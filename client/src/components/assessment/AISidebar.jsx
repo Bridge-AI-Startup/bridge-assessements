@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowRight, Sparkles, Undo, RotateCcw, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,7 @@ export default function AISidebar({
   contextSections = [],
   onRemoveContext,
   lastChange,
+  responseMessage,
 }) {
   const [message, setMessage] = useState("");
   const [chatHistory, setChatHistory] = useState([
@@ -31,6 +32,23 @@ export default function AISidebar({
         "I've generated a backend assessment focused on Node.js and PostgreSQL. Let me know how you'd like to adjust it.",
     },
   ]);
+
+  // Add response message to chat history when it's received
+  useEffect(() => {
+    if (responseMessage) {
+      setChatHistory((prev) => {
+        // Avoid duplicates - check if the last message is the same
+        const lastMessage = prev[prev.length - 1];
+        if (
+          lastMessage?.role === "assistant" &&
+          lastMessage?.content === responseMessage
+        ) {
+          return prev; // Don't add duplicate
+        }
+        return [...prev, { role: "assistant", content: responseMessage }];
+      });
+    }
+  }, [responseMessage]);
 
   const handleSubmit = () => {
     if (!message.trim() || isLoading) return;
@@ -70,9 +88,9 @@ export default function AISidebar({
       </div>
 
       {/* Chat History */}
-      <div className="px-5 py-4 border-b border-gray-100 max-h-[200px] overflow-y-auto">
+      <div className="px-5 py-4 border-b border-gray-100 max-h-[300px] overflow-y-auto">
         <div className="space-y-3">
-          {chatHistory.slice(-2).map((msg, i) => (
+          {chatHistory.map((msg, i) => (
             <div
               key={i}
               className={`text-sm p-3 rounded-xl ${

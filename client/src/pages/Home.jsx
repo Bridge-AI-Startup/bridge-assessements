@@ -12,13 +12,13 @@ import {
   Edit,
   LogOut,
   User,
+  BarChart3,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { base44 } from "@/api/base44Client";
-import { useQuery } from "@tanstack/react-query";
+import { getAssessments, deleteAssessment } from "@/api/assessment";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,23 +26,63 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { logOut, getCurrentUser } from "@/auth";
+import { signOut, onAuthStateChanged } from "firebase/auth";
+import { auth } from "@/firebase/firebase";
 
 export default function Home() {
   const [currentUser, setCurrentUser] = useState(null);
-  const { data: assessments = [], isLoading } = useQuery({
-    queryKey: ["assessments"],
-    queryFn: () => base44.entities.Assessment.list("-created_date"),
-  });
+  const [assessments, setAssessments] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    const user = getCurrentUser();
-    setCurrentUser(user);
+    // Wait for auth state to be ready
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      console.log("🔄 [Home] Auth state changed, user:", user?.email);
+      setCurrentUser(user);
+
+      if (!user) {
+        console.warn("⚠️ [Home] No user found, redirecting to landing");
+        window.location.href = createPageUrl("Landing");
+        return;
+      }
+
+      // Fetch assessments
+      const fetchAssessments = async () => {
+        setIsLoading(true);
+        setError(null);
+        try {
+          console.log("🔄 [Home] Fetching assessments...");
+          const result = await getAssessments();
+          console.log("📦 [Home] getAssessments result:", result);
+
+          if (result.success) {
+            console.log("✅ [Home] Assessments loaded:", result.data);
+            setAssessments(result.data || []);
+          } else {
+            const errorMsg =
+              "error" in result ? result.error : "Failed to load assessments";
+            setError(errorMsg);
+            console.error("❌ [Home] Failed to load assessments:", errorMsg);
+          }
+        } catch (err) {
+          console.error("❌ [Home] Error fetching assessments:", err);
+          setError(err.message || "An unexpected error occurred");
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      fetchAssessments();
+    });
+
+    // Cleanup subscription on unmount
+    return () => unsubscribe();
   }, []);
 
   const handleLogout = async () => {
     try {
-      await logOut();
+      await signOut(auth);
       // Redirect to landing page after logout
       window.location.href = createPageUrl("Landing");
     } catch (error) {
@@ -52,17 +92,34 @@ export default function Home() {
     }
   };
 
-  const getStatusBadge = (status) => {
-    const styles = {
-      draft: "bg-gray-100 text-gray-600",
-      active: "bg-green-100 text-green-700",
-      archived: "bg-yellow-100 text-yellow-700",
-    };
-    return (
-      <Badge className={styles[status]}>
-        {status.charAt(0).toUpperCase() + status.slice(1)}
-      </Badge>
-    );
+  const handleDelete = async (assessmentId) => {
+    if (!confirm("Are you sure you want to delete this assessment?")) {
+      return;
+    }
+
+    try {
+      const result = await deleteAssessment(assessmentId);
+      if (result.success) {
+        // Remove from local state
+        setAssessments(assessments.filter((a) => a._id !== assessmentId));
+      } else {
+        const errorMsg =
+          "error" in result ? result.error : "Failed to delete assessment";
+        alert(errorMsg);
+      }
+    } catch (err) {
+      console.error("Error deleting assessment:", err);
+      alert("Failed to delete assessment");
+    }
+  };
+
+  const formatTimeLimit = (minutes) => {
+    if (minutes < 60) {
+      return `${minutes}m`;
+    }
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
   };
 
   return (
@@ -120,6 +177,13 @@ export default function Home() {
           </div>
         </motion.div>
 
+        {/* Error Message */}
+        {error && (
+          <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
         {/* Assessments Grid */}
         {isLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -165,7 +229,7 @@ export default function Home() {
           >
             {assessments.map((assessment, index) => (
               <motion.div
-                key={assessment.id}
+                key={assessment._id}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.05 }}
@@ -176,7 +240,7 @@ export default function Home() {
                     <h3 className="font-semibold text-gray-900 mb-1 line-clamp-1">
                       {assessment.title}
                     </h3>
-                    {getStatusBadge(assessment.status)}
+                    <Badge className="bg-blue-100 text-blue-700">Active</Badge>
                   </div>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -185,15 +249,20 @@ export default function Home() {
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => {
+                          window.location.href =
+                            createPageUrl("AssessmentEditor") +
+                            `?id=${assessment._id}`;
+                        }}
+                      >
                         <Edit className="w-4 h-4 mr-2" />
                         Edit
                       </DropdownMenuItem>
-                      <DropdownMenuItem>
-                        <Archive className="w-4 h-4 mr-2" />
-                        Archive
-                      </DropdownMenuItem>
-                      <DropdownMenuItem className="text-red-600">
+                      <DropdownMenuItem
+                        className="text-red-600"
+                        onClick={() => handleDelete(assessment._id)}
+                      >
                         <Trash2 className="w-4 h-4 mr-2" />
                         Delete
                       </DropdownMenuItem>
@@ -207,20 +276,24 @@ export default function Home() {
 
                 <div className="flex items-center gap-4 text-sm text-gray-500 mb-4">
                   <div className="flex items-center gap-1.5">
-                    <Users className="w-4 h-4" />
-                    <span>{assessment.candidates_invited || 0} invited</span>
+                    <Clock className="w-4 h-4" />
+                    <span>{formatTimeLimit(assessment.timeLimit)}</span>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <CheckCircle className="w-4 h-4" />
+                    <FileText className="w-4 h-4" />
                     <span>
-                      {assessment.candidates_completed || 0} completed
+                      Created{" "}
+                      {new Date(assessment.createdAt).toLocaleDateString()}
                     </span>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
                   <Link
-                    to={createPageUrl("AssessmentEditor")}
+                    to={
+                      createPageUrl("AssessmentEditor") +
+                      `?id=${assessment._id}`
+                    }
                     className="flex-1"
                   >
                     <Button
@@ -231,9 +304,20 @@ export default function Home() {
                       Open
                     </Button>
                   </Link>
-                  <Link to={createPageUrl("SubmissionsDashboard")}>
-                    <Button variant="ghost" size="sm" className="text-gray-500">
-                      <Users className="w-4 h-4" />
+                  <Link
+                    to={
+                      createPageUrl("SubmissionsDashboard") +
+                      `?assessmentId=${assessment._id}`
+                    }
+                    className="flex-1"
+                  >
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full text-[#1E3A8A] border-[#1E3A8A]/20 hover:bg-[#1E3A8A]/5"
+                    >
+                      <BarChart3 className="w-4 h-4 mr-1.5" />
+                      Submissions
                     </Button>
                   </Link>
                 </div>

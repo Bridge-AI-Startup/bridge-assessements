@@ -17,31 +17,24 @@ import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import PresetPills from "@/components/assessment/PresetPills";
 import AuthModal from "@/components/auth/AuthModal";
-import { getCurrentUser, onAuthStateChange } from "@/auth";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth } from "@/firebase/firebase";
+import bridgeLogo from "@/assets/bridge-logo.svg";
 
 export default function Landing() {
   const [description, setDescription] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authDefaultTab, setAuthDefaultTab] = useState("login");
 
-  // Redirect logged-in users to Home
+  // Redirect logged-in users to Home (only on initial load)
+  // Don't listen for auth changes - let AuthModal handle redirects after backend verification
   useEffect(() => {
-    // Check initial auth state
-    const user = getCurrentUser();
+    // Check initial auth state only (for users already logged in)
+    const user = auth.currentUser;
     if (user) {
       window.location.href = createPageUrl("Home");
-      return;
     }
-
-    // Listen for auth state changes (e.g., user logs in via modal)
-    const unsubscribe = onAuthStateChange((user) => {
-      if (user) {
-        window.location.href = createPageUrl("Home");
-      }
-    });
-
-    return () => unsubscribe();
+    // Don't listen for auth state changes - AuthModal will handle redirects
   }, []);
 
   const placeholderText =
@@ -68,16 +61,27 @@ export default function Landing() {
       <div className="absolute top-4 left-0 right-0 z-50 flex justify-center px-6">
         <nav className="bg-white/80 backdrop-blur-md rounded-full shadow-lg border border-gray-200/50 px-4 py-2 flex items-center justify-between gap-12">
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-[#1E3A8A] flex items-center justify-center">
-              <span className="text-white font-bold text-xs">B</span>
+            <div className="w-7 h-7 rounded-lg overflow-hidden flex items-center justify-center">
+              <img
+                src={bridgeLogo}
+                alt="Bridge"
+                className="w-full h-full object-contain"
+              />
             </div>
             <span className="font-semibold text-gray-900 text-sm">Bridge</span>
           </div>
           <div className="flex items-center gap-2">
             <Button
               onClick={() => {
-                setAuthDefaultTab("login");
-                setShowAuthModal(true);
+                // Check if user is already signed in
+                const user = auth.currentUser;
+                if (user) {
+                  // User is already signed in, redirect to Home
+                  window.location.href = createPageUrl("Home");
+                } else {
+                  // User is not signed in, show sign-in modal
+                  setShowAuthModal(true);
+                }
               }}
               variant="ghost"
               className="text-gray-700 hover:text-gray-900 rounded-full text-sm px-4 py-1.5 h-auto"
@@ -86,8 +90,7 @@ export default function Landing() {
             </Button>
             <Button
               onClick={() => {
-                setAuthDefaultTab("signup");
-                setShowAuthModal(true);
+                window.location.href = createPageUrl("GetStarted");
               }}
               className="bg-[#1E3A8A] hover:bg-[#152a66] text-white rounded-full text-sm px-4 py-1.5 h-auto"
             >
@@ -114,7 +117,7 @@ export default function Landing() {
 
             {/* Subheading */}
             <p className="text-lg text-gray-500 max-w-2xl mx-auto leading-relaxed mb-6">
-              Drop in a job description — Bridge creates the take-home project,
+              Drop in a job description, Bridge creates the take-home project,
               generates AI interview questions, and scores submissions for you.
             </p>
             <Button className="bg-[#FFFF00] hover:bg-[#faed00] text-[#1E3A8A] px-6 py-3 h-auto rounded-xl font-semibold shadow-sm">
@@ -443,9 +446,6 @@ export default function Landing() {
       <AuthModal
         isOpen={showAuthModal}
         onClose={() => setShowAuthModal(false)}
-        defaultTab={authDefaultTab}
-        showTabs={false}
-        signupRedirect={authDefaultTab === "signup" ? "Home" : "GetStarted"}
       />
     </div>
   );

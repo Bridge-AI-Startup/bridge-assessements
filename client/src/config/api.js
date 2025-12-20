@@ -12,9 +12,4 @@ export const API_ENDPOINTS = {
     ME: `${API_BASE_URL}/api/user-auth/me`,
     UPDATE_ME: `${API_BASE_URL}/api/user-auth/me`,
   },
-  // Auth endpoints
-  AUTH: {
-    VERIFY: `${API_BASE_URL}/api/auth/verify`,
-    USER: `${API_BASE_URL}/api/auth/user`,
-  },
 };

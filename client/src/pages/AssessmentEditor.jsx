@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
+import ReactMarkdown from "react-markdown";
 import {
   FileText,
   Target,
@@ -12,12 +13,30 @@ import {
   User,
   Timer,
   BarChart3,
+  Copy,
+  Check,
 } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
-import { base44 } from "@/api/base44Client";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  getAssessment,
+  updateAssessment,
+  chatWithAssessment,
+} from "@/api/assessment";
+import { generateShareLink } from "@/api/submission";
+import { auth } from "@/firebase/firebase";
+import { onAuthStateChanged } from "firebase/auth";
 import DocumentBlock, {
   RubricItem,
   TestCaseItem,
@@ -26,17 +45,105 @@ import AISidebar from "@/components/assessment/AISidebar";
 import CandidatePreviewModal from "@/components/assessment/CandidatePreviewModal";
 
 export default function AssessmentEditor() {
+  const [searchParams] = useSearchParams();
+  const assessmentId = searchParams.get("id");
+
   const [isLoading, setIsLoading] = useState(false);
+  const [isFetchingAssessment, setIsFetchingAssessment] = useState(true);
   const [showPreview, setShowPreview] = useState(false);
+  const [assessmentData, setAssessmentData] = useState(null); // Store DB assessment data
+  const [authReady, setAuthReady] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editedTitle, setEditedTitle] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   const [highlightedSection, setHighlightedSection] = useState(null);
   const [lastChange, setLastChange] = useState(null);
+  const [responseMessage, setResponseMessage] = useState(null);
   const [isSmartInterviewerEnabled, setIsSmartInterviewerEnabled] =
     useState(true);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [candidateName, setCandidateName] = useState("");
+  const [generatedLink, setGeneratedLink] = useState("");
+  const [isGeneratingLink, setIsGeneratingLink] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
   const [interviewerPrompt, setInterviewerPrompt] = useState("");
   const [contextSections, setContextSections] = useState([]);
   const [timeLimit, setTimeLimit] = useState({ hours: 4, minutes: 0 });
   const [startDeadline, setStartDeadline] = useState(7);
+  const [timeLimitSaveTimeout, setTimeLimitSaveTimeout] = useState(null);
+
+  // Wait for auth state to be ready
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      console.log(
+        "🔄 [AssessmentEditor] Auth state changed, user:",
+        user?.email
+      );
+      setCurrentUser(user);
+      setAuthReady(true);
+
+      if (!user) {
+        console.warn(
+          "⚠️ [AssessmentEditor] No user found, redirecting to landing"
+        );
+        window.location.href = createPageUrl("Landing");
+        return;
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Fetch assessment from database (only after auth is ready)
+  useEffect(() => {
+    if (!authReady) {
+      return; // Wait for auth to be ready
+    }
+
+    const fetchAssessment = async () => {
+      if (!assessmentId) {
+        console.warn("No assessment ID provided");
+        setIsFetchingAssessment(false);
+        return;
+      }
+
+      setIsFetchingAssessment(true);
+      try {
+        console.log("🔄 [AssessmentEditor] Fetching assessment:", assessmentId);
+
+        // Get token from current user
+        const token = currentUser ? await currentUser.getIdToken() : undefined;
+        console.log("   Token obtained:", token ? "✅" : "❌");
+
+        const result = await getAssessment(assessmentId, token);
+
+        if (result.success) {
+          console.log("✅ [AssessmentEditor] Assessment loaded:", result.data);
+          setAssessmentData(result.data);
+
+          // Update timeLimit from database
+          const totalMinutes = result.data.timeLimit;
+          const hours = Math.floor(totalMinutes / 60);
+          const minutes = totalMinutes % 60;
+          setTimeLimit({ hours, minutes });
+        } else {
+          const errorMsg =
+            "error" in result ? result.error : "Failed to load assessment";
+          console.error("❌ [AssessmentEditor] Error:", errorMsg);
+          alert(errorMsg);
+        }
+      } catch (err) {
+        console.error("❌ [AssessmentEditor] Unexpected error:", err);
+        alert("Failed to load assessment");
+      } finally {
+        setIsFetchingAssessment(false);
+      }
+    };
+
+    fetchAssessment();
+  }, [assessmentId, authReady, currentUser]);
 
   const handleAddToContext = (section) => {
     setContextSections((prev) =>
@@ -46,6 +153,7 @@ export default function AssessmentEditor() {
     );
   };
 
+  // Assessment state - will be updated when data is loaded
   const [assessment, setAssessment] = useState({
     projectDescription:
       "Build a simple REST API for a task management system. The candidate will create endpoints for CRUD operations on tasks and users, implement database relationships, and add basic authentication. This project tests practical backend skills in a realistic scenario.",
@@ -79,118 +187,363 @@ export default function AssessmentEditor() {
     ],
   });
 
+  // Update assessment description and title when data is loaded
+  useEffect(() => {
+    if (assessmentData) {
+      if (assessmentData.description) {
+        setAssessment((prev) => ({
+          ...prev,
+          projectDescription: assessmentData.description,
+        }));
+      }
+      if (assessmentData.title) {
+        setEditedTitle(assessmentData.title);
+      }
+      // Update timeLimit from database
+      if (assessmentData.timeLimit) {
+        const totalMinutes = assessmentData.timeLimit;
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        setTimeLimit({ hours, minutes });
+      }
+    }
+  }, [assessmentData]);
+
+  // Auto-save timeLimit when it changes (debounced)
+  useEffect(() => {
+    if (!assessmentId || !currentUser || !authReady || !assessmentData) {
+      return;
+    }
+
+    // Clear existing timeout
+    if (timeLimitSaveTimeout) {
+      clearTimeout(timeLimitSaveTimeout);
+    }
+
+    // Calculate total minutes
+    const totalMinutes = timeLimit.hours * 60 + timeLimit.minutes;
+    const currentTotalMinutes = assessmentData.timeLimit;
+
+    // Only save if it's different from what's in the database and valid
+    if (totalMinutes !== currentTotalMinutes && totalMinutes > 0) {
+      const timeout = setTimeout(async () => {
+        console.log(
+          "💾 [AssessmentEditor] Auto-saving timeLimit:",
+          totalMinutes
+        );
+        await handleTimeLimitSave(totalMinutes);
+      }, 1000); // Wait 1 second after user stops typing
+
+      setTimeLimitSaveTimeout(timeout);
+    }
+
+    return () => {
+      if (timeLimitSaveTimeout) {
+        clearTimeout(timeLimitSaveTimeout);
+      }
+    };
+  }, [timeLimit, assessmentId, currentUser, authReady, assessmentData]);
+
+  // Save assessment changes to backend
+  const saveAssessment = async (updates) => {
+    if (!assessmentId || !currentUser) {
+      console.warn("Cannot save: missing assessmentId or user");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const token = await currentUser.getIdToken();
+      console.log("🔄 [AssessmentEditor] Updating assessment:", updates);
+
+      const result = await updateAssessment(assessmentId, updates, token);
+
+      if (result.success) {
+        console.log("✅ [AssessmentEditor] Assessment saved:", result.data);
+        setAssessmentData(result.data);
+        // Update local state if needed
+        if (result.data.description) {
+          setAssessment((prev) => ({
+            ...prev,
+            projectDescription: result.data.description,
+          }));
+        }
+        // Update timeLimit in local state if it changed
+        if (result.data.timeLimit) {
+          const totalMinutes = result.data.timeLimit;
+          const hours = Math.floor(totalMinutes / 60);
+          const minutes = totalMinutes % 60;
+          setTimeLimit({ hours, minutes });
+        }
+      } else {
+        const errorMsg =
+          "error" in result ? result.error : "Failed to save assessment";
+        console.error("❌ [AssessmentEditor] Save error:", errorMsg);
+        alert(errorMsg);
+      }
+    } catch (err) {
+      console.error("❌ [AssessmentEditor] Unexpected save error:", err);
+      alert("Failed to save assessment");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // ========== Save Handlers ==========
+
+  /**
+   * Save title changes
+   */
+  const handleTitleSave = async () => {
+    if (editedTitle.trim() && editedTitle !== assessmentData?.title) {
+      await saveAssessment({ title: editedTitle.trim() });
+    }
+    setIsEditingTitle(false);
+  };
+
+  const handleTitleCancel = () => {
+    setEditedTitle(assessmentData?.title || "");
+    setIsEditingTitle(false);
+  };
+
+  /**
+   * Save description changes
+   */
+  const handleDescriptionSave = async (description) => {
+    if (description.trim() && description !== assessmentData?.description) {
+      await saveAssessment({ description: description.trim() });
+    }
+  };
+
+  /**
+   * Save timeLimit changes
+   */
+  const handleTimeLimitSave = async (totalMinutes) => {
+    if (totalMinutes > 0 && totalMinutes !== assessmentData?.timeLimit) {
+      await saveAssessment({ timeLimit: totalMinutes });
+    }
+  };
+
   const handleChatSubmit = async (message) => {
+    if (!assessmentId || !currentUser || !assessmentData) {
+      alert("Cannot chat: missing assessment data or user");
+      return;
+    }
+
     setIsLoading(true);
+    setResponseMessage(null); // Clear previous response message
 
     try {
-      const allowedSections =
-        contextSections.length > 0
-          ? contextSections
-          : ["projectDescription", "rubric", "testCases"];
+      console.log("💬 [AssessmentEditor] Sending chat message:", message);
 
-      const sectionRestriction =
-        contextSections.length > 0
-          ? `IMPORTANT: You may ONLY modify the following sections: ${contextSections
-              .map((s) => {
-                if (s === "projectDescription") return "Project Description";
-                if (s === "rubric") return "Rubric";
-                if (s === "testCases") return "Test Cases";
-                return s;
-              })
-              .join(", ")}. Do NOT change any other sections.`
-          : "You may update any sections as needed.";
+      // Get token from current user
+      const token = await currentUser.getIdToken();
 
-      const response = await base44.integrations.Core.InvokeLLM({
-        prompt: `You are an expert technical hiring assistant. Based on the following instruction, update the technical assessment.
+      // Prepare chat request with current assessment context
+      const chatRequest = {
+        message: message.trim(),
+        allowedSections:
+          contextSections.length > 0 ? contextSections : undefined,
+        rubric: assessment.rubric,
+        testCases: assessment.testCases,
+      };
 
-      Current Assessment:
-            - Project Description: ${assessment.projectDescription}
-            - Rubric: ${assessment.rubric
-              .map((r) => `${r.criteria} (${r.weight})`)
-              .join(", ")}
-            - Test Cases: ${assessment.testCases
-              .map((t) => `${t.name} (${t.type}, ${t.points}pts)`)
-              .join(", ")}
+      const result = await chatWithAssessment(assessmentId, chatRequest, token);
 
-      ${sectionRestriction}
+      if (!result.success) {
+        const errorMsg =
+          "error" in result ? result.error : "Failed to process chat message";
+        console.error("❌ [AssessmentEditor] Chat error:", errorMsg);
+        alert(errorMsg);
+        setIsLoading(false);
+        return;
+      }
 
-      User Instruction: "${message}"
+      const {
+        updates,
+        changedSections,
+        changesSummary,
+        responseMessage: aiResponseMessage,
+        assessment: updatedAssessment,
+      } = result.data;
 
-      Return a JSON object with the updated assessment. Only include fields that should change (and only from allowed sections). The structure should be:
-{
-  "projectDescription": "string (if changed)",
-  "rubric": [{"criteria": "string", "weight": "string"} (if changed)],
-  "testCases": [{"name": "string", "type": "unit|integration|e2e", "points": number} (if changed)],
-  "changedSections": ["list of ALL section names that were changed: projectDescription, rubric, testCases"],
-  "changesSummary": ["brief bullet points of what was changed across all sections"]
-}`,
-        response_json_schema: {
-          type: "object",
-          properties: {
-            projectDescription: { type: "string" },
-            rubric: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  criteria: { type: "string" },
-                  weight: { type: "string" },
-                },
-              },
-            },
-            testCases: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  name: { type: "string" },
-                  type: { type: "string" },
-                  points: { type: "number" },
-                },
-              },
-            },
-            changedSections: { type: "array", items: { type: "string" } },
-            changesSummary: { type: "array", items: { type: "string" } },
-          },
-        },
+      console.log("✅ [AssessmentEditor] Chat successful:", {
+        changedSections,
+        changesSummary,
+        responseMessage: aiResponseMessage,
       });
 
-      const updates = {};
-      if (response.projectDescription)
-        updates.projectDescription = response.projectDescription;
-      if (response.rubric?.length) updates.rubric = response.rubric;
-      if (response.testCases?.length) updates.testCases = response.testCases;
+      // Set response message to display in chat
+      if (aiResponseMessage) {
+        setResponseMessage(aiResponseMessage);
+      }
 
-      setAssessment((prev) => ({ ...prev, ...updates }));
+      // Update local assessment state with frontend-only fields
+      if (updates.rubric) {
+        setAssessment((prev) => ({
+          ...prev,
+          rubric: updates.rubric,
+        }));
+      }
+      if (updates.testCases) {
+        setAssessment((prev) => ({
+          ...prev,
+          testCases: updates.testCases,
+        }));
+      }
 
-      if (response.changedSections?.length) {
-        // Highlight all changed sections
-        response.changedSections.forEach((section, index) => {
+      // Update database-backed fields
+      if (updates.description) {
+        setAssessment((prev) => ({
+          ...prev,
+          projectDescription: updates.description,
+        }));
+        // Save to backend
+        await handleDescriptionSave(updates.description);
+      }
+      if (updates.title) {
+        setEditedTitle(updates.title);
+        await handleTitleSave();
+      }
+      if (updates.timeLimit !== undefined) {
+        const hours = Math.floor(updates.timeLimit / 60);
+        const minutes = updates.timeLimit % 60;
+        setTimeLimit({ hours, minutes });
+        await handleTimeLimitSave(updates.timeLimit);
+      }
+      if (updates.scoring) {
+        // Note: scoring updates would need to be saved if we add that field to the update endpoint
+        console.log("📊 [AssessmentEditor] Scoring updated:", updates.scoring);
+      }
+
+      // Update assessmentData if backend returned updated assessment
+      if (updatedAssessment) {
+        setAssessmentData(updatedAssessment);
+      }
+
+      // Highlight changed sections
+      if (changedSections?.length) {
+        console.log(
+          "🎯 [AssessmentEditor] Highlighting sections:",
+          changedSections
+        );
+        changedSections.forEach((section, index) => {
           setTimeout(() => {
-            setHighlightedSection(section);
-            setTimeout(() => setHighlightedSection(null), 2000);
+            // Normalize section name to match frontend expectations
+            const normalizedSection =
+              section === "description" ? "projectDescription" : section;
+            console.log(`   Highlighting section: ${normalizedSection}`);
+            setHighlightedSection(normalizedSection);
+            setTimeout(() => {
+              setHighlightedSection(null);
+              console.log(`   Unhighlighting section: ${normalizedSection}`);
+            }, 2000);
           }, index * 500);
         });
-
-        setLastChange({
-          section:
-            response.changedSections.length > 1
-              ? `${response.changedSections.length} sections`
-              : response.changedSections[0],
-          changes: response.changesSummary || [],
-        });
+      } else {
+        console.warn(
+          "⚠️ [AssessmentEditor] No changedSections received from backend"
+        );
       }
+
+      // Set last change summary
+      setLastChange({
+        section:
+          changedSections.length > 1
+            ? `${changedSections.length} sections`
+            : changedSections[0] || "assessment",
+        changes: changesSummary || ["Assessment updated"],
+      });
     } catch (error) {
-      console.error("Error updating assessment:", error);
+      console.error("❌ [AssessmentEditor] Chat error:", error);
+      alert("Failed to process chat message. Please try again.");
     }
 
     setIsLoading(false);
   };
 
   const handleShare = () => {
-    navigator.clipboard.writeText(window.location.href);
-    alert("Assessment link copied to clipboard!");
+    setShowShareModal(true);
+    setCandidateName("");
+    setGeneratedLink("");
+    setLinkCopied(false);
   };
+
+  const handleGenerateLink = async () => {
+    if (!candidateName.trim()) {
+      alert("Please enter a candidate name");
+      return;
+    }
+
+    if (!assessmentId || !currentUser) {
+      alert("Cannot generate link: missing assessment data or user");
+      return;
+    }
+
+    setIsGeneratingLink(true);
+    try {
+      const token = await currentUser.getIdToken();
+      const result = await generateShareLink(
+        {
+          assessmentId,
+          candidateName: candidateName.trim(),
+        },
+        token
+      );
+
+      if (result.success) {
+        setGeneratedLink(result.data.shareLink);
+      } else {
+        const errorMsg =
+          "error" in result ? result.error : "Failed to generate link";
+        alert(errorMsg);
+      }
+    } catch (error) {
+      console.error("❌ [AssessmentEditor] Error generating link:", error);
+      alert("Failed to generate link. Please try again.");
+    } finally {
+      setIsGeneratingLink(false);
+    }
+  };
+
+  const handleCopyLink = async () => {
+    if (generatedLink) {
+      try {
+        await navigator.clipboard.writeText(generatedLink);
+        setLinkCopied(true);
+        setTimeout(() => setLinkCopied(false), 2000);
+      } catch (error) {
+        console.error("Failed to copy link:", error);
+        alert("Failed to copy link to clipboard");
+      }
+    }
+  };
+
+  // Show loading state while fetching assessment
+  if (isFetchingAssessment) {
+    return (
+      <div className="min-h-screen bg-[#f8f9fb] flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-8 h-8 border-2 border-[#1E3A8A]/30 border-t-[#1E3A8A] rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-500">Loading assessment...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state if no assessment ID or failed to load
+  if (!assessmentId || !assessmentData) {
+    return (
+      <div className="min-h-screen bg-[#f8f9fb] flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-red-600 mb-4">Failed to load assessment</p>
+          <Link to={createPageUrl("Home")}>
+            <Button>Back to Assessments</Button>
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#f8f9fb]">
@@ -208,9 +561,47 @@ export default function AssessmentEditor() {
             >
               ← Back to Assessments
             </Link>
-            <h1 className="text-2xl font-bold text-[#1E3A8A]">
-              Assessment Editor
-            </h1>
+            {isEditingTitle ? (
+              <div className="flex items-center gap-2">
+                <Input
+                  value={editedTitle}
+                  onChange={(e) => setEditedTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      handleTitleSave();
+                    } else if (e.key === "Escape") {
+                      handleTitleCancel();
+                    }
+                  }}
+                  className="text-2xl font-bold text-[#1E3A8A] border-[#1E3A8A] focus-visible:ring-[#1E3A8A]"
+                  autoFocus
+                />
+                <Button
+                  onClick={handleTitleSave}
+                  size="sm"
+                  className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                  disabled={isSaving}
+                >
+                  Save
+                </Button>
+                <Button
+                  onClick={handleTitleCancel}
+                  size="sm"
+                  variant="outline"
+                  disabled={isSaving}
+                >
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <h1
+                className="text-2xl font-bold text-[#1E3A8A] cursor-pointer hover:underline"
+                onClick={() => setIsEditingTitle(true)}
+                title="Click to edit title"
+              >
+                {assessmentData?.title || "Assessment Editor"}
+              </h1>
+            )}
             <p className="text-gray-500 text-sm">
               Use Bridge AI to shape your technical assessment — tweak scope,
               difficulty, and structure in one place.
@@ -218,7 +609,15 @@ export default function AssessmentEditor() {
           </div>
           <div className="flex items-center gap-2 text-xs text-gray-400 bg-white px-3 py-2 rounded-lg border border-gray-200">
             <Clock className="w-3.5 h-3.5" />
-            <span>Draft saved • Last updated 2 min ago</span>
+            <span>
+              {isSaving
+                ? "Saving..."
+                : assessmentData?.updatedAt
+                ? `Last updated ${new Date(
+                    assessmentData.updatedAt
+                  ).toLocaleString()}`
+                : "Draft saved"}
+            </span>
           </div>
         </motion.div>
 
@@ -241,16 +640,63 @@ export default function AssessmentEditor() {
               onAddToContext={() => handleAddToContext("projectDescription")}
               isInContext={contextSections.includes("projectDescription")}
               editValue={assessment.projectDescription}
-              onEdit={(value) =>
+              onEdit={async (value) => {
+                // Update local state
                 setAssessment((prev) => ({
                   ...prev,
                   projectDescription: value,
-                }))
-              }
+                }));
+                // Save to backend
+                await handleDescriptionSave(value);
+              }}
             >
-              <p className="text-gray-700 leading-relaxed">
-                {assessment.projectDescription}
-              </p>
+              <div className="prose prose-sm max-w-none text-gray-700 leading-relaxed">
+                <ReactMarkdown
+                  components={{
+                    h2: ({ children }) => (
+                      <h2 className="text-lg font-semibold text-gray-900 mt-6 mb-3">
+                        {children}
+                      </h2>
+                    ),
+                    h3: ({ children }) => (
+                      <h3 className="text-base font-semibold text-gray-900 mt-4 mb-2">
+                        {children}
+                      </h3>
+                    ),
+                    p: ({ children }) => <p className="mb-3">{children}</p>,
+                    ul: ({ children }) => (
+                      <ul className="list-disc list-inside mb-3 space-y-1">
+                        {children}
+                      </ul>
+                    ),
+                    ol: ({ children }) => (
+                      <ol className="list-decimal list-inside mb-3 space-y-1">
+                        {children}
+                      </ol>
+                    ),
+                    li: ({ children }) => <li className="ml-2">{children}</li>,
+                    code: ({ children, className }) => {
+                      const isInline = !className;
+                      return isInline ? (
+                        <code className="bg-gray-100 text-gray-800 px-1.5 py-0.5 rounded text-sm font-mono">
+                          {children}
+                        </code>
+                      ) : (
+                        <code className="block bg-gray-100 text-gray-800 p-3 rounded text-sm font-mono overflow-x-auto mb-3">
+                          {children}
+                        </code>
+                      );
+                    },
+                    strong: ({ children }) => (
+                      <strong className="font-semibold text-gray-900">
+                        {children}
+                      </strong>
+                    ),
+                  }}
+                >
+                  {assessment.projectDescription}
+                </ReactMarkdown>
+              </div>
             </DocumentBlock>
 
             {/* Scoring & Rubric */}
@@ -492,7 +938,12 @@ export default function AssessmentEditor() {
             {/* Bottom Sticky Bar */}
             <div className="sticky bottom-0 bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex items-center justify-end mt-6">
               <div className="flex gap-3">
-                <Link to={createPageUrl("SubmissionsDashboard")}>
+                <Link
+                  to={
+                    createPageUrl("SubmissionsDashboard") +
+                    `?assessmentId=${assessmentId}`
+                  }
+                >
                   <Button
                     variant="outline"
                     className="px-5 h-10 rounded-full text-sm border-gray-200 text-gray-700 hover:bg-gray-50"
@@ -544,6 +995,7 @@ export default function AssessmentEditor() {
                 setContextSections((prev) => prev.filter((s) => s !== section))
               }
               lastChange={lastChange}
+              responseMessage={responseMessage}
             />
           </motion.div>
         </div>
@@ -555,6 +1007,110 @@ export default function AssessmentEditor() {
         onClose={() => setShowPreview(false)}
         assessment={assessment}
       />
+
+      {/* Share Link Modal */}
+      <Dialog open={showShareModal} onOpenChange={setShowShareModal}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Generate Assessment Link</DialogTitle>
+            <DialogDescription>
+              Enter the candidate's name to generate a unique shareable link for
+              this assessment.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            {!generatedLink ? (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Candidate Name *
+                  </label>
+                  <Input
+                    value={candidateName}
+                    onChange={(e) => setCandidateName(e.target.value)}
+                    placeholder="Enter candidate's full name"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && candidateName.trim()) {
+                        handleGenerateLink();
+                      }
+                    }}
+                    autoFocus
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                  <p className="text-sm text-green-800 mb-2">
+                    Link generated successfully!
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={generatedLink}
+                      readOnly
+                      className="flex-1 bg-white"
+                    />
+                    <Button
+                      onClick={handleCopyLink}
+                      size="sm"
+                      variant="outline"
+                      className="flex-shrink-0"
+                    >
+                      {linkCopied ? (
+                        <>
+                          <Check className="w-4 h-4 mr-2" />
+                          Copied!
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-4 h-4 mr-2" />
+                          Copy
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500">
+                  Share this link with the candidate. They will be able to
+                  access and complete the assessment.
+                </p>
+              </>
+            )}
+          </div>
+
+          <DialogFooter>
+            {!generatedLink ? (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowShareModal(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleGenerateLink}
+                  disabled={!candidateName.trim() || isGeneratingLink}
+                  className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                >
+                  {isGeneratingLink ? "Generating..." : "Generate Link"}
+                </Button>
+              </>
+            ) : (
+              <Button
+                onClick={() => {
+                  setShowShareModal(false);
+                  setGeneratedLink("");
+                  setCandidateName("");
+                }}
+                className="bg-[#1E3A8A] hover:bg-[#152a66]"
+              >
+                Done
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

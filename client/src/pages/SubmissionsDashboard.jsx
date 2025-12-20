@@ -1,79 +1,209 @@
-import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import { 
-  Users, 
-  CheckCircle, 
-  Clock, 
-  TrendingDown, 
+import React, { useState, useEffect } from "react";
+import { motion } from "framer-motion";
+import {
+  Users,
+  CheckCircle,
+  Clock,
+  TrendingDown,
   Search,
   Filter,
   ChevronDown,
   Eye,
   Star,
   ArrowUpRight,
-  ArrowDownRight
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
-import { Link } from 'react-router-dom';
-import { createPageUrl } from '@/utils';
+  ArrowDownRight,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Link, useSearchParams } from "react-router-dom";
+import { createPageUrl } from "@/utils";
+import { getSubmissionsForAssessment } from "@/api/submission";
+import { getAssessment } from "@/api/assessment";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth } from "@/firebase/firebase";
 
 export default function SubmissionsDashboard() {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [searchParams] = useSearchParams();
+  const assessmentId = searchParams.get("assessmentId");
 
-  // Mock data
-  const stats = {
-    totalInvited: 156,
-    started: 112,
-    completed: 87,
-    avgScore: 74,
-    avgTimeSpent: "3h 12m"
-  };
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [submissions, setSubmissions] = useState([]);
+  const [assessment, setAssessment] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
 
-  const dropoffRate = Math.round(((stats.started - stats.completed) / stats.started) * 100);
-  const startRate = Math.round((stats.started / stats.totalInvited) * 100);
-  const completionRate = Math.round((stats.completed / stats.started) * 100);
+  // Wait for auth state to be ready
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+      if (!user) {
+        window.location.href = createPageUrl("Landing");
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
-  const submissions = [
-    { id: 1, name: "Sarah Chen", email: "sarah.chen@email.com", status: "completed", score: 87, submittedAt: "2024-01-15T14:30:00Z", timeSpent: "3h 42m" },
-    { id: 2, name: "Marcus Johnson", email: "marcus.j@email.com", status: "completed", score: 92, submittedAt: "2024-01-15T10:15:00Z", timeSpent: "2h 58m" },
-    { id: 3, name: "Emily Rodriguez", email: "emily.r@email.com", status: "in_progress", score: null, submittedAt: null, timeSpent: "1h 20m" },
-    { id: 4, name: "David Kim", email: "david.kim@email.com", status: "completed", score: 68, submittedAt: "2024-01-14T16:45:00Z", timeSpent: "4h 10m" },
-    { id: 5, name: "Lisa Wang", email: "lisa.wang@email.com", status: "not_started", score: null, submittedAt: null, timeSpent: null },
-    { id: 6, name: "James Miller", email: "james.m@email.com", status: "completed", score: 79, submittedAt: "2024-01-14T09:20:00Z", timeSpent: "3h 05m" },
-    { id: 7, name: "Anna Thompson", email: "anna.t@email.com", status: "expired", score: null, submittedAt: null, timeSpent: null },
-    { id: 8, name: "Michael Brown", email: "michael.b@email.com", status: "in_progress", score: null, submittedAt: null, timeSpent: "0h 45m" },
-  ];
+  // Fetch assessment and submissions
+  useEffect(() => {
+    if (!assessmentId || !currentUser) {
+      return;
+    }
 
-  const filteredSubmissions = submissions.filter(sub => {
-    const matchesSearch = sub.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          sub.email.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || sub.status === statusFilter;
+    const fetchData = async () => {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        // Fetch assessment details
+        const token = await currentUser.getIdToken();
+        const assessmentResult = await getAssessment(assessmentId, token);
+
+        if (!assessmentResult.success) {
+          setError("Failed to load assessment");
+          setIsLoading(false);
+          return;
+        }
+
+        setAssessment(assessmentResult.data);
+
+        // Fetch submissions
+        const submissionsResult = await getSubmissionsForAssessment(
+          assessmentId,
+          token
+        );
+
+        if (submissionsResult.success) {
+          setSubmissions(submissionsResult.data || []);
+        } else {
+          setError(submissionsResult.error || "Failed to load submissions");
+        }
+      } catch (err) {
+        console.error("Error fetching data:", err);
+        setError(err.message || "An unexpected error occurred");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [assessmentId, currentUser]);
+
+  // Calculate stats from real data
+  const stats = React.useMemo(() => {
+    const totalInvited = submissions.length;
+    const started = submissions.filter(
+      (s) =>
+        s.status === "in-progress" ||
+        s.status === "submitted" ||
+        s.status === "expired"
+    ).length;
+    const completed = submissions.filter(
+      (s) => s.status === "submitted"
+    ).length;
+    const expired = submissions.filter((s) => s.status === "expired").length;
+
+    // Calculate average score (only from completed submissions)
+    const completedSubmissions = submissions.filter(
+      (s) => s.status === "submitted"
+    );
+    // Note: We don't have score in the submission model yet, so this will be 0 for now
+    const avgScore =
+      completedSubmissions.length > 0
+        ? Math.round(
+            completedSubmissions.reduce((sum, s) => sum + (s.score || 0), 0) /
+              completedSubmissions.length
+          )
+        : 0;
+
+    // Calculate average time spent (in minutes)
+    const avgTimeSpentMinutes =
+      completedSubmissions.length > 0
+        ? Math.round(
+            completedSubmissions.reduce(
+              (sum, s) => sum + (s.timeSpent || 0),
+              0
+            ) / completedSubmissions.length
+          )
+        : 0;
+
+    const formatTime = (minutes) => {
+      if (minutes < 60) return `${minutes}m`;
+      const hours = Math.floor(minutes / 60);
+      const mins = minutes % 60;
+      return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+    };
+
+    return {
+      totalInvited,
+      started,
+      completed,
+      expired,
+      avgScore,
+      avgTimeSpent: formatTime(avgTimeSpentMinutes),
+    };
+  }, [submissions]);
+
+  const dropoffRate =
+    stats.started > 0
+      ? Math.round(((stats.started - stats.completed) / stats.started) * 100)
+      : 0;
+  const startRate =
+    stats.totalInvited > 0
+      ? Math.round((stats.started / stats.totalInvited) * 100)
+      : 0;
+  const completionRate =
+    stats.started > 0 ? Math.round((stats.completed / stats.started) * 100) : 0;
+
+  const filteredSubmissions = submissions.filter((sub) => {
+    const name = sub.candidateName || "";
+    const email = sub.candidateEmail || "";
+    const matchesSearch =
+      name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      email.toLowerCase().includes(searchQuery.toLowerCase());
+    // Map filter values to actual status values
+    let filterStatus = statusFilter;
+    if (statusFilter === "completed") filterStatus = "submitted";
+    if (statusFilter === "not_started") filterStatus = "pending";
+    if (statusFilter === "in_progress") filterStatus = "in-progress";
+    const matchesStatus = statusFilter === "all" || sub.status === filterStatus;
     return matchesSearch && matchesStatus;
   });
 
+  const formatTimeSpent = (minutes) => {
+    if (!minutes) return "—";
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  };
+
   const getStatusBadge = (status) => {
     const styles = {
-      completed: 'bg-green-100 text-green-700',
-      in_progress: 'bg-blue-100 text-blue-700',
-      not_started: 'bg-gray-100 text-gray-600',
-      expired: 'bg-red-100 text-red-700'
+      submitted: "bg-green-100 text-green-700",
+      "in-progress": "bg-blue-100 text-blue-700",
+      pending: "bg-gray-100 text-gray-600",
+      expired: "bg-red-100 text-red-700",
     };
     const labels = {
-      completed: 'Completed',
-      in_progress: 'In Progress',
-      not_started: 'Not Started',
-      expired: 'Expired'
+      submitted: "Completed",
+      "in-progress": "In Progress",
+      pending: "Not Started",
+      expired: "Expired",
     };
-    return <Badge className={styles[status]}>{labels[status]}</Badge>;
+    return (
+      <Badge className={styles[status] || "bg-gray-100 text-gray-600"}>
+        {labels[status] || status}
+      </Badge>
+    );
   };
 
   const getScoreColor = (score) => {
-    if (score >= 80) return 'text-green-600';
-    if (score >= 60) return 'text-yellow-600';
-    return 'text-red-600';
+    if (score >= 80) return "text-green-600";
+    if (score >= 60) return "text-yellow-600";
+    return "text-red-600";
   };
 
   return (
@@ -81,15 +211,24 @@ export default function SubmissionsDashboard() {
       <div className="max-w-6xl mx-auto px-6 py-8">
         {/* Header */}
         <motion.div
-                        initial={{ opacity: 0, y: -10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="mb-8"
-                      >
-                        <Link to={createPageUrl('Home')} className="text-sm text-gray-500 hover:text-[#1E3A8A] mb-1 block">
-                          ← Back to Assessments
-                        </Link>
-                        <h1 className="text-2xl font-bold text-[#1E3A8A]">Submissions Dashboard</h1>
-          <p className="text-gray-500 text-sm">Track candidate progress and review submissions</p>
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8"
+        >
+          <Link
+            to={createPageUrl("Home")}
+            className="text-sm text-gray-500 hover:text-[#1E3A8A] mb-1 block"
+          >
+            ← Back to Assessments
+          </Link>
+          <h1 className="text-2xl font-bold text-[#1E3A8A]">
+            {assessment ? assessment.title : "Submissions Dashboard"}
+          </h1>
+          <p className="text-gray-500 text-sm">
+            {assessment
+              ? `Track candidate progress and review submissions for "${assessment.title}"`
+              : "Track candidate progress and review submissions"}
+          </p>
         </motion.div>
 
         {/* Stats Cards */}
@@ -103,7 +242,9 @@ export default function SubmissionsDashboard() {
             <div className="flex items-center justify-between mb-2">
               <Users className="w-5 h-5 text-gray-400" />
             </div>
-            <p className="text-2xl font-bold text-gray-900">{stats.totalInvited}</p>
+            <p className="text-2xl font-bold text-gray-900">
+              {stats.totalInvited}
+            </p>
             <p className="text-sm text-gray-500">Total Invited</p>
           </div>
 
@@ -127,7 +268,9 @@ export default function SubmissionsDashboard() {
                 {completionRate}%
               </span>
             </div>
-            <p className="text-2xl font-bold text-gray-900">{stats.completed}</p>
+            <p className="text-2xl font-bold text-gray-900">
+              {stats.completed}
+            </p>
             <p className="text-sm text-gray-500">Completed</p>
           </div>
 
@@ -139,7 +282,9 @@ export default function SubmissionsDashboard() {
                 {dropoffRate}%
               </span>
             </div>
-            <p className="text-2xl font-bold text-red-600">{stats.started - stats.completed}</p>
+            <p className="text-2xl font-bold text-red-600">
+              {stats.started - stats.completed}
+            </p>
             <p className="text-sm text-gray-500">Dropoff</p>
           </div>
 
@@ -147,7 +292,9 @@ export default function SubmissionsDashboard() {
             <div className="flex items-center justify-between mb-2">
               <Star className="w-5 h-5 text-yellow-500" />
             </div>
-            <p className="text-2xl font-bold text-gray-900">{stats.avgScore}%</p>
+            <p className="text-2xl font-bold text-gray-900">
+              {stats.avgScore}%
+            </p>
             <p className="text-sm text-gray-500">Avg Score</p>
           </div>
         </motion.div>
@@ -184,67 +331,128 @@ export default function SubmissionsDashboard() {
           </div>
         </motion.div>
 
-        {/* Submissions Table */}
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="bg-white rounded-xl border border-gray-200 overflow-hidden"
-        >
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Candidate</th>
-                <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Score</th>
-                <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Time Spent</th>
-                <th className="text-right px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {filteredSubmissions.map((submission) => (
-                <tr key={submission.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-5 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-[#1E3A8A] flex items-center justify-center text-white text-sm font-medium">
-                        {submission.name.split(' ').map(n => n[0]).join('')}
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">{submission.name}</p>
-                        <p className="text-xs text-gray-500">{submission.email}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-5 py-4">
-                    {getStatusBadge(submission.status)}
-                  </td>
-                  <td className="px-5 py-4">
-                    {submission.score !== null ? (
-                      <span className={`font-semibold ${getScoreColor(submission.score)}`}>
-                        {submission.score}%
-                      </span>
-                    ) : (
-                      <span className="text-gray-400">—</span>
-                    )}
-                  </td>
-                  <td className="px-5 py-4 text-sm text-gray-600">
-                    {submission.timeSpent || '—'}
-                  </td>
-                  <td className="px-5 py-4 text-right">
-                    {submission.status === 'completed' && (
-                      <Link to={createPageUrl('CandidateSubmission')}>
-                        <Button variant="ghost" size="sm" className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10">
-                          <Eye className="w-4 h-4 mr-1" />
-                          View
-                        </Button>
-                      </Link>
-                    )}
-                  </td>
+        {/* Error Message */}
+        {error && (
+          <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        {/* Loading State */}
+        {isLoading ? (
+          <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+            <div className="w-8 h-8 border-2 border-[#1E3A8A]/30 border-t-[#1E3A8A] rounded-full animate-spin mx-auto mb-4"></div>
+            <p className="text-gray-500">Loading submissions...</p>
+          </div>
+        ) : filteredSubmissions.length === 0 ? (
+          <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+            <Users className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              No submissions yet
+            </h3>
+            <p className="text-gray-500">
+              {submissions.length === 0
+                ? "No candidates have been invited to this assessment yet."
+                : "No submissions match your search criteria."}
+            </p>
+          </div>
+        ) : (
+          /* Submissions Table */
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            className="bg-white rounded-xl border border-gray-200 overflow-hidden"
+          >
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Candidate
+                  </th>
+                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Status
+                  </th>
+                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Score
+                  </th>
+                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Time Spent
+                  </th>
+                  <th className="text-right px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </motion.div>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {filteredSubmissions.map((submission) => {
+                  const candidateName = submission.candidateName || "Unknown";
+                  const candidateEmail = submission.candidateEmail || "";
+                  const initials = candidateName
+                    .split(" ")
+                    .map((n) => n[0])
+                    .join("")
+                    .toUpperCase()
+                    .slice(0, 2);
+
+                  return (
+                    <tr
+                      key={submission._id}
+                      className="hover:bg-gray-50 transition-colors"
+                    >
+                      <td className="px-5 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-full bg-[#1E3A8A] flex items-center justify-center text-white text-sm font-medium">
+                            {initials}
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-gray-900">
+                              {candidateName}
+                            </p>
+                            {candidateEmail && (
+                              <p className="text-xs text-gray-500">
+                                {candidateEmail}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-4">
+                        {getStatusBadge(submission.status)}
+                      </td>
+                      <td className="px-5 py-4">
+                        {/* Note: Score is not in the submission model yet */}
+                        <span className="text-gray-400">—</span>
+                      </td>
+                      <td className="px-5 py-4 text-sm text-gray-600">
+                        {formatTimeSpent(submission.timeSpent)}
+                      </td>
+                      <td className="px-5 py-4 text-right">
+                        {submission.status === "submitted" &&
+                          submission.githubLink && (
+                            <a
+                              href={submission.githubLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10"
+                              >
+                                <Eye className="w-4 h-4 mr-1" />
+                                View
+                              </Button>
+                            </a>
+                          )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </motion.div>
+        )}
       </div>
     </div>
   );

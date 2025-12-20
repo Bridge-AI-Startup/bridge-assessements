@@ -1,4 +1,4 @@
-import { getIdToken } from "@/auth";
+import { auth } from "@/firebase/firebase";
 
 /**
  * Make an authenticated API request
@@ -10,7 +10,11 @@ import { getIdToken } from "@/auth";
 export const authenticatedFetch = async (url, options = {}) => {
   try {
     // Get Firebase ID token
-    const token = await getIdToken();
+    const user = auth.currentUser;
+    if (!user) {
+      throw new Error("No user is currently signed in");
+    }
+    const token = await user.getIdToken();
 
     // Merge headers
     const headers = {

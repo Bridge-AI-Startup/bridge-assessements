@@ -1,24 +1,14 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Mail, ArrowRight, Lock, AlertCircle } from "lucide-react";
+import { signInWithEmailAndPassword } from "firebase/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  signIn,
-  signUp,
-  getAuthErrorMessage,
-  loginUserInBackend,
-} from "@/auth";
+import { auth } from "../../firebase/firebase";
 import { createPageUrl } from "@/utils";
+import { verifyUser } from "../../api/user";
 
-export default function AuthModal({
-  isOpen,
-  onClose,
-  defaultTab = "login",
-  showTabs = true,
-  signupRedirect = "GetStarted", // Default redirect after signup
-}) {
-  const [activeTab, setActiveTab] = useState(defaultTab);
+export default function AuthModal({ isOpen, onClose }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -30,42 +20,61 @@ export default function AuthModal({
     setIsLoading(true);
 
     try {
-      if (activeTab === "signup") {
-        // Create account and redirect (Firebase will validate email and password)
-        await signUp(email, password);
+      // Sign in
+      console.log("🔄 [AuthModal] Starting sign in process...");
+      console.log("   Email:", email);
 
-        // Create/login user in backend database
-        try {
-          await loginUserInBackend();
-        } catch (backendError) {
-          console.error("Backend login error:", backendError);
-          // Continue even if backend call fails - user is still authenticated in Firebase
-        }
-
-        // Redirect based on signupRedirect prop
-        if (signupRedirect === "GetStarted") {
-          // Store email for GetStarted page
-          localStorage.setItem("pending_email", email);
-        }
-        window.location.href = createPageUrl(signupRedirect);
-      } else {
-        // Sign in
-        await signIn(email, password);
-
-        // Create/login user in backend database
-        try {
-          await loginUserInBackend();
-        } catch (backendError) {
-          console.error("Backend login error:", backendError);
-          // Continue even if backend call fails - user is still authenticated in Firebase
-        }
-
-        // Redirect to Home on successful login
-        window.location.href = createPageUrl("Home");
+      console.log("   Step 1: Authenticating with Firebase...");
+      const userCredential = await signInWithEmailAndPassword(
+        auth,
+        email,
+        password
+      );
+      const token = await userCredential.user.getIdToken();
+      console.log("   ✅ Firebase authentication successful");
+      console.log("   Step 2: Verifying user with backend...");
+      const result = await verifyUser(token);
+      console.log("   [AuthModal] verifyUser result:", result);
+      if (!result.success) {
+        const errorMsg =
+          "error" in result
+            ? result.error
+            : "Authentication failed. Please try again.";
+        console.error("   ❌ Backend verification failed:", errorMsg);
+        setError(errorMsg);
+        setIsLoading(false);
+        return;
       }
+      console.log("   ✅ Backend verification successful");
+
+      // Redirect to Home on successful login
+      const homeUrl = createPageUrl("Home");
+      console.log("   Step 3: Redirecting to Home...");
+      console.log("   URL:", homeUrl);
+
+      // Close modal before redirect
+      onClose();
+
+      // Small delay to ensure modal closes smoothly
+      setTimeout(() => {
+        window.location.href = homeUrl;
+      }, 100);
     } catch (err) {
-      console.error("Auth error:", err);
-      setError(getAuthErrorMessage(err));
+      console.error("❌ [AuthModal] Auth error:", err);
+      console.error("   Error code:", err.code);
+      console.error("   Error message:", err.message);
+      if (err instanceof Error) {
+        // Handle Firebase auth errors
+        if (err.message.includes("auth/invalid-email")) {
+          setError("Invalid email address");
+        } else if (err.message.includes("auth/wrong-password")) {
+          setError("Incorrect password");
+        } else if (err.message.includes("auth/user-not-found")) {
+          setError("No account found with this email");
+        } else {
+          setError("Login failed. Please try again.");
+        }
+      }
       setIsLoading(false);
     }
   };
@@ -99,43 +108,11 @@ export default function AuthModal({
             <div className="w-14 h-14 rounded-2xl bg-white flex items-center justify-center mx-auto mb-4">
               <span className="text-[#1E3A8A] font-bold text-xl">B</span>
             </div>
-            <h2 className="text-2xl font-bold text-white mb-1">
-              {activeTab === "login"
-                ? "Welcome back"
-                : "Get started with Bridge"}
-            </h2>
+            <h2 className="text-2xl font-bold text-white mb-1">Welcome back</h2>
             <p className="text-blue-200 text-sm">
-              {activeTab === "login"
-                ? "Sign in to continue to your dashboard"
-                : "Create your account in seconds"}
+              Sign in to continue to your dashboard
             </p>
           </div>
-
-          {/* Tabs */}
-          {showTabs && (
-            <div className="flex border-b border-gray-200">
-              <button
-                onClick={() => setActiveTab("login")}
-                className={`flex-1 py-3 text-sm font-medium transition-colors ${
-                  activeTab === "login"
-                    ? "text-[#1E3A8A] border-b-2 border-[#1E3A8A]"
-                    : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                Sign In
-              </button>
-              <button
-                onClick={() => setActiveTab("signup")}
-                className={`flex-1 py-3 text-sm font-medium transition-colors ${
-                  activeTab === "signup"
-                    ? "text-[#1E3A8A] border-b-2 border-[#1E3A8A]"
-                    : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                Sign Up
-              </button>
-            </div>
-          )}
 
           {/* Form */}
           <div className="p-6">
@@ -189,44 +166,29 @@ export default function AuthModal({
                 {isLoading ? (
                   <span className="flex items-center gap-2">
                     <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    {activeTab === "login"
-                      ? "Signing in..."
-                      : "Creating account..."}
+                    Signing in...
                   </span>
                 ) : (
                   <span className="flex items-center justify-center gap-2">
-                    {activeTab === "login" ? "Sign In" : "Create Account"}
+                    Sign In
                     <ArrowRight className="w-4 h-4" />
                   </span>
                 )}
               </Button>
             </form>
 
-            {showTabs && (
-              <div className="mt-6 text-center text-sm text-gray-500">
-                {activeTab === "login" ? (
-                  <>
-                    Don't have an account?{" "}
-                    <button
-                      onClick={() => setActiveTab("signup")}
-                      className="text-[#1E3A8A] font-medium hover:underline"
-                    >
-                      Sign up free
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    Already have an account?{" "}
-                    <button
-                      onClick={() => setActiveTab("login")}
-                      className="text-[#1E3A8A] font-medium hover:underline"
-                    >
-                      Sign in
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
+            <div className="mt-6 text-center text-sm text-gray-500">
+              Don't have an account?{" "}
+              <button
+                onClick={() => {
+                  onClose();
+                  window.location.href = createPageUrl("GetStarted");
+                }}
+                className="text-[#1E3A8A] font-medium hover:underline"
+              >
+                Sign up free
+              </button>
+            </div>
           </div>
         </motion.div>
       </motion.div>

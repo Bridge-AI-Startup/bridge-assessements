@@ -2,6 +2,7 @@ import React from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Clock, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import bridgeLogo from "@/assets/bridge-logo.svg";
 
 export default function CandidatePreviewModal({ isOpen, onClose, assessment }) {
   if (!isOpen) return null;
@@ -40,8 +41,12 @@ export default function CandidatePreviewModal({ isOpen, onClose, assessment }) {
           <div className="p-8">
             {/* Company Header */}
             <div className="text-center mb-8">
-              <div className="w-16 h-16 rounded-2xl bg-[#1E3A8A] flex items-center justify-center mx-auto mb-4">
-                <span className="text-white font-bold text-xl">B</span>
+              <div className="w-16 h-16 rounded-2xl overflow-hidden flex items-center justify-center mx-auto mb-4">
+                <img
+                  src={bridgeLogo}
+                  alt="Bridge"
+                  className="w-full h-full object-contain"
+                />
               </div>
               <h1 className="text-2xl font-bold text-gray-900 mb-2">
                 Technical Assessment

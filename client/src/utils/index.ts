@@ -1,6 +1,5 @@
-
-
-
 export function createPageUrl(pageName: string) {
-    return '/' + pageName.toLowerCase().replace(/ /g, '-');
+  // Routes are case-sensitive and match the PAGES keys exactly
+  // So "Home" should map to "/Home", not "/home"
+  return "/" + pageName;
 }

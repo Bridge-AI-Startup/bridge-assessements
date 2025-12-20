@@ -1,34 +1,36 @@
-import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import { Pencil, Sparkles, GripVertical, Trash2, Plus } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
+import React, { useState } from "react";
+import { motion } from "framer-motion";
+import { Pencil, Sparkles, GripVertical, Trash2, Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 
-export default function DocumentBlock({ 
-  title, 
-  icon: Icon, 
-  children, 
-  isActive, 
+export default function DocumentBlock({
+  title,
+  icon: Icon,
+  children,
+  isActive,
   isHighlighted,
   onSelect,
   onAddToContext,
   isInContext,
   onEdit,
   editValue,
-  type = 'default'
+  type = "default",
 }) {
   const [isEditing, setIsEditing] = useState(false);
-  const [editText, setEditText] = useState('');
+  const [editText, setEditText] = useState("");
 
   const handleStartEdit = (e) => {
     e.stopPropagation();
-    setEditText(editValue || '');
+    setEditText(editValue || "");
     setIsEditing(true);
   };
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.stopPropagation();
-    onEdit?.(editText);
+    if (onEdit) {
+      await onEdit(editText);
+    }
     setIsEditing(false);
   };
 
@@ -41,10 +43,16 @@ export default function DocumentBlock({
     <motion.div
       onClick={onSelect}
       className={`bg-white rounded-xl border transition-all duration-200 cursor-pointer ${
-        isActive 
-          ? 'border-[#1E3A8A] shadow-sm' 
-          : 'border-gray-200 hover:border-gray-300'
-      } ${isHighlighted ? 'ring-2 ring-[#FFF44F] ring-opacity-50' : ''}`}
+        isActive
+          ? "border-[#1E3A8A] shadow-sm"
+          : "border-gray-200 hover:border-gray-300"
+      } ${
+        isHighlighted
+          ? "ring-4 ring-yellow-400 ring-opacity-75 shadow-lg border-yellow-400"
+          : ""
+      }`}
+      animate={isHighlighted ? { scale: [1, 1.02, 1] } : {}}
+      transition={{ duration: 0.3 }}
     >
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
@@ -63,17 +71,28 @@ export default function DocumentBlock({
               className="h-8 px-2.5 text-gray-500 hover:text-gray-700"
             >
               <Pencil className="w-3.5 h-3.5 mr-1.5" />
-              {isEditing ? 'Cancel' : 'Edit'}
+              {isEditing ? "Cancel" : "Edit"}
             </Button>
           )}
           <Button
             variant="ghost"
             size="sm"
-            onClick={(e) => { e.stopPropagation(); onAddToContext?.(); }}
-            className={`h-8 px-2.5 ${isInContext ? 'text-green-600 hover:text-green-700 hover:bg-green-50' : 'text-[#1E3A8A] hover:text-[#1E3A8A] hover:bg-blue-50'}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onAddToContext?.();
+            }}
+            className={`h-8 px-2.5 ${
+              isInContext
+                ? "text-green-600 hover:text-green-700 hover:bg-green-50"
+                : "text-[#1E3A8A] hover:text-[#1E3A8A] hover:bg-blue-50"
+            }`}
           >
-            <Plus className={`w-3.5 h-3.5 mr-1.5 ${isInContext ? 'rotate-45' : ''} transition-transform`} />
-            {isInContext ? 'Editable' : 'Restrict edits to this'}
+            <Plus
+              className={`w-3.5 h-3.5 mr-1.5 ${
+                isInContext ? "rotate-45" : ""
+              } transition-transform`}
+            />
+            {isInContext ? "Editable" : "Restrict edits to this"}
           </Button>
         </div>
       </div>
@@ -92,7 +111,11 @@ export default function DocumentBlock({
               <Button variant="outline" size="sm" onClick={handleCancel}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={handleSave} className="bg-[#1E3A8A] hover:bg-[#152a66]">
+              <Button
+                size="sm"
+                onClick={handleSave}
+                className="bg-[#1E3A8A] hover:bg-[#152a66]"
+              >
                 Save
               </Button>
             </div>
@@ -125,14 +148,20 @@ export function DeliverableItem({ text, index, onEdit, onDelete }) {
           type="text"
           value={editText}
           onChange={(e) => setEditText(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleSave()}
+          onKeyDown={(e) => e.key === "Enter" && handleSave()}
           className="flex-1 text-gray-700 bg-white border border-gray-200 rounded px-2 py-1 text-sm"
           autoFocus
         />
-        <button onClick={handleSave} className="p-1.5 text-green-600 hover:text-green-700 rounded">
+        <button
+          onClick={handleSave}
+          className="p-1.5 text-green-600 hover:text-green-700 rounded"
+        >
           Save
         </button>
-        <button onClick={() => setIsEditing(false)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded">
+        <button
+          onClick={() => setIsEditing(false)}
+          className="p-1.5 text-gray-400 hover:text-gray-600 rounded"
+        >
           Cancel
         </button>
       </div>
@@ -140,7 +169,7 @@ export function DeliverableItem({ text, index, onEdit, onDelete }) {
   }
 
   return (
-    <div 
+    <div
       className="flex items-start gap-3 py-2.5 px-3 -mx-3 rounded-lg hover:bg-gray-50 group transition-colors"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
@@ -152,11 +181,17 @@ export function DeliverableItem({ text, index, onEdit, onDelete }) {
       <p className="flex-1 text-gray-700 leading-relaxed">{text}</p>
       {isHovered && (
         <div className="flex items-center gap-1">
-          <button onClick={() => setIsEditing(true)} className="p-1.5 text-gray-400 hover:text-[#1E3A8A] rounded transition-colors">
+          <button
+            onClick={() => setIsEditing(true)}
+            className="p-1.5 text-gray-400 hover:text-[#1E3A8A] rounded transition-colors"
+          >
             <Pencil className="w-3.5 h-3.5" />
           </button>
 
-          <button className="p-1.5 text-gray-400 hover:text-red-500 rounded transition-colors" onClick={onDelete}>
+          <button
+            className="p-1.5 text-gray-400 hover:text-red-500 rounded transition-colors"
+            onClick={onDelete}
+          >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -194,8 +229,18 @@ export function RubricItem({ criteria, weight, onEdit, onDelete }) {
           className="w-16 text-gray-700 bg-white border border-gray-200 rounded px-2 py-1 text-sm text-center"
           placeholder="25%"
         />
-        <button onClick={handleSave} className="text-xs text-green-600 hover:text-green-700">Save</button>
-        <button onClick={() => setIsEditing(false)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+        <button
+          onClick={handleSave}
+          className="text-xs text-green-600 hover:text-green-700"
+        >
+          Save
+        </button>
+        <button
+          onClick={() => setIsEditing(false)}
+          className="text-xs text-gray-400 hover:text-gray-600"
+        >
+          Cancel
+        </button>
       </div>
     );
   }
@@ -208,13 +253,13 @@ export function RubricItem({ criteria, weight, onEdit, onDelete }) {
       </div>
       <div className="flex items-center gap-2">
         <span className="text-sm text-gray-400">{weight}</span>
-        <button 
+        <button
           onClick={() => setIsEditing(true)}
           className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-[#1E3A8A] rounded transition-colors"
         >
           <Pencil className="w-3.5 h-3.5" />
         </button>
-        <button 
+        <button
           onClick={onDelete}
           className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-red-500 rounded transition-colors"
         >
@@ -231,11 +276,11 @@ export function TestCaseItem({ name, type, points, onEdit, onDelete }) {
   const [editName, setEditName] = useState(name);
   const [editType, setEditType] = useState(type);
   const [editPoints, setEditPoints] = useState(points);
-  
+
   const typeColors = {
-    unit: 'bg-green-100 text-green-700',
-    integration: 'bg-blue-100 text-blue-700',
-    e2e: 'bg-purple-100 text-purple-700'
+    unit: "bg-green-100 text-green-700",
+    integration: "bg-blue-100 text-blue-700",
+    e2e: "bg-purple-100 text-purple-700",
   };
 
   const handleSave = () => {
@@ -270,20 +315,34 @@ export function TestCaseItem({ name, type, points, onEdit, onDelete }) {
           className="w-16 text-gray-700 bg-white border border-gray-200 rounded px-2 py-1 text-sm text-center"
           placeholder="10"
         />
-        <button onClick={handleSave} className="text-xs text-green-600 hover:text-green-700">Save</button>
-        <button onClick={() => setIsEditing(false)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+        <button
+          onClick={handleSave}
+          className="text-xs text-green-600 hover:text-green-700"
+        >
+          Save
+        </button>
+        <button
+          onClick={() => setIsEditing(false)}
+          className="text-xs text-gray-400 hover:text-gray-600"
+        >
+          Cancel
+        </button>
       </div>
     );
   }
 
   return (
-    <div 
+    <div
       className="flex items-center justify-between py-2.5 px-3 -mx-3 rounded-lg hover:bg-gray-50 group transition-colors"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
       <div className="flex items-center gap-3">
-        <span className={`px-2 py-0.5 text-xs rounded-full ${typeColors[type] || 'bg-gray-100 text-gray-600'}`}>
+        <span
+          className={`px-2 py-0.5 text-xs rounded-full ${
+            typeColors[type] || "bg-gray-100 text-gray-600"
+          }`}
+        >
           {type}
         </span>
         <span className="text-gray-700">{name}</span>
@@ -292,10 +351,16 @@ export function TestCaseItem({ name, type, points, onEdit, onDelete }) {
         <span className="text-sm text-gray-400">{points} pts</span>
         {isHovered && (
           <div className="flex items-center gap-1">
-            <button onClick={() => setIsEditing(true)} className="p-1.5 text-gray-400 hover:text-[#1E3A8A] rounded transition-colors">
+            <button
+              onClick={() => setIsEditing(true)}
+              className="p-1.5 text-gray-400 hover:text-[#1E3A8A] rounded transition-colors"
+            >
               <Pencil className="w-3.5 h-3.5" />
             </button>
-            <button className="p-1.5 text-gray-400 hover:text-red-500 rounded transition-colors" onClick={onDelete}>
+            <button
+              className="p-1.5 text-gray-400 hover:text-red-500 rounded transition-colors"
+              onClick={onDelete}
+            >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           </div>

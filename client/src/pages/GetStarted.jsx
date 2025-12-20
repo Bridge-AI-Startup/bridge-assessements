@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,17 +10,11 @@ import {
   Lock,
   AlertCircle,
 } from "lucide-react";
-import {
-  signUp,
-  getCurrentUser,
-  updateUserProfile,
-  onAuthStateChange,
-  getAuthErrorMessage,
-  createUserInBackend,
-  loginUserInBackend,
-  updateUserInBackend,
-} from "@/auth";
+import { createUserWithEmailAndPassword } from "firebase/auth";
+import { auth } from "@/firebase/firebase";
+import { createUser } from "@/api/user";
 import { createPageUrl } from "@/utils";
+import bridgeLogo from "@/assets/bridge-logo.svg";
 
 export default function GetStarted() {
   const [email, setEmail] = useState("");
@@ -41,21 +35,11 @@ export default function GetStarted() {
     }
 
     // Get initial user state
-    const user = getCurrentUser();
+    const user = auth.currentUser;
     setCurrentUser(user);
     if (user && user.email) {
       setEmail(user.email);
     }
-
-    // Listen to auth state changes
-    const unsubscribe = onAuthStateChange((user) => {
-      setCurrentUser(user);
-      if (user && user.email && !email) {
-        setEmail(user.email);
-      }
-    });
-
-    return () => unsubscribe();
   }, []);
 
   const handleLogoChange = (e) => {
@@ -74,10 +58,21 @@ export default function GetStarted() {
     if (!currentUser) {
       setIsLoading(true);
       try {
-        await signUp(email, password);
+        await createUserWithEmailAndPassword(auth, email, password);
+        // Update currentUser after signup
+        setCurrentUser(auth.currentUser);
       } catch (err) {
         console.error("Sign up error:", err);
-        setError(getAuthErrorMessage(err));
+        // Handle Firebase auth errors
+        if (err.code === "auth/email-already-in-use") {
+          setError("This email is already registered. Please sign in instead.");
+        } else if (err.code === "auth/invalid-email") {
+          setError("Invalid email address");
+        } else if (err.code === "auth/weak-password") {
+          setError("Password should be at least 6 characters");
+        } else {
+          setError("Failed to create account. Please try again.");
+        }
         setIsLoading(false);
         return;
       }
@@ -86,46 +81,69 @@ export default function GetStarted() {
     setIsLoading(true);
 
     try {
-      // Get Firebase token
-      const user = getCurrentUser();
+      // Get Firebase user
+      const user = auth.currentUser;
       if (!user) {
         throw new Error("User not authenticated");
       }
 
-      // Update Firebase profile with company name
-      if (companyName) {
-        await updateUserProfile({ displayName: companyName });
-      }
+      // Create or update user in backend database (companyName is saved here)
+      console.log("🔄 [GetStarted] Saving user data to backend...");
+      console.log("   Company Name:", companyName);
+      console.log("   Current User exists:", !!currentUser);
 
-      // Create or update user in backend database
+      const userData = {
+        companyName: companyName,
+        companyLogoUrl: logoPreview || null,
+      };
+
       try {
-        if (currentUser) {
-          // User already exists - update in backend
-          await updateUserInBackend({
-            name: companyName,
-            companyLogoUrl: logoPreview || null,
-          });
-        } else {
-          // New user - create in backend
-          await createUserInBackend({
-            name: companyName,
-            companyLogoUrl: logoPreview || null,
-          });
+        // If Firebase signup succeeded, user is new - create in backend
+        console.log("   📝 Creating user in backend...");
+        const createResult = await createUser(userData);
+
+        if (!createResult.success) {
+          const errorMsg =
+            "error" in createResult
+              ? createResult.error
+              : "Failed to create user";
+          throw new Error(errorMsg);
         }
+        console.log("   ✅ User created successfully");
       } catch (backendError) {
-        console.error("Backend user creation/update error:", backendError);
-        // Try login as fallback (in case user was created elsewhere)
-        try {
-          await loginUserInBackend({
-            name: companyName,
-            companyLogoUrl: logoPreview || null,
-          });
-        } catch (loginError) {
-          console.error("Backend login fallback error:", loginError);
-          // Continue anyway - user is authenticated in Firebase
+        console.error("Backend user creation error:", backendError);
+
+        // Check if it's a network error
+        const isNetworkErr =
+          backendError.message?.includes("Failed to fetch") ||
+          backendError.message?.includes("NetworkError");
+
+        if (isNetworkErr) {
+          console.warn(
+            "Backend is offline. Storing data locally for later sync."
+          );
+          // Store user data in localStorage for sync when backend comes online
+          localStorage.setItem(
+            "pending_backend_sync",
+            JSON.stringify({
+              companyName: companyName,
+              companyLogoUrl: logoPreview || null,
+              timestamp: Date.now(),
+            })
+          );
+        } else {
+          // If create fails for non-network reasons, show error and stop
+          console.error("Backend error details:", backendError);
+          setError(
+            backendError.message ||
+              "Failed to create user account. Please try again."
+          );
+          setIsLoading(false);
+          return; // Don't redirect if backend creation fails
         }
       }
 
+      // Only redirect if backend creation succeeded
       // Get the job description from landing page
       const jobDescription =
         localStorage.getItem("pending_job_description") || "";
@@ -167,8 +185,12 @@ export default function GetStarted() {
         </Button>
 
         <div className="text-center mb-8">
-          <div className="w-14 h-14 rounded-2xl bg-[#1E3A8A] flex items-center justify-center mx-auto mb-4">
-            <span className="text-white font-bold text-xl">B</span>
+          <div className="w-14 h-14 rounded-2xl overflow-hidden flex items-center justify-center mx-auto mb-4">
+            <img
+              src={bridgeLogo}
+              alt="Bridge"
+              className="w-full h-full object-contain"
+            />
           </div>
           <h1 className="text-2xl font-bold text-gray-900 mb-1">
             Set up your company
