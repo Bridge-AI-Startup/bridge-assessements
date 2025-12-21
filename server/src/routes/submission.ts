@@ -35,6 +35,14 @@ router.get(
   SubmissionController.getSubmissionsForAssessment
 );
 
+// Employer endpoint - Generate interview questions for a submission (auth required)
+// Must come before /:id route
+router.post(
+  "/:submissionId/generate-interview",
+  [verifyAuthToken],
+  SubmissionController.generateInterviewQuestions
+);
+
 // Public endpoint - Start a new submission
 // Must come before /:id route
 router.post(
@@ -49,6 +57,12 @@ router.post(
   "/token/:token/submit",
   SubmissionValidator.submitSubmissionValidation,
   SubmissionController.submitSubmissionByToken
+);
+
+// Public endpoint - Generate interview questions by token (for candidates)
+router.post(
+  "/token/:token/generate-interview",
+  SubmissionController.generateInterviewQuestionsByToken
 );
 
 // Public endpoint - Final submission

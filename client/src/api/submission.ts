@@ -188,3 +188,77 @@ export async function getSubmissionsForAssessment(
     return handleAPIError(error);
   }
 }
+
+export type GenerateInterviewResponse = {
+  questions: string[];
+  submissionId: string;
+  candidateName?: string;
+};
+
+/**
+ * Generate interview questions for a submission by token (candidate endpoint)
+ */
+export async function generateInterviewQuestionsByToken(
+  submissionToken: string
+): Promise<APIResult<GenerateInterviewResponse>> {
+  try {
+    const response = await post(
+      `/submissions/token/${submissionToken}/generate-interview`,
+      {}
+    );
+
+    const result = await response.json();
+
+    if (result && result.questions && Array.isArray(result.questions)) {
+      return { success: true, data: result as GenerateInterviewResponse };
+    }
+
+    return {
+      success: false,
+      error: result.error || "Failed to generate interview questions",
+    };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Generate interview questions for a submission (employer endpoint)
+ */
+export async function generateInterviewQuestions(
+  submissionId: string,
+  token?: string
+): Promise<APIResult<GenerateInterviewResponse>> {
+  try {
+    // Get Firebase ID token - use provided token or get from current user
+    let authToken = token;
+    if (!authToken) {
+      const user = auth.currentUser;
+      if (!user) {
+        return { success: false, error: "No user is currently signed in" };
+      }
+      authToken = await user.getIdToken();
+    }
+
+    const response = await post(
+      `/submissions/${submissionId}/generate-interview`,
+      {},
+      {
+        Authorization: `Bearer ${authToken}`,
+      }
+    );
+
+    const result = await response.json();
+
+    if (result && result.questions && Array.isArray(result.questions)) {
+      return { success: true, data: result as GenerateInterviewResponse };
+    }
+
+    return {
+      success: false,
+      error: result.error || "Failed to generate interview questions",
+    };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}

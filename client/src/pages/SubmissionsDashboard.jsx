@@ -12,13 +12,18 @@ import {
   Star,
   ArrowUpRight,
   ArrowDownRight,
+  MessageSquare,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Link, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { getSubmissionsForAssessment } from "@/api/submission";
+import {
+  getSubmissionsForAssessment,
+  generateInterviewQuestions,
+} from "@/api/submission";
 import { getAssessment } from "@/api/assessment";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
@@ -34,6 +39,8 @@ export default function SubmissionsDashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
+  const [generatingInterview, setGeneratingInterview] = useState(null); // submissionId
+  const [interviewQuestions, setInterviewQuestions] = useState(null); // { submissionId, questions, candidateName }
 
   // Wait for auth state to be ready
   useEffect(() => {
@@ -204,6 +211,37 @@ export default function SubmissionsDashboard() {
     if (score >= 80) return "text-green-600";
     if (score >= 60) return "text-yellow-600";
     return "text-red-600";
+  };
+
+  const handleGenerateInterview = async (submissionId) => {
+    if (!currentUser) return;
+
+    setGeneratingInterview(submissionId);
+    setError(null);
+
+    try {
+      const token = await currentUser.getIdToken();
+      const result = await generateInterviewQuestions(submissionId, token);
+
+      if (result.success) {
+        setInterviewQuestions({
+          submissionId,
+          questions: result.data.questions,
+          candidateName: result.data.candidateName,
+        });
+      } else {
+        setError(result.error || "Failed to generate interview questions");
+      }
+    } catch (err) {
+      console.error("Error generating interview:", err);
+      setError(err.message || "An unexpected error occurred");
+    } finally {
+      setGeneratingInterview(null);
+    }
+  };
+
+  const closeInterviewModal = () => {
+    setInterviewQuestions(null);
   };
 
   return (
@@ -428,29 +466,126 @@ export default function SubmissionsDashboard() {
                         {formatTimeSpent(submission.timeSpent)}
                       </td>
                       <td className="px-5 py-4 text-right">
-                        {submission.status === "submitted" &&
-                          submission.githubLink && (
-                            <a
-                              href={submission.githubLink}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10"
-                              >
-                                <Eye className="w-4 h-4 mr-1" />
-                                View
-                              </Button>
-                            </a>
-                          )}
+                        <div className="flex items-center justify-end gap-2">
+                          {submission.status === "submitted" &&
+                            submission.githubLink && (
+                              <>
+                                <a
+                                  href={submission.githubLink}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10"
+                                  >
+                                    <Eye className="w-4 h-4 mr-1" />
+                                    View
+                                  </Button>
+                                </a>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() =>
+                                    handleGenerateInterview(submission._id)
+                                  }
+                                  disabled={
+                                    generatingInterview === submission._id
+                                  }
+                                  className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10"
+                                >
+                                  {generatingInterview === submission._id ? (
+                                    <>
+                                      <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                                      Generating...
+                                    </>
+                                  ) : (
+                                    <>
+                                      <MessageSquare className="w-4 h-4 mr-1" />
+                                      Interview
+                                    </>
+                                  )}
+                                </Button>
+                              </>
+                            )}
+                        </div>
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+          </motion.div>
+        )}
+
+        {/* Interview Questions Modal */}
+        {interviewQuestions && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6"
+            onClick={closeInterviewModal}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white rounded-2xl shadow-xl max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col"
+            >
+              {/* Header */}
+              <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">
+                    Interview Questions
+                  </h2>
+                  {interviewQuestions.candidateName && (
+                    <p className="text-sm text-gray-500 mt-1">
+                      For {interviewQuestions.candidateName}
+                    </p>
+                  )}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={closeInterviewModal}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  ✕
+                </Button>
+              </div>
+
+              {/* Questions */}
+              <div className="px-6 py-4 overflow-y-auto flex-1">
+                <div className="space-y-4">
+                  {interviewQuestions.questions.map((question, index) => (
+                    <div
+                      key={index}
+                      className="bg-gray-50 rounded-lg p-4 border border-gray-200"
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="w-6 h-6 rounded-full bg-[#1E3A8A] text-white flex items-center justify-center text-sm font-medium flex-shrink-0">
+                          {index + 1}
+                        </div>
+                        <p className="text-gray-900 leading-relaxed">
+                          {question}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="px-6 py-4 border-t border-gray-200 flex justify-end">
+                <Button
+                  onClick={closeInterviewModal}
+                  className="bg-[#1E3A8A] hover:bg-[#152a66] text-white"
+                >
+                  Close
+                </Button>
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </div>

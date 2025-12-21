@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import {
   Clock,
@@ -21,9 +21,11 @@ import {
   startAssessment,
   submitAssessment,
 } from "@/api/submission";
+import { createPageUrl } from "@/utils";
 
 export default function CandidateAssessment() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const token = searchParams.get("token");
 
   const [submission, setSubmission] = useState(null);
@@ -54,6 +56,16 @@ export default function CandidateAssessment() {
           if (typeof assessmentData === "object" && assessmentData !== null) {
             setAssessment(assessmentData);
           }
+
+          // If already submitted or expired, redirect to submitted page
+          if (
+            result.data.status === "submitted" ||
+            result.data.status === "expired"
+          ) {
+            navigate(`${createPageUrl("CandidateSubmitted")}?token=${token}`);
+            return;
+          }
+
           if (result.data.status === "in-progress") {
             setTimeRemaining(result.data.timeRemaining);
           }
@@ -173,17 +185,17 @@ export default function CandidateAssessment() {
     try {
       const result = await submitAssessment(token, githubUrl.trim());
       if (result.success) {
-        alert("Assessment submitted successfully!");
-        setSubmission(result.data);
+        // Redirect to submitted page
+        navigate(`${createPageUrl("CandidateSubmitted")}?token=${token}`);
       } else {
         const errorMsg =
           "error" in result ? result.error : "Failed to submit assessment";
         alert(errorMsg);
+        setIsSubmitting(false);
       }
     } catch (error) {
       console.error("Error submitting assessment:", error);
       alert("Failed to submit assessment");
-    } finally {
       setIsSubmitting(false);
     }
   };

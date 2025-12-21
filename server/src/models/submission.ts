@@ -68,6 +68,31 @@ const SubmissionSchema = new mongoose.Schema(
       default: null,
     },
 
+    // GitHub repository information (parsed and resolved)
+    githubRepo: {
+      owner: {
+        type: String,
+        default: null,
+      },
+      repo: {
+        type: String,
+        default: null,
+      },
+      refType: {
+        type: String,
+        enum: ["commit", "branch"],
+        default: null,
+      },
+      ref: {
+        type: String,
+        default: null,
+      },
+      pinnedCommitSha: {
+        type: String,
+        default: null,
+      },
+    },
+
     // Optional metadata
     metadata: {
       ipAddress: {

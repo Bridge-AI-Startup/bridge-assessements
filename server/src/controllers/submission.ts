@@ -5,6 +5,12 @@ import { AuthError } from "../errors/auth.js";
 import AssessmentModel from "../models/assessment.js";
 import SubmissionModel from "../models/submission.js";
 import validationErrorParser from "../util/validationErrorParser.js";
+import { parseGithubRepoUrl, resolvePinnedCommit } from "../util/github.js";
+import {
+  downloadAndExtractRepoSnapshot,
+  cleanupRepoSnapshot,
+} from "../util/repoSnapshot.js";
+import { generateInterviewQuestions as generateQuestionsFromCode } from "../services/interviewGeneration.js";
 
 export type StartSubmissionRequest = {
   assessmentId: string;
@@ -258,10 +264,42 @@ export const updateSubmission: RequestHandler = async (req, res, next) => {
     const updates: {
       githubLink?: string;
       timeSpent?: number;
+      githubRepo?: {
+        owner: string;
+        repo: string;
+        refType: "commit" | "branch";
+        ref: string;
+        pinnedCommitSha: string;
+      };
     } = {};
 
     if (githubLink !== undefined) {
       updates.githubLink = githubLink;
+
+      // Try to parse and resolve GitHub repository information
+      // For auto-save, we're lenient - if it fails, we still save the link
+      // The final submission will validate it properly
+      if (githubLink && githubLink.trim()) {
+        try {
+          const parsedRepo = parseGithubRepoUrl(githubLink);
+          const resolvedRepo = await resolvePinnedCommit(parsedRepo);
+          updates.githubRepo = {
+            owner: resolvedRepo.owner,
+            repo: resolvedRepo.repo,
+            refType: resolvedRepo.refType,
+            ref: resolvedRepo.ref,
+            pinnedCommitSha: resolvedRepo.pinnedCommitSha,
+          };
+        } catch (error) {
+          // Log error but don't fail the update - allow auto-save to continue
+          // Final submission will validate properly
+          console.warn(
+            `Failed to parse GitHub URL during auto-save: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      }
     }
     if (timeSpent !== undefined) {
       updates.timeSpent = timeSpent;
@@ -320,8 +358,31 @@ export const submitSubmissionByToken: RequestHandler = async (
       submission.timeSpent = Math.floor(elapsedMinutes);
     }
 
-    // Update submission
-    submission.githubLink = githubLink;
+    // Parse and resolve GitHub repository information
+    try {
+      const parsedRepo = parseGithubRepoUrl(githubLink);
+      const resolvedRepo = await resolvePinnedCommit(parsedRepo);
+
+      // Update submission with GitHub link and resolved repository information
+      submission.githubLink = githubLink;
+      submission.githubRepo = {
+        owner: resolvedRepo.owner,
+        repo: resolvedRepo.repo,
+        refType: resolvedRepo.refType,
+        ref: resolvedRepo.ref,
+        pinnedCommitSha: resolvedRepo.pinnedCommitSha,
+      };
+    } catch (error) {
+      // If GitHub parsing/resolution fails, return error to user
+      // This includes private repo errors, invalid URLs, etc.
+      return res.status(400).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to process GitHub repository URL",
+      });
+    }
+
     submission.status =
       submission.status === "expired" ? "expired" : "submitted";
     submission.submittedAt = new Date();
@@ -374,8 +435,31 @@ export const submitSubmission: RequestHandler = async (req, res, next) => {
       }
     }
 
-    // Update submission
-    submission.githubLink = githubLink;
+    // Parse and resolve GitHub repository information
+    try {
+      const parsedRepo = parseGithubRepoUrl(githubLink);
+      const resolvedRepo = await resolvePinnedCommit(parsedRepo);
+
+      // Update submission with GitHub link and resolved repository information
+      submission.githubLink = githubLink;
+      submission.githubRepo = {
+        owner: resolvedRepo.owner,
+        repo: resolvedRepo.repo,
+        refType: resolvedRepo.refType,
+        ref: resolvedRepo.ref,
+        pinnedCommitSha: resolvedRepo.pinnedCommitSha,
+      };
+    } catch (error) {
+      // If GitHub parsing/resolution fails, return error to user
+      // This includes private repo errors, invalid URLs, etc.
+      return res.status(400).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to process GitHub repository URL",
+      });
+    }
+
     if (timeSpent !== undefined) {
       submission.timeSpent = timeSpent;
     }
@@ -448,6 +532,252 @@ export const getPublicAssessment: RequestHandler = async (req, res, next) => {
     }
 
     res.status(200).json(assessment);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Generate interview questions from a submitted repository by token (public endpoint - for candidates)
+ */
+export const generateInterviewQuestionsByToken: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { token } = req.params;
+
+    // Get submission by token
+    const submission = await SubmissionModel.findOne({ token }).populate(
+      "assessmentId"
+    );
+
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    // Verify submission is submitted
+    if (submission.status !== "submitted" && submission.status !== "expired") {
+      return res.status(400).json({
+        error:
+          "Interview questions can only be generated for submitted assessments",
+      });
+    }
+
+    // Verify GitHub repo info exists
+    if (
+      !submission.githubRepo ||
+      !submission.githubRepo.owner ||
+      !submission.githubRepo.repo ||
+      !submission.githubRepo.pinnedCommitSha
+    ) {
+      return res.status(400).json({
+        error: "GitHub repository information not found for this submission",
+      });
+    }
+
+    const { owner, repo, pinnedCommitSha } = submission.githubRepo;
+    const assessment = submission.assessmentId as any;
+
+    // Download and extract repository
+    let snapshot;
+    try {
+      console.log(
+        `📥 Downloading repo: ${owner}/${repo}@${pinnedCommitSha.substring(
+          0,
+          7
+        )}`
+      );
+      snapshot = await downloadAndExtractRepoSnapshot({
+        owner,
+        repo,
+        pinnedCommitSha,
+        submissionId: submission._id.toString(),
+      });
+      console.log(`✅ Repository extracted to: ${snapshot.repoRootPath}`);
+    } catch (error) {
+      console.error("Failed to download/extract repository:", error);
+      return res.status(500).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to download repository",
+      });
+    }
+
+    // Generate interview questions
+    let questions: string[];
+    try {
+      questions = await generateQuestionsFromCode(
+        snapshot.repoRootPath,
+        assessment.description || ""
+      );
+    } catch (error) {
+      // Clean up on error
+      try {
+        await cleanupRepoSnapshot({
+          zipPath: snapshot.zipPath,
+          extractDir: snapshot.extractDir,
+        });
+      } catch (cleanupError) {
+        console.error("Failed to cleanup on generation error:", cleanupError);
+      }
+
+      console.error("Failed to generate interview questions:", error);
+      return res.status(500).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to generate interview questions",
+      });
+    }
+
+    // Clean up temp files
+    try {
+      await cleanupRepoSnapshot({
+        zipPath: snapshot.zipPath,
+        extractDir: snapshot.extractDir,
+      });
+      console.log("✅ Cleaned up temporary files");
+    } catch (cleanupError) {
+      console.warn("Failed to cleanup temp files:", cleanupError);
+      // Don't fail the request if cleanup fails
+    }
+
+    res.status(200).json({
+      questions,
+      submissionId: submission._id.toString(),
+      candidateName: submission.candidateName,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Generate interview questions from a submitted repository (employer endpoint - auth required)
+ */
+export const generateInterviewQuestions: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { uid } = req.body as { uid: string };
+    const { submissionId } = req.params;
+
+    // Get MongoDB user ID from Firebase UID
+    const userId = await getUserIdFromFirebaseUid(uid);
+
+    // Get submission and verify it belongs to user's assessment
+    const submission = await SubmissionModel.findById(submissionId).populate(
+      "assessmentId"
+    );
+
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    const assessment = submission.assessmentId as any;
+
+    // Verify assessment belongs to user
+    if (assessment.userId.toString() !== userId) {
+      throw AuthError.INVALID_AUTH_TOKEN;
+    }
+
+    // Verify submission is submitted
+    if (submission.status !== "submitted" && submission.status !== "expired") {
+      return res.status(400).json({
+        error:
+          "Interview questions can only be generated for submitted assessments",
+      });
+    }
+
+    // Verify GitHub repo info exists
+    if (
+      !submission.githubRepo ||
+      !submission.githubRepo.owner ||
+      !submission.githubRepo.repo ||
+      !submission.githubRepo.pinnedCommitSha
+    ) {
+      return res.status(400).json({
+        error: "GitHub repository information not found for this submission",
+      });
+    }
+
+    const { owner, repo, pinnedCommitSha } = submission.githubRepo;
+
+    // Download and extract repository
+    let snapshot;
+    try {
+      console.log(
+        `📥 Downloading repo: ${owner}/${repo}@${pinnedCommitSha.substring(
+          0,
+          7
+        )}`
+      );
+      snapshot = await downloadAndExtractRepoSnapshot({
+        owner,
+        repo,
+        pinnedCommitSha,
+        submissionId: submissionId,
+      });
+      console.log(`✅ Repository extracted to: ${snapshot.repoRootPath}`);
+    } catch (error) {
+      console.error("Failed to download/extract repository:", error);
+      return res.status(500).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to download repository",
+      });
+    }
+
+    // Generate interview questions
+    let questions: string[];
+    try {
+      questions = await generateQuestionsFromCode(
+        snapshot.repoRootPath,
+        assessment.description || ""
+      );
+    } catch (error) {
+      // Clean up on error
+      try {
+        await cleanupRepoSnapshot({
+          zipPath: snapshot.zipPath,
+          extractDir: snapshot.extractDir,
+        });
+      } catch (cleanupError) {
+        console.error("Failed to cleanup on generation error:", cleanupError);
+      }
+
+      console.error("Failed to generate interview questions:", error);
+      return res.status(500).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to generate interview questions",
+      });
+    }
+
+    // Clean up temp files
+    try {
+      await cleanupRepoSnapshot({
+        zipPath: snapshot.zipPath,
+        extractDir: snapshot.extractDir,
+      });
+      console.log("✅ Cleaned up temporary files");
+    } catch (cleanupError) {
+      console.warn("Failed to cleanup temp files:", cleanupError);
+      // Don't fail the request if cleanup fails
+    }
+
+    res.status(200).json({
+      questions,
+      submissionId: submission._id.toString(),
+      candidateName: submission.candidateName,
+    });
   } catch (error) {
     next(error);
   }
