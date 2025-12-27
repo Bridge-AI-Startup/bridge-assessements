@@ -10,7 +10,13 @@ import {
   downloadAndExtractRepoSnapshot,
   cleanupRepoSnapshot,
 } from "../util/repoSnapshot.js";
-import { generateInterviewQuestions as generateQuestionsFromCode } from "../services/interviewGeneration.js";
+import {
+  generateInterviewQuestions as generateQuestionsFromCode,
+  generateInterviewQuestionsFromRetrieval,
+} from "../services/interviewGeneration.js";
+import { indexSubmissionRepo } from "../services/repoIndexing.js";
+import { searchCodeChunks } from "../services/repoRetrieval.js";
+import RepoIndexModel from "../models/repoIndex.js";
 
 export type StartSubmissionRequest = {
   assessmentId: string;
@@ -394,6 +400,23 @@ export const submitSubmissionByToken: RequestHandler = async (
       "title description timeLimit"
     );
 
+    // Trigger repository indexing in the background (fire-and-forget)
+    // This doesn't block the submission response
+    if (
+      submission.githubRepo &&
+      submission.githubRepo.owner &&
+      submission.githubRepo.repo &&
+      submission.githubRepo.pinnedCommitSha
+    ) {
+      indexSubmissionRepo(submission._id.toString()).catch((error) => {
+        // Log error but don't fail the submission
+        console.error(
+          `[submitSubmissionByToken] Failed to index repository for submission ${submission._id}:`,
+          error
+        );
+      });
+    }
+
     res.status(200).json(updatedSubmission);
   } catch (error) {
     next(error);
@@ -472,6 +495,23 @@ export const submitSubmission: RequestHandler = async (req, res, next) => {
       "assessmentId",
       "title description timeLimit"
     );
+
+    // Trigger repository indexing in the background (fire-and-forget)
+    // This doesn't block the submission response
+    if (
+      submission.githubRepo &&
+      submission.githubRepo.owner &&
+      submission.githubRepo.repo &&
+      submission.githubRepo.pinnedCommitSha
+    ) {
+      indexSubmissionRepo(submission._id.toString()).catch((error) => {
+        // Log error but don't fail the submission
+        console.error(
+          `[submitSubmission] Failed to index repository for submission ${submission._id}:`,
+          error
+        );
+      });
+    }
 
     res.status(200).json(updatedSubmission);
   } catch (error) {
@@ -577,54 +617,62 @@ export const generateInterviewQuestionsByToken: RequestHandler = async (
       });
     }
 
-    const { owner, repo, pinnedCommitSha } = submission.githubRepo;
     const assessment = submission.assessmentId as any;
 
-    // Download and extract repository
-    let snapshot;
-    try {
-      console.log(
-        `📥 Downloading repo: ${owner}/${repo}@${pinnedCommitSha.substring(
-          0,
-          7
-        )}`
-      );
-      snapshot = await downloadAndExtractRepoSnapshot({
-        owner,
-        repo,
-        pinnedCommitSha,
-        submissionId: submission._id.toString(),
-      });
-      console.log(`✅ Repository extracted to: ${snapshot.repoRootPath}`);
-    } catch (error) {
-      console.error("Failed to download/extract repository:", error);
-      return res.status(500).json({
+    // Validate assessment description exists
+    if (!assessment.description || !assessment.description.trim()) {
+      return res.status(400).json({
         error:
-          error instanceof Error
-            ? error.message
-            : "Failed to download repository",
+          "Assessment description is required to generate interview questions",
       });
     }
 
-    // Generate interview questions
-    let questions: string[];
+    // Generate interview questions using Pinecone retrieval
+    let validatedQuestions;
+    let retrievedChunkCount: number = 0;
+    let chunkPaths: string[] = [];
+
     try {
-      questions = await generateQuestionsFromCode(
-        snapshot.repoRootPath,
-        assessment.description || ""
+      console.log(
+        "🔄 [generateInterviewQuestionsByToken] Starting interview question generation with retrieval..."
+      );
+      const result = await generateInterviewQuestionsFromRetrieval(
+        submission._id.toString(),
+        assessment.description,
+        assessment.scoring // Pass scoring map as rubric
+      );
+      validatedQuestions = result.questions;
+      retrievedChunkCount = result.retrievedChunkCount;
+      chunkPaths = result.chunkPaths;
+      console.log(
+        `✅ [generateInterviewQuestionsByToken] Question generation completed. Received ${
+          validatedQuestions?.length || 0
+        } questions from ${retrievedChunkCount} code chunks`
       );
     } catch (error) {
-      // Clean up on error
-      try {
-        await cleanupRepoSnapshot({
-          zipPath: snapshot.zipPath,
-          extractDir: snapshot.extractDir,
-        });
-      } catch (cleanupError) {
-        console.error("Failed to cleanup on generation error:", cleanupError);
+      console.error("Failed to generate interview questions:", error);
+
+      // Handle specific errors
+      if (error instanceof Error) {
+        if (
+          error.message === "Repo indexed but no relevant code chunks found"
+        ) {
+          return res.status(409).json({
+            error: error.message,
+          });
+        }
+        if (error.message.includes("Assessment description is required")) {
+          return res.status(400).json({
+            error: error.message,
+          });
+        }
+        if (error.message.includes("Repo not indexed yet")) {
+          return res.status(409).json({
+            error: error.message,
+          });
+        }
       }
 
-      console.error("Failed to generate interview questions:", error);
       return res.status(500).json({
         error:
           error instanceof Error
@@ -633,22 +681,61 @@ export const generateInterviewQuestionsByToken: RequestHandler = async (
       });
     }
 
-    // Clean up temp files
-    try {
-      await cleanupRepoSnapshot({
-        zipPath: snapshot.zipPath,
-        extractDir: snapshot.extractDir,
+    // Validate questions were generated
+    if (!validatedQuestions || validatedQuestions.length === 0) {
+      console.error(
+        "❌ [generateInterviewQuestionsByToken] No questions generated or questions array is empty"
+      );
+      return res.status(500).json({
+        error: "No interview questions were generated",
       });
-      console.log("✅ Cleaned up temporary files");
-    } catch (cleanupError) {
-      console.warn("Failed to cleanup temp files:", cleanupError);
-      // Don't fail the request if cleanup fails
     }
 
+    // Questions are already validated and in the correct format
+    // Add createdAt if not present
+    const questionsWithTimestamps = validatedQuestions.map((q) => ({
+      prompt: q.prompt,
+      anchors: q.anchors,
+      createdAt: new Date(),
+    }));
+
+    console.log(
+      `🔄 [generateInterviewQuestionsByToken] Saving ${questionsWithTimestamps.length} questions to submission ${submission._id}...`
+    );
+    submission.interviewQuestions = questionsWithTimestamps;
+    // Mark the array as modified to ensure Mongoose saves it
+    submission.markModified("interviewQuestions");
+
+    try {
+      await submission.save();
+      console.log(
+        `✅ [generateInterviewQuestionsByToken] Submission save completed`
+      );
+    } catch (saveError) {
+      console.error(
+        "❌ [generateInterviewQuestionsByToken] Failed to save submission:",
+        saveError
+      );
+      throw saveError;
+    }
+
+    // Verify the save by reloading
+    const savedSubmission = await SubmissionModel.findById(submission._id);
+    console.log(
+      `✅ [generateInterviewQuestionsByToken] Saved ${questionsWithTimestamps.length} interview questions to submission ${submission._id}`
+    );
+    console.log(
+      `   [generateInterviewQuestionsByToken] Verified: ${
+        savedSubmission?.interviewQuestions?.length || 0
+      } questions in database`
+    );
+
     res.status(200).json({
-      questions,
+      questions: questionsWithTimestamps,
       submissionId: submission._id.toString(),
       candidateName: submission.candidateName,
+      retrievedChunkCount,
+      chunkPaths,
     });
   } catch (error) {
     next(error);
@@ -706,53 +793,60 @@ export const generateInterviewQuestions: RequestHandler = async (
       });
     }
 
-    const { owner, repo, pinnedCommitSha } = submission.githubRepo;
-
-    // Download and extract repository
-    let snapshot;
-    try {
-      console.log(
-        `📥 Downloading repo: ${owner}/${repo}@${pinnedCommitSha.substring(
-          0,
-          7
-        )}`
-      );
-      snapshot = await downloadAndExtractRepoSnapshot({
-        owner,
-        repo,
-        pinnedCommitSha,
-        submissionId: submissionId,
-      });
-      console.log(`✅ Repository extracted to: ${snapshot.repoRootPath}`);
-    } catch (error) {
-      console.error("Failed to download/extract repository:", error);
-      return res.status(500).json({
+    // Validate assessment description exists
+    if (!assessment.description || !assessment.description.trim()) {
+      return res.status(400).json({
         error:
-          error instanceof Error
-            ? error.message
-            : "Failed to download repository",
+          "Assessment description is required to generate interview questions",
       });
     }
 
-    // Generate interview questions
-    let questions: string[];
+    // Generate interview questions using Pinecone retrieval
+    let validatedQuestions;
+    let retrievedChunkCount: number = 0;
+    let chunkPaths: string[] = [];
+
     try {
-      questions = await generateQuestionsFromCode(
-        snapshot.repoRootPath,
-        assessment.description || ""
+      console.log(
+        "🔄 [generateInterviewQuestions] Starting interview question generation with retrieval..."
+      );
+      const result = await generateInterviewQuestionsFromRetrieval(
+        submissionId,
+        assessment.description,
+        assessment.scoring // Pass scoring map as rubric
+      );
+      validatedQuestions = result.questions;
+      retrievedChunkCount = result.retrievedChunkCount;
+      chunkPaths = result.chunkPaths;
+      console.log(
+        `✅ [generateInterviewQuestions] Question generation completed. Received ${
+          validatedQuestions?.length || 0
+        } questions from ${retrievedChunkCount} code chunks`
       );
     } catch (error) {
-      // Clean up on error
-      try {
-        await cleanupRepoSnapshot({
-          zipPath: snapshot.zipPath,
-          extractDir: snapshot.extractDir,
-        });
-      } catch (cleanupError) {
-        console.error("Failed to cleanup on generation error:", cleanupError);
+      console.error("Failed to generate interview questions:", error);
+
+      // Handle specific errors
+      if (error instanceof Error) {
+        if (
+          error.message === "Repo indexed but no relevant code chunks found"
+        ) {
+          return res.status(409).json({
+            error: error.message,
+          });
+        }
+        if (error.message.includes("Assessment description is required")) {
+          return res.status(400).json({
+            error: error.message,
+          });
+        }
+        if (error.message.includes("Repo not indexed yet")) {
+          return res.status(409).json({
+            error: error.message,
+          });
+        }
       }
 
-      console.error("Failed to generate interview questions:", error);
       return res.status(500).json({
         error:
           error instanceof Error
@@ -761,24 +855,258 @@ export const generateInterviewQuestions: RequestHandler = async (
       });
     }
 
-    // Clean up temp files
-    try {
-      await cleanupRepoSnapshot({
-        zipPath: snapshot.zipPath,
-        extractDir: snapshot.extractDir,
+    // Validate questions were generated
+    if (!validatedQuestions || validatedQuestions.length === 0) {
+      console.error(
+        "❌ [generateInterviewQuestions] No questions generated or questions array is empty"
+      );
+      return res.status(500).json({
+        error: "No interview questions were generated",
       });
-      console.log("✅ Cleaned up temporary files");
-    } catch (cleanupError) {
-      console.warn("Failed to cleanup temp files:", cleanupError);
-      // Don't fail the request if cleanup fails
+    }
+
+    // Questions are already validated and in the correct format
+    // Add createdAt if not present
+    const questionsWithTimestamps = validatedQuestions.map((q) => ({
+      prompt: q.prompt,
+      anchors: q.anchors,
+      createdAt: new Date(),
+    }));
+
+    console.log(
+      `🔄 [generateInterviewQuestions] Saving ${questionsWithTimestamps.length} questions to submission ${submission._id}...`
+    );
+    submission.interviewQuestions = questionsWithTimestamps;
+    // Mark the array as modified to ensure Mongoose saves it
+    submission.markModified("interviewQuestions");
+
+    try {
+      await submission.save();
+      console.log(`✅ [generateInterviewQuestions] Submission save completed`);
+    } catch (saveError) {
+      console.error(
+        "❌ [generateInterviewQuestions] Failed to save submission:",
+        saveError
+      );
+      throw saveError;
+    }
+
+    // Verify the save by reloading
+    const savedSubmission = await SubmissionModel.findById(submission._id);
+    console.log(
+      `✅ [generateInterviewQuestions] Saved ${questionsWithTimestamps.length} interview questions to submission ${submission._id}`
+    );
+    console.log(
+      `   [generateInterviewQuestions] Verified: ${
+        savedSubmission?.interviewQuestions?.length || 0
+      } questions in database`
+    );
+
+    res.status(200).json({
+      questions: questionsWithTimestamps,
+      submissionId: submission._id.toString(),
+      candidateName: submission.candidateName,
+      retrievedChunkCount,
+      chunkPaths,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get interview agent prompt for a submission (public endpoint - auth disabled for testing)
+ * Returns a formatted system prompt string that can be used with ElevenLabs agent
+ */
+export const getInterviewAgentPrompt: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { submissionId } = req.params;
+
+    // Load the Submission
+    const submission = await SubmissionModel.findById(submissionId).populate(
+      "assessmentId"
+    );
+
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    // Check if interview questions exist
+    if (
+      !submission.interviewQuestions ||
+      submission.interviewQuestions.length === 0
+    ) {
+      return res.status(409).json({
+        error: "Generate interview questions first",
+      });
+    }
+
+    // Build the prompt string
+    const roleInstruction =
+      "You are a technical interviewer conducting a live verbal interview.";
+
+    const rules = `Rules:
+- Ask the questions in order
+- Do not invent new base questions
+- You may ask brief follow-up questions if needed
+- Keep the interview focused and technical
+- If unsure about something, ask for clarification rather than guessing`;
+
+    // Extract question prompts and format as numbered list
+    const questionsList = submission.interviewQuestions
+      .map((q, index) => `${index + 1}. ${q.prompt}`)
+      .join("\n");
+
+    // Combine into final prompt
+    const prompt = `${roleInstruction}
+
+${rules}
+
+Interview Questions:
+${questionsList}`;
+
+    res.status(200).json({
+      prompt,
+      questionCount: submission.interviewQuestions.length,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Index a submission's repository into Pinecone
+ * POST /api/submissions/:submissionId/index-repo
+ */
+export const indexSubmissionRepository: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { submissionId } = req.params;
+
+    if (!submissionId) {
+      return res.status(400).json({ error: "submissionId is required" });
+    }
+
+    const result = await indexSubmissionRepo(submissionId);
+
+    res.status(200).json({
+      status: result.status,
+      chunkCount: result.chunkCount,
+      fileCount: result.fileCount,
+      error: result.error,
+    });
+  } catch (error) {
+    console.error("Error indexing repository:", error);
+    next(error);
+  }
+};
+
+/**
+ * Get repository indexing status
+ * GET /api/submissions/:submissionId/repo-index/status
+ */
+export const getRepoIndexStatus: RequestHandler = async (req, res, next) => {
+  try {
+    const { submissionId } = req.params;
+
+    if (!submissionId) {
+      return res.status(400).json({ error: "submissionId is required" });
+    }
+
+    const submission = await SubmissionModel.findById(submissionId);
+
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    const pinnedCommitSha = submission.githubRepo?.pinnedCommitSha;
+
+    if (!pinnedCommitSha) {
+      return res.status(400).json({
+        error: "GitHub repository information not found for this submission",
+      });
+    }
+
+    const repoIndex = await RepoIndexModel.findOne({
+      submissionId: submission._id,
+      pinnedCommitSha,
+    });
+
+    if (!repoIndex) {
+      return res.status(404).json({
+        error: "Repository index not found",
+        status: "not_indexed",
+      });
     }
 
     res.status(200).json({
-      questions,
-      submissionId: submission._id.toString(),
-      candidateName: submission.candidateName,
+      status: repoIndex.status,
+      stats: repoIndex.stats,
+      error: repoIndex.error,
+      updatedAt: repoIndex.updatedAt,
+      createdAt: repoIndex.createdAt,
     });
   } catch (error) {
+    console.error("Error getting repo index status:", error);
+    next(error);
+  }
+};
+
+/**
+ * Search code chunks for a submission
+ * POST /api/submissions/:submissionId/search-code
+ */
+export const searchCode: RequestHandler = async (req, res, next) => {
+  try {
+    const { submissionId } = req.params;
+    const { query, topK } = req.body;
+
+    // Validate submissionId
+    if (!submissionId) {
+      return res.status(400).json({ error: "submissionId is required" });
+    }
+
+    // Validate query
+    if (!query || typeof query !== "string" || !query.trim()) {
+      return res
+        .status(400)
+        .json({ error: "query is required and must be a non-empty string" });
+    }
+
+    // Optional: Verify submission exists (but this isn't strictly required)
+    const submission = await SubmissionModel.findById(submissionId);
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    // Search code chunks
+    const result = await searchCodeChunks(submissionId, query.trim(), {
+      topK: topK ? Number(topK) : undefined,
+    });
+
+    res.status(200).json({
+      chunks: result.chunks,
+      stats: result.stats,
+    });
+  } catch (error) {
+    // Handle specific errors
+    if (error instanceof Error) {
+      if (error.message === "Repo not indexed yet") {
+        return res.status(409).json({ error: error.message });
+      }
+      if (error.message.includes("required")) {
+        return res.status(400).json({ error: error.message });
+      }
+    }
+
+    console.error("Error searching code:", error);
     next(error);
   }
 };

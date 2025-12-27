@@ -13,8 +13,11 @@ import { Button } from "@/components/ui/button";
 import {
   getSubmissionByToken,
   generateInterviewQuestionsByToken,
+  startInterview,
+  answerInterviewQuestion,
 } from "@/api/submission";
 import { createPageUrl } from "@/utils";
+import ElevenLabsInterviewClient from "@/components/ElevenLabsInterviewClient";
 
 export default function CandidateSubmitted() {
   const [searchParams] = useSearchParams();
@@ -25,8 +28,17 @@ export default function CandidateSubmitted() {
   const [assessment, setAssessment] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isGeneratingInterview, setIsGeneratingInterview] = useState(false);
-  const [interviewQuestions, setInterviewQuestions] = useState(null);
   const [interviewError, setInterviewError] = useState(null);
+
+  // Interview state
+  const [sessionId, setSessionId] = useState(null);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(null);
+  const [totalQuestions, setTotalQuestions] = useState(null);
+  const [interviewerText, setInterviewerText] = useState("");
+  const [candidateAnswer, setCandidateAnswer] = useState("");
+  const [transcript, setTranscript] = useState([]);
+  const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
+  const [isInterviewCompleted, setIsInterviewCompleted] = useState(false);
 
   useEffect(() => {
     if (!token) {
@@ -90,36 +102,149 @@ export default function CandidateSubmitted() {
   const isExpired = submission.status === "expired";
 
   const handleGenerateInterview = async () => {
-    if (!token) return;
+    if (!token || !submission?._id) return;
 
     setIsGeneratingInterview(true);
     setInterviewError(null);
-    setInterviewQuestions(null);
+    setTranscript([]);
+    setCandidateAnswer("");
+    setIsInterviewCompleted(false);
 
     try {
-      const result = await generateInterviewQuestionsByToken(token);
+      // Step 1: Generate interview questions
+      const generateResult = await generateInterviewQuestionsByToken(token);
 
-      if (result.success) {
-        setInterviewQuestions({
-          questions: result.data.questions,
-          candidateName: result.data.candidateName,
-        });
-      } else {
+      if (!generateResult.success) {
         setInterviewError(
-          result.error || "Failed to generate interview questions"
+          generateResult.error || "Failed to generate interview questions"
         );
+        setIsGeneratingInterview(false);
+        return;
       }
+
+      // Step 2: Automatically start the interview after questions are generated
+      const startResult = await startInterview(submission._id);
+
+      if (!startResult.success) {
+        // Try to extract a user-friendly error message
+        let errorMessage = startResult.error || "Failed to start interview";
+
+        // Check for specific error cases
+        if (
+          errorMessage.includes("not ready") ||
+          errorMessage.includes("409")
+        ) {
+          errorMessage =
+            "Interview questions were generated but could not be started. Please try again.";
+        } else if (errorMessage.includes("already completed")) {
+          errorMessage = "This interview has already been completed.";
+        }
+
+        setInterviewError(errorMessage);
+        setIsGeneratingInterview(false);
+        return;
+      }
+
+      // Interview started successfully
+      setSessionId(startResult.data.sessionId);
+      setCurrentQuestionIndex(startResult.data.questionIndex);
+      setTotalQuestions(startResult.data.totalQuestions);
+      setInterviewerText(startResult.data.interviewerText);
+
+      // Add first question to transcript
+      setTranscript([
+        {
+          role: "interviewer",
+          text: startResult.data.interviewerText,
+        },
+      ]);
+
+      setIsGeneratingInterview(false);
     } catch (err) {
-      console.error("Error generating interview:", err);
+      console.error("Error generating/starting interview:", err);
       setInterviewError(err.message || "An unexpected error occurred");
-    } finally {
       setIsGeneratingInterview(false);
     }
   };
 
-  const closeInterviewModal = () => {
-    setInterviewQuestions(null);
+  const handleSubmitAnswer = async () => {
+    if (!sessionId || !candidateAnswer.trim() || isInterviewCompleted) {
+      return;
+    }
+
+    setIsSubmittingAnswer(true);
     setInterviewError(null);
+
+    try {
+      const result = await answerInterviewQuestion(
+        sessionId,
+        candidateAnswer.trim()
+      );
+
+      if (!result.success) {
+        setInterviewError(result.error || "Failed to submit answer");
+        setIsSubmittingAnswer(false);
+        return;
+      }
+
+      // Add candidate answer to transcript
+      setTranscript((prev) => [
+        ...prev,
+        {
+          role: "candidate",
+          text: candidateAnswer.trim(),
+        },
+      ]);
+
+      // Clear answer input
+      setCandidateAnswer("");
+
+      if (result.data.done) {
+        // Interview completed
+        setIsInterviewCompleted(true);
+        setInterviewerText(result.data.interviewerText);
+
+        // Add final interviewer message to transcript
+        setTranscript((prev) => [
+          ...prev,
+          {
+            role: "interviewer",
+            text: result.data.interviewerText,
+          },
+        ]);
+      } else {
+        // More questions remain
+        setCurrentQuestionIndex(result.data.questionIndex);
+        setInterviewerText(result.data.interviewerText);
+
+        // Add next interviewer question to transcript
+        setTranscript((prev) => [
+          ...prev,
+          {
+            role: "interviewer",
+            text: result.data.interviewerText,
+          },
+        ]);
+      }
+
+      setIsSubmittingAnswer(false);
+    } catch (err) {
+      console.error("Error submitting answer:", err);
+      setInterviewError(err.message || "Failed to submit answer");
+      setIsSubmittingAnswer(false);
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (
+      e.key === "Enter" &&
+      !e.shiftKey &&
+      !isSubmittingAnswer &&
+      !isInterviewCompleted
+    ) {
+      e.preventDefault();
+      handleSubmitAnswer();
+    }
   };
 
   return (
@@ -258,7 +383,7 @@ export default function CandidateSubmitted() {
 
           {/* Actions */}
           <div className="space-y-4">
-            {submission.githubLink && (
+            {submission.githubLink && !sessionId && (
               <Button
                 onClick={handleGenerateInterview}
                 disabled={isGeneratingInterview}
@@ -284,82 +409,148 @@ export default function CandidateSubmitted() {
               </div>
             )}
 
-            <div className="text-center">
-              <p className="text-sm text-gray-500">
-                You can close this page. Your submission has been saved.
-              </p>
-            </div>
-          </div>
-        </div>
-      </motion.div>
-
-      {/* Interview Questions Modal */}
-      {interviewQuestions && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6"
-          onClick={closeInterviewModal}
-        >
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            onClick={(e) => e.stopPropagation()}
-            className="bg-white rounded-2xl shadow-xl max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col"
-          >
-            {/* Header */}
-            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold text-gray-900">
-                  Interview Questions
-                </h2>
-                <p className="text-sm text-gray-500 mt-1">
-                  Questions based on your code submission
+            {!sessionId && (
+              <div className="text-center">
+                <p className="text-sm text-gray-500">
+                  You can close this page. Your submission has been saved.
                 </p>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={closeInterviewModal}
-                className="text-gray-400 hover:text-gray-600"
-              >
-                ✕
-              </Button>
-            </div>
+            )}
+          </div>
 
-            {/* Questions */}
-            <div className="px-6 py-4 overflow-y-auto flex-1">
-              <div className="space-y-4">
-                {interviewQuestions.questions.map((question, index) => (
-                  <div
-                    key={index}
-                    className="bg-gray-50 rounded-lg p-4 border border-gray-200"
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="w-6 h-6 rounded-full bg-[#1E3A8A] text-white flex items-center justify-center text-sm font-medium flex-shrink-0">
-                        {index + 1}
-                      </div>
-                      <p className="text-gray-900 leading-relaxed">
-                        {question}
-                      </p>
+          {/* ElevenLabs Voice Interview Section */}
+          {submission?._id && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mt-8 pt-8 border-t border-gray-200"
+            >
+              <ElevenLabsInterviewClient
+                submissionId={submission._id}
+                userId={submission.candidateEmail}
+              />
+            </motion.div>
+          )}
+
+          {/* Text-Based Interview Section */}
+          {sessionId && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mt-8 pt-8 border-t border-gray-200"
+            >
+              <div className="mb-6">
+                <h2 className="text-xl font-bold text-gray-900 mb-2">
+                  Interview
+                </h2>
+                {currentQuestionIndex !== null && totalQuestions && (
+                  <p className="text-sm text-gray-600">
+                    Question {currentQuestionIndex + 1} of {totalQuestions}
+                  </p>
+                )}
+                {isInterviewCompleted && (
+                  <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-xl text-sm text-green-800 font-medium">
+                    Interview Complete
+                  </div>
+                )}
+              </div>
+
+              {/* Interviewer Prompt */}
+              {interviewerText && (
+                <div className="mb-6">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-2">
+                    Interviewer:
+                  </h3>
+                  <div className="bg-blue-50 rounded-xl p-4 border border-blue-200">
+                    <p className="text-gray-900 leading-relaxed">
+                      {interviewerText}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Candidate Answer Input */}
+              {!isInterviewCompleted && (
+                <div className="mb-6">
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Your Answer:
+                  </label>
+                  <textarea
+                    value={candidateAnswer}
+                    onChange={(e) => setCandidateAnswer(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Type your answer here..."
+                    disabled={isSubmittingAnswer || isInterviewCompleted}
+                    className="w-full min-h-[120px] p-4 text-sm border border-gray-300 rounded-xl font-sans resize-y focus:outline-none focus:ring-2 focus:ring-[#1E3A8A] focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  />
+                  <div className="mt-2 flex items-center justify-between">
+                    <p className="text-xs text-gray-500">
+                      Press Enter to submit (Shift+Enter for new line)
+                    </p>
+                    <Button
+                      onClick={handleSubmitAnswer}
+                      disabled={
+                        isSubmittingAnswer ||
+                        !candidateAnswer.trim() ||
+                        isInterviewCompleted
+                      }
+                      className="bg-[#1E3A8A] hover:bg-[#152a66] text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isSubmittingAnswer ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Submitting...
+                        </>
+                      ) : (
+                        "Submit Answer"
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Transcript */}
+              {transcript.length > 0 && (
+                <div className="mt-8">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                    Transcript
+                  </h3>
+                  <div className="bg-gray-50 rounded-xl border border-gray-200 max-h-[400px] overflow-y-auto p-4">
+                    <div className="space-y-4">
+                      {transcript.map((entry, index) => (
+                        <div
+                          key={index}
+                          className={`p-4 rounded-lg border-l-4 ${
+                            entry.role === "interviewer"
+                              ? "bg-blue-50 border-blue-500"
+                              : "bg-white border-green-500"
+                          }`}
+                        >
+                          <div
+                            className={`text-sm font-semibold mb-2 ${
+                              entry.role === "interviewer"
+                                ? "text-blue-700"
+                                : "text-green-700"
+                            }`}
+                          >
+                            {entry.role === "interviewer"
+                              ? "Interviewer"
+                              : "Candidate"}
+                            :
+                          </div>
+                          <p className="text-gray-900 whitespace-pre-wrap">
+                            {entry.text}
+                          </p>
+                        </div>
+                      ))}
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-end">
-              <Button
-                onClick={closeInterviewModal}
-                className="bg-[#1E3A8A] hover:bg-[#152a66] text-white"
-              >
-                Close
-              </Button>
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
+                </div>
+              )}
+            </motion.div>
+          )}
+        </div>
+      </motion.div>
     </div>
   );
 }

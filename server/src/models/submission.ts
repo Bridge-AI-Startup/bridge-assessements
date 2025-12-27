@@ -93,6 +93,43 @@ const SubmissionSchema = new mongoose.Schema(
       },
     },
 
+    // Interview questions generated from the candidate's code submission
+    // Stored after repo is pinned to commit and before interviews can start
+    interviewQuestions: [
+      {
+        prompt: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+        anchors: {
+          type: [
+            {
+              path: {
+                type: String,
+                required: true,
+              },
+              startLine: {
+                type: Number,
+                required: true,
+                min: 1,
+              },
+              endLine: {
+                type: Number,
+                required: true,
+                min: 1,
+              },
+            },
+          ],
+          default: [],
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+
     // Optional metadata
     metadata: {
       ipAddress: {

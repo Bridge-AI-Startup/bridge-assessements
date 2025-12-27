@@ -262,3 +262,69 @@ export async function generateInterviewQuestions(
     return handleAPIError(error);
   }
 }
+
+export type StartInterviewResponse = {
+  sessionId: string;
+  questionIndex: number;
+  interviewerText: string;
+  totalQuestions: number;
+};
+
+/**
+ * Start or resume an interview session
+ */
+export async function startInterview(
+  submissionId: string
+): Promise<APIResult<StartInterviewResponse>> {
+  try {
+    const response = await post(`/interviews/start`, {
+      submissionId,
+    });
+
+    const result = await response.json();
+
+    if (result && result.sessionId) {
+      return { success: true, data: result as StartInterviewResponse };
+    }
+
+    return {
+      success: false,
+      error: result.error || "Failed to start interview",
+    };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+export type AnswerQuestionResponse = {
+  done: boolean;
+  questionIndex?: number;
+  interviewerText: string;
+};
+
+/**
+ * Submit an answer to an interview question
+ */
+export async function answerInterviewQuestion(
+  sessionId: string,
+  text: string
+): Promise<APIResult<AnswerQuestionResponse>> {
+  try {
+    const response = await post(`/interviews/${sessionId}/answer`, {
+      text,
+    });
+
+    const result = await response.json();
+
+    if (result && typeof result.done === "boolean") {
+      return { success: true, data: result as AnswerQuestionResponse };
+    }
+
+    return {
+      success: false,
+      error: result.error || "Failed to submit answer",
+    };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}

@@ -5,6 +5,8 @@ import "./config/firebaseAdmin.js"; // Initialize Firebase Admin
 import userRoutes from "./routes/user.js";
 import assessmentRoutes from "./routes/assessment.js";
 import submissionRoutes from "./routes/submission.js";
+import interviewRoutes from "./routes/interview.js";
+import agentToolsRoutes from "./routes/agentTools.js";
 
 const PORT = process.env.PORT || 5050;
 const app = express();
@@ -96,6 +98,15 @@ console.log("     - POST /api/submissions/:id/submit");
 console.log(
   "     - GET /api/submissions/assessments/:id/submissions (employer)"
 );
+
+app.use("/api/interviews", interviewRoutes);
+console.log("  ✅ /api/interviews routes registered");
+console.log("     - POST /api/interviews/start");
+console.log("     - POST /api/interviews/:sessionId/answer");
+
+app.use("/api/agent-tools", agentToolsRoutes);
+console.log("  ✅ /api/agent-tools routes registered");
+console.log("     - POST /api/agent-tools/get-context");
 
 // 404 handler
 app.use((req, res) => {

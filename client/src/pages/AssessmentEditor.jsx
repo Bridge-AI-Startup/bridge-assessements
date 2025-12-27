@@ -8,9 +8,7 @@ import {
   Eye,
   Share2,
   Clock,
-  FlaskConical,
   BrainCircuit,
-  User,
   Timer,
   BarChart3,
   Copy,
@@ -39,7 +37,6 @@ import { auth } from "@/firebase/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 import DocumentBlock, {
   RubricItem,
-  TestCaseItem,
 } from "@/components/assessment/DocumentBlock";
 import AISidebar from "@/components/assessment/AISidebar";
 import CandidatePreviewModal from "@/components/assessment/CandidatePreviewModal";
@@ -170,20 +167,6 @@ export default function AssessmentEditor() {
       { criteria: "Database Modeling", weight: "20%" },
       { criteria: "Testing", weight: "15%" },
       { criteria: "Documentation", weight: "15%" },
-    ],
-    testCases: [
-      { name: "User registration creates valid JWT", type: "unit", points: 10 },
-      {
-        name: "Tasks CRUD operations work correctly",
-        type: "integration",
-        points: 15,
-      },
-      { name: "Unauthorized access returns 401", type: "unit", points: 10 },
-      {
-        name: "Database relationships are maintained",
-        type: "integration",
-        points: 15,
-      },
     ],
   });
 
@@ -345,7 +328,6 @@ export default function AssessmentEditor() {
         allowedSections:
           contextSections.length > 0 ? contextSections : undefined,
         rubric: assessment.rubric,
-        testCases: assessment.testCases,
       };
 
       const result = await chatWithAssessment(assessmentId, chatRequest, token);
@@ -383,12 +365,6 @@ export default function AssessmentEditor() {
         setAssessment((prev) => ({
           ...prev,
           rubric: updates.rubric,
-        }));
-      }
-      if (updates.testCases) {
-        setAssessment((prev) => ({
-          ...prev,
-          testCases: updates.testCases,
         }));
       }
 
@@ -749,57 +725,6 @@ export default function AssessmentEditor() {
               </button>
             </DocumentBlock>
 
-            {/* Test Cases */}
-            <DocumentBlock
-              title="Test Cases"
-              icon={FlaskConical}
-              isActive={false}
-              isHighlighted={highlightedSection === "testCases"}
-              onSelect={() => {}}
-              onAddToContext={() => handleAddToContext("testCases")}
-              isInContext={contextSections.includes("testCases")}
-            >
-              <div className="space-y-1">
-                {assessment.testCases.map((testCase, index) => (
-                  <TestCaseItem
-                    key={index}
-                    name={testCase.name}
-                    type={testCase.type}
-                    points={testCase.points}
-                    onEdit={(name, type, points) => {
-                      setAssessment((prev) => ({
-                        ...prev,
-                        testCases: prev.testCases.map((t, i) =>
-                          i === index ? { name, type, points } : t
-                        ),
-                      }));
-                    }}
-                    onDelete={() => {
-                      setAssessment((prev) => ({
-                        ...prev,
-                        testCases: prev.testCases.filter((_, i) => i !== index),
-                      }));
-                    }}
-                  />
-                ))}
-              </div>
-              <button
-                onClick={() =>
-                  setAssessment((prev) => ({
-                    ...prev,
-                    testCases: [
-                      ...prev.testCases,
-                      { name: "New test case", type: "unit", points: 10 },
-                    ],
-                  }))
-                }
-                className="mt-4 text-sm text-[#1E3A8A] hover:text-[#1E3A8A]/80 flex items-center gap-1.5 font-medium"
-              >
-                <Plus className="w-4 h-4" />
-                Add test case
-              </button>
-            </DocumentBlock>
-
             {/* Smart AI Interviewer */}
             <DocumentBlock
               title="Smart AI Interviewer"
@@ -950,15 +875,6 @@ export default function AssessmentEditor() {
                   >
                     <BarChart3 className="w-4 h-4 mr-2" />
                     View submissions
-                  </Button>
-                </Link>
-                <Link to={createPageUrl("CandidateAssessment")}>
-                  <Button
-                    variant="outline"
-                    className="px-5 h-10 rounded-full text-sm border-gray-200 text-gray-700 hover:bg-gray-50"
-                  >
-                    <User className="w-4 h-4 mr-2" />
-                    Test candidate view
                   </Button>
                 </Link>
                 <Button

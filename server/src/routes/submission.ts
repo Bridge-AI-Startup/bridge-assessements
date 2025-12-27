@@ -43,6 +43,36 @@ router.post(
   SubmissionController.generateInterviewQuestions
 );
 
+// Public endpoint - Get interview agent prompt for a submission (auth disabled for testing)
+// Must come before /:id route
+router.get(
+  "/:submissionId/interview-agent-prompt",
+  SubmissionController.getInterviewAgentPrompt
+);
+
+// Employer endpoint - Index repository into Pinecone (auth required)
+// Must come before /:id route
+router.post(
+  "/:submissionId/index-repo",
+  [verifyAuthToken],
+  SubmissionController.indexSubmissionRepository
+);
+
+// Employer endpoint - Get repository index status (auth required)
+// Must come before /:id route
+router.get(
+  "/:submissionId/repo-index/status",
+  [verifyAuthToken],
+  SubmissionController.getRepoIndexStatus
+);
+
+// Debug endpoint - Search code chunks (no auth required for testing)
+// Must come before /:id route
+router.post(
+  "/:submissionId/search-code",
+  SubmissionController.searchCode
+);
+
 // Public endpoint - Start a new submission
 // Must come before /:id route
 router.post(
