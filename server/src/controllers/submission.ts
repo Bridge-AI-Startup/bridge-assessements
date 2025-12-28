@@ -956,6 +956,15 @@ export const getInterviewAgentPrompt: RequestHandler = async (
 - Keep the interview focused and technical
 - If unsure about something, ask for clarification rather than guessing`;
 
+    const toolInstructions = `Available Tool:
+You have access to a tool called "get_context" that retrieves relevant code snippets from the candidate's submission based on the current question and their answer. Use this tool when:
+- The candidate mentions specific code, files, or implementation details
+- You want to verify their answer by checking the actual code
+- You need to ask a precise follow-up question that references specific code
+- The answer is unclear and you want to see what they actually implemented
+
+The tool requires: submissionId, currentQuestion, and candidateAnswer. It returns code chunks with file paths, line numbers, and code content that you can reference in follow-up questions.`;
+
     // Extract question prompts and format as numbered list
     const questionsList = submission.interviewQuestions
       .map((q, index) => `${index + 1}. ${q.prompt}`)
@@ -965,6 +974,8 @@ export const getInterviewAgentPrompt: RequestHandler = async (
     const prompt = `${roleInstruction}
 
 ${rules}
+
+${toolInstructions}
 
 Interview Questions:
 ${questionsList}`;

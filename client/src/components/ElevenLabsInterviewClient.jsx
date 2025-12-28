@@ -244,6 +244,9 @@ export default function ElevenLabsInterviewClient({ submissionId, userId }) {
         agentId: agentId,
         connectionType: "webrtc",
         userId: userId || undefined,
+        dynamicVariables: {
+          submissionId: submissionId,
+        },
       });
 
       setConversationId(id);

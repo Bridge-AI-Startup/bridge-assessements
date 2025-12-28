@@ -32,27 +32,6 @@ npm run dev  # or npm start
 - A submission with `submissionId` that exists in your database
 - That submission must have a `RepoIndex` with `status: "ready"`
 
-### Test with Postman:
-
-1. **Create a new POST request:**
-   - Method: `POST`
-   - URL: `http://localhost:5050/api/agent-tools/get-context`
-
-2. **Set Headers:**
-   - `Content-Type`: `application/json`
-   - `X-Agent-Secret`: `your-secret-token-here` (only if AGENT_SECRET is set)
-
-3. **Set Body (raw JSON):**
-   ```json
-   {
-     "submissionId": "YOUR_SUBMISSION_ID",
-     "currentQuestion": "How did you implement authentication?",
-     "candidateAnswer": "I used JWT tokens with a middleware."
-   }
-   ```
-
-4. **Click Send** and check the response
-
 ### Test with curl:
 
 ```bash
@@ -145,6 +124,13 @@ In your ElevenLabs agent configuration, you'll need to:
      }
    }
    ```
+
+   **Important:** In the ElevenLabs UI tool configuration, set `submissionId` as a **Dynamic Variable** (not a regular parameter):
+   - In the tool parameter configuration, set the value type to "Dynamic variable"
+   - Enter `{{submissionId}}` as the value
+   - This will use the dynamic variable passed when starting the conversation
+
+   The `currentQuestion` and `candidateAnswer` parameters should remain as regular parameters (the agent will provide these when calling the tool).
 
 3. **Agent will call the tool when needed:**
    - The agent decides when to call this tool (Pattern B from requirements)
