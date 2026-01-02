@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 const presets = [
   { label: "Frontend intern (React)", value: "We're hiring a frontend intern proficient in React to build responsive user interfaces and collaborate with our design team on new features..." },
   { label: "Backend intern (Node)", value: "We're looking for a backend intern who knows Node.js and PostgreSQL to build internal APIs and data pipelines. They'll work on performance and reliability..." },
-  { label: "Data science intern", value: "We're seeking a data science intern skilled in Python and SQL to analyze user behavior data and build predictive models for our product team..." }
+  { label: "Full stack MERN + Langchain", value: "We're seeking a full-stack MERN developer skilled in MongoDB, Express, React, and Node.js, with experience in Langchain to build end-to-end web applications with AI capabilities..." }
 ];
 
 export default function PresetPills({ onSelect, selectedPreset }) {

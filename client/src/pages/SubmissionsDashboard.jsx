@@ -7,22 +7,31 @@ import {
   TrendingDown,
   Search,
   Filter,
-  ChevronDown,
   Eye,
-  Star,
   ArrowUpRight,
   ArrowDownRight,
   MessageSquare,
-  Loader2,
+  Trash2,
+  Copy,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { useToast } from "@/components/ui/use-toast";
 import { Link, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import {
   getSubmissionsForAssessment,
-  generateInterviewQuestions,
+  deleteSubmission,
 } from "@/api/submission";
 import { getAssessment } from "@/api/assessment";
 import { onAuthStateChanged } from "firebase/auth";
@@ -39,8 +48,11 @@ export default function SubmissionsDashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
-  const [generatingInterview, setGeneratingInterview] = useState(null); // submissionId
-  const [interviewQuestions, setInterviewQuestions] = useState(null); // { submissionId, questions, candidateName }
+  const [selectedInterview, setSelectedInterview] = useState(null);
+  const [showInterviewModal, setShowInterviewModal] = useState(false);
+  const [isDropoffAnalysisExpanded, setIsDropoffAnalysisExpanded] =
+    useState(false);
+  const { toast } = useToast();
 
   // Wait for auth state to be ready
   useEffect(() => {
@@ -101,31 +113,28 @@ export default function SubmissionsDashboard() {
   // Calculate stats from real data
   const stats = React.useMemo(() => {
     const totalInvited = submissions.length;
+
+    // Started includes: in-progress, submitted, expired, and opted-out (if they started)
     const started = submissions.filter(
       (s) =>
         s.status === "in-progress" ||
         s.status === "submitted" ||
-        s.status === "expired"
+        s.status === "expired" ||
+        (s.status === "opted-out" && s.startedAt)
     ).length;
+
+    // Completed only includes submitted (not expired)
     const completed = submissions.filter(
       (s) => s.status === "submitted"
     ).length;
+
     const expired = submissions.filter((s) => s.status === "expired").length;
+    const optedOut = submissions.filter((s) => s.status === "opted-out").length;
 
-    // Calculate average score (only from completed submissions)
+    // Calculate average time spent (in minutes) - only for completed submissions
     const completedSubmissions = submissions.filter(
-      (s) => s.status === "submitted"
+      (s) => s.status === "submitted" && s.timeSpent && s.timeSpent > 0
     );
-    // Note: We don't have score in the submission model yet, so this will be 0 for now
-    const avgScore =
-      completedSubmissions.length > 0
-        ? Math.round(
-            completedSubmissions.reduce((sum, s) => sum + (s.score || 0), 0) /
-              completedSubmissions.length
-          )
-        : 0;
-
-    // Calculate average time spent (in minutes)
     const avgTimeSpentMinutes =
       completedSubmissions.length > 0
         ? Math.round(
@@ -148,7 +157,7 @@ export default function SubmissionsDashboard() {
       started,
       completed,
       expired,
-      avgScore,
+      optedOut,
       avgTimeSpent: formatTime(avgTimeSpentMinutes),
     };
   }, [submissions]);
@@ -164,6 +173,186 @@ export default function SubmissionsDashboard() {
   const completionRate =
     stats.started > 0 ? Math.round((stats.completed / stats.started) * 100) : 0;
 
+  // Analyze dropoff feedback
+  const dropoffAnalysis = React.useMemo(() => {
+    const optedOutSubmissions = submissions.filter(
+      (s) => s.status === "opted-out" && s.optOutReason
+    );
+
+    if (optedOutSubmissions.length === 0) {
+      return null;
+    }
+
+    const reasons = optedOutSubmissions.map((s) =>
+      s.optOutReason.toLowerCase().trim()
+    );
+
+    // Common themes/categories
+    const themes = {
+      time: {
+        keywords: [
+          "time",
+          "busy",
+          "schedule",
+          "deadline",
+          "hours",
+          "long",
+          "too much time",
+          "not enough time",
+        ],
+        count: 0,
+        examples: [],
+      },
+      complexity: {
+        keywords: [
+          "too hard",
+          "too difficult",
+          "complex",
+          "challenging",
+          "overwhelming",
+          "advanced",
+        ],
+        count: 0,
+        examples: [],
+      },
+      unclear: {
+        keywords: [
+          "unclear",
+          "confusing",
+          "unclear instructions",
+          "not clear",
+          "vague",
+          "ambiguous",
+        ],
+        count: 0,
+        examples: [],
+      },
+      notInterested: {
+        keywords: [
+          "not interested",
+          "not a fit",
+          "not right",
+          "different",
+          "not for me",
+        ],
+        count: 0,
+        examples: [],
+      },
+      technical: {
+        keywords: [
+          "technical",
+          "tech stack",
+          "framework",
+          "language",
+          "tools",
+          "environment",
+        ],
+        count: 0,
+        examples: [],
+      },
+      other: {
+        keywords: [],
+        count: 0,
+        examples: [],
+      },
+    };
+
+    // Categorize reasons
+    reasons.forEach((reason, index) => {
+      let categorized = false;
+      const originalReason = optedOutSubmissions[index].optOutReason;
+
+      for (const [themeName, theme] of Object.entries(themes)) {
+        if (themeName === "other") continue;
+
+        if (theme.keywords.some((keyword) => reason.includes(keyword))) {
+          theme.count++;
+          if (theme.examples.length < 3) {
+            theme.examples.push(originalReason);
+          }
+          categorized = true;
+          break;
+        }
+      }
+
+      if (!categorized) {
+        themes.other.count++;
+        if (themes.other.examples.length < 3) {
+          themes.other.examples.push(originalReason);
+        }
+      }
+    });
+
+    // Generate suggestions based on themes
+    const suggestions = [];
+
+    if (themes.time.count > 0) {
+      suggestions.push({
+        priority: themes.time.count >= 2 ? "high" : "medium",
+        issue: "Time concerns",
+        suggestion:
+          "Consider reducing the time limit or breaking the assessment into smaller parts. Make the expected time commitment clear upfront.",
+        count: themes.time.count,
+      });
+    }
+
+    if (themes.complexity.count > 0) {
+      suggestions.push({
+        priority: themes.complexity.count >= 2 ? "high" : "medium",
+        issue: "Assessment too complex",
+        suggestion:
+          "Review the difficulty level. Consider providing starter code or scaffolding to help candidates get started faster.",
+        count: themes.complexity.count,
+      });
+    }
+
+    if (themes.unclear.count > 0) {
+      suggestions.push({
+        priority: "high",
+        issue: "Unclear instructions",
+        suggestion:
+          "Clarify the project description and requirements. Add more specific examples and expected deliverables.",
+        count: themes.unclear.count,
+      });
+    }
+
+    if (themes.technical.count > 0) {
+      suggestions.push({
+        priority: "medium",
+        issue: "Technical stack mismatch",
+        suggestion:
+          "Ensure the required technologies are clearly stated in the job description and assessment. Consider offering flexibility in tech stack.",
+        count: themes.technical.count,
+      });
+    }
+
+    if (themes.notInterested.count > 0) {
+      suggestions.push({
+        priority: "low",
+        issue: "Not a good fit",
+        suggestion:
+          "This is expected - some candidates will self-select out. Ensure your job description accurately represents the role.",
+        count: themes.notInterested.count,
+      });
+    }
+
+    // Sort suggestions by priority and count
+    suggestions.sort((a, b) => {
+      const priorityOrder = { high: 3, medium: 2, low: 1 };
+      if (priorityOrder[a.priority] !== priorityOrder[b.priority]) {
+        return priorityOrder[b.priority] - priorityOrder[a.priority];
+      }
+      return b.count - a.count;
+    });
+
+    return {
+      totalWithFeedback: optedOutSubmissions.length,
+      themes,
+      suggestions,
+      allReasons: optedOutSubmissions.map((s) => s.optOutReason),
+    };
+  }, [submissions]);
+
   const filteredSubmissions = submissions.filter((sub) => {
     const name = sub.candidateName || "";
     const email = sub.candidateEmail || "";
@@ -175,6 +364,7 @@ export default function SubmissionsDashboard() {
     if (statusFilter === "completed") filterStatus = "submitted";
     if (statusFilter === "not_started") filterStatus = "pending";
     if (statusFilter === "in_progress") filterStatus = "in-progress";
+    if (statusFilter === "opted_out") filterStatus = "opted-out";
     const matchesStatus = statusFilter === "all" || sub.status === filterStatus;
     return matchesSearch && matchesStatus;
   });
@@ -187,18 +377,22 @@ export default function SubmissionsDashboard() {
     return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
   };
 
-  const getStatusBadge = (status) => {
+  const getStatusBadge = (status, submission) => {
     const styles = {
       submitted: "bg-green-100 text-green-700",
       "in-progress": "bg-blue-100 text-blue-700",
       pending: "bg-gray-100 text-gray-600",
       expired: "bg-red-100 text-red-700",
+      "opted-out": "bg-orange-100 text-orange-700",
     };
     const labels = {
       submitted: "Completed",
       "in-progress": "In Progress",
       pending: "Not Started",
       expired: "Expired",
+      "opted-out": submission?.startedAt
+        ? "Opted Out (After Start)"
+        : "Opted Out (Before Start)",
     };
     return (
       <Badge className={styles[status] || "bg-gray-100 text-gray-600"}>
@@ -207,41 +401,110 @@ export default function SubmissionsDashboard() {
     );
   };
 
-  const getScoreColor = (score) => {
-    if (score >= 80) return "text-green-600";
-    if (score >= 60) return "text-yellow-600";
-    return "text-red-600";
+  const getInterviewStatusBadge = (interview) => {
+    if (!interview) {
+      return <Badge className="bg-gray-100 text-gray-600">Not Started</Badge>;
+    }
+
+    const statusStyles = {
+      not_started: "bg-gray-100 text-gray-600",
+      in_progress: "bg-blue-100 text-blue-700",
+      completed: "bg-green-100 text-green-700",
+      failed: "bg-red-100 text-red-700",
+    };
+
+    const statusLabels = {
+      not_started: "Not Started",
+      in_progress: "In Progress",
+      completed: "Completed",
+      failed: "Failed",
+    };
+
+    return (
+      <Badge
+        className={statusStyles[interview.status] || statusStyles.not_started}
+      >
+        {statusLabels[interview.status] || "Unknown"}
+      </Badge>
+    );
   };
 
-  const handleGenerateInterview = async (submissionId) => {
-    if (!currentUser) return;
+  const formatDate = (dateString) => {
+    if (!dateString) return "—";
+    const date = new Date(dateString);
+    return date.toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  };
 
-    setGeneratingInterview(submissionId);
-    setError(null);
+  const handleViewInterview = (submission) => {
+    setSelectedInterview(submission);
+    setShowInterviewModal(true);
+  };
 
+  const [submissionToDelete, setSubmissionToDelete] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDeleteClick = (submission) => {
+    setSubmissionToDelete(submission);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!submissionToDelete || !currentUser) return;
+
+    setIsDeleting(true);
     try {
       const token = await currentUser.getIdToken();
-      const result = await generateInterviewQuestions(submissionId, token);
+      const result = await deleteSubmission(submissionToDelete._id, token);
 
       if (result.success) {
-        setInterviewQuestions({
-          submissionId,
-          questions: result.data.questions,
-          candidateName: result.data.candidateName,
-        });
+        // Remove the submission from the list
+        setSubmissions((prev) =>
+          prev.filter((s) => s._id !== submissionToDelete._id)
+        );
+        setSubmissionToDelete(null);
       } else {
-        setError(result.error || "Failed to generate interview questions");
+        setError(result.error || "Failed to delete submission");
       }
     } catch (err) {
-      console.error("Error generating interview:", err);
-      setError(err.message || "An unexpected error occurred");
+      console.error("Error deleting submission:", err);
+      setError(err.message || "An error occurred while deleting");
     } finally {
-      setGeneratingInterview(null);
+      setIsDeleting(false);
     }
   };
 
-  const closeInterviewModal = () => {
-    setInterviewQuestions(null);
+  const handleDeleteCancel = () => {
+    setSubmissionToDelete(null);
+  };
+
+  const getCandidateLink = (submission) => {
+    const baseUrl = window.location.origin;
+    return `${baseUrl}${createPageUrl("CandidateAssessment")}?token=${
+      submission.token
+    }`;
+  };
+
+  const handleCopyLink = async (submission) => {
+    const link = getCandidateLink(submission);
+    try {
+      await navigator.clipboard.writeText(link);
+      toast({
+        title: "Link copied",
+        description: "You have copied submission link",
+      });
+    } catch (error) {
+      console.error("Failed to copy link:", error);
+      toast({
+        title: "Failed to copy",
+        description: "Failed to copy link to clipboard",
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -274,7 +537,7 @@ export default function SubmissionsDashboard() {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="grid grid-cols-5 gap-4 mb-8"
+          className="grid grid-cols-4 gap-4 mb-8"
         >
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <div className="flex items-center justify-between mb-2">
@@ -325,17 +588,138 @@ export default function SubmissionsDashboard() {
             </p>
             <p className="text-sm text-gray-500">Dropoff</p>
           </div>
-
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <div className="flex items-center justify-between mb-2">
-              <Star className="w-5 h-5 text-yellow-500" />
-            </div>
-            <p className="text-2xl font-bold text-gray-900">
-              {stats.avgScore}%
-            </p>
-            <p className="text-sm text-gray-500">Avg Score</p>
-          </div>
         </motion.div>
+
+        {/* Dropoff Feedback Analysis */}
+        {dropoffAnalysis && dropoffAnalysis.totalWithFeedback > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.12 }}
+            className="bg-gradient-to-r from-orange-50 to-yellow-50 rounded-xl border border-orange-200 mb-6 overflow-hidden"
+          >
+            <button
+              onClick={() =>
+                setIsDropoffAnalysisExpanded(!isDropoffAnalysisExpanded)
+              }
+              className="w-full p-6 flex items-center justify-between hover:bg-orange-100/50 transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <TrendingDown className="w-6 h-6 text-orange-600" />
+                <h2 className="text-xl font-semibold text-gray-900">
+                  Dropoff Feedback Analysis
+                </h2>
+                <Badge className="bg-orange-100 text-orange-700">
+                  {dropoffAnalysis.totalWithFeedback} feedback
+                  {dropoffAnalysis.totalWithFeedback !== 1 ? "s" : ""}
+                </Badge>
+              </div>
+              {isDropoffAnalysisExpanded ? (
+                <ChevronUp className="w-5 h-5 text-gray-600" />
+              ) : (
+                <ChevronDown className="w-5 h-5 text-gray-600" />
+              )}
+            </button>
+
+            {isDropoffAnalysisExpanded && (
+              <div className="px-6 pb-6">
+                {/* Suggestions */}
+                {dropoffAnalysis.suggestions.length > 0 && (
+                  <div className="mb-6">
+                    <h3 className="text-sm font-semibold text-gray-900 mb-3">
+                      Recommendations
+                    </h3>
+                    <div className="space-y-3">
+                      {dropoffAnalysis.suggestions.map((suggestion, index) => (
+                        <div
+                          key={index}
+                          className={`p-4 rounded-lg border-l-4 ${
+                            suggestion.priority === "high"
+                              ? "bg-red-50 border-red-500"
+                              : suggestion.priority === "medium"
+                              ? "bg-yellow-50 border-yellow-500"
+                              : "bg-blue-50 border-blue-500"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between mb-2">
+                            <div>
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-sm font-semibold text-gray-900">
+                                  {suggestion.issue}
+                                </span>
+                                <Badge
+                                  className={
+                                    suggestion.priority === "high"
+                                      ? "bg-red-100 text-red-700"
+                                      : suggestion.priority === "medium"
+                                      ? "bg-yellow-100 text-yellow-700"
+                                      : "bg-blue-100 text-blue-700"
+                                  }
+                                >
+                                  {suggestion.priority} priority
+                                </Badge>
+                                <span className="text-xs text-gray-500">
+                                  ({suggestion.count} mention
+                                  {suggestion.count !== 1 ? "s" : ""})
+                                </span>
+                              </div>
+                              <p className="text-sm text-gray-700">
+                                {suggestion.suggestion}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Common Themes */}
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-900 mb-3">
+                    Common Themes
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    {Object.entries(dropoffAnalysis.themes)
+                      .filter(([_, theme]) => theme.count > 0)
+                      .map(([themeName, theme]) => (
+                        <div
+                          key={themeName}
+                          className="bg-white rounded-lg border border-orange-200 p-3"
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm font-medium text-gray-900 capitalize">
+                              {themeName === "notInterested"
+                                ? "Not Interested"
+                                : themeName}
+                            </span>
+                            <Badge className="bg-orange-100 text-orange-700">
+                              {theme.count}
+                            </Badge>
+                          </div>
+                          {theme.examples.length > 0 && (
+                            <div className="space-y-1">
+                              {theme.examples
+                                .slice(0, 2)
+                                .map((example, idx) => (
+                                  <p
+                                    key={idx}
+                                    className="text-xs text-gray-600 italic truncate"
+                                    title={example}
+                                  >
+                                    "{example}"
+                                  </p>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </motion.div>
+        )}
 
         {/* Filters */}
         <motion.div
@@ -364,6 +748,7 @@ export default function SubmissionsDashboard() {
               <option value="completed">Completed</option>
               <option value="in_progress">In Progress</option>
               <option value="not_started">Not Started</option>
+              <option value="opted_out">Opted Out</option>
               <option value="expired">Expired</option>
             </select>
           </div>
@@ -412,7 +797,7 @@ export default function SubmissionsDashboard() {
                     Status
                   </th>
                   <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Score
+                    Interview
                   </th>
                   <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Time Spent
@@ -456,59 +841,78 @@ export default function SubmissionsDashboard() {
                         </div>
                       </td>
                       <td className="px-5 py-4">
-                        {getStatusBadge(submission.status)}
+                        <div className="flex flex-col gap-1">
+                          {getStatusBadge(submission.status, submission)}
+                          {submission.optedOut && submission.optOutReason && (
+                            <p
+                              className="text-xs text-gray-500 italic max-w-xs truncate"
+                              title={submission.optOutReason}
+                            >
+                              "{submission.optOutReason}"
+                            </p>
+                          )}
+                        </div>
                       </td>
                       <td className="px-5 py-4">
-                        {/* Note: Score is not in the submission model yet */}
-                        <span className="text-gray-400">—</span>
+                        <div className="flex items-center gap-2">
+                          {getInterviewStatusBadge(submission.interview)}
+                          {submission.interview && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleViewInterview(submission)}
+                              className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10 h-7 px-2"
+                            >
+                              <MessageSquare className="w-3.5 h-3.5 mr-1" />
+                              Details
+                            </Button>
+                          )}
+                        </div>
                       </td>
                       <td className="px-5 py-4 text-sm text-gray-600">
                         {formatTimeSpent(submission.timeSpent)}
                       </td>
                       <td className="px-5 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
+                          {/* Copy Link */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleCopyLink(submission)}
+                            className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10"
+                            title="Copy candidate assessment link"
+                          >
+                            <Copy className="w-4 h-4" />
+                          </Button>
+                          {/* GitHub Link (if submitted) */}
                           {submission.status === "submitted" &&
                             submission.githubLink && (
-                              <>
-                                <a
-                                  href={submission.githubLink}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                >
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10"
-                                  >
-                                    <Eye className="w-4 h-4 mr-1" />
-                                    View
-                                  </Button>
-                                </a>
+                              <a
+                                href={submission.githubLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                              >
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  onClick={() =>
-                                    handleGenerateInterview(submission._id)
-                                  }
-                                  disabled={
-                                    generatingInterview === submission._id
-                                  }
                                   className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10"
+                                  title="View GitHub repository"
                                 >
-                                  {generatingInterview === submission._id ? (
-                                    <>
-                                      <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                                      Generating...
-                                    </>
-                                  ) : (
-                                    <>
-                                      <MessageSquare className="w-4 h-4 mr-1" />
-                                      Interview
-                                    </>
-                                  )}
+                                  <Eye className="w-4 h-4" />
                                 </Button>
-                              </>
+                              </a>
                             )}
+                          {/* Delete */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteClick(submission)}
+                            className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                            title="Delete submission"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -519,75 +923,254 @@ export default function SubmissionsDashboard() {
           </motion.div>
         )}
 
-        {/* Interview Questions Modal */}
-        {interviewQuestions && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6"
-            onClick={closeInterviewModal}
-          >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-2xl shadow-xl max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col"
-            >
-              {/* Header */}
-              <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-                <div>
-                  <h2 className="text-xl font-bold text-gray-900">
-                    Interview Questions
-                  </h2>
-                  {interviewQuestions.candidateName && (
-                    <p className="text-sm text-gray-500 mt-1">
-                      For {interviewQuestions.candidateName}
+        {/* Delete Confirmation Modal */}
+        <Dialog
+          open={!!submissionToDelete}
+          onOpenChange={(open) => {
+            if (!open) handleDeleteCancel();
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Delete Candidate Submission</DialogTitle>
+              <DialogDescription>
+                Are you sure you want to delete the submission from{" "}
+                <strong>
+                  {submissionToDelete?.candidateName || "this candidate"}
+                </strong>
+                ? This action cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex justify-end gap-3 mt-4">
+              <Button
+                variant="outline"
+                onClick={handleDeleteCancel}
+                disabled={isDeleting}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleDeleteConfirm}
+                disabled={isDeleting}
+              >
+                {isDeleting ? "Deleting..." : "Delete"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Interview Details Modal */}
+        <Dialog open={showInterviewModal} onOpenChange={setShowInterviewModal}>
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <MessageSquare className="w-5 h-5" />
+                Interview Details
+                {selectedInterview && (
+                  <span className="text-sm font-normal text-gray-500">
+                    - {selectedInterview.candidateName || "Unknown Candidate"}
+                  </span>
+                )}
+              </DialogTitle>
+              <DialogDescription>
+                View transcript, summary, and metadata for this interview
+              </DialogDescription>
+            </DialogHeader>
+
+            {selectedInterview?.interview ? (
+              <div className="space-y-6 mt-4">
+                {/* Opt-Out Information */}
+                {selectedInterview.optedOut && (
+                  <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+                    <p className="text-sm font-medium text-orange-900 mb-2">
+                      Candidate Opted Out
                     </p>
+                    {selectedInterview.startedAt ? (
+                      <p className="text-xs text-orange-800 mb-2 font-semibold">
+                        ⚠️ Opted out after starting the assessment
+                      </p>
+                    ) : (
+                      <p className="text-xs text-orange-800 mb-2 font-semibold">
+                        ℹ️ Opted out before starting the assessment
+                      </p>
+                    )}
+                    {selectedInterview.optOutReason && (
+                      <p className="text-sm text-orange-800 mb-1">
+                        <strong>Reason:</strong>{" "}
+                        {selectedInterview.optOutReason}
+                      </p>
+                    )}
+                    {selectedInterview.optedOutAt && (
+                      <p className="text-xs text-orange-700">
+                        Opted out on: {formatDate(selectedInterview.optedOutAt)}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Interview Status & Metadata */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm font-medium text-gray-700 mb-1">
+                      Status
+                    </p>
+                    {getInterviewStatusBadge(selectedInterview.interview)}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-700 mb-1">
+                      Provider
+                    </p>
+                    <p className="text-sm text-gray-600 capitalize">
+                      {selectedInterview.interview.provider || "—"}
+                    </p>
+                  </div>
+                  {selectedInterview.interview.startedAt && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-700 mb-1">
+                        Started At
+                      </p>
+                      <p className="text-sm text-gray-600">
+                        {formatDate(selectedInterview.interview.startedAt)}
+                      </p>
+                    </div>
+                  )}
+                  {selectedInterview.interview.completedAt && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-700 mb-1">
+                        Completed At
+                      </p>
+                      <p className="text-sm text-gray-600">
+                        {formatDate(selectedInterview.interview.completedAt)}
+                      </p>
+                    </div>
+                  )}
+                  {selectedInterview.interview.conversationId && (
+                    <div className="col-span-2">
+                      <p className="text-sm font-medium text-gray-700 mb-1">
+                        Conversation ID
+                      </p>
+                      <p className="text-sm text-gray-600 font-mono">
+                        {selectedInterview.interview.conversationId}
+                      </p>
+                    </div>
                   )}
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={closeInterviewModal}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  ✕
-                </Button>
-              </div>
 
-              {/* Questions */}
-              <div className="px-6 py-4 overflow-y-auto flex-1">
-                <div className="space-y-4">
-                  {interviewQuestions.questions.map((question, index) => (
-                    <div
-                      key={index}
-                      className="bg-gray-50 rounded-lg p-4 border border-gray-200"
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className="w-6 h-6 rounded-full bg-[#1E3A8A] text-white flex items-center justify-center text-sm font-medium flex-shrink-0">
-                          {index + 1}
-                        </div>
-                        <p className="text-gray-900 leading-relaxed">
-                          {question}
-                        </p>
+                {/* Summary */}
+                {selectedInterview.interview.summary && (
+                  <div>
+                    <p className="text-sm font-medium text-gray-700 mb-2">
+                      Summary
+                    </p>
+                    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                      <p className="text-sm text-gray-700 whitespace-pre-wrap">
+                        {selectedInterview.interview.summary}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Transcript */}
+                {selectedInterview.interview.transcript?.turns &&
+                  selectedInterview.interview.transcript.turns.length > 0 && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-700 mb-2">
+                        Transcript (
+                        {selectedInterview.interview.transcript.turns.length}{" "}
+                        turns)
+                      </p>
+                      <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 space-y-4 max-h-96 overflow-y-auto">
+                        {selectedInterview.interview.transcript.turns.map(
+                          (turn, index) => (
+                            <div
+                              key={index}
+                              className={`flex gap-3 ${
+                                turn.role === "agent"
+                                  ? "justify-start"
+                                  : "justify-end"
+                              }`}
+                            >
+                              <div
+                                className={`max-w-[80%] rounded-lg p-3 ${
+                                  turn.role === "agent"
+                                    ? "bg-white border border-gray-200"
+                                    : "bg-[#1E3A8A] text-white"
+                                }`}
+                              >
+                                <p className="text-xs font-medium mb-1 opacity-70">
+                                  {turn.role === "agent"
+                                    ? "Interviewer"
+                                    : "Candidate"}
+                                </p>
+                                <p
+                                  className={`text-sm ${
+                                    turn.role === "agent"
+                                      ? "text-gray-700"
+                                      : "text-white"
+                                  }`}
+                                >
+                                  {turn.text}
+                                </p>
+                                {(turn.startMs !== undefined ||
+                                  turn.endMs !== undefined) && (
+                                  <p className="text-xs opacity-60 mt-1">
+                                    {turn.startMs !== undefined &&
+                                      `${(turn.startMs / 1000).toFixed(1)}s`}
+                                    {turn.startMs !== undefined &&
+                                      turn.endMs !== undefined &&
+                                      " - "}
+                                    {turn.endMs !== undefined &&
+                                      `${(turn.endMs / 1000).toFixed(1)}s`}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        )}
                       </div>
                     </div>
-                  ))}
-                </div>
-              </div>
+                  )}
 
-              {/* Footer */}
-              <div className="px-6 py-4 border-t border-gray-200 flex justify-end">
-                <Button
-                  onClick={closeInterviewModal}
-                  className="bg-[#1E3A8A] hover:bg-[#152a66] text-white"
-                >
-                  Close
-                </Button>
+                {/* Error Information */}
+                {selectedInterview.interview.error &&
+                  selectedInterview.interview.error.message && (
+                    <div>
+                      <p className="text-sm font-medium text-red-700 mb-2">
+                        Error
+                      </p>
+                      <div className="bg-red-50 rounded-lg p-4 border border-red-200">
+                        <p className="text-sm text-red-700">
+                          {selectedInterview.interview.error.message}
+                        </p>
+                        {selectedInterview.interview.error.at && (
+                          <p className="text-xs text-red-600 mt-1">
+                            At:{" "}
+                            {formatDate(selectedInterview.interview.error.at)}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                {!selectedInterview.interview.summary &&
+                  (!selectedInterview.interview.transcript?.turns ||
+                    selectedInterview.interview.transcript.turns.length ===
+                      0) && (
+                    <div className="text-center py-8 text-gray-500">
+                      <MessageSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                      <p>No interview data available yet</p>
+                    </div>
+                  )}
               </div>
-            </motion.div>
-          </motion.div>
-        )}
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                <MessageSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                <p>No interview data available</p>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );

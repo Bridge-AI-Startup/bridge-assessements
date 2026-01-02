@@ -2,14 +2,7 @@ import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  ArrowRight,
-  ArrowLeft,
-  Upload,
-  Mail,
-  Lock,
-  AlertCircle,
-} from "lucide-react";
+import { ArrowRight, ArrowLeft, Mail, Lock, AlertCircle } from "lucide-react";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
 import { createUser } from "@/api/user";
@@ -20,8 +13,6 @@ export default function GetStarted() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [companyName, setCompanyName] = useState("");
-  const [logo, setLogo] = useState(null);
-  const [logoPreview, setLogoPreview] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [currentUser, setCurrentUser] = useState(null);
@@ -41,14 +32,6 @@ export default function GetStarted() {
       setEmail(user.email);
     }
   }, []);
-
-  const handleLogoChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setLogo(file);
-      setLogoPreview(URL.createObjectURL(file));
-    }
-  };
 
   const handleContinue = async (e) => {
     e.preventDefault();
@@ -94,7 +77,6 @@ export default function GetStarted() {
 
       const userData = {
         companyName: companyName,
-        companyLogoUrl: logoPreview || null,
       };
 
       try {
@@ -127,7 +109,6 @@ export default function GetStarted() {
             "pending_backend_sync",
             JSON.stringify({
               companyName: companyName,
-              companyLogoUrl: logoPreview || null,
               timestamp: Date.now(),
             })
           );
@@ -144,21 +125,19 @@ export default function GetStarted() {
       }
 
       // Only redirect if backend creation succeeded
-      // Get the job description from landing page
-      const jobDescription =
-        localStorage.getItem("pending_job_description") || "";
+      // The job description is already in localStorage from Landing page
       localStorage.setItem("company_name", companyName);
       localStorage.setItem("user_email", email);
 
-      // Store logo if provided
-      if (logoPreview) {
-        localStorage.setItem("logo_preview", logoPreview);
+      // Check if user came from upgrade flow - redirect to subscription instead
+      const redirectToSubscription = localStorage.getItem("redirect_to_subscription");
+      if (redirectToSubscription === "true") {
+        localStorage.removeItem("redirect_to_subscription");
+        window.location.href = createPageUrl("Subscription");
+      } else {
+        // Navigate to CreateAssessment (it will check localStorage for pending_job_description)
+        window.location.href = createPageUrl("CreateAssessment");
       }
-
-      // Navigate to assessment editor with job description
-      window.location.href =
-        createPageUrl("AssessmentEditor") +
-        `?description=${encodeURIComponent(jobDescription)}`;
     } catch (err) {
       console.error("Error:", err);
       setError(err.message || "An error occurred. Please try again.");
@@ -240,37 +219,6 @@ export default function GetStarted() {
               </div>
             </div>
           )}
-
-          {/* Logo Upload */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              Company logo
-            </label>
-            <div
-              onClick={() => document.getElementById("logo-upload").click()}
-              className="border-2 border-dashed border-gray-200 rounded-xl p-6 text-center cursor-pointer hover:border-[#1E3A8A]/30 transition-colors"
-            >
-              {logoPreview ? (
-                <img
-                  src={logoPreview}
-                  alt="Logo preview"
-                  className="w-16 h-16 object-contain mx-auto"
-                />
-              ) : (
-                <>
-                  <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                  <p className="text-sm text-gray-500">Click to upload logo</p>
-                </>
-              )}
-              <input
-                id="logo-upload"
-                type="file"
-                accept="image/*"
-                onChange={handleLogoChange}
-                className="hidden"
-              />
-            </div>
-          </div>
 
           {/* Company Name */}
           <div>

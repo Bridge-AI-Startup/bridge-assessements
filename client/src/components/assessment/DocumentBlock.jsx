@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Pencil, Sparkles, GripVertical, Trash2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,11 +19,36 @@ export default function DocumentBlock({
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState("");
+  const textareaRef = useRef(null);
+
+  // Auto-resize textarea to fit content
+  useEffect(() => {
+    if (isEditing && textareaRef.current) {
+      // Use setTimeout to ensure DOM is ready
+      setTimeout(() => {
+        const textarea = textareaRef.current;
+        if (textarea) {
+          // Reset height to auto to get the correct scrollHeight
+          textarea.style.height = "auto";
+          // Set height to scrollHeight to fit all content
+          textarea.style.height = `${textarea.scrollHeight}px`;
+        }
+      }, 0);
+    }
+  }, [isEditing, editText]);
 
   const handleStartEdit = (e) => {
     e.stopPropagation();
     setEditText(editValue || "");
     setIsEditing(true);
+  };
+
+  const handleTextChange = (e) => {
+    setEditText(e.target.value);
+    // Auto-resize on input
+    const textarea = e.target;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
   };
 
   const handleSave = async (e) => {
@@ -102,10 +127,12 @@ export default function DocumentBlock({
         {isEditing ? (
           <div className="space-y-3">
             <Textarea
+              ref={textareaRef}
               value={editText}
-              onChange={(e) => setEditText(e.target.value)}
+              onChange={handleTextChange}
               onClick={(e) => e.stopPropagation()}
-              className="min-h-[100px] text-gray-700"
+              className="min-h-[100px] text-gray-700 resize-none overflow-hidden"
+              style={{ height: "auto" }}
             />
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={handleCancel}>
@@ -121,7 +148,17 @@ export default function DocumentBlock({
             </div>
           </div>
         ) : (
-          children
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onEdit) {
+                handleStartEdit(e);
+              }
+            }}
+            className="cursor-text hover:bg-gray-50 -mx-5 -my-4 px-5 py-4 rounded transition-colors"
+          >
+            {children}
+          </div>
         )}
       </div>
     </motion.div>

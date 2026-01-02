@@ -125,3 +125,47 @@ server/
 - `NODE_ENV` - Environment (development/production)
 - `FIREBASE_SERVICE_ACCOUNT` - Firebase service account JSON as string (recommended)
 - `FIREBASE_SERVICE_ACCOUNT_PATH` - Path to Firebase service account JSON file (alternative)
+
+### AI Provider Configuration (LangChain)
+
+The application uses **LangChain** to support multiple AI providers with per-use-case configuration. You can use different providers for different purposes:
+
+**Use Cases:**
+- `assessment_generation` - Generate assessment components from job description
+- `assessment_chat` - Chat with assessment AI assistant
+- `interview_questions` - Generate interview questions from code
+- `interview_summary` - Generate interview summary from transcript
+
+**Configuration Options:**
+
+1. **Global Provider** (applies to all use cases unless overridden):
+   ```env
+   AI_PROVIDER=openai  # or "anthropic" or "gemini"
+   ```
+
+2. **Per-Use-Case Providers** (override global for specific use cases):
+   ```env
+   AI_PROVIDER_ASSESSMENT_GENERATION=anthropic
+   AI_PROVIDER_INTERVIEW_QUESTIONS=gemini
+   AI_PROVIDER_ASSESSMENT_CHAT=openai
+   AI_PROVIDER_INTERVIEW_SUMMARY=anthropic
+   ```
+
+3. **Model Configuration** (per provider, with per-use-case overrides):
+   ```env
+   # Global models
+   OPENAI_MODEL=gpt-4o-mini
+   ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+   GEMINI_MODEL=gemini-1.5-pro
+   
+   # Per-use-case models (optional)
+   OPENAI_MODEL_ASSESSMENT_GENERATION=gpt-4o
+   ANTHROPIC_MODEL_INTERVIEW_QUESTIONS=claude-3-5-haiku-20241022
+   ```
+
+**Supported Providers:**
+- **OpenAI**: Requires `OPENAI_API_KEY`
+- **Anthropic**: Requires `ANTHROPIC_API_KEY`
+- **Gemini**: Requires `GEMINI_API_KEY`
+
+See `config.env.example` for complete configuration options.

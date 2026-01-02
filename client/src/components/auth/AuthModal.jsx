@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { auth } from "../../firebase/firebase";
 import { createPageUrl } from "@/utils";
 import { verifyUser } from "../../api/user";
+import bridgeLogo from "@/assets/bridge-logo.svg";
 
 export default function AuthModal({ isOpen, onClose }) {
   const [email, setEmail] = useState("");
@@ -105,8 +106,12 @@ export default function AuthModal({ isOpen, onClose }) {
             >
               <X className="w-5 h-5" />
             </button>
-            <div className="w-14 h-14 rounded-2xl bg-white flex items-center justify-center mx-auto mb-4">
-              <span className="text-[#1E3A8A] font-bold text-xl">B</span>
+            <div className="w-14 h-14 rounded-2xl bg-white flex items-center justify-center mx-auto mb-4 overflow-hidden">
+              <img
+                src={bridgeLogo}
+                alt="Bridge"
+                className="w-full h-full object-contain"
+              />
             </div>
             <h2 className="text-2xl font-bold text-white mb-1">Welcome back</h2>
             <p className="text-blue-200 text-sm">

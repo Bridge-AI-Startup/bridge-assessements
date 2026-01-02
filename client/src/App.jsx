@@ -7,6 +7,9 @@ import NavigationTracker from "@/lib/NavigationTracker";
 import { pagesConfig } from "./pages.config";
 import { BrowserRouter as Router, Route, Routes } from "react-router-dom";
 import PageNotFound from "./lib/PageNotFound";
+import { Analytics } from "@vercel/analytics/react";
+import BillingSuccess from "./pages/BillingSuccess";
+import BillingCancel from "./pages/BillingCancel";
 
 const { Pages, Layout, mainPage } = pagesConfig;
 const mainPageKey = mainPage ?? Object.keys(Pages)[0];
@@ -33,7 +36,9 @@ function App() {
               </LayoutWrapper>
             }
           />
-          {Object.entries(Pages).map(([path, Page]) => (
+          {Object.entries(Pages)
+            .filter(([path]) => path !== mainPageKey) // Exclude mainPage from individual routes since it's already at "/"
+            .map(([path, Page]) => (
             <Route
               key={path}
               path={`/${path}`}
@@ -44,11 +49,29 @@ function App() {
               }
             />
           ))}
+          {/* Custom routes for Stripe redirects */}
+          <Route
+            path="/billing/success"
+            element={
+              <LayoutWrapper currentPageName="BillingSuccess">
+                <BillingSuccess />
+              </LayoutWrapper>
+            }
+          />
+          <Route
+            path="/billing/cancel"
+            element={
+              <LayoutWrapper currentPageName="BillingCancel">
+                <BillingCancel />
+              </LayoutWrapper>
+            }
+          />
           <Route path="*" element={<PageNotFound />} />
         </Routes>
       </Router>
       <Toaster />
       <VisualEditAgent />
+      <Analytics />
     </QueryClientProvider>
   );
 }

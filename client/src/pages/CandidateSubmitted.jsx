@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import {
@@ -6,16 +6,10 @@ import {
   Link as LinkIcon,
   Clock,
   Calendar,
-  MessageSquare,
   Loader2,
+  X,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import {
-  getSubmissionByToken,
-  generateInterviewQuestionsByToken,
-  startInterview,
-  answerInterviewQuestion,
-} from "@/api/submission";
+import { getSubmissionByToken } from "@/api/submission";
 import { createPageUrl } from "@/utils";
 import ElevenLabsInterviewClient from "@/components/ElevenLabsInterviewClient";
 
@@ -27,18 +21,10 @@ export default function CandidateSubmitted() {
   const [submission, setSubmission] = useState(null);
   const [assessment, setAssessment] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isGeneratingInterview, setIsGeneratingInterview] = useState(false);
+  const [isWaitingForQuestions, setIsWaitingForQuestions] = useState(false);
   const [interviewError, setInterviewError] = useState(null);
-
-  // Interview state
-  const [sessionId, setSessionId] = useState(null);
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(null);
-  const [totalQuestions, setTotalQuestions] = useState(null);
-  const [interviewerText, setInterviewerText] = useState("");
-  const [candidateAnswer, setCandidateAnswer] = useState("");
-  const [transcript, setTranscript] = useState([]);
-  const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
-  const [isInterviewCompleted, setIsInterviewCompleted] = useState(false);
+  const [isInterviewCompletedLocally, setIsInterviewCompletedLocally] =
+    useState(false);
 
   useEffect(() => {
     if (!token) {
@@ -58,12 +44,48 @@ export default function CandidateSubmitted() {
             setAssessment(assessmentData);
           }
 
+          // If interview is already completed, set local state immediately
+          if (result.data.interview?.status === "completed") {
+            setIsInterviewCompletedLocally(true);
+          }
+
+          // If submission is opted out, show opted out screen (don't redirect to avoid loops)
+          if (result.data.status === "opted-out") {
+            // Keep the submission data but we'll show opted out UI below
+            setIsLoading(false);
+            return;
+          }
+
           // If submission is not submitted, redirect back to assessment
           if (
             result.data.status !== "submitted" &&
             result.data.status !== "expired"
           ) {
             navigate(`${createPageUrl("CandidateAssessment")}?token=${token}`);
+            return;
+          }
+
+          // Check if interview questions exist
+          // Only check/poll for questions if smart interviewer is enabled
+          const isSmartInterviewerEnabled = 
+            typeof assessmentData === "object" && 
+            assessmentData !== null && 
+            assessmentData.isSmartInterviewerEnabled !== false;
+          
+          if (
+            result.data.interviewQuestions &&
+            Array.isArray(result.data.interviewQuestions) &&
+            result.data.interviewQuestions.length > 0
+          ) {
+            // Questions are ready, ElevenLabs component will be shown
+            setIsWaitingForQuestions(false);
+          } else if (result.data.githubLink && isSmartInterviewerEnabled) {
+            // Questions not ready yet, start polling (only if smart interviewer is enabled)
+            setIsWaitingForQuestions(true);
+            pollForQuestions();
+          } else {
+            // Smart interviewer is disabled or no github link, don't wait for questions
+            setIsWaitingForQuestions(false);
           }
         } else {
           console.error("Failed to load submission");
@@ -77,6 +99,92 @@ export default function CandidateSubmitted() {
 
     loadSubmission();
   }, [token, navigate]);
+
+  // Poll for interview questions until they're ready
+  const pollForQuestions = async () => {
+    const maxAttempts = 30; // Poll for up to 5 minutes (30 * 10s)
+    let attempts = 0;
+
+    const poll = async () => {
+      if (attempts >= maxAttempts) {
+        setIsWaitingForQuestions(false);
+        setInterviewError(
+          "Interview questions are taking longer than expected. Please refresh the page."
+        );
+        return;
+      }
+
+      try {
+        const result = await getSubmissionByToken(token);
+        if (
+          result.success &&
+          result.data.interviewQuestions &&
+          Array.isArray(result.data.interviewQuestions) &&
+          result.data.interviewQuestions.length > 0
+        ) {
+          // Questions are ready!
+          setSubmission(result.data);
+          setIsWaitingForQuestions(false);
+        } else {
+          // Questions not ready yet, poll again in 10 seconds
+          attempts++;
+          setTimeout(poll, 10000);
+        }
+      } catch (error) {
+        console.error("Error polling for questions:", error);
+        attempts++;
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 10000);
+        } else {
+          setIsWaitingForQuestions(false);
+          setInterviewError("Failed to check for interview questions.");
+        }
+      }
+    };
+
+    // Start polling after 10 seconds (give indexing time to start)
+    setTimeout(poll, 10000);
+  };
+
+  // Poll for interview completion when interview ends
+  const pollForInterviewCompletion = async () => {
+    // Immediately mark as completed locally for instant UI update
+    setIsInterviewCompletedLocally(true);
+
+    const maxAttempts = 20; // Poll for up to 2 minutes (20 * 6s)
+    let attempts = 0;
+
+    const poll = async () => {
+      if (attempts >= maxAttempts) {
+        // Stop polling after max attempts, user can refresh manually
+        return;
+      }
+
+      try {
+        const result = await getSubmissionByToken(token);
+        if (result.success && result.data) {
+          // Check if interview status has changed to completed
+          if (result.data.interview?.status === "completed") {
+            setSubmission(result.data);
+            return; // Stop polling once we see completed status
+          }
+        }
+
+        // Poll again in 6 seconds
+        attempts++;
+        setTimeout(poll, 6000);
+      } catch (error) {
+        console.error("Error polling for interview completion:", error);
+        attempts++;
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 6000);
+        }
+      }
+    };
+
+    // Start polling immediately
+    poll();
+  };
 
   if (isLoading) {
     return (
@@ -100,152 +208,78 @@ export default function CandidateSubmitted() {
   }
 
   const isExpired = submission.status === "expired";
+  const isOptedOut = submission.status === "opted-out";
 
-  const handleGenerateInterview = async () => {
-    if (!token || !submission?._id) return;
+  // Show opted out screen
+  if (isOptedOut) {
+    const optedOutBeforeStarting = !submission.startedAt;
 
-    setIsGeneratingInterview(true);
-    setInterviewError(null);
-    setTranscript([]);
-    setCandidateAnswer("");
-    setIsInterviewCompleted(false);
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[#f8f9fb] to-[#eef1f8] flex items-center justify-center p-6">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-2xl bg-white rounded-2xl shadow-xl overflow-hidden"
+        >
+          {/* Header */}
+          <div className="bg-orange-500 px-8 py-6 text-center">
+            <div className="w-16 h-16 rounded-full bg-white flex items-center justify-center mx-auto mb-4">
+              <X className="w-10 h-10 text-orange-500" />
+            </div>
+            <h1 className="text-2xl font-bold text-white mb-1">
+              You Have Opted Out
+            </h1>
+            <p className="text-white/90">
+              {optedOutBeforeStarting
+                ? "You have chosen not to start this assessment"
+                : "You have chosen not to complete this assessment"}
+            </p>
+          </div>
 
-    try {
-      // Step 1: Generate interview questions
-      const generateResult = await generateInterviewQuestionsByToken(token);
+          {/* Content */}
+          <div className="p-8">
+            <div className="mb-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-3">
+                {assessment.title}
+              </h2>
+              {optedOutBeforeStarting ? (
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-4">
+                  <p className="text-xs text-blue-800 font-medium">
+                    ℹ️ You opted out before starting the assessment
+                  </p>
+                </div>
+              ) : (
+                <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 mb-4">
+                  <p className="text-xs text-orange-800 font-medium">
+                    ⚠️ You opted out after starting the assessment
+                  </p>
+                </div>
+              )}
+              {submission.optOutReason && (
+                <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 mb-4">
+                  <p className="text-sm font-medium text-gray-700 mb-2">
+                    Your reason:
+                  </p>
+                  <p className="text-sm text-gray-600">
+                    {submission.optOutReason}
+                  </p>
+                </div>
+              )}
+            </div>
 
-      if (!generateResult.success) {
-        setInterviewError(
-          generateResult.error || "Failed to generate interview questions"
-        );
-        setIsGeneratingInterview(false);
-        return;
-      }
-
-      // Step 2: Automatically start the interview after questions are generated
-      const startResult = await startInterview(submission._id);
-
-      if (!startResult.success) {
-        // Try to extract a user-friendly error message
-        let errorMessage = startResult.error || "Failed to start interview";
-
-        // Check for specific error cases
-        if (
-          errorMessage.includes("not ready") ||
-          errorMessage.includes("409")
-        ) {
-          errorMessage =
-            "Interview questions were generated but could not be started. Please try again.";
-        } else if (errorMessage.includes("already completed")) {
-          errorMessage = "This interview has already been completed.";
-        }
-
-        setInterviewError(errorMessage);
-        setIsGeneratingInterview(false);
-        return;
-      }
-
-      // Interview started successfully
-      setSessionId(startResult.data.sessionId);
-      setCurrentQuestionIndex(startResult.data.questionIndex);
-      setTotalQuestions(startResult.data.totalQuestions);
-      setInterviewerText(startResult.data.interviewerText);
-
-      // Add first question to transcript
-      setTranscript([
-        {
-          role: "interviewer",
-          text: startResult.data.interviewerText,
-        },
-      ]);
-
-      setIsGeneratingInterview(false);
-    } catch (err) {
-      console.error("Error generating/starting interview:", err);
-      setInterviewError(err.message || "An unexpected error occurred");
-      setIsGeneratingInterview(false);
-    }
-  };
-
-  const handleSubmitAnswer = async () => {
-    if (!sessionId || !candidateAnswer.trim() || isInterviewCompleted) {
-      return;
-    }
-
-    setIsSubmittingAnswer(true);
-    setInterviewError(null);
-
-    try {
-      const result = await answerInterviewQuestion(
-        sessionId,
-        candidateAnswer.trim()
-      );
-
-      if (!result.success) {
-        setInterviewError(result.error || "Failed to submit answer");
-        setIsSubmittingAnswer(false);
-        return;
-      }
-
-      // Add candidate answer to transcript
-      setTranscript((prev) => [
-        ...prev,
-        {
-          role: "candidate",
-          text: candidateAnswer.trim(),
-        },
-      ]);
-
-      // Clear answer input
-      setCandidateAnswer("");
-
-      if (result.data.done) {
-        // Interview completed
-        setIsInterviewCompleted(true);
-        setInterviewerText(result.data.interviewerText);
-
-        // Add final interviewer message to transcript
-        setTranscript((prev) => [
-          ...prev,
-          {
-            role: "interviewer",
-            text: result.data.interviewerText,
-          },
-        ]);
-      } else {
-        // More questions remain
-        setCurrentQuestionIndex(result.data.questionIndex);
-        setInterviewerText(result.data.interviewerText);
-
-        // Add next interviewer question to transcript
-        setTranscript((prev) => [
-          ...prev,
-          {
-            role: "interviewer",
-            text: result.data.interviewerText,
-          },
-        ]);
-      }
-
-      setIsSubmittingAnswer(false);
-    } catch (err) {
-      console.error("Error submitting answer:", err);
-      setInterviewError(err.message || "Failed to submit answer");
-      setIsSubmittingAnswer(false);
-    }
-  };
-
-  const handleKeyDown = (e) => {
-    if (
-      e.key === "Enter" &&
-      !e.shiftKey &&
-      !isSubmittingAnswer &&
-      !isInterviewCompleted
-    ) {
-      e.preventDefault();
-      handleSubmitAnswer();
-    }
-  };
+            <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
+              <p className="text-sm text-orange-800">
+                <strong>Note:</strong>{" "}
+                {optedOutBeforeStarting
+                  ? "You opted out before starting the assessment. If you change your mind, please contact the assessment team."
+                  : "You opted out after starting the assessment. If you change your mind, please contact the assessment team."}
+              </p>
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#f8f9fb] to-[#eef1f8] flex items-center justify-center p-6">
@@ -383,24 +417,21 @@ export default function CandidateSubmitted() {
 
           {/* Actions */}
           <div className="space-y-4">
-            {submission.githubLink && !sessionId && (
-              <Button
-                onClick={handleGenerateInterview}
-                disabled={isGeneratingInterview}
-                className="w-full bg-[#1E3A8A] hover:bg-[#152a66] text-white py-6 text-lg rounded-xl disabled:opacity-50"
-              >
-                {isGeneratingInterview ? (
-                  <>
-                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                    Generating Interview Questions...
-                  </>
-                ) : (
-                  <>
-                    <MessageSquare className="w-5 h-5 mr-2" />
-                    Generate Interview Questions
-                  </>
-                )}
-              </Button>
+            {isWaitingForQuestions && assessment?.isSmartInterviewerEnabled !== false && (
+              <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                <div className="flex items-center gap-3">
+                  <Loader2 className="w-5 h-5 text-blue-600 animate-spin" />
+                  <div>
+                    <p className="text-sm font-medium text-blue-900">
+                      Generating Interview Questions...
+                    </p>
+                    <p className="text-xs text-blue-700 mt-1">
+                      This may take a few moments. The interview will start
+                      automatically when ready.
+                    </p>
+                  </div>
+                </div>
+              </div>
             )}
 
             {interviewError && (
@@ -409,146 +440,62 @@ export default function CandidateSubmitted() {
               </div>
             )}
 
-            {!sessionId && (
-              <div className="text-center">
-                <p className="text-sm text-gray-500">
-                  You can close this page. Your submission has been saved.
-                </p>
-              </div>
-            )}
+            {!isWaitingForQuestions &&
+              (!submission.interviewQuestions ||
+                !Array.isArray(submission.interviewQuestions) ||
+                submission.interviewQuestions.length === 0) && (
+                <div className="text-center">
+                  <p className="text-sm text-gray-500">
+                    You can close this page. Your submission has been saved.
+                  </p>
+                </div>
+              )}
           </div>
 
-          {/* ElevenLabs Voice Interview Section */}
-          {submission?._id && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="mt-8 pt-8 border-t border-gray-200"
-            >
-              <ElevenLabsInterviewClient
-                submissionId={submission._id}
-                userId={submission.candidateEmail}
-              />
-            </motion.div>
-          )}
-
-          {/* Text-Based Interview Section */}
-          {sessionId && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="mt-8 pt-8 border-t border-gray-200"
-            >
-              <div className="mb-6">
-                <h2 className="text-xl font-bold text-gray-900 mb-2">
-                  Interview
-                </h2>
-                {currentQuestionIndex !== null && totalQuestions && (
-                  <p className="text-sm text-gray-600">
-                    Question {currentQuestionIndex + 1} of {totalQuestions}
-                  </p>
-                )}
-                {isInterviewCompleted && (
-                  <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-xl text-sm text-green-800 font-medium">
-                    Interview Complete
-                  </div>
-                )}
-              </div>
-
-              {/* Interviewer Prompt */}
-              {interviewerText && (
-                <div className="mb-6">
-                  <h3 className="text-sm font-semibold text-gray-700 mb-2">
-                    Interviewer:
-                  </h3>
-                  <div className="bg-blue-50 rounded-xl p-4 border border-blue-200">
-                    <p className="text-gray-900 leading-relaxed">
-                      {interviewerText}
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* Candidate Answer Input */}
-              {!isInterviewCompleted && (
-                <div className="mb-6">
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Your Answer:
-                  </label>
-                  <textarea
-                    value={candidateAnswer}
-                    onChange={(e) => setCandidateAnswer(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Type your answer here..."
-                    disabled={isSubmittingAnswer || isInterviewCompleted}
-                    className="w-full min-h-[120px] p-4 text-sm border border-gray-300 rounded-xl font-sans resize-y focus:outline-none focus:ring-2 focus:ring-[#1E3A8A] focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
-                  />
-                  <div className="mt-2 flex items-center justify-between">
-                    <p className="text-xs text-gray-500">
-                      Press Enter to submit (Shift+Enter for new line)
-                    </p>
-                    <Button
-                      onClick={handleSubmitAnswer}
-                      disabled={
-                        isSubmittingAnswer ||
-                        !candidateAnswer.trim() ||
-                        isInterviewCompleted
-                      }
-                      className="bg-[#1E3A8A] hover:bg-[#152a66] text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isSubmittingAnswer ? (
-                        <>
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                          Submitting...
-                        </>
-                      ) : (
-                        "Submit Answer"
-                      )}
-                    </Button>
-                  </div>
-                </div>
-              )}
-
-              {/* Transcript */}
-              {transcript.length > 0 && (
-                <div className="mt-8">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">
-                    Transcript
-                  </h3>
-                  <div className="bg-gray-50 rounded-xl border border-gray-200 max-h-[400px] overflow-y-auto p-4">
-                    <div className="space-y-4">
-                      {transcript.map((entry, index) => (
-                        <div
-                          key={index}
-                          className={`p-4 rounded-lg border-l-4 ${
-                            entry.role === "interviewer"
-                              ? "bg-blue-50 border-blue-500"
-                              : "bg-white border-green-500"
-                          }`}
-                        >
-                          <div
-                            className={`text-sm font-semibold mb-2 ${
-                              entry.role === "interviewer"
-                                ? "text-blue-700"
-                                : "text-green-700"
-                            }`}
-                          >
-                            {entry.role === "interviewer"
-                              ? "Interviewer"
-                              : "Candidate"}
-                            :
-                          </div>
-                          <p className="text-gray-900 whitespace-pre-wrap">
-                            {entry.text}
-                          </p>
-                        </div>
-                      ))}
+          {/* ElevenLabs Voice Interview Section - Only show when questions are ready and smart interviewer is enabled */}
+          {submission?._id &&
+            assessment?.isSmartInterviewerEnabled !== false &&
+            submission.interviewQuestions &&
+            Array.isArray(submission.interviewQuestions) &&
+            submission.interviewQuestions.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mt-8 pt-8 border-t border-gray-200"
+              >
+                {/* Show completed interview view immediately if locally completed or backend says completed */}
+                {isInterviewCompletedLocally ||
+                submission.interview?.status === "completed" ? (
+                  <div className="p-6 bg-green-50 border border-green-200 rounded-xl">
+                    <div className="flex items-center gap-3">
+                      <CheckCircle className="w-8 h-8 text-green-600" />
+                      <div>
+                        <h3 className="text-lg font-semibold text-green-900">
+                          Interview Completed
+                        </h3>
+                        <p className="text-sm text-green-700 mt-1">
+                          Thank you for completing the interview! Your responses
+                          have been recorded.
+                        </p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
-            </motion.div>
-          )}
+                ) : (
+                  <ElevenLabsInterviewClient
+                    submissionId={submission._id}
+                    token={token}
+                    userId={submission.candidateEmail}
+                    interviewStatus={submission.interview?.status}
+                    onInterviewStatusChange={async (newStatus) => {
+                      // When interview completes, immediately show completed view and poll for updated submission data
+                      if (newStatus === "completed") {
+                        pollForInterviewCompletion();
+                      }
+                    }}
+                  />
+                )}
+              </motion.div>
+            )}
         </div>
       </motion.div>
     </div>

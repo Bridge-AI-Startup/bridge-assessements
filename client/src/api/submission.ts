@@ -1,4 +1,4 @@
-import { APIResult, post, get, handleAPIError } from "./requests";
+import { APIResult, post, get, patch, del, handleAPIError } from "./requests";
 import { auth } from "@/firebase/firebase";
 
 export type GenerateShareLinkRequest = {
@@ -26,11 +26,46 @@ export type Submission = {
       };
   candidateName?: string;
   candidateEmail?: string;
-  status: "pending" | "in-progress" | "submitted" | "expired";
+  status: "pending" | "in-progress" | "submitted" | "expired" | "opted-out";
   startedAt?: string;
   submittedAt?: string;
   timeSpent: number;
   githubLink?: string;
+  optedOut?: boolean;
+  optOutReason?: string;
+  optedOutAt?: string;
+  interviewQuestions?: Array<{
+    prompt: string;
+    anchors?: Array<{
+      path: string;
+      startLine: number;
+      endLine: number;
+    }>;
+    createdAt: string;
+  }>;
+  interview?: {
+    provider: string;
+    status: "not_started" | "in_progress" | "completed" | "failed";
+    conversationId?: string;
+    transcript: {
+      turns: Array<{
+        role: "agent" | "candidate";
+        text: string;
+        startMs?: number;
+        endMs?: number;
+      }>;
+    };
+    summary?: string;
+    analysis?: any; // Mixed type from provider
+    startedAt?: string;
+    completedAt?: string;
+    updatedAt?: string;
+    error?: {
+      message?: string;
+      at?: string;
+      raw?: any;
+    };
+  };
   timeRemaining?: number | null; // Minutes remaining (calculated server-side)
   createdAt: string;
   updatedAt: string;
@@ -54,11 +89,39 @@ export async function generateShareLink(
       authToken = await user.getIdToken();
     }
 
-    const response = await post("/submissions/generate-link", data, {
-      Authorization: `Bearer ${authToken}`,
+    // Make request without assertOk to handle 403 subscription limit errors
+    // Using direct fetch to handle 403 status without throwing
+    const API_BASE_URL = "http://localhost:5050/api";
+    const response = await fetch(`${API_BASE_URL}/submissions/generate-link`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(data),
     });
 
     const result = await response.json();
+
+    // Check for subscription limit error (403 status)
+    if (
+      response.status === 403 &&
+      result.error === "SUBSCRIPTION_LIMIT_REACHED"
+    ) {
+      return {
+        success: false,
+        error: "SUBSCRIPTION_LIMIT_REACHED",
+      };
+    }
+
+    // Check for other errors
+    if (!response.ok) {
+      return {
+        success: false,
+        error:
+          result.error || `Failed to generate share link (${response.status})`,
+      };
+    }
 
     // Backend returns the response directly
     if (result && result.token && result.shareLink) {
@@ -263,66 +326,86 @@ export async function generateInterviewQuestions(
   }
 }
 
-export type StartInterviewResponse = {
-  sessionId: string;
-  questionIndex: number;
-  interviewerText: string;
-  totalQuestions: number;
-};
+/**
+ * Update interview conversationId for a submission
+ */
+export async function updateInterviewConversationId(
+  submissionId: string,
+  conversationId: string,
+  token?: string
+): Promise<APIResult<{ message: string }>> {
+  try {
+    // Include token in query params if provided (for candidate access)
+    const url = token
+      ? `/submissions/${submissionId}/interview-conversation-id?token=${token}`
+      : `/submissions/${submissionId}/interview-conversation-id`;
+    const response = await patch(url, { conversationId });
+
+    const result = await response.json();
+    return { success: true, data: result };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
 
 /**
- * Start or resume an interview session
+ * Delete a submission (employer endpoint)
  */
-export async function startInterview(
-  submissionId: string
-): Promise<APIResult<StartInterviewResponse>> {
+export async function deleteSubmission(
+  submissionId: string,
+  token?: string
+): Promise<APIResult<{ message: string }>> {
   try {
-    const response = await post(`/interviews/start`, {
-      submissionId,
+    // Get Firebase ID token - use provided token or get from current user
+    let authToken = token;
+    if (!authToken) {
+      const user = auth.currentUser;
+      if (!user) {
+        return { success: false, error: "No user is currently signed in" };
+      }
+      authToken = await user.getIdToken();
+    }
+
+    const response = await del(`/submissions/${submissionId}`, {
+      Authorization: `Bearer ${authToken}`,
     });
 
     const result = await response.json();
 
-    if (result && result.sessionId) {
-      return { success: true, data: result as StartInterviewResponse };
+    if (response.ok) {
+      return { success: true, data: result };
     }
 
     return {
       success: false,
-      error: result.error || "Failed to start interview",
+      error: result.error || "Failed to delete submission",
     };
   } catch (error) {
     return handleAPIError(error);
   }
 }
 
-export type AnswerQuestionResponse = {
-  done: boolean;
-  questionIndex?: number;
-  interviewerText: string;
-};
-
 /**
- * Submit an answer to an interview question
+ * Opt out of assessment (candidate endpoint)
  */
-export async function answerInterviewQuestion(
-  sessionId: string,
-  text: string
-): Promise<APIResult<AnswerQuestionResponse>> {
+export async function optOutAssessment(
+  token: string,
+  reason?: string
+): Promise<APIResult<Submission>> {
   try {
-    const response = await post(`/interviews/${sessionId}/answer`, {
-      text,
+    const response = await post(`/submissions/token/${token}/opt-out`, {
+      reason,
     });
 
     const result = await response.json();
 
-    if (result && typeof result.done === "boolean") {
-      return { success: true, data: result as AnswerQuestionResponse };
+    if (result && result._id) {
+      return { success: true, data: result as Submission };
     }
 
     return {
       success: false,
-      error: result.error || "Failed to submit answer",
+      error: result.error || "Failed to opt out",
     };
   } catch (error) {
     return handleAPIError(error);

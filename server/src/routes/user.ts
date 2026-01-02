@@ -13,5 +13,6 @@ router.post(
   UserController.createUser
 );
 router.get("/whoami", [verifyAuthToken], UserController.loginUser);
+router.post("/delete", [verifyAuthToken], UserController.deleteAccount);
 
 export default router;

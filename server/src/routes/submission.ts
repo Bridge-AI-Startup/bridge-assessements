@@ -2,6 +2,10 @@ import express from "express";
 
 import * as SubmissionController from "../controllers/submission.js";
 import { verifyAuthToken } from "../validators/auth.js";
+import {
+  verifySubmissionAccess,
+  verifySubmissionToken,
+} from "../validators/submissionAuth.js";
 import * as SubmissionValidator from "../validators/submissionValidation.js";
 
 const router = express.Router();
@@ -35,6 +39,14 @@ router.get(
   SubmissionController.getSubmissionsForAssessment
 );
 
+// Employer endpoint - Delete a submission (auth required)
+// Must come before /:id route
+router.delete(
+  "/:submissionId",
+  [verifyAuthToken],
+  SubmissionController.deleteSubmission
+);
+
 // Employer endpoint - Generate interview questions for a submission (auth required)
 // Must come before /:id route
 router.post(
@@ -43,11 +55,22 @@ router.post(
   SubmissionController.generateInterviewQuestions
 );
 
-// Public endpoint - Get interview agent prompt for a submission (auth disabled for testing)
+// Get interview agent prompt for a submission
+// Accessible by: employer (auth) or candidate (token)
 // Must come before /:id route
 router.get(
   "/:submissionId/interview-agent-prompt",
+  verifySubmissionAccess,
   SubmissionController.getInterviewAgentPrompt
+);
+
+// Update interview conversationId (called when interview starts)
+// Accessible by: employer (auth) or candidate (token)
+// Must come before /:id route
+router.patch(
+  "/:submissionId/interview-conversation-id",
+  verifySubmissionAccess,
+  SubmissionController.updateInterviewConversationId
 );
 
 // Employer endpoint - Index repository into Pinecone (auth required)
@@ -66,10 +89,12 @@ router.get(
   SubmissionController.getRepoIndexStatus
 );
 
-// Debug endpoint - Search code chunks (no auth required for testing)
+// Search code chunks for a submission
+// Accessible by: employer (auth) only - this is a debug/admin endpoint
 // Must come before /:id route
 router.post(
   "/:submissionId/search-code",
+  verifyAuthToken,
   SubmissionController.searchCode
 );
 
@@ -94,6 +119,9 @@ router.post(
   "/token/:token/generate-interview",
   SubmissionController.generateInterviewQuestionsByToken
 );
+
+// Public endpoint - Opt out of assessment by token
+router.post("/token/:token/opt-out", SubmissionController.optOutByToken);
 
 // Public endpoint - Final submission
 // Must come before /:id route

@@ -44,13 +44,6 @@ export default function CandidateSubmission() {
     projectDescription: "Build a simple REST API for a task management system."
   };
 
-  const scores = {
-    codeQuality: { score: 90, weight: 25, feedback: "Clean, well-structured code with good separation of concerns." },
-    apiDesign: { score: 85, weight: 25, feedback: "RESTful endpoints follow best practices. Could improve error responses." },
-    databaseModeling: { score: 88, weight: 20, feedback: "Efficient schema design with proper relationships." },
-    testing: { score: 80, weight: 15, feedback: "Good unit test coverage. Integration tests could be more comprehensive." },
-    documentation: { score: 92, weight: 15, feedback: "Excellent README with clear setup instructions and API documentation." }
-  };
 
   const testResults = [
     { name: "User registration creates valid JWT", type: "unit", passed: true, points: 10, maxPoints: 10 },
@@ -181,44 +174,6 @@ export default function CandidateSubmission() {
           </div>
         </motion.div>
 
-        {/* Rubric Scores */}
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15 }}
-          className="bg-white rounded-xl border border-gray-200 p-6 mb-6"
-        >
-          <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <Star className="w-5 h-5 text-[#1E3A8A]" />
-            Evaluation Breakdown
-          </h2>
-          <div className="space-y-4">
-            {Object.entries(scores).map(([key, value]) => (
-              <div key={key} className="flex items-start gap-4">
-                <div className="w-32 flex-shrink-0">
-                  <p className="text-sm font-medium text-gray-700 capitalize">
-                    {key.replace(/([A-Z])/g, ' $1').trim()}
-                  </p>
-                  <p className="text-xs text-gray-400">{value.weight}% weight</p>
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-1">
-                    <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div 
-                        className={`h-full rounded-full ${value.score >= 90 ? 'bg-green-500' : value.score >= 70 ? 'bg-yellow-500' : 'bg-red-500'}`}
-                        style={{ width: `${value.score}%` }}
-                      />
-                    </div>
-                    <span className={`text-sm font-semibold ${getScoreColor(value.score)}`}>
-                      {value.score}%
-                    </span>
-                  </div>
-                  <p className="text-sm text-gray-500">{value.feedback}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </motion.div>
 
         {/* Test Results */}
         <motion.div

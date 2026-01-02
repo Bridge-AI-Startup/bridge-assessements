@@ -10,13 +10,12 @@ import {
   downloadAndExtractRepoSnapshot,
   cleanupRepoSnapshot,
 } from "../util/repoSnapshot.js";
-import {
-  generateInterviewQuestions as generateQuestionsFromCode,
-  generateInterviewQuestionsFromRetrieval,
-} from "../services/interviewGeneration.js";
+import { generateInterviewQuestionsFromRetrieval } from "../services/interviewGeneration.js";
 import { indexSubmissionRepo } from "../services/repoIndexing.js";
 import { searchCodeChunks } from "../services/repoRetrieval.js";
 import RepoIndexModel from "../models/repoIndex.js";
+import { deleteNamespace } from "../util/pinecone.js";
+import { PROMPT_INTERVIEW_AGENT } from "../prompts/index.js";
 
 export type StartSubmissionRequest = {
   assessmentId: string;
@@ -176,10 +175,14 @@ export const getSubmissionByToken: RequestHandler = async (req, res, next) => {
   try {
     const { token } = req.params;
 
-    const submission = await SubmissionModel.findOne({ token }).populate(
-      "assessmentId",
-      "title description timeLimit"
-    );
+    const submission = await SubmissionModel.findOne({ token }).populate({
+      path: "assessmentId",
+      select: "title description timeLimit starterFilesGitHubLink isSmartInterviewerEnabled",
+      populate: {
+        path: "userId",
+        select: "companyName",
+      },
+    });
 
     if (!submission) {
       return res.status(404).json({ error: "Submission not found" });
@@ -557,6 +560,68 @@ export const getSubmissionsForAssessment: RequestHandler = async (
 };
 
 /**
+ * Delete a submission (employer only - auth required)
+ */
+export const deleteSubmission: RequestHandler = async (req, res, next) => {
+  try {
+    const { uid } = req.body as { uid: string };
+    const { submissionId } = req.params;
+
+    // Get MongoDB user ID from Firebase UID
+    const userId = await getUserIdFromFirebaseUid(uid);
+
+    // Get submission and verify it belongs to user's assessment
+    const submission = await SubmissionModel.findById(submissionId).populate(
+      "assessmentId"
+    );
+
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    const assessment = submission.assessmentId as any;
+    if (!assessment || assessment.userId.toString() !== userId) {
+      throw AuthError.INVALID_AUTH_TOKEN; // Don't reveal if submission exists
+    }
+
+    // Step 1: Find and delete Pinecone data if it exists
+    const repoIndex = await RepoIndexModel.findOne({ submissionId });
+    if (repoIndex && repoIndex.pinecone) {
+      try {
+        await deleteNamespace(
+          repoIndex.pinecone.indexName,
+          repoIndex.pinecone.namespace
+        );
+        console.log(
+          `✅ [deleteSubmission] Deleted Pinecone namespace ${repoIndex.pinecone.namespace} for submission ${submissionId}`
+        );
+      } catch (pineconeError) {
+        // Log error but don't fail the deletion - Pinecone cleanup is best effort
+        console.error(
+          `⚠️ [deleteSubmission] Failed to delete Pinecone namespace for submission ${submissionId}:`,
+          pineconeError
+        );
+      }
+    }
+
+    // Step 2: Delete RepoIndex record from MongoDB
+    if (repoIndex) {
+      await RepoIndexModel.findByIdAndDelete(repoIndex._id);
+      console.log(
+        `✅ [deleteSubmission] Deleted RepoIndex record for submission ${submissionId}`
+      );
+    }
+
+    // Step 3: Delete the submission from MongoDB
+    await SubmissionModel.findByIdAndDelete(submissionId);
+
+    res.status(200).json({ message: "Submission deleted successfully" });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Get a public assessment by ID (for candidate to view before starting)
  */
 export const getPublicAssessment: RequestHandler = async (req, res, next) => {
@@ -627,6 +692,15 @@ export const generateInterviewQuestionsByToken: RequestHandler = async (
       });
     }
 
+    // Check if smart interviewer is enabled
+    const isSmartInterviewerEnabled = (assessment as any).isSmartInterviewerEnabled !== false; // Default to true if not set
+    
+    if (!isSmartInterviewerEnabled) {
+      return res.status(403).json({
+        error: "Smart AI Interviewer is disabled for this assessment",
+      });
+    }
+
     // Generate interview questions using Pinecone retrieval
     let validatedQuestions;
     let retrievedChunkCount: number = 0;
@@ -636,10 +710,14 @@ export const generateInterviewQuestionsByToken: RequestHandler = async (
       console.log(
         "🔄 [generateInterviewQuestionsByToken] Starting interview question generation with retrieval..."
       );
+      const numQuestions = (assessment as any).numInterviewQuestions ?? 2;
+      const customInstructions = (assessment as any)
+        .interviewerCustomInstructions;
       const result = await generateInterviewQuestionsFromRetrieval(
         submission._id.toString(),
         assessment.description,
-        assessment.scoring // Pass scoring map as rubric
+        numQuestions,
+        customInstructions
       );
       validatedQuestions = result.questions;
       retrievedChunkCount = result.retrievedChunkCount;
@@ -801,6 +879,15 @@ export const generateInterviewQuestions: RequestHandler = async (
       });
     }
 
+    // Check if smart interviewer is enabled
+    const isSmartInterviewerEnabled = (assessment as any).isSmartInterviewerEnabled !== false; // Default to true if not set
+    
+    if (!isSmartInterviewerEnabled) {
+      return res.status(403).json({
+        error: "Smart AI Interviewer is disabled for this assessment",
+      });
+    }
+
     // Generate interview questions using Pinecone retrieval
     let validatedQuestions;
     let retrievedChunkCount: number = 0;
@@ -810,10 +897,14 @@ export const generateInterviewQuestions: RequestHandler = async (
       console.log(
         "🔄 [generateInterviewQuestions] Starting interview question generation with retrieval..."
       );
+      const numQuestions = (assessment as any).numInterviewQuestions ?? 2;
+      const customInstructions = (assessment as any)
+        .interviewerCustomInstructions;
       const result = await generateInterviewQuestionsFromRetrieval(
         submissionId,
         assessment.description,
-        assessment.scoring // Pass scoring map as rubric
+        numQuestions,
+        customInstructions
       );
       validatedQuestions = result.questions;
       retrievedChunkCount = result.retrievedChunkCount;
@@ -945,40 +1036,21 @@ export const getInterviewAgentPrompt: RequestHandler = async (
       });
     }
 
-    // Build the prompt string
-    const roleInstruction =
-      "You are a technical interviewer conducting a live verbal interview.";
-
-    const rules = `Rules:
-- Ask the questions in order
-- Do not invent new base questions
-- You may ask brief follow-up questions if needed
-- Keep the interview focused and technical
-- If unsure about something, ask for clarification rather than guessing`;
-
-    const toolInstructions = `Available Tool:
-You have access to a tool called "get_context" that retrieves relevant code snippets from the candidate's submission based on the current question and their answer. Use this tool when:
-- The candidate mentions specific code, files, or implementation details
-- You want to verify their answer by checking the actual code
-- You need to ask a precise follow-up question that references specific code
-- The answer is unclear and you want to see what they actually implemented
-
-The tool requires: submissionId, currentQuestion, and candidateAnswer. It returns code chunks with file paths, line numbers, and code content that you can reference in follow-up questions.`;
-
     // Extract question prompts and format as numbered list
     const questionsList = submission.interviewQuestions
       .map((q, index) => `${index + 1}. ${q.prompt}`)
       .join("\n");
 
-    // Combine into final prompt
-    const prompt = `${roleInstruction}
+    // Get custom instructions if available
+    const assessment = submission.assessmentId as any;
+    const customInstructions = assessment?.interviewerCustomInstructions;
 
-${rules}
-
-${toolInstructions}
-
-Interview Questions:
-${questionsList}`;
+    // Build prompt using centralized prompt template
+    const prompt = PROMPT_INTERVIEW_AGENT.template(
+      submission.interviewQuestions.length,
+      questionsList,
+      customInstructions
+    );
 
     res.status(200).json({
       prompt,
@@ -1071,6 +1143,58 @@ export const getRepoIndexStatus: RequestHandler = async (req, res, next) => {
 };
 
 /**
+ * Update interview conversationId for a submission
+ * PATCH /api/submissions/:submissionId/interview-conversation-id
+ * Public endpoint - no auth required (called from frontend when interview starts)
+ */
+export const updateInterviewConversationId: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { submissionId } = req.params;
+    const { conversationId } = req.body as { conversationId: string };
+
+    if (!conversationId) {
+      return res.status(400).json({ error: "conversationId is required" });
+    }
+
+    const submission = await SubmissionModel.findById(submissionId);
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    // Initialize interview object if it doesn't exist
+    if (!submission.interview) {
+      (submission as any).interview = {};
+    }
+
+    // Update conversationId and status
+    (submission as any).interview.conversationId = conversationId;
+    (submission as any).interview.status = "in_progress";
+    (submission as any).interview.provider = "elevenlabs";
+    (submission as any).interview.startedAt = new Date();
+    (submission as any).interview.updatedAt = new Date();
+
+    submission.markModified("interview");
+    await submission.save();
+
+    console.log(
+      `✅ [updateInterviewConversationId] Stored conversationId ${conversationId} for submission ${submissionId}`
+    );
+
+    res.status(200).json({
+      message: "Conversation ID updated",
+      submissionId,
+      conversationId,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Search code chunks for a submission
  * POST /api/submissions/:submissionId/search-code
  */
@@ -1142,6 +1266,37 @@ export const generateShareLink: RequestHandler = async (req, res, next) => {
     // Get MongoDB user ID from Firebase UID
     const userId = await getUserIdFromFirebaseUid(uid);
 
+    // Get user to check subscription tier
+    const UserModel = (await import("../models/user.js")).default;
+    const user = await UserModel.findById(userId);
+    if (!user) {
+      throw AuthError.INVALID_AUTH_TOKEN;
+    }
+
+    // Check subscription limits - use subscriptionStatus === "active" as source of truth
+    const subscriptionStatus = user.subscriptionStatus || (user as any).subscription?.subscriptionStatus;
+    const isSubscribed = subscriptionStatus === "active";
+    
+    if (!isSubscribed) {
+      // Count total submissions across all assessments for this user
+      const userAssessments = await AssessmentModel.find({ userId });
+      const assessmentIds = userAssessments.map((a) => a._id);
+      const submissionCount = await SubmissionModel.countDocuments({
+        assessmentId: { $in: assessmentIds },
+      });
+
+      // Free tier limit: 3 submissions total
+      if (submissionCount >= 3) {
+        return res.status(403).json({
+          error: "SUBSCRIPTION_LIMIT_REACHED",
+          message:
+            "You've reached the free tier limit of 3 candidate submissions. Upgrade to continue.",
+          limit: 3,
+          current: submissionCount,
+        });
+      }
+    }
+
     // Verify assessment exists and belongs to the user
     const assessment = await AssessmentModel.findOne({
       _id: assessmentId,
@@ -1171,6 +1326,45 @@ export const generateShareLink: RequestHandler = async (req, res, next) => {
       submissionId: submission._id,
       candidateName: submission.candidateName,
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Opt out of the assessment (public endpoint - by token)
+ */
+export const optOutByToken: RequestHandler = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const { reason } = req.body as { reason?: string };
+
+    const submission = await SubmissionModel.findOne({ token });
+
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    // Don't allow opting out if already submitted
+    if (submission.status === "submitted") {
+      return res
+        .status(400)
+        .json({ error: "Cannot opt out of a submitted assessment" });
+    }
+
+    // Update submission
+    submission.optedOut = true;
+    submission.optOutReason = reason || null;
+    submission.optedOutAt = new Date();
+    submission.status = "opted-out";
+
+    await submission.save();
+
+    const updatedSubmission = await SubmissionModel.findById(
+      submission._id
+    ).populate("assessmentId", "title description timeLimit");
+
+    res.status(200).json(updatedSubmission);
   } catch (error) {
     next(error);
   }

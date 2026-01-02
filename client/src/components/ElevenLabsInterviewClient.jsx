@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useConversation } from "@elevenlabs/react";
 import { Button } from "@/components/ui/button";
-import { Loader2, Phone, PhoneOff } from "lucide-react";
+import { Loader2, Phone, PhoneOff, CheckCircle } from "lucide-react";
 import { get } from "@/api/requests";
 
 /**
@@ -10,28 +10,34 @@ import { get } from "@/api/requests";
  * Manages voice interview sessions using ElevenLabs Agents Platform.
  * Fetches the interview prompt from backend and passes it as a conversation override.
  */
-export default function ElevenLabsInterviewClient({ submissionId, userId }) {
+export default function ElevenLabsInterviewClient({
+  submissionId,
+  userId,
+  interviewStatus,
+  onInterviewStatusChange,
+  token,
+}) {
   // Local UI state
   const [prompt, setPrompt] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [conversationId, setConversationId] = useState(null);
-  const [connectionLog, setConnectionLog] = useState([]);
+  const [transcript, setTranscript] = useState([]);
+  const [isInterviewComplete, setIsInterviewComplete] = useState(false);
+  const transcriptEndRef = useRef(null);
 
   // Get agent ID from environment variable
-  const agentId = import.meta.env.VITE_ELEVENLABS_AGENT_ID;
+  // @ts-ignore - Vite env types
+  const agentId = import.meta.env?.VITE_ELEVENLABS_AGENT_ID;
 
   // Memoize overrides to ensure they update when prompt changes
   // Important: Overrides must be enabled in ElevenLabs agent Security settings
   const overrides = useMemo(() => {
     if (!prompt) {
-      console.log(
-        "⚠️ [ElevenLabs] Overrides are undefined - prompt is not set yet"
-      );
       return undefined;
     }
 
-    const overrideObj = {
+    return {
       agent: {
         prompt: {
           prompt: prompt,
@@ -40,15 +46,6 @@ export default function ElevenLabsInterviewClient({ submissionId, userId }) {
           "Hey — I'm going to ask you a few questions about your submission. Ready?",
       },
     };
-
-    console.log("✅ [ElevenLabs] Overrides computed:", {
-      hasPrompt: !!prompt,
-      promptLength: prompt.length,
-      firstMessage: overrideObj.agent.firstMessage,
-      overrideStructure: overrideObj,
-    });
-
-    return overrideObj;
   }, [prompt]);
 
   // Use a ref to track current overrides for use in async handlers
@@ -56,6 +53,13 @@ export default function ElevenLabsInterviewClient({ submissionId, userId }) {
   useEffect(() => {
     overridesRef.current = overrides;
   }, [overrides]);
+
+  // Auto-scroll transcript to bottom when new messages are added
+  useEffect(() => {
+    if (transcriptEndRef.current) {
+      transcriptEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [transcript]);
 
   // Initialize ElevenLabs conversation hook with memoized overrides
   // Key the hook by prompt to force re-initialization when prompt changes
@@ -65,28 +69,135 @@ export default function ElevenLabsInterviewClient({ submissionId, userId }) {
     // Note: The hook should be reactive, but using a key pattern ensures it re-initializes
     // Callbacks
     onConnect: () => {
-      setConnectionLog((prev) => [...prev, "✅ Connected to ElevenLabs"]);
       setError(null);
     },
     onDisconnect: () => {
-      setConnectionLog((prev) => [...prev, "❌ Disconnected from ElevenLabs"]);
       setConversationId(null);
     },
     onError: (err) => {
-      console.error("ElevenLabs error:", err);
-      setError(err.message || "An error occurred with the voice interview");
-      setConnectionLog((prev) => [
-        ...prev,
-        `❌ Error: ${err.message || "Unknown error"}`,
-      ]);
+      // @ts-ignore - Error type varies
+      const errorMessage =
+        (err && typeof err === "object" && err.message) ||
+        (err ? String(err) : "An error occurred with the voice interview");
+      setError(errorMessage);
     },
     onMessage: (message) => {
-      // Optional: log messages for debugging
-      if (message.type === "transcript" || message.type === "llm_response") {
-        setConnectionLog((prev) => [
+      // Add messages to transcript
+      if (!message || typeof message !== "object") return;
+
+      // @ts-ignore - MessagePayload type from ElevenLabs
+      const messageType = message.type || "";
+      // @ts-ignore - MessagePayload type from ElevenLabs
+      const text =
+        message.text ||
+        message.content ||
+        message.message ||
+        message.data ||
+        "";
+
+      // Handle different message types - be more permissive to catch all messages
+      if (text && text.trim()) {
+        // Determine role based on message type or content
+        // IMPORTANT: ElevenLabs typically sends:
+        // - "transcript" or "user_transcript" for candidate/user speech
+        // - "llm_response" or "agent_response" for interviewer/agent speech
+        let role = "candidate"; // Default to candidate (user speech)
+
+        // @ts-ignore - MessagePayload type from ElevenLabs
+        const msgType = (messageType || "").toLowerCase();
+        // @ts-ignore - MessagePayload type from ElevenLabs
+        const msgRole = (message.role || "").toString().toLowerCase();
+        // @ts-ignore - MessagePayload type from ElevenLabs
+        const msgSpeaker = (message.speaker || "").toString().toLowerCase();
+        // @ts-ignore - MessagePayload type from ElevenLabs
+        const msgFrom = (message.from || "").toString().toLowerCase();
+        // @ts-ignore - MessagePayload type from ElevenLabs
+        const msgSource = (message.source || "").toString().toLowerCase();
+
+        // Check if this is an interviewer/agent message
+        // Be very explicit about what constitutes an interviewer message
+        const isInterviewer =
+          msgType === "llm_response" ||
+          msgType === "agent_response" ||
+          msgType === "agent_speech" ||
+          msgType === "assistant" ||
+          msgType === "agent" ||
+          msgType === "system" ||
+          msgRole === "assistant" ||
+          msgRole === "agent" ||
+          msgRole === "system" ||
+          msgSpeaker === "agent" ||
+          msgSpeaker === "assistant" ||
+          msgSpeaker === "system" ||
+          msgFrom === "agent" ||
+          msgFrom === "assistant" ||
+          msgSource === "agent" ||
+          msgSource === "assistant";
+
+        // Explicitly check for user/candidate messages
+        const isCandidate =
+          msgType === "transcript" ||
+          msgType === "user_transcript" ||
+          msgType === "user" ||
+          msgType === "user_speech" ||
+          msgRole === "user" ||
+          msgSpeaker === "user" ||
+          msgFrom === "user";
+
+        if (isInterviewer) {
+          role = "interviewer";
+        } else if (isCandidate) {
+          role = "candidate";
+        }
+        // If neither matches, default stays as "candidate"
+
+        const trimmedText = text.trim();
+        setTranscript((prev) => [
           ...prev,
-          `💬 ${message.type}: ${message.text || message.content || ""}`,
+          {
+            role,
+            text: trimmedText,
+            timestamp: new Date(),
+          },
         ]);
+
+        // Check if interviewer is signaling completion
+        if (role === "interviewer") {
+          const completionPhrases = [
+            "completes our interview",
+            "completes the interview",
+            "completes this interview",
+            "covers all the questions",
+            "that's all the questions",
+            "thank you for your time",
+            "thank you for participating",
+            "interview is complete",
+            "interview is finished",
+            "we're done",
+            "we are done",
+          ];
+
+          const lowerText = trimmedText.toLowerCase();
+          const isCompletionMessage = completionPhrases.some((phrase) =>
+            lowerText.includes(phrase)
+          );
+
+          if (isCompletionMessage && !isInterviewComplete) {
+            setIsInterviewComplete(true);
+            // Notify parent component that interview is complete
+            if (onInterviewStatusChange) {
+              onInterviewStatusChange("completed");
+            }
+            // Wait a moment for the message to be fully spoken, then end the session
+            setTimeout(async () => {
+              try {
+                await conversation.endSession();
+              } catch {
+                // Silently handle error
+              }
+            }, 3000); // Wait 3 seconds for the completion message to finish
+          }
+        }
       }
     },
   });
@@ -95,7 +206,8 @@ export default function ElevenLabsInterviewClient({ submissionId, userId }) {
   const handleStartInterview = async () => {
     setError(null);
     setLoading(true);
-    setConnectionLog([]);
+    setTranscript([]); // Clear transcript on new start
+    setIsInterviewComplete(false); // Reset completion state
 
     try {
       // Check if agent ID is configured
@@ -106,19 +218,15 @@ export default function ElevenLabsInterviewClient({ submissionId, userId }) {
       }
 
       // Step 1: Fetch prompt from backend
-      setConnectionLog((prev) => [...prev, "📡 Fetching interview prompt..."]);
-
       let fetchedPrompt = null;
       try {
-        const response = await get(
-          `/submissions/${submissionId}/interview-agent-prompt`
-        );
+        // Include token in query params if provided (for candidate access)
+        const url = token
+          ? `/submissions/${submissionId}/interview-agent-prompt?token=${token}`
+          : `/submissions/${submissionId}/interview-agent-prompt`;
+        const response = await get(url);
         const data = await response.json();
         fetchedPrompt = data.prompt;
-        setConnectionLog((prev) => [
-          ...prev,
-          `✅ Prompt loaded (${data.questionCount} questions)`,
-        ]);
       } catch (fetchError) {
         // Handle API errors - assertOk throws errors with status codes
         let errorMessage = "Failed to fetch interview prompt";
@@ -146,22 +254,13 @@ export default function ElevenLabsInterviewClient({ submissionId, userId }) {
         }
 
         setError(errorMessage);
-        setConnectionLog((prev) => [...prev, `❌ ${errorMessage}`]);
         setLoading(false);
         return;
       }
 
       // Step 2: Request microphone permission
-      setConnectionLog((prev) => [
-        ...prev,
-        "🎤 Requesting microphone permission...",
-      ]);
       try {
         await navigator.mediaDevices.getUserMedia({ audio: true });
-        setConnectionLog((prev) => [
-          ...prev,
-          "✅ Microphone permission granted",
-        ]);
       } catch {
         setError(
           "Microphone permission denied. Please allow microphone access to start the interview."
@@ -179,54 +278,41 @@ export default function ElevenLabsInterviewClient({ submissionId, userId }) {
 
       // Set the prompt in state - this will trigger useMemo to update overrides
       setPrompt(fetchedPrompt);
-      setConnectionLog((prev) => [
-        ...prev,
-        `📝 Prompt set in state (${fetchedPrompt.length} characters)`,
-      ]);
 
-      // Wait for React to update state and useMemo to re-compute overrides
-      // We need multiple render cycles to ensure the hook picks up the new overrides
-      let attempts = 0;
-      let currentOverrides = null;
-      while (attempts < 10 && !currentOverrides) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        currentOverrides = overridesRef.current;
-        attempts++;
-      }
-
-      const expectedOverrides = {
+      // Build overrides directly instead of waiting for React state updates
+      // This ensures overrides are ready on the first click
+      const directOverrides = {
         agent: {
-          prompt: { prompt: fetchedPrompt },
+          prompt: {
+            prompt: fetchedPrompt,
+          },
           firstMessage:
             "Hey — I'm going to ask you a few questions about your submission. Ready?",
         },
       };
 
-      console.log("🔍 [ElevenLabs] Starting session - Overrides check:", {
-        promptInState: prompt
-          ? `${prompt.substring(0, 50)}... (${prompt.length} chars)`
-          : "null",
-        fetchedPromptLength: fetchedPrompt.length,
-        hasOverridesFromMemo: !!currentOverrides,
-        hasOverridesFromRef: !!overridesRef.current,
-        overridesFirstMessage:
-          currentOverrides?.agent?.firstMessage || "NOT SET",
-        expectedFirstMessage: expectedOverrides.agent.firstMessage,
-        overridesStructure: currentOverrides || "UNDEFINED",
-        promptMatches: prompt === fetchedPrompt ? "YES" : "NO - MISMATCH!",
-        attempts: attempts,
-      });
+      // Wait for React to update state and useMemo to re-compute overrides
+      // But use directOverrides as fallback to ensure they're always available
+      let attempts = 0;
+      let currentOverrides = directOverrides; // Start with direct overrides
+      while (
+        attempts < 20 &&
+        (!overridesRef.current || overridesRef.current === undefined)
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        if (overridesRef.current) {
+          currentOverrides = overridesRef.current;
+          break;
+        }
+        attempts++;
+      }
+
+      // If ref still doesn't have overrides, use the direct ones we built
+      if (!currentOverrides || currentOverrides === undefined) {
+        currentOverrides = directOverrides;
+      }
 
       if (!currentOverrides) {
-        console.error(
-          "❌ [ElevenLabs] CRITICAL: Overrides are undefined when starting session!"
-        );
-        console.error(
-          "   This means the prompt state update didn't trigger useMemo properly."
-        );
-        console.error("   Current prompt state:", prompt);
-        console.error("   Fetched prompt length:", fetchedPrompt.length);
-        console.error("   Overrides ref value:", overridesRef.current);
         setError(
           "Failed to load overrides. Please check that System prompt override is enabled in ElevenLabs agent settings."
         );
@@ -234,30 +320,33 @@ export default function ElevenLabsInterviewClient({ submissionId, userId }) {
         return;
       }
 
-      setConnectionLog((prev) => [...prev, "🚀 Starting voice session..."]);
-      setConnectionLog((prev) => [
-        ...prev,
-        "✅ Overrides active - custom prompt and first message will be used",
-      ]);
+      // Ensure submissionId is a string (MongoDB ObjectId might be an object)
+      const submissionIdString = String(submissionId);
 
+      // Pass overrides directly to startSession to ensure they're applied on first click
       const id = await conversation.startSession({
         agentId: agentId,
         connectionType: "webrtc",
         userId: userId || undefined,
         dynamicVariables: {
-          submissionId: submissionId,
+          submissionId: submissionIdString,
         },
+        overrides: currentOverrides, // Pass overrides directly to ensure they're applied
       });
 
       setConversationId(id);
-      setConnectionLog((prev) => [...prev, `✅ Session started (ID: ${id})`]);
+
+      // Store conversationId on the submission for webhook attribution
+      try {
+        const { updateInterviewConversationId } = await import(
+          "@/api/submission"
+        );
+        await updateInterviewConversationId(submissionIdString, id, token);
+      } catch {
+        // Don't fail the interview if storing conversationId fails
+      }
     } catch (err) {
-      console.error("Failed to start interview:", err);
       setError(err.message || "Failed to start voice interview");
-      setConnectionLog((prev) => [
-        ...prev,
-        `❌ Failed: ${err.message || "Unknown error"}`,
-      ]);
     } finally {
       setLoading(false);
     }
@@ -266,12 +355,8 @@ export default function ElevenLabsInterviewClient({ submissionId, userId }) {
   // End button handler
   const handleEndInterview = async () => {
     try {
-      setConnectionLog((prev) => [...prev, "🛑 Ending session..."]);
       await conversation.endSession();
-      setConnectionLog((prev) => [...prev, "✅ Session ended"]);
-      // Keep prompt in state for potential restart
     } catch (err) {
-      console.error("Failed to end interview:", err);
       setError(err.message || "Failed to end voice interview");
     }
   };
@@ -332,71 +417,112 @@ export default function ElevenLabsInterviewClient({ submissionId, userId }) {
         )}
       </div>
 
-      {/* Action Buttons */}
-      <div className="flex gap-3 mb-4">
-        <Button
-          onClick={handleStartInterview}
-          disabled={loading || isConnected || !agentId}
-          className="flex-1 bg-[#1E3A8A] hover:bg-[#152a66] text-white"
-        >
-          {loading ? (
-            <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              Starting...
-            </>
-          ) : (
-            <>
-              <Phone className="w-4 h-4 mr-2" />
-              Start Voice Interview
-            </>
-          )}
-        </Button>
-        <Button
-          onClick={handleEndInterview}
-          disabled={!isConnected}
-          variant="destructive"
-          className="flex-1"
-        >
-          <PhoneOff className="w-4 h-4 mr-2" />
-          End Interview
-        </Button>
-      </div>
-
-      {/* Connection Log */}
-      {connectionLog.length > 0 && (
-        <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-          <h3 className="text-sm font-semibold text-gray-700 mb-2">
-            Connection Log:
-          </h3>
-          <div className="space-y-1 max-h-40 overflow-y-auto">
-            {connectionLog.map((log, index) => (
-              <div key={index} className="text-xs text-gray-600 font-mono">
-                {log}
-              </div>
-            ))}
+      {/* Interview Already Completed */}
+      {interviewStatus === "completed" && (
+        <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+          <div className="flex items-center gap-2 mb-2">
+            <CheckCircle className="w-5 h-5 text-green-600" />
+            <h3 className="text-sm font-semibold text-green-900">
+              Interview Completed
+            </h3>
           </div>
+          <p className="text-sm text-green-800">
+            You have already completed this interview. Thank you for your
+            participation!
+          </p>
         </div>
       )}
 
-      {/* Debug Info - Show if prompt is loaded */}
-      {prompt && (
-        <div className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg text-xs">
-          <p className="font-medium mb-1 text-gray-700">Debug Info:</p>
-          <p className="text-gray-600">
-            Prompt loaded: {prompt.length} characters
-          </p>
-          <p className="text-gray-600 mt-1">
-            Overrides active: {prompt ? "Yes" : "No"}
-          </p>
-          <details className="mt-2">
-            <summary className="cursor-pointer text-gray-600 hover:text-gray-800">
-              View prompt preview
-            </summary>
-            <pre className="mt-2 p-2 bg-white rounded text-xs overflow-auto max-h-32">
-              {prompt.substring(0, 500)}
-              {prompt.length > 500 ? "..." : ""}
-            </pre>
-          </details>
+      {/* Action Buttons */}
+      {interviewStatus !== "completed" && (
+        <div className="flex gap-3 mb-4">
+          <Button
+            onClick={handleStartInterview}
+            disabled={
+              loading ||
+              isConnected ||
+              !agentId ||
+              interviewStatus === "completed"
+            }
+            className="flex-1 bg-[#1E3A8A] hover:bg-[#152a66] text-white"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Starting...
+              </>
+            ) : (
+              <>
+                <Phone className="w-4 h-4 mr-2" />
+                Start Voice Interview
+              </>
+            )}
+          </Button>
+          <Button
+            onClick={handleEndInterview}
+            disabled={!isConnected || isInterviewComplete}
+            variant="destructive"
+            className="flex-1"
+          >
+            <PhoneOff className="w-4 h-4 mr-2" />
+            {isInterviewComplete ? "Interview Complete" : "End Interview"}
+          </Button>
+        </div>
+      )}
+
+      {/* Interview Complete Message (during active session) */}
+      {isInterviewComplete && interviewStatus !== "completed" && (
+        <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
+          ✅ Interview completed! The session has been ended automatically.
+        </div>
+      )}
+
+      {/* Transcript - Always show when connected, even if empty */}
+      {(isConnected || transcript.length > 0) && (
+        <div className="mt-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">
+            Conversation Transcript
+          </h3>
+          <div className="bg-gray-50 rounded-xl border border-gray-200 max-h-[500px] overflow-y-auto p-4">
+            {transcript.length > 0 ? (
+              <div className="space-y-4">
+                {transcript.map((entry, index) => (
+                  <div
+                    key={index}
+                    className={`p-4 rounded-lg border-l-4 ${
+                      entry.role === "interviewer"
+                        ? "bg-blue-50 border-blue-500"
+                        : "bg-white border-green-500"
+                    }`}
+                  >
+                    <div
+                      className={`text-sm font-semibold mb-2 ${
+                        entry.role === "interviewer"
+                          ? "text-blue-700"
+                          : "text-green-700"
+                      }`}
+                    >
+                      {entry.role === "interviewer"
+                        ? "Interviewer"
+                        : "Candidate"}
+                      :
+                    </div>
+                    <p className="text-gray-900 whitespace-pre-wrap">
+                      {entry.text}
+                    </p>
+                  </div>
+                ))}
+                {/* Invisible element at the end to scroll to */}
+                <div ref={transcriptEndRef} />
+              </div>
+            ) : (
+              <div className="text-center py-8 text-gray-500 text-sm">
+                {isConnected
+                  ? "Conversation will appear here as you speak..."
+                  : "Start the interview to see the conversation transcript"}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -407,15 +533,11 @@ export default function ElevenLabsInterviewClient({ submissionId, userId }) {
           <li>Click "Start Voice Interview" to begin</li>
           <li>Allow microphone access when prompted</li>
           <li>The agent will ask questions based on your submission</li>
-          <li>Click "End Interview" when finished</li>
+          <li>You only have one chance to record your answers</li>
+          <li>
+            The interview will end automatically when all questions are answered
+          </li>
         </ul>
-        <div className="mt-2 pt-2 border-t border-blue-200">
-          <p className="font-medium text-xs">⚠️ Troubleshooting:</p>
-          <p className="text-xs mt-1">
-            If overrides aren't working, verify in ElevenLabs UI: Agent Settings
-            → Security → Enable "System prompt override"
-          </p>
-        </div>
       </div>
     </div>
   );

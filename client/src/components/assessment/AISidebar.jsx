@@ -13,7 +13,6 @@ const quickActions = [
   "Add test cases",
   "Rewrite for interns",
   "Generate follow-up questions",
-  "Tighten rubric",
 ];
 
 export default function AISidebar({
@@ -23,28 +22,22 @@ export default function AISidebar({
   onRemoveContext,
   lastChange,
   responseMessage,
+  model,
 }) {
   const [message, setMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState([
-    {
-      role: "assistant",
-      content:
-        "I've generated a backend assessment focused on Node.js and PostgreSQL. Let me know how you'd like to adjust it.",
-    },
-  ]);
+  const [chatHistory, setChatHistory] = useState([]);
 
   // Add response message to chat history when it's received
   useEffect(() => {
     if (responseMessage) {
       setChatHistory((prev) => {
-        // Avoid duplicates - check if the last message is the same
+        // Replace the last assistant message if it exists, otherwise add new one
         const lastMessage = prev[prev.length - 1];
-        if (
-          lastMessage?.role === "assistant" &&
-          lastMessage?.content === responseMessage
-        ) {
-          return prev; // Don't add duplicate
+        if (lastMessage?.role === "assistant") {
+          // Replace the last assistant message with the new response
+          return [...prev.slice(0, -1), { role: "assistant", content: responseMessage }];
         }
+        // Add new assistant message
         return [...prev, { role: "assistant", content: responseMessage }];
       });
     }
@@ -82,7 +75,7 @@ export default function AISidebar({
         <div className="flex items-center gap-1.5 mt-2">
           <Zap className="w-3 h-3 text-green-500" />
           <span className="text-xs text-gray-400">
-            Model: Bridge AI • Responds in seconds
+            Model: {model || "Bridge AI"} • Responds in seconds
           </span>
         </div>
       </div>
@@ -116,7 +109,6 @@ export default function AISidebar({
                 className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-white border border-[#1E3A8A]/20 text-[#1E3A8A] rounded-full"
               >
                 {section === "projectDescription" && "Project Description"}
-                {section === "rubric" && "Scoring & Rubric"}
                 {section === "testCases" && "Test Cases"}
                 {section === "smartInterviewer" && "Smart Interviewer"}
                 <button

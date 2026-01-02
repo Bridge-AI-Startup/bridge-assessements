@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { ArrowRight, AlertCircle, ArrowLeft } from "lucide-react";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -11,7 +12,12 @@ import { auth } from "@/firebase/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 
 export default function CreateAssessment() {
+  const [creationMode, setCreationMode] = useState("ai"); // "ai" or "manual"
   const [description, setDescription] = useState("");
+  const [manualTitle, setManualTitle] = useState("");
+  const [manualDescription, setManualDescription] = useState("");
+  const [manualTimeLimit, setManualTimeLimit] = useState(60);
+  const [starterFilesLink, setStarterFilesLink] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState("");
   const [currentUser, setCurrentUser] = useState(null);
@@ -34,6 +40,62 @@ export default function CreateAssessment() {
         window.location.href = createPageUrl("Landing");
         return;
       }
+
+      // Check for pending creation mode from Landing page
+      const pendingMode = localStorage.getItem("pending_creation_mode");
+      if (pendingMode === "ai" || pendingMode === "manual") {
+        console.log(
+          "📝 [CreateAssessment] Found pending creation mode:",
+          pendingMode
+        );
+        setCreationMode(pendingMode);
+        localStorage.removeItem("pending_creation_mode");
+      }
+
+      // Check for pending job description from Landing page (AI mode)
+      const pendingDescription = localStorage.getItem(
+        "pending_job_description"
+      );
+      if (pendingDescription) {
+        console.log(
+          "📝 [CreateAssessment] Found pending job description, auto-filling..."
+        );
+        setDescription(pendingDescription);
+        // Clear it so it doesn't auto-fill again on re-renders
+        localStorage.removeItem("pending_job_description");
+      }
+
+      // Check for pending manual fields from Landing page (Manual mode)
+      const pendingManualTitle = localStorage.getItem("pending_manual_title");
+      const pendingManualDescription = localStorage.getItem(
+        "pending_manual_description"
+      );
+      const pendingManualTimeLimit = localStorage.getItem(
+        "pending_manual_timeLimit"
+      );
+      const pendingStarterFilesLink = localStorage.getItem(
+        "pending_starter_files_link"
+      );
+
+      if (pendingManualTitle) {
+        setManualTitle(pendingManualTitle);
+        localStorage.removeItem("pending_manual_title");
+      }
+      if (pendingManualDescription) {
+        setManualDescription(pendingManualDescription);
+        localStorage.removeItem("pending_manual_description");
+      }
+      if (pendingManualTimeLimit) {
+        const timeLimit = parseInt(pendingManualTimeLimit, 10);
+        if (!isNaN(timeLimit) && timeLimit > 0) {
+          setManualTimeLimit(timeLimit);
+        }
+        localStorage.removeItem("pending_manual_timeLimit");
+      }
+      if (pendingStarterFilesLink) {
+        setStarterFilesLink(pendingStarterFilesLink);
+        localStorage.removeItem("pending_starter_files_link");
+      }
     });
 
     return () => unsubscribe();
@@ -43,11 +105,6 @@ export default function CreateAssessment() {
     "Looking for a backend intern with Node + Postgres experience to build internal APIs…";
 
   const handleGenerate = async () => {
-    if (!description.trim()) {
-      setError("Please enter a job description");
-      return;
-    }
-
     // Ensure user is authenticated before proceeding
     if (!currentUser || !authReady) {
       setError("Please wait for authentication to complete");
@@ -58,59 +115,103 @@ export default function CreateAssessment() {
     setError("");
 
     try {
-      console.log("🔄 [CreateAssessment] Generating assessment data...");
-      console.log("   Description:", description);
-      console.log("   Current User:", currentUser?.email);
-
-      // Get token from current user
       const token = await currentUser.getIdToken();
-      console.log("   Token obtained:", token ? "✅" : "❌");
 
-      // Generate assessment data from backend
-      const generateResult = await generateAssessmentData(
-        description.trim(),
-        token
-      );
+      let assessmentData;
 
-      if (!generateResult.success) {
-        const errorMsg =
-          "error" in generateResult
-            ? generateResult.error
-            : "Failed to generate assessment data";
-        console.error("❌ [CreateAssessment] Generation error:", errorMsg);
-        setError(errorMsg);
-        setIsGenerating(false);
-        return;
-      }
+      if (creationMode === "ai") {
+        // AI Generation Mode
+        if (!description.trim()) {
+          setError("Please enter a job description");
+          setIsGenerating(false);
+          return;
+        }
 
-      const {
-        title,
-        description: generatedDescription,
-        timeLimit,
-        scoring,
-      } = generateResult.data;
-      console.log("   Generated Title:", title);
-      console.log(
-        "   Generated Description:",
-        generatedDescription.substring(0, 100) + "..."
-      );
-      console.log("   Time Limit:", timeLimit, "minutes");
-      console.log("   Generated Scoring:", scoring);
+        console.log(
+          "🔄 [CreateAssessment] Generating assessment data with AI..."
+        );
 
-      // Create assessment with generated data (use AI-generated description, not user input)
-      const result = await createAssessment(
-        {
+        // Generate assessment data from backend
+        const generateResult = await generateAssessmentData(
+          description.trim(),
+          token
+        );
+
+        if (!generateResult.success) {
+          const errorMsg =
+            "error" in generateResult
+              ? generateResult.error
+              : "Failed to generate assessment data";
+          console.error("❌ [CreateAssessment] Generation error:", errorMsg);
+          setError(errorMsg);
+          setIsGenerating(false);
+          return;
+        }
+
+        const {
+          title,
+          description: generatedDescription,
+          timeLimit,
+        } = generateResult.data;
+
+        assessmentData = {
           title: title,
           description: generatedDescription,
           timeLimit: timeLimit,
-          scoring: scoring,
-        },
-        token
-      );
+        };
+      } else {
+        // Manual Creation Mode
+        if (!manualTitle.trim()) {
+          setError("Please enter an assessment title");
+          setIsGenerating(false);
+          return;
+        }
+        if (!manualDescription.trim()) {
+          setError("Please enter an assessment description");
+          setIsGenerating(false);
+          return;
+        }
+        if (manualTimeLimit < 1 || manualTimeLimit > 10080) {
+          setError("Time limit must be between 1 and 10080 minutes (1 week)");
+          setIsGenerating(false);
+          return;
+        }
+
+        console.log("🔄 [CreateAssessment] Creating assessment manually...");
+
+        assessmentData = {
+          title: manualTitle.trim(),
+          description: manualDescription.trim(),
+          timeLimit: manualTimeLimit,
+        };
+      }
+
+      // Add starter files GitHub link if provided (only for manual mode)
+      if (creationMode === "manual" && starterFilesLink.trim()) {
+        assessmentData.starterFilesGitHubLink = starterFilesLink.trim();
+      }
+
+      // Create assessment
+      const result = await createAssessment(assessmentData, token);
 
       if (!result.success) {
         const errorMsg =
           "error" in result ? result.error : "Failed to create assessment";
+        
+        // Check if it's a subscription limit error
+        if (errorMsg === "SUBSCRIPTION_LIMIT_REACHED" || errorMsg.includes("limit")) {
+          const shouldUpgrade = window.confirm(
+            "You've reached the free tier limit of 1 assessment.\n\n" +
+            "Upgrade to create unlimited assessments.\n\n" +
+            "Would you like to view subscription plans?"
+          );
+          if (shouldUpgrade) {
+            window.location.href = createPageUrl("Subscription");
+          }
+          setIsGenerating(false);
+          return;
+        }
+        
         console.error("❌ [CreateAssessment] Error:", errorMsg);
         setError(errorMsg);
         setIsGenerating(false);
@@ -121,6 +222,14 @@ export default function CreateAssessment() {
         "✅ [CreateAssessment] Assessment created successfully:",
         result.data
       );
+
+      // Clear any pending data since we've used it
+      localStorage.removeItem("pending_job_description");
+      localStorage.removeItem("pending_creation_mode");
+      localStorage.removeItem("pending_manual_title");
+      localStorage.removeItem("pending_manual_description");
+      localStorage.removeItem("pending_manual_timeLimit");
+      localStorage.removeItem("pending_starter_files_link");
 
       // Redirect to assessment editor with the new assessment ID
       const assessmentId = result.data._id;
@@ -179,9 +288,39 @@ export default function CreateAssessment() {
 
           {/* Subheading */}
           <p className="text-lg text-gray-500 max-w-2xl mx-auto leading-relaxed">
-            Drop in a job description, Bridge creates the take-home project,
-            generates AI interview questions, and scores submissions for you.
+            {creationMode === "ai"
+              ? "Drop in a job description, Bridge creates the take-home project, generates AI interview questions, and scores submissions for you."
+              : "Create your own assessment by providing the title, description, and time limit."}
           </p>
+        </motion.div>
+
+        {/* Mode Toggle */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.15 }}
+          className="flex justify-center mb-8 gap-4"
+        >
+          <button
+            onClick={() => setCreationMode("ai")}
+            className={`px-6 py-3 rounded-xl font-medium transition-all ${
+              creationMode === "ai"
+                ? "bg-[#1E3A8A] text-white shadow-md"
+                : "bg-white text-gray-700 border border-gray-200 hover:border-[#1E3A8A]/30"
+            }`}
+          >
+            Generate with AI
+          </button>
+          <button
+            onClick={() => setCreationMode("manual")}
+            className={`px-6 py-3 rounded-xl font-medium transition-all ${
+              creationMode === "manual"
+                ? "bg-[#1E3A8A] text-white shadow-md"
+                : "bg-white text-gray-700 border border-gray-200 hover:border-[#1E3A8A]/30"
+            }`}
+          >
+            Create Manually
+          </button>
         </motion.div>
 
         {/* Main Input Card */}
@@ -192,37 +331,127 @@ export default function CreateAssessment() {
           className="bg-white rounded-2xl shadow-[0_4px_40px_rgba(0,0,0,0.06)] border border-gray-100 overflow-hidden"
         >
           <div className="p-6 md:p-8">
-            {/* Preset Pills */}
-            <div className="mb-5">
-              <PresetPills
-                onSelect={handlePresetSelect}
-                selectedPreset={description}
-              />
-            </div>
+            <AnimatePresence mode="wait">
+              {creationMode === "ai" ? (
+                <motion.div
+                  key="ai-mode"
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  {/* Preset Pills */}
+                  <div className="mb-5">
+                    <PresetPills
+                      onSelect={handlePresetSelect}
+                      selectedPreset={description}
+                    />
+                  </div>
 
-            {/* Textarea */}
-            <div className="relative">
-              <Textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={placeholderText}
-                className="w-full min-h-[180px] text-base md:text-lg leading-relaxed resize-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-gray-400 p-0"
-              />
-            </div>
+                  {/* Textarea */}
+                  <div className="relative">
+                    <Textarea
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder={placeholderText}
+                      className="w-full min-h-[180px] text-base md:text-lg leading-relaxed resize-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-gray-400 p-0"
+                    />
+                  </div>
 
-            {/* Helper text */}
-            <p className="text-sm text-gray-400 mt-4">
-              Press{" "}
-              <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-500 font-mono text-xs">
-                Enter
-              </kbd>{" "}
-              to generate ·{" "}
-              <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-500 font-mono text-xs">
-                Shift+Enter
-              </kbd>{" "}
-              for new line
-            </p>
+                  {/* Helper text */}
+                  <p className="text-sm text-gray-400 mt-4">
+                    Press{" "}
+                    <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-500 font-mono text-xs">
+                      Enter
+                    </kbd>{" "}
+                    to generate ·{" "}
+                    <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-500 font-mono text-xs">
+                      Shift+Enter
+                    </kbd>{" "}
+                    for new line
+                  </p>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="manual-mode"
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  transition={{ duration: 0.3 }}
+                  className="space-y-5"
+                >
+                  {/* Title Input */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Assessment Title
+                    </label>
+                    <Input
+                      type="text"
+                      value={manualTitle}
+                      onChange={(e) => setManualTitle(e.target.value)}
+                      placeholder="e.g., Backend API Development Assessment"
+                      className="w-full"
+                    />
+                  </div>
+
+                  {/* Description Textarea */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Assessment Description
+                    </label>
+                    <Textarea
+                      value={manualDescription}
+                      onChange={(e) => setManualDescription(e.target.value)}
+                      placeholder="Describe the take-home project, requirements, and what you're looking for in the candidate's submission..."
+                      className="w-full min-h-[200px] text-base leading-relaxed"
+                    />
+                  </div>
+
+                  {/* Time Limit Input */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Time Limit (minutes)
+                    </label>
+                    <Input
+                      type="number"
+                      value={manualTimeLimit}
+                      onChange={(e) => {
+                        const value = parseInt(e.target.value, 10);
+                        if (!isNaN(value) && value > 0) {
+                          setManualTimeLimit(value);
+                        }
+                      }}
+                      min="1"
+                      max="10080"
+                      className="w-full"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      Enter time limit in minutes (1-10080, max 1 week)
+                    </p>
+                  </div>
+
+                  {/* Starter Files GitHub Link (only in manual mode) */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Starter Files GitHub Link (Optional)
+                    </label>
+                    <Input
+                      type="url"
+                      value={starterFilesLink}
+                      onChange={(e) => setStarterFilesLink(e.target.value)}
+                      placeholder="https://github.com/username/repo"
+                      className="w-full"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      Provide a GitHub repository link with starter files and
+                      instructions. Candidates will have access to this link
+                      when they start the assessment.
+                    </p>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* Error Message */}
             {error && (
@@ -239,9 +468,13 @@ export default function CreateAssessment() {
               onClick={handleGenerate}
               disabled={
                 isGenerating ||
-                !description.trim() ||
                 !authReady ||
-                !currentUser
+                !currentUser ||
+                (creationMode === "ai" && !description.trim()) ||
+                (creationMode === "manual" &&
+                  (!manualTitle.trim() ||
+                    !manualDescription.trim() ||
+                    manualTimeLimit < 1))
               }
               className="bg-[#FFFF00] hover:bg-[#faed00] text-[#1E3A8A] px-6 py-2.5 h-auto rounded-xl font-semibold transition-all duration-200 disabled:opacity-50 shadow-sm"
             >
@@ -296,7 +529,9 @@ export default function CreateAssessment() {
                     exit={{ opacity: 0 }}
                     className="flex items-center gap-2"
                   >
-                    Generate with AI
+                    {creationMode === "ai"
+                      ? "Generate with AI"
+                      : "Create Assessment"}
                     <ArrowRight className="w-4 h-4" />
                   </motion.span>
                 )}

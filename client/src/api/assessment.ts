@@ -7,7 +7,10 @@ export type Assessment = {
   title: string;
   description: string;
   timeLimit: number;
-  scoring?: Record<string, number>; // Key-value pair: category -> percent weight
+  numInterviewQuestions?: number;
+  starterFilesGitHubLink?: string;
+  interviewerCustomInstructions?: string;
+  isSmartInterviewerEnabled?: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -16,14 +19,19 @@ export type AssessmentCreate = {
   title: string;
   description: string;
   timeLimit: number;
-  scoring?: Record<string, number>; // Key-value pair: category -> percent weight
+  numInterviewQuestions?: number;
+  starterFilesGitHubLink?: string;
+  interviewerCustomInstructions?: string;
 };
 
 export type AssessmentUpdate = {
   title?: string;
   description?: string;
   timeLimit?: number;
-  scoring?: Record<string, number>; // Key-value pair: category -> percent weight
+  numInterviewQuestions?: number;
+  starterFilesGitHubLink?: string;
+  interviewerCustomInstructions?: string;
+  isSmartInterviewerEnabled?: boolean;
 };
 
 /**
@@ -48,22 +56,40 @@ export async function createAssessment(
       title: string;
       description: string;
       timeLimit: number;
-      scoring?: Record<string, number>;
     } = {
       title: data.title,
       description: data.description,
       timeLimit: data.timeLimit,
     };
 
-    if (data.scoring) {
-      requestBody.scoring = data.scoring;
-    }
-
-    const response = await post("/assessments", requestBody, {
-      Authorization: `Bearer ${authToken}`,
+    // Make request without assertOk to handle 403 subscription limit errors
+    const API_BASE_URL = "http://localhost:5050/api";
+    const response = await fetch(`${API_BASE_URL}/assessments`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
     });
 
     const result = await response.json();
+
+    // Check for subscription limit error (403 status)
+    if (response.status === 403 && result.error === "SUBSCRIPTION_LIMIT_REACHED") {
+      return {
+        success: false,
+        error: "SUBSCRIPTION_LIMIT_REACHED",
+      };
+    }
+
+    // Check for other errors
+    if (!response.ok) {
+      return {
+        success: false,
+        error: result.error || `Failed to create assessment (${response.status})`,
+      };
+    }
 
     // Backend returns assessment object directly (not wrapped in { success, data })
     // Check if it's an assessment object (has _id)
@@ -178,7 +204,10 @@ export async function updateAssessment(
       title?: string;
       description?: string;
       timeLimit?: number;
-      scoring?: Record<string, number>;
+      numInterviewQuestions?: number;
+      starterFilesGitHubLink?: string;
+      interviewerCustomInstructions?: string;
+      isSmartInterviewerEnabled?: boolean;
     } = {};
 
     if (data.title !== undefined) {
@@ -190,8 +219,17 @@ export async function updateAssessment(
     if (data.timeLimit !== undefined) {
       updateBody.timeLimit = data.timeLimit;
     }
-    if (data.scoring !== undefined) {
-      updateBody.scoring = data.scoring;
+    if (data.numInterviewQuestions !== undefined) {
+      updateBody.numInterviewQuestions = data.numInterviewQuestions;
+    }
+    if (data.starterFilesGitHubLink !== undefined) {
+      updateBody.starterFilesGitHubLink = data.starterFilesGitHubLink;
+    }
+    if (data.interviewerCustomInstructions !== undefined) {
+      updateBody.interviewerCustomInstructions = data.interviewerCustomInstructions;
+    }
+    if (data.isSmartInterviewerEnabled !== undefined) {
+      updateBody.isSmartInterviewerEnabled = data.isSmartInterviewerEnabled;
     }
 
     const response = await patch(`/assessments/${id}`, updateBody, {
@@ -259,7 +297,7 @@ export async function deleteAssessment(
 
 /**
  * Generate assessment data from description
- * Calls the backend to generate title, timeLimit, and scoring based on description
+ * Calls the backend to generate title and timeLimit based on description
  */
 export async function generateAssessmentData(
   jobDescription: string,
@@ -269,7 +307,6 @@ export async function generateAssessmentData(
     title: string;
     description: string;
     timeLimit: number;
-    scoring: Record<string, number>;
   }>
 > {
   try {
@@ -311,8 +348,6 @@ export async function generateAssessmentData(
       hasDescription: !!result.description,
       descriptionLength: result.description?.length,
       hasTimeLimit: !!result.timeLimit,
-      hasScoring: !!result.scoring,
-      scoringKeys: result.scoring ? Object.keys(result.scoring) : [],
       fullResult: result,
     });
 
@@ -321,14 +356,12 @@ export async function generateAssessmentData(
       result &&
       result.title &&
       result.description &&
-      result.timeLimit &&
-      result.scoring
+      result.timeLimit
     ) {
       console.log("✅ [generateAssessmentData] Successfully generated:", {
         title: result.title,
         descriptionLength: result.description.length,
         timeLimit: result.timeLimit,
-        scoringKeys: Object.keys(result.scoring),
       });
       return { success: true, data: result };
     }
@@ -339,7 +372,6 @@ export async function generateAssessmentData(
         hasTitle: !!result.title,
         hasDescription: !!result.description,
         hasTimeLimit: !!result.timeLimit,
-        hasScoring: !!result.scoring,
         result,
       }
     );
@@ -357,7 +389,6 @@ export async function generateAssessmentData(
 export type ChatRequest = {
   message: string;
   allowedSections?: string[];
-  rubric?: Array<{ criteria: string; weight: string }>;
   testCases?: Array<{ name: string; type: string; points: number }>;
 };
 
@@ -366,13 +397,13 @@ export type ChatResponse = {
     description?: string;
     title?: string;
     timeLimit?: number;
-    scoring?: Record<string, number>;
-    rubric?: Array<{ criteria: string; weight: string }>;
     testCases?: Array<{ name: string; type: string; points: number }>;
   };
   changedSections: string[];
   changesSummary: string[];
   responseMessage: string;
+  model?: string;
+  provider?: string;
   assessment?: Assessment;
 };
 

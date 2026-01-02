@@ -6,17 +6,16 @@ import {
   Users,
   CheckCircle,
   Clock,
-  MoreVertical,
-  Archive,
   Trash2,
-  Edit,
   LogOut,
   User,
   BarChart3,
+  CreditCard,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { getAssessments, deleteAssessment } from "@/api/assessment";
 import {
@@ -26,14 +25,28 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { signOut, onAuthStateChanged } from "firebase/auth";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { signOut, onAuthStateChanged, deleteUser } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
+import { deleteAccount } from "@/api/user";
 
 export default function Home() {
+  const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState(null);
   const [assessments, setAssessments] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     // Wait for auth state to be ready
@@ -42,8 +55,8 @@ export default function Home() {
       setCurrentUser(user);
 
       if (!user) {
-        console.warn("⚠️ [Home] No user found, redirecting to landing");
-        window.location.href = createPageUrl("Landing");
+        console.warn("⚠️ [Home] No user found, redirecting to base website");
+        window.location.href = "/";
         return;
       }
 
@@ -83,12 +96,51 @@ export default function Home() {
   const handleLogout = async () => {
     try {
       await signOut(auth);
-      // Redirect to landing page after logout
-      window.location.href = createPageUrl("Landing");
+      // Redirect to base website after logout
+      window.location.href = "/";
     } catch (error) {
       console.error("Logout error:", error);
       // Still redirect even if logout fails
-      window.location.href = createPageUrl("Landing");
+      window.location.href = "/";
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    setIsDeleting(true);
+    try {
+      // Call backend to delete account and all associated data
+      const result = await deleteAccount();
+
+      if (result.success) {
+        console.log("✅ Account deleted successfully");
+
+        // Delete Firebase user
+        const user = auth.currentUser;
+        if (user) {
+          try {
+            await deleteUser(user);
+            console.log("✅ Firebase user deleted");
+          } catch (firebaseError) {
+            console.error("⚠️ Failed to delete Firebase user:", firebaseError);
+            // Still proceed - backend deletion succeeded
+          }
+        }
+
+        // Sign out and redirect
+        await signOut(auth);
+        window.location.href = "/";
+      } else {
+        const errorMsg =
+          "error" in result ? result.error : "Failed to delete account";
+        alert(errorMsg);
+        setIsDeleting(false);
+        setShowDeleteDialog(false);
+      }
+    } catch (err) {
+      console.error("Error deleting account:", err);
+      alert("Failed to delete account. Please try again.");
+      setIsDeleting(false);
+      setShowDeleteDialog(false);
     }
   };
 
@@ -146,6 +198,15 @@ export default function Home() {
                 New Assessment
               </Button>
             </Link>
+            <Link to={createPageUrl("Subscription")}>
+              <Button
+                variant="outline"
+                className="border-[#1E3A8A] text-[#1E3A8A] hover:bg-[#1E3A8A]/5 rounded-full px-5"
+              >
+                <CreditCard className="w-4 h-4 mr-2" />
+                Subscription
+              </Button>
+            </Link>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="rounded-full h-9 w-9 p-0">
@@ -172,10 +233,54 @@ export default function Home() {
                   <LogOut className="w-4 h-4 mr-2" />
                   Log out
                 </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => setShowDeleteDialog(true)}
+                  className="text-red-600 cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Delete account
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
         </motion.div>
+
+        {/* Delete Account Confirmation Dialog */}
+        <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle className="flex items-center gap-2 text-red-600">
+                <AlertTriangle className="w-5 h-5" />
+                Delete Account
+              </AlertDialogTitle>
+              <AlertDialogDescription className="pt-2">
+                This action cannot be undone. This will permanently delete your
+                account and all associated data, including:
+                <ul className="list-disc list-inside mt-3 space-y-1 text-sm">
+                  <li>All your assessments</li>
+                  <li>All candidate submissions</li>
+                  <li>All interview data and transcripts</li>
+                  <li>Your subscription (if active)</li>
+                  <li>All code embeddings and indexed data</li>
+                </ul>
+                <p className="mt-4 font-semibold">
+                  Are you absolutely sure you want to proceed?
+                </p>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleDeleteAccount}
+                disabled={isDeleting}
+                className="bg-red-600 hover:bg-red-700 text-white"
+              >
+                {isDeleting ? "Deleting..." : "Yes, delete my account"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {/* Error Message */}
         {error && (
@@ -233,7 +338,12 @@ export default function Home() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.05 }}
-                className="bg-white rounded-xl border border-gray-200 p-5 hover:shadow-md transition-shadow group"
+                className="bg-white rounded-xl border border-gray-200 p-5 hover:shadow-md transition-shadow group cursor-pointer"
+                onClick={() => {
+                  navigate(
+                    createPageUrl("AssessmentEditor") + `?id=${assessment._id}`
+                  );
+                }}
               >
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex-1">
@@ -242,32 +352,16 @@ export default function Home() {
                     </h3>
                     <Badge className="bg-blue-100 text-blue-700">Active</Badge>
                   </div>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button className="p-1.5 hover:bg-gray-100 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity">
-                        <MoreVertical className="w-4 h-4 text-gray-500" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem
-                        onClick={() => {
-                          window.location.href =
-                            createPageUrl("AssessmentEditor") +
-                            `?id=${assessment._id}`;
+                  <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(assessment._id);
                         }}
+                    className="p-1.5 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity text-red-600 hover:text-red-700"
+                    title="Delete assessment"
                       >
-                        <Edit className="w-4 h-4 mr-2" />
-                        Edit
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        className="text-red-600"
-                        onClick={() => handleDelete(assessment._id)}
-                      >
-                        <Trash2 className="w-4 h-4 mr-2" />
-                        Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
 
                 <p className="text-sm text-gray-500 mb-4 line-clamp-2">
@@ -288,22 +382,10 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
-                  <Link
-                    to={
-                      createPageUrl("AssessmentEditor") +
-                      `?id=${assessment._id}`
-                    }
-                    className="flex-1"
-                  >
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full text-[#1E3A8A] border-[#1E3A8A]/20 hover:bg-[#1E3A8A]/5"
-                    >
-                      Open
-                    </Button>
-                  </Link>
+                <div
+                  className="flex items-center gap-2 pt-3 border-t border-gray-100"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <Link
                     to={
                       createPageUrl("SubmissionsDashboard") +

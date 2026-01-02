@@ -79,13 +79,11 @@ export default function CandidatePreviewModal({ isOpen, onClose, assessment }) {
                 How You'll Be Evaluated
               </h2>
               <div className="flex flex-wrap gap-2">
-                {(
-                  assessment?.rubric || [
+                {[
                     { criteria: "Code Quality" },
                     { criteria: "Problem Solving" },
                     { criteria: "Documentation" },
-                  ]
-                ).map((item, index) => (
+                ].map((item, index) => (
                   <span
                     key={index}
                     className="px-3 py-1.5 bg-[#1E3A8A]/10 text-[#1E3A8A] text-sm rounded-lg"

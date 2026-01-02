@@ -32,12 +32,32 @@ const AssessmentSchema = new mongoose.Schema(
       min: 1, // At least 1 minute
     },
 
-    // Scoring categories and their percent weights
-    // Example: { "Code Quality": 25, "API Design": 25, "Testing": 15 }
-    scoring: {
-      type: Map,
-      of: Number,
-      default: new Map(),
+    // Number of interview questions to generate
+    numInterviewQuestions: {
+      type: Number,
+      default: 2,
+      min: 1,
+      max: 4, // Maximum 4 questions
+    },
+
+    // GitHub link to starter files repository
+    starterFilesGitHubLink: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+
+    // Custom instructions for the AI interviewer
+    interviewerCustomInstructions: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+
+    // Whether smart AI interviewer is enabled
+    isSmartInterviewerEnabled: {
+      type: Boolean,
+      default: true,
     },
   },
   {

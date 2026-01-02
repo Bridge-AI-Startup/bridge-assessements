@@ -10,7 +10,7 @@ export default function AssessmentPanel({
   content, 
   isHighlighted, 
   onEdit,
-  type = 'text' // 'text', 'list', 'rubric', 'toggles'
+  type = 'text' // 'text', 'list', 'toggles'
 }) {
   const [isOpen, setIsOpen] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
@@ -78,28 +78,6 @@ export default function AssessmentPanel({
       );
     }
 
-    if (type === 'rubric' && Array.isArray(content)) {
-      return (
-        <div className="space-y-3">
-          {content.map((item, index) => (
-            <motion.div 
-              key={index}
-              className={`p-3 rounded-lg border border-gray-100 transition-colors duration-300 ${showHighlight ? 'bg-[#FFFF00]/30' : 'bg-gray-50'}`}
-            >
-              <div className="font-medium text-gray-900 mb-1">{item.criteria}</div>
-              <div className="text-sm text-gray-600">{item.description}</div>
-              <div className="mt-2 flex gap-2">
-                {item.levels?.map((level, i) => (
-                  <span key={i} className="text-xs px-2 py-1 bg-white border border-gray-200 rounded">
-                    {level}
-                  </span>
-                ))}
-              </div>
-            </motion.div>
-          ))}
-        </div>
-      );
-    }
 
     if (type === 'toggles' && typeof content === 'object') {
       return (

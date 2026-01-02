@@ -106,6 +106,17 @@ function deduplicateChunks(chunks: CodeChunk[]): CodeChunk[] {
  */
 export const getContext: RequestHandler = async (req, res, next) => {
   try {
+    // Log tool call for testing
+    console.log("\n" + "=".repeat(80));
+    console.log("🔧 [agentTools/getContext] Tool call received");
+    console.log("=".repeat(80));
+    console.log("📥 Request body:", JSON.stringify(req.body, null, 2));
+    console.log("📋 Headers:", {
+      "x-agent-secret": req.headers["x-agent-secret"] ? "***" : "missing",
+      "content-type": req.headers["content-type"],
+    });
+    console.log("=".repeat(80) + "\n");
+
     const { submissionId, currentQuestion, candidateAnswer } =
       req.body as GetContextRequest;
 
@@ -228,14 +239,39 @@ export const getContext: RequestHandler = async (req, res, next) => {
     };
 
     // Step 9: Log (without full code contents)
-    console.log(
-      `🔍 [agentTools/getContext] submissionId=${submissionId}, questionLength=${trimmedQuestion.length}, answerLength=${trimmedAnswer.length}, topK=${requestedTopK} (used=${retrievalResult.stats.requestedTopK}), chunksReturned=${response.stats.chunksReturned}, totalCharsReturned=${response.stats.totalCharsReturned}`
-    );
+    console.log("\n" + "=".repeat(80));
+    console.log("✅ [agentTools/getContext] Tool call completed successfully");
+    console.log("=".repeat(80));
+    console.log(`📊 Stats:
+  - submissionId: ${submissionId}
+  - questionLength: ${trimmedQuestion.length} chars
+  - answerLength: ${trimmedAnswer.length} chars
+  - topK requested: ${requestedTopK} (used: ${retrievalResult.stats.requestedTopK})
+  - chunksReturned: ${response.stats.chunksReturned}
+  - totalCharsReturned: ${response.stats.totalCharsReturned}`);
+    console.log(`📁 Code chunks returned (first 3):
+${finalChunks
+  .slice(0, 3)
+  .map(
+    (chunk, idx) =>
+      `  ${idx + 1}. ${chunk.path}:${chunk.startLine}-${
+        chunk.endLine
+      } (score: ${chunk.score.toFixed(3)})`
+  )
+  .join("\n")}`);
+    console.log("=".repeat(80) + "\n");
 
     res.status(200).json(response);
   } catch (error) {
-    console.error("Error in get-context endpoint:", error);
+    console.error("\n" + "=".repeat(80));
+    console.error("❌ [agentTools/getContext] Tool call failed");
+    console.error("=".repeat(80));
+    console.error("Error:", error);
+    if (error instanceof Error) {
+      console.error("Error message:", error.message);
+      console.error("Error stack:", error.stack);
+    }
+    console.error("=".repeat(80) + "\n");
     next(error);
   }
 };
-

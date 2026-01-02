@@ -1,17 +1,14 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import {
   Clock,
-  FileText,
-  Code,
-  Calendar,
   AlertCircle,
   Play,
-  Upload,
   Link as LinkIcon,
   Send,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,8 +17,10 @@ import {
   getSubmissionByToken,
   startAssessment,
   submitAssessment,
+  optOutAssessment,
 } from "@/api/submission";
 import { createPageUrl } from "@/utils";
+import bridgeLogo from "@/assets/bridge-logo.svg";
 
 export default function CandidateAssessment() {
   const [searchParams] = useSearchParams();
@@ -34,9 +33,11 @@ export default function CandidateAssessment() {
   const [isStarting, setIsStarting] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [githubUrl, setGithubUrl] = useState("");
-  const [notes, setNotes] = useState("");
   const [timeRemaining, setTimeRemaining] = useState(null); // in minutes
   const [timeDisplay, setTimeDisplay] = useState(""); // formatted display
+  const [showOptOutModal, setShowOptOutModal] = useState(false);
+  const [optOutReason, setOptOutReason] = useState("");
+  const [isOptingOut, setIsOptingOut] = useState(false);
 
   // Load submission on mount
   useEffect(() => {
@@ -66,6 +67,13 @@ export default function CandidateAssessment() {
             return;
           }
 
+          // If opted out, stop here - don't redirect, just show the opted out screen
+          // This prevents redirect loops and API spam
+          if (result.data.status === "opted-out") {
+            setIsLoading(false);
+            return;
+          }
+
           if (result.data.status === "in-progress") {
             setTimeRemaining(result.data.timeRemaining);
           }
@@ -90,8 +98,14 @@ export default function CandidateAssessment() {
   }, [token]);
 
   // Sync time with backend every 30 seconds if assessment is in progress
+  // IMPORTANT: Don't poll if opted out to prevent API spam
   useEffect(() => {
-    if (!token || !submission || submission.status !== "in-progress") {
+    if (
+      !token ||
+      !submission ||
+      submission.status !== "in-progress" ||
+      submission.status === "opted-out"
+    ) {
       return;
     }
 
@@ -200,6 +214,35 @@ export default function CandidateAssessment() {
     }
   };
 
+  const handleOptOut = async () => {
+    if (!token) {
+      alert("No token provided");
+      return;
+    }
+
+    setIsOptingOut(true);
+    try {
+      const result = await optOutAssessment(
+        token,
+        optOutReason.trim() || undefined
+      );
+      if (result.success) {
+        // Update local state to show opted out screen
+        setSubmission(result.data);
+        setShowOptOutModal(false);
+        setOptOutReason("");
+      } else {
+        const errorMsg = "error" in result ? result.error : "Failed to opt out";
+        alert(errorMsg);
+        setIsOptingOut(false);
+      }
+    } catch (error) {
+      console.error("Error opting out:", error);
+      alert("Failed to opt out");
+      setIsOptingOut(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-[#f8f9fb] flex items-center justify-center">
@@ -217,6 +260,77 @@ export default function CandidateAssessment() {
         <div className="text-center">
           <p className="text-red-600 mb-4">Failed to load assessment</p>
         </div>
+      </div>
+    );
+  }
+
+  // Show opted out screen if candidate has opted out
+  if (submission.status === "opted-out") {
+    const optedOutBeforeStarting = !submission.startedAt;
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[#f8f9fb] to-[#eef1f8] flex items-center justify-center p-6">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-2xl bg-white rounded-2xl shadow-xl overflow-hidden"
+        >
+          {/* Header */}
+          <div className="bg-orange-500 px-8 py-6 text-center">
+            <div className="w-16 h-16 rounded-full bg-white flex items-center justify-center mx-auto mb-4">
+              <X className="w-10 h-10 text-orange-500" />
+            </div>
+            <h1 className="text-2xl font-bold text-white mb-1">
+              You Have Opted Out
+            </h1>
+            <p className="text-white/90">
+              {optedOutBeforeStarting
+                ? "You have chosen not to start this assessment"
+                : "You have chosen not to complete this assessment"}
+            </p>
+          </div>
+
+          {/* Content */}
+          <div className="p-8">
+            <div className="mb-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-3">
+                {assessment.title}
+              </h2>
+              {optedOutBeforeStarting ? (
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-4">
+                  <p className="text-xs text-blue-800 font-medium">
+                    ℹ️ You opted out before starting the assessment
+                  </p>
+                </div>
+              ) : (
+                <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 mb-4">
+                  <p className="text-xs text-orange-800 font-medium">
+                    ⚠️ You opted out after starting the assessment
+                  </p>
+                </div>
+              )}
+              {submission.optOutReason && (
+                <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 mb-4">
+                  <p className="text-sm font-medium text-gray-700 mb-2">
+                    Your reason:
+                  </p>
+                  <p className="text-sm text-gray-600">
+                    {submission.optOutReason}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
+              <p className="text-sm text-orange-800">
+                <strong>Note:</strong>{" "}
+                {optedOutBeforeStarting
+                  ? "You opted out before starting the assessment. If you change your mind, please contact the assessment team."
+                  : "You opted out after starting the assessment. If you change your mind, please contact the assessment team."}
+              </p>
+            </div>
+          </div>
+        </motion.div>
       </div>
     );
   }
@@ -248,13 +362,22 @@ export default function CandidateAssessment() {
         >
           {/* Header */}
           <div className="bg-[#1E3A8A] px-8 py-6 text-center">
-            <div className="w-16 h-16 rounded-2xl bg-white flex items-center justify-center mx-auto mb-4">
-              <span className="text-[#1E3A8A] font-bold text-2xl">B</span>
+            <div className="w-16 h-16 rounded-2xl bg-white flex items-center justify-center mx-auto mb-4 overflow-hidden">
+              <img
+                src={bridgeLogo}
+                alt="Bridge"
+                className="w-full h-full object-contain"
+              />
             </div>
             <h1 className="text-2xl font-bold text-white mb-1">
               {assessment.title}
             </h1>
             <p className="text-blue-200">Technical Assessment</p>
+            {assessment.userId?.companyName && (
+              <p className="text-blue-300 text-sm mt-2">
+                From {assessment.userId.companyName}
+              </p>
+            )}
           </div>
 
           {/* Content */}
@@ -268,6 +391,31 @@ export default function CandidateAssessment() {
                 </span>
               </div>
             </div>
+
+            {/* Starter Files GitHub Link (if available) */}
+            {assessment.starterFilesGitHubLink && (
+              <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                <div className="flex items-start gap-3">
+                  <LinkIcon className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h3 className="text-sm font-semibold text-blue-900 mb-1">
+                      Starter Files & Instructions
+                    </h3>
+                    <p className="text-sm text-blue-800 mb-2">
+                      Access the starter files and detailed instructions:
+                    </p>
+                    <a
+                      href={assessment.starterFilesGitHubLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:text-blue-800 hover:underline text-sm font-medium break-all"
+                    >
+                      {assessment.starterFilesGitHubLink}
+                    </a>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Warning */}
             <div className="flex items-start gap-3 p-4 bg-yellow-50 border border-yellow-200 rounded-xl mb-6">
@@ -283,13 +431,65 @@ export default function CandidateAssessment() {
             <Button
               onClick={handleStart}
               disabled={isStarting}
-              className="w-full bg-[#1E3A8A] hover:bg-[#152a66] text-white py-6 text-lg rounded-xl disabled:opacity-50"
+              className="w-full bg-[#1E3A8A] hover:bg-[#152a66] text-white py-6 text-lg rounded-xl disabled:opacity-50 mb-3"
             >
               <Play className="w-5 h-5 mr-2" />
               {isStarting ? "Starting..." : "Start Assessment"}
             </Button>
+
+            {/* Opt Out Button */}
+            <button
+              onClick={() => setShowOptOutModal(true)}
+              className="w-full text-sm text-gray-500 hover:text-gray-700 py-2"
+            >
+              I cannot complete this assessment
+            </button>
           </div>
         </motion.div>
+
+        {/* Opt Out Modal - Available in both states */}
+        {showOptOutModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-white rounded-xl shadow-xl max-w-md w-full p-6"
+            >
+              <h2 className="text-xl font-semibold text-gray-900 mb-2">
+                Opt Out of Assessment
+              </h2>
+              <p className="text-sm text-gray-600 mb-4">
+                Are you sure you want to opt out of this assessment? Please let
+                us know why (optional):
+              </p>
+              <Textarea
+                value={optOutReason}
+                onChange={(e) => setOptOutReason(e.target.value)}
+                placeholder="E.g., Time constraints, technical issues, not interested..."
+                className="min-h-[100px] mb-4"
+              />
+              <div className="flex gap-3">
+                <Button
+                  onClick={handleOptOut}
+                  disabled={isOptingOut}
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                >
+                  {isOptingOut ? "Opting Out..." : "Confirm Opt Out"}
+                </Button>
+                <Button
+                  onClick={() => {
+                    setShowOptOutModal(false);
+                    setOptOutReason("");
+                  }}
+                  variant="outline"
+                  disabled={isOptingOut}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
       </div>
     );
   }
@@ -301,16 +501,22 @@ export default function CandidateAssessment() {
       <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[#1E3A8A] flex items-center justify-center">
-              <span className="text-white font-bold">
-                {assessment.companyLogo}
-              </span>
+            <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center overflow-hidden">
+              <img
+                src={bridgeLogo}
+                alt="Bridge"
+                className="w-full h-full object-contain"
+              />
             </div>
             <div>
               <h1 className="font-semibold text-gray-900">
                 {assessment.title}
               </h1>
-              <p className="text-xs text-gray-500">{assessment.companyName}</p>
+              {assessment.userId?.companyName && (
+                <p className="text-xs text-gray-500">
+                  {assessment.userId.companyName}
+                </p>
+              )}
             </div>
           </div>
           <div
@@ -388,6 +594,32 @@ export default function CandidateAssessment() {
                 {assessment.description}
               </ReactMarkdown>
             </div>
+
+            {/* Starter Files GitHub Link */}
+            {assessment.starterFilesGitHubLink && (
+              <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-start gap-3">
+                  <LinkIcon className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h3 className="text-sm font-semibold text-blue-900 mb-1">
+                      Starter Files & Instructions
+                    </h3>
+                    <p className="text-sm text-blue-800 mb-2">
+                      Access the starter files and detailed instructions in the
+                      GitHub repository:
+                    </p>
+                    <a
+                      href={assessment.starterFilesGitHubLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:text-blue-800 hover:underline text-sm font-medium break-all"
+                    >
+                      {assessment.starterFilesGitHubLink}
+                    </a>
+                  </div>
+                </div>
+              </div>
+            )}
           </motion.div>
 
           {/* Submission Form */}
@@ -417,30 +649,36 @@ export default function CandidateAssessment() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Additional Notes (optional)
-                </label>
-                <Textarea
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Any additional context about your approach, trade-offs made, or things you'd improve with more time..."
-                  className="min-h-[100px]"
-                />
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <p className="text-sm text-blue-800">
+                  <strong>Note:</strong> Please include any additional context,
+                  notes about your approach, trade-offs made, or things you'd
+                  improve with more time in your repository's README file.
+                </p>
               </div>
 
-              <Button
-                onClick={handleSubmit}
-                disabled={
-                  !githubUrl ||
-                  isSubmitting ||
-                  (timeRemaining !== null && timeRemaining <= 0)
-                }
-                className="w-full bg-[#1E3A8A] hover:bg-[#152a66] text-white py-5 disabled:opacity-50"
-              >
-                <Send className="w-4 h-4 mr-2" />
-                {isSubmitting ? "Submitting..." : "Submit Assessment"}
-              </Button>
+              <div className="flex gap-3">
+                <Button
+                  onClick={handleSubmit}
+                  disabled={
+                    !githubUrl ||
+                    isSubmitting ||
+                    (timeRemaining !== null && timeRemaining <= 0)
+                  }
+                  className="flex-1 bg-[#1E3A8A] hover:bg-[#152a66] text-white py-5 disabled:opacity-50"
+                >
+                  <Send className="w-4 h-4 mr-2" />
+                  {isSubmitting ? "Submitting..." : "Submit Assessment"}
+                </Button>
+                <Button
+                  onClick={() => setShowOptOutModal(true)}
+                  variant="outline"
+                  className="px-4 py-5 border-gray-300 text-gray-700 hover:bg-gray-50"
+                >
+                  <X className="w-4 h-4 mr-2" />
+                  Opt Out
+                </Button>
+              </div>
             </div>
           </motion.div>
         </div>
@@ -458,6 +696,50 @@ export default function CandidateAssessment() {
           </p>
         </motion.div>
       </div>
+
+      {/* Opt Out Modal - Available in both states */}
+      {showOptOutModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-xl shadow-xl max-w-md w-full p-6"
+          >
+            <h2 className="text-xl font-semibold text-gray-900 mb-2">
+              Opt Out of Assessment
+            </h2>
+            <p className="text-sm text-gray-600 mb-4">
+              Are you sure you want to opt out of this assessment? Please let us
+              know why (optional):
+            </p>
+            <Textarea
+              value={optOutReason}
+              onChange={(e) => setOptOutReason(e.target.value)}
+              placeholder="E.g., Time constraints, technical issues, not interested..."
+              className="min-h-[100px] mb-4"
+            />
+            <div className="flex gap-3">
+              <Button
+                onClick={handleOptOut}
+                disabled={isOptingOut}
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+              >
+                {isOptingOut ? "Opting Out..." : "Confirm Opt Out"}
+              </Button>
+              <Button
+                onClick={() => {
+                  setShowOptOutModal(false);
+                  setOptOutReason("");
+                }}
+                variant="outline"
+                disabled={isOptingOut}
+              >
+                Cancel
+              </Button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }

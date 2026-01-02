@@ -101,3 +101,47 @@ export async function createUser({
     return handleAPIError(error);
   }
 }
+
+/**
+ * Delete user account and all associated data
+ */
+export async function deleteAccount(
+  token?: string
+): Promise<APIResult<{ message: string; deletedAssessments: number }>> {
+  try {
+    // Get token if not provided
+    let authToken = token;
+    if (!authToken) {
+      const user = auth.currentUser;
+      if (!user) {
+        return { success: false, error: "No user is currently signed in" };
+      }
+      authToken = await user.getIdToken();
+    }
+
+    const response = await post(
+      "/users/delete",
+      {},
+      {
+        Authorization: `Bearer ${authToken}`,
+      }
+    );
+
+    const result = await response.json();
+
+    if (result.success && result.data) {
+      return { success: true, data: result.data };
+    }
+
+    if (result && result.message) {
+      return { success: true, data: result };
+    }
+
+    return {
+      success: false,
+      error: result.error || "Failed to delete account",
+    };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}

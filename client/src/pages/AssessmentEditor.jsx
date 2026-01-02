@@ -3,7 +3,6 @@ import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import {
   FileText,
-  Target,
   Plus,
   Eye,
   Share2,
@@ -13,6 +12,8 @@ import {
   BarChart3,
   Copy,
   Check,
+  Link as LinkIcon,
+  Pencil,
 } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -35,9 +36,7 @@ import {
 import { generateShareLink } from "@/api/submission";
 import { auth } from "@/firebase/firebase";
 import { onAuthStateChanged } from "firebase/auth";
-import DocumentBlock, {
-  RubricItem,
-} from "@/components/assessment/DocumentBlock";
+import DocumentBlock from "@/components/assessment/DocumentBlock";
 import AISidebar from "@/components/assessment/AISidebar";
 import CandidatePreviewModal from "@/components/assessment/CandidatePreviewModal";
 
@@ -58,6 +57,7 @@ export default function AssessmentEditor() {
   const [highlightedSection, setHighlightedSection] = useState(null);
   const [lastChange, setLastChange] = useState(null);
   const [responseMessage, setResponseMessage] = useState(null);
+  const [aiModel, setAiModel] = useState(null);
   const [isSmartInterviewerEnabled, setIsSmartInterviewerEnabled] =
     useState(true);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -70,6 +70,14 @@ export default function AssessmentEditor() {
   const [timeLimit, setTimeLimit] = useState({ hours: 4, minutes: 0 });
   const [startDeadline, setStartDeadline] = useState(7);
   const [timeLimitSaveTimeout, setTimeLimitSaveTimeout] = useState(null);
+  const [numInterviewQuestions, setNumInterviewQuestions] = useState(2);
+  const [numQuestionsSaveTimeout, setNumQuestionsSaveTimeout] = useState(null);
+  const [starterFilesGitHubLink, setStarterFilesGitHubLink] = useState("");
+  const [isEditingStarterFiles, setIsEditingStarterFiles] = useState(false);
+  const [editedStarterFilesLink, setEditedStarterFilesLink] = useState("");
+  const [isEditingCustomInstructions, setIsEditingCustomInstructions] =
+    useState(false);
+  const [editedCustomInstructions, setEditedCustomInstructions] = useState("");
 
   // Wait for auth state to be ready
   useEffect(() => {
@@ -161,13 +169,6 @@ export default function AssessmentEditor() {
       "How would you scale this API to handle 10,000 concurrent users?",
       "If you had more time, what would you improve?",
     ],
-    rubric: [
-      { criteria: "Code Quality", weight: "25%" },
-      { criteria: "API Design", weight: "25%" },
-      { criteria: "Database Modeling", weight: "20%" },
-      { criteria: "Testing", weight: "15%" },
-      { criteria: "Documentation", weight: "15%" },
-    ],
   });
 
   // Update assessment description and title when data is loaded
@@ -188,6 +189,50 @@ export default function AssessmentEditor() {
         const hours = Math.floor(totalMinutes / 60);
         const minutes = totalMinutes % 60;
         setTimeLimit({ hours, minutes });
+      }
+      // Update numInterviewQuestions from database (only if different to avoid reset loops)
+      if (assessmentData.isSmartInterviewerEnabled !== undefined) {
+        setIsSmartInterviewerEnabled(assessmentData.isSmartInterviewerEnabled);
+      }
+      if (assessmentData.numInterviewQuestions !== undefined) {
+        const dbValue = assessmentData.numInterviewQuestions;
+        // Only update if it's actually different from current state
+        // This prevents resetting during save operations
+        setNumInterviewQuestions((prev) => {
+          if (prev !== dbValue) {
+            console.log(
+              `🔄 [AssessmentEditor] Updating numInterviewQuestions from ${prev} to ${dbValue}`
+            );
+            return dbValue;
+          }
+          return prev;
+        });
+      } else {
+        // If undefined in DB, ensure we have a default (but don't reset if user is editing)
+        setNumInterviewQuestions((prev) => {
+          if (prev === 5) {
+            // Already at default, no change needed
+            return prev;
+          }
+          // Only reset to default if we're loading for the first time
+          // Check if this is initial load by seeing if assessmentData was just set
+          console.log(
+            `⚠️ [AssessmentEditor] numInterviewQuestions is undefined in DB, keeping current value: ${prev}`
+          );
+          return prev;
+        });
+      }
+      // Update starterFilesGitHubLink from database
+      if (assessmentData.starterFilesGitHubLink !== undefined) {
+        const link = assessmentData.starterFilesGitHubLink || "";
+        setStarterFilesGitHubLink(link);
+        setEditedStarterFilesLink(link);
+      }
+      // Update interviewerCustomInstructions from database
+      if (assessmentData.interviewerCustomInstructions !== undefined) {
+        const instructions = assessmentData.interviewerCustomInstructions || "";
+        setInterviewerPrompt(instructions);
+        setEditedCustomInstructions(instructions);
       }
     }
   }, [assessmentData]);
@@ -227,11 +272,59 @@ export default function AssessmentEditor() {
     };
   }, [timeLimit, assessmentId, currentUser, authReady, assessmentData]);
 
+  // Auto-save numInterviewQuestions when it changes (debounced)
+  useEffect(() => {
+    if (!assessmentId || !currentUser || !authReady || !assessmentData) {
+      return;
+    }
+
+    // Clear existing timeout
+    if (numQuestionsSaveTimeout) {
+      clearTimeout(numQuestionsSaveTimeout);
+    }
+
+    const currentNumQuestions = assessmentData.numInterviewQuestions ?? 2;
+
+    // Only save if it's different from what's in the database and valid
+    // Also check that it's a valid number (not NaN)
+    if (
+      numInterviewQuestions !== currentNumQuestions &&
+      numInterviewQuestions >= 1 &&
+      numInterviewQuestions <= 4 &&
+      !isNaN(numInterviewQuestions)
+    ) {
+      console.log(
+        `💾 [AssessmentEditor] Queuing save: ${numInterviewQuestions} (current: ${currentNumQuestions})`
+      );
+      const timeout = setTimeout(async () => {
+        console.log(
+          "💾 [AssessmentEditor] Auto-saving numInterviewQuestions:",
+          numInterviewQuestions
+        );
+        await saveAssessment({ numInterviewQuestions });
+      }, 1000); // Debounce: wait 1 second after last change
+
+      setNumQuestionsSaveTimeout(timeout);
+    }
+
+    return () => {
+      if (numQuestionsSaveTimeout) {
+        clearTimeout(numQuestionsSaveTimeout);
+      }
+    };
+  }, [
+    numInterviewQuestions,
+    assessmentId,
+    currentUser,
+    authReady,
+    assessmentData,
+  ]);
+
   // Save assessment changes to backend
   const saveAssessment = async (updates) => {
     if (!assessmentId || !currentUser) {
       console.warn("Cannot save: missing assessmentId or user");
-      return;
+      return { success: false };
     }
 
     setIsSaving(true);
@@ -243,6 +336,10 @@ export default function AssessmentEditor() {
 
       if (result.success) {
         console.log("✅ [AssessmentEditor] Assessment saved:", result.data);
+        console.log(
+          "   numInterviewQuestions in response:",
+          result.data.numInterviewQuestions
+        );
         setAssessmentData(result.data);
         // Update local state if needed
         if (result.data.description) {
@@ -258,6 +355,32 @@ export default function AssessmentEditor() {
           const minutes = totalMinutes % 60;
           setTimeLimit({ hours, minutes });
         }
+        // Update numInterviewQuestions in local state if it changed
+        // Use functional update to avoid conflicts with auto-save
+        if (result.data.numInterviewQuestions !== undefined) {
+          setNumInterviewQuestions((prev) => {
+            const newValue = result.data.numInterviewQuestions;
+            // Only update if different to avoid unnecessary re-renders
+            return prev !== newValue ? newValue : prev;
+          });
+        }
+        // Update starterFilesGitHubLink in local state if it changed
+        if (result.data.starterFilesGitHubLink !== undefined) {
+          const link = result.data.starterFilesGitHubLink || "";
+          setStarterFilesGitHubLink(link);
+          if (!isEditingStarterFiles) {
+            setEditedStarterFilesLink(link);
+          }
+        }
+        // Update interviewerCustomInstructions in local state if it changed
+        if (result.data.interviewerCustomInstructions !== undefined) {
+          const instructions = result.data.interviewerCustomInstructions || "";
+          setInterviewerPrompt(instructions);
+          if (!isEditingCustomInstructions) {
+            setEditedCustomInstructions(instructions);
+          }
+        }
+        return result;
       } else {
         const errorMsg =
           "error" in result ? result.error : "Failed to save assessment";
@@ -307,6 +430,57 @@ export default function AssessmentEditor() {
     }
   };
 
+  /**
+   * Save starter files GitHub link changes
+   */
+  const handleStarterFilesSave = async () => {
+    const linkToSave = editedStarterFilesLink.trim() || null;
+    if (linkToSave !== (assessmentData?.starterFilesGitHubLink || null)) {
+      const result = await saveAssessment({
+        starterFilesGitHubLink: linkToSave,
+      });
+      if (result && result.success) {
+        setStarterFilesGitHubLink(linkToSave || "");
+      }
+    } else {
+      setStarterFilesGitHubLink(editedStarterFilesLink.trim() || "");
+    }
+    setIsEditingStarterFiles(false);
+  };
+
+  const handleStarterFilesCancel = () => {
+    setEditedStarterFilesLink(assessmentData?.starterFilesGitHubLink || "");
+    setIsEditingStarterFiles(false);
+  };
+
+  /**
+   * Save custom instructions changes
+   */
+  const handleCustomInstructionsSave = async () => {
+    const instructionsToSave = editedCustomInstructions.trim() || null;
+    if (
+      instructionsToSave !==
+      (assessmentData?.interviewerCustomInstructions || null)
+    ) {
+      const result = await saveAssessment({
+        interviewerCustomInstructions: instructionsToSave,
+      });
+      if (result && result.success) {
+        setInterviewerPrompt(instructionsToSave || "");
+      }
+    } else {
+      setInterviewerPrompt(editedCustomInstructions.trim() || "");
+    }
+    setIsEditingCustomInstructions(false);
+  };
+
+  const handleCustomInstructionsCancel = () => {
+    setEditedCustomInstructions(
+      assessmentData?.interviewerCustomInstructions || ""
+    );
+    setIsEditingCustomInstructions(false);
+  };
+
   const handleChatSubmit = async (message) => {
     if (!assessmentId || !currentUser || !assessmentData) {
       alert("Cannot chat: missing assessment data or user");
@@ -315,6 +489,7 @@ export default function AssessmentEditor() {
 
     setIsLoading(true);
     setResponseMessage(null); // Clear previous response message
+    setAiModel(null); // Clear previous model info
 
     try {
       console.log("💬 [AssessmentEditor] Sending chat message:", message);
@@ -327,7 +502,6 @@ export default function AssessmentEditor() {
         message: message.trim(),
         allowedSections:
           contextSections.length > 0 ? contextSections : undefined,
-        rubric: assessment.rubric,
       };
 
       const result = await chatWithAssessment(assessmentId, chatRequest, token);
@@ -346,6 +520,8 @@ export default function AssessmentEditor() {
         changedSections,
         changesSummary,
         responseMessage: aiResponseMessage,
+        model: aiModelName,
+        provider: aiProvider,
         assessment: updatedAssessment,
       } = result.data;
 
@@ -353,6 +529,8 @@ export default function AssessmentEditor() {
         changedSections,
         changesSummary,
         responseMessage: aiResponseMessage,
+        model: aiModelName,
+        provider: aiProvider,
       });
 
       // Set response message to display in chat
@@ -360,12 +538,9 @@ export default function AssessmentEditor() {
         setResponseMessage(aiResponseMessage);
       }
 
-      // Update local assessment state with frontend-only fields
-      if (updates.rubric) {
-        setAssessment((prev) => ({
-          ...prev,
-          rubric: updates.rubric,
-        }));
+      // Set model info for display
+      if (aiModelName) {
+        setAiModel(aiModelName);
       }
 
       // Update database-backed fields
@@ -386,10 +561,6 @@ export default function AssessmentEditor() {
         const minutes = updates.timeLimit % 60;
         setTimeLimit({ hours, minutes });
         await handleTimeLimitSave(updates.timeLimit);
-      }
-      if (updates.scoring) {
-        // Note: scoring updates would need to be saved if we add that field to the update endpoint
-        console.log("📊 [AssessmentEditor] Scoring updated:", updates.scoring);
       }
 
       // Update assessmentData if backend returned updated assessment
@@ -472,7 +643,24 @@ export default function AssessmentEditor() {
       } else {
         const errorMsg =
           "error" in result ? result.error : "Failed to generate link";
-        alert(errorMsg);
+
+        // Check if it's a subscription limit error
+        if (
+          errorMsg.includes("SUBSCRIPTION_LIMIT_REACHED") ||
+          errorMsg.includes("limit")
+        ) {
+          // Show upgrade modal or redirect to subscription page
+          const shouldUpgrade = window.confirm(
+            "You've reached the free tier limit of 3 candidate submissions.\n\n" +
+              "Upgrade to continue inviting unlimited candidates.\n\n" +
+              "Would you like to view subscription plans?"
+          );
+          if (shouldUpgrade) {
+            window.location.href = createPageUrl("Subscription");
+          }
+        } else {
+          alert(errorMsg);
+        }
       }
     } catch (error) {
       console.error("❌ [AssessmentEditor] Error generating link:", error);
@@ -675,56 +863,6 @@ export default function AssessmentEditor() {
               </div>
             </DocumentBlock>
 
-            {/* Scoring & Rubric */}
-            <DocumentBlock
-              title="Scoring & Rubric"
-              icon={Target}
-              isActive={false}
-              isHighlighted={highlightedSection === "rubric"}
-              onSelect={() => {}}
-              onAddToContext={() => handleAddToContext("rubric")}
-              isInContext={contextSections.includes("rubric")}
-            >
-              <div className="space-y-1">
-                {assessment.rubric.map((item, index) => (
-                  <RubricItem
-                    key={index}
-                    criteria={item.criteria}
-                    weight={item.weight}
-                    onEdit={(criteria, weight) => {
-                      setAssessment((prev) => ({
-                        ...prev,
-                        rubric: prev.rubric.map((r, i) =>
-                          i === index ? { criteria, weight } : r
-                        ),
-                      }));
-                    }}
-                    onDelete={() => {
-                      setAssessment((prev) => ({
-                        ...prev,
-                        rubric: prev.rubric.filter((_, i) => i !== index),
-                      }));
-                    }}
-                  />
-                ))}
-              </div>
-              <button
-                onClick={() =>
-                  setAssessment((prev) => ({
-                    ...prev,
-                    rubric: [
-                      ...prev.rubric,
-                      { criteria: "New Criteria", weight: "10%" },
-                    ],
-                  }))
-                }
-                className="mt-4 text-sm text-[#1E3A8A] hover:text-[#1E3A8A]/80 flex items-center gap-1.5 font-medium"
-              >
-                <Plus className="w-4 h-4" />
-                Add rubric item
-              </button>
-            </DocumentBlock>
-
             {/* Smart AI Interviewer */}
             <DocumentBlock
               title="Smart AI Interviewer"
@@ -756,24 +894,111 @@ export default function AssessmentEditor() {
                   </div>
                   <Switch
                     checked={isSmartInterviewerEnabled}
-                    onCheckedChange={setIsSmartInterviewerEnabled}
+                    onCheckedChange={async (checked) => {
+                      setIsSmartInterviewerEnabled(checked);
+                      // Save immediately when toggled
+                      await saveAssessment({ isSmartInterviewerEnabled: checked });
+                    }}
                     className="data-[state=checked]:bg-[#1E3A8A]"
                   />
                 </div>
                 {isSmartInterviewerEnabled && (
-                  <div className="pt-3 border-t border-gray-100">
-                    <label className="text-sm font-medium text-gray-700 mb-2 block">
-                      Custom Instructions (optional)
-                    </label>
-                    <textarea
-                      value={interviewerPrompt}
-                      onChange={(e) => setInterviewerPrompt(e.target.value)}
-                      placeholder="E.g., Focus on system design decisions, ask about error handling strategies, probe for scalability considerations..."
-                      className="w-full min-h-[80px] text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20 focus:border-[#1E3A8A]"
-                    />
-                    <p className="text-xs text-gray-400 mt-1.5">
-                      Guide the AI interviewer's focus and question style
-                    </p>
+                  <div className="pt-3 border-t border-gray-100 space-y-4">
+                    <div>
+                      <label className="text-sm font-medium text-gray-700 mb-2 block">
+                        Number of Questions
+                      </label>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="number"
+                          min="1"
+                          max="4"
+                          value={numInterviewQuestions}
+                          onChange={(e) => {
+                            const value = parseInt(e.target.value, 10);
+                            if (!isNaN(value) && value >= 1 && value <= 4) {
+                              setNumInterviewQuestions(value);
+                            }
+                          }}
+                          className="w-20 text-sm text-gray-700 bg-white border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20 focus:border-[#1E3A8A]"
+                        />
+                        <span className="text-sm text-gray-500">
+                          questions (1-4)
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-1.5">
+                        Number of base questions for the ElevenLabs voice interview. The AI interviewer will ask a couple follow-up questions per base question to dive deeper.
+                      </p>
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-sm font-medium text-gray-700">
+                          Custom Instructions (optional)
+                        </label>
+                        {!isEditingCustomInstructions ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setEditedCustomInstructions(interviewerPrompt);
+                              setIsEditingCustomInstructions(true);
+                            }}
+                            className="h-7 px-2 text-xs text-gray-500 hover:text-gray-700"
+                          >
+                            <Pencil className="w-3.5 h-3.5 mr-1.5" />
+                            Edit
+                          </Button>
+                        ) : (
+                          <div className="flex gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleCustomInstructionsCancel}
+                              className="h-7 px-2 text-xs"
+                              disabled={isSaving}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={handleCustomInstructionsSave}
+                              className="h-7 px-2 text-xs bg-[#1E3A8A] hover:bg-[#152a66]"
+                              disabled={isSaving}
+                            >
+                              Save
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                      {isEditingCustomInstructions ? (
+                        <textarea
+                          value={editedCustomInstructions}
+                          onChange={(e) =>
+                            setEditedCustomInstructions(e.target.value)
+                          }
+                          placeholder="E.g., Focus on system design decisions, ask about error handling strategies, probe for scalability considerations..."
+                          className="w-full min-h-[80px] text-sm text-gray-700 bg-white border border-gray-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20 focus:border-[#1E3A8A]"
+                        />
+                      ) : (
+                        <div
+                          onClick={() => {
+                            setEditedCustomInstructions(interviewerPrompt);
+                            setIsEditingCustomInstructions(true);
+                          }}
+                          className="w-full min-h-[80px] text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 cursor-text hover:bg-gray-100 transition-colors"
+                        >
+                          {interviewerPrompt || (
+                            <span className="text-gray-400 italic">
+                              No custom instructions set. Click to add
+                              instructions.
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <p className="text-xs text-gray-400 mt-1.5">
+                        Guide the AI interviewer's focus and question style
+                      </p>
+                    </div>
                   </div>
                 )}
               </div>
@@ -860,6 +1085,91 @@ export default function AssessmentEditor() {
               </div>
             </DocumentBlock>
 
+            {/* Starter Files */}
+            <DocumentBlock
+              title="Starter Files"
+              icon={LinkIcon}
+              isActive={false}
+              isHighlighted={highlightedSection === "starterFiles"}
+              onSelect={() => {}}
+              onAddToContext={() => handleAddToContext("starterFiles")}
+              isInContext={contextSections.includes("starterFiles")}
+            >
+              <div className="space-y-4">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-sm font-medium text-gray-700">
+                      GitHub Repository Link (Optional)
+                    </label>
+                    {!isEditingStarterFiles ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setEditedStarterFilesLink(starterFilesGitHubLink);
+                          setIsEditingStarterFiles(true);
+                        }}
+                        className="h-7 px-2 text-xs text-gray-500 hover:text-gray-700"
+                      >
+                        <Pencil className="w-3.5 h-3.5 mr-1.5" />
+                        Edit
+                      </Button>
+                    ) : (
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleStarterFilesCancel}
+                          className="h-7 px-2 text-xs"
+                          disabled={isSaving}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={handleStarterFilesSave}
+                          className="h-7 px-2 text-xs bg-[#1E3A8A] hover:bg-[#152a66]"
+                          disabled={isSaving}
+                        >
+                          Save
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Provide a GitHub repository link with starter files and
+                    instructions. Candidates will have access to this link when
+                    they start the assessment.
+                  </p>
+                  {isEditingStarterFiles ? (
+                    <input
+                      type="url"
+                      value={editedStarterFilesLink}
+                      onChange={(e) =>
+                        setEditedStarterFilesLink(e.target.value)
+                      }
+                      placeholder="https://github.com/username/repo"
+                      className="w-full text-sm text-gray-700 bg-white border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20 focus:border-[#1E3A8A]"
+                    />
+                  ) : (
+                    <div
+                      onClick={() => {
+                        setEditedStarterFilesLink(starterFilesGitHubLink);
+                        setIsEditingStarterFiles(true);
+                      }}
+                      className="w-full text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 cursor-text hover:bg-gray-100 transition-colors"
+                    >
+                      {starterFilesGitHubLink || (
+                        <span className="text-gray-400 italic">
+                          No GitHub link set. Click to add a link.
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </DocumentBlock>
+
             {/* Bottom Sticky Bar */}
             <div className="sticky bottom-0 bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex items-center justify-end mt-6">
               <div className="flex gap-3">
@@ -912,6 +1222,7 @@ export default function AssessmentEditor() {
               }
               lastChange={lastChange}
               responseMessage={responseMessage}
+              model={aiModel}
             />
           </motion.div>
         </div>
