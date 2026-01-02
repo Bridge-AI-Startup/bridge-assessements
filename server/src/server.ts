@@ -1,8 +1,19 @@
 import express from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
+import { config } from "dotenv";
+import { existsSync } from "fs";
 import connectMongoose from "./db/mongooseConnection.js";
 import "./config/firebaseAdmin.js"; // Initialize Firebase Admin
+
+// Load config.env file if it exists (for local development)
+// In production (Render), environment variables are set directly
+if (existsSync("config.env")) {
+  config({ path: "config.env" });
+  console.log("📄 Loaded environment variables from config.env");
+} else {
+  console.log("📄 Using environment variables from system (production mode)");
+}
 import userRoutes from "./routes/user.js";
 import assessmentRoutes from "./routes/assessment.js";
 import submissionRoutes from "./routes/submission.js";
@@ -61,7 +72,9 @@ app.use(
       if (allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        console.warn(`⚠️ [CORS] Blocked request from unauthorized origin: ${origin}`);
+        console.warn(
+          `⚠️ [CORS] Blocked request from unauthorized origin: ${origin}`
+        );
         callback(new Error("Not allowed by CORS"));
       }
     },
