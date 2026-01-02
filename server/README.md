@@ -17,9 +17,14 @@ Express.js backend server for the Bridge Assessments application with Firebase A
    - **Set up Firebase Admin SDK:**
      - Go to Firebase Console → Project Settings → Service Accounts
      - Generate a new private key
-     - Either:
-       - Add the JSON content as `FIREBASE_SERVICE_ACCOUNT` environment variable (as a JSON string)
-       - Or save the file and set `FIREBASE_SERVICE_ACCOUNT_PATH` to the file path
+     - **For production (e.g., Render):**
+       - Copy the entire JSON content from the downloaded file
+       - Set `FIREBASE_SERVICE_ACCOUNT_JSON` environment variable with the JSON as a single-line string
+       - In Render, paste the JSON directly into the environment variable (newlines will be escaped automatically)
+     - **For local development (optional):**
+       - You can either use `FIREBASE_SERVICE_ACCOUNT_JSON` (same as production)
+       - Or save the file locally and set `FIREBASE_SERVICE_ACCOUNT_PATH` to the file path
+       - Note: File path method does NOT work in production environments
 
 3. **Start the server:**
 
@@ -123,8 +128,8 @@ server/
 - `PORT` - Server port (default: 5050)
 - `FRONTEND_URL` - Frontend URL for CORS (default: http://localhost:5173)
 - `NODE_ENV` - Environment (development/production)
-- `FIREBASE_SERVICE_ACCOUNT` - Firebase service account JSON as string (recommended)
-- `FIREBASE_SERVICE_ACCOUNT_PATH` - Path to Firebase service account JSON file (alternative)
+- `FIREBASE_SERVICE_ACCOUNT_JSON` - Firebase service account JSON as string (REQUIRED for production)
+- `FIREBASE_SERVICE_ACCOUNT_PATH` - Path to Firebase service account JSON file (local development only, not supported in production)
 
 ### AI Provider Configuration (LangChain)
 

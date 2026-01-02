@@ -63,8 +63,8 @@ A full-stack TypeScript application for creating and managing technical coding a
    FRONTEND_URL=http://localhost:5173
    NODE_ENV=development
    
-   # Firebase Admin
-   FIREBASE_SERVICE_ACCOUNT={"type":"service_account",...}
+   # Firebase Admin (REQUIRED for production)
+   FIREBASE_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}
    
    # Stripe
    STRIPE_SECRET_KEY=sk_test_your_stripe_secret_key

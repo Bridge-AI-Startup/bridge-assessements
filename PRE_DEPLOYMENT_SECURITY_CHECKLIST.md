@@ -16,7 +16,7 @@
 // Add startup validation in server.ts
 const requiredEnvVars = [
   'ATLAS_URI',
-  'FIREBASE_SERVICE_ACCOUNT',
+  'FIREBASE_SERVICE_ACCOUNT_JSON',
   'STRIPE_SECRET_KEY',
   'STRIPE_WEBHOOK_SECRET',
   'STRIPE_PRICE_ID',

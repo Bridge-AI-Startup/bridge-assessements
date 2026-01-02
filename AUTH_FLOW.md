@@ -138,8 +138,8 @@ Continue to route handler
 ### `config/firebaseAdmin.js`
 - **Purpose**: Initialize Firebase Admin SDK
 - **Configuration Options**:
-  1. `FIREBASE_SERVICE_ACCOUNT` - JSON string in env var
-  2. `FIREBASE_SERVICE_ACCOUNT_PATH` - Path to JSON file
+  1. `FIREBASE_SERVICE_ACCOUNT_JSON` - JSON string in env var (REQUIRED for production)
+  2. `FIREBASE_SERVICE_ACCOUNT_PATH` - Path to JSON file (local development only)
   3. Default credentials (Google Cloud environments)
 - **Exports**: `auth` (Firebase Admin auth instance)
 
@@ -318,6 +318,6 @@ router.get("/protected", verifyToken, (req, res) => {
 - No additional setup needed
 
 ### Backend:
-- Set `FIREBASE_SERVICE_ACCOUNT` or `FIREBASE_SERVICE_ACCOUNT_PATH` in `config.env`
+- Set `FIREBASE_SERVICE_ACCOUNT_JSON` (recommended) or `FIREBASE_SERVICE_ACCOUNT_PATH` (local dev only) in `config.env`
 - Get service account key from Firebase Console → Project Settings → Service Accounts
 

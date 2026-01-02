@@ -8,7 +8,7 @@
   - [ ] `DB_NAME` - Production database name
   - [ ] `FRONTEND_URL` - Production frontend URL (for CORS)
   - [ ] `NODE_ENV=production`
-  - [ ] `FIREBASE_SERVICE_ACCOUNT` - Production Firebase service account
+  - [ ] `FIREBASE_SERVICE_ACCOUNT_JSON` - Production Firebase service account (JSON string)
   - [ ] `AGENT_SECRET` - Strong random secret for ElevenLabs agent tools
   - [ ] `ELEVENLABS_WEBHOOK_SECRET` - ElevenLabs webhook secret
   - [ ] `PINECONE_API_KEY` - Production Pinecone API key
