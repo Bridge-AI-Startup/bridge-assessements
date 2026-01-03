@@ -55,6 +55,8 @@ const allowedOrigins = [
   // Production domains (add your actual production domain here)
   process.env.FRONTEND_URL,
   "https://www.bridge-jobs.com",
+  "https://bridge-landing-saazms-projects.vercel.app",
+  "https://bridge-landing-7dg0wxh94-saazms-projects.vercel.app",
   // Development
   ...(process.env.NODE_ENV === "development"
     ? ["http://localhost:5173", "http://localhost:3000"]
