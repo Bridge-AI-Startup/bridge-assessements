@@ -1,5 +1,6 @@
 import { APIResult, post, get, patch, del, handleAPIError } from "./requests";
 import { auth } from "@/firebase/firebase";
+import { API_BASE_URL } from "@/config/api";
 
 export type GenerateShareLinkRequest = {
   assessmentId: string;
@@ -91,7 +92,6 @@ export async function generateShareLink(
 
     // Make request without assertOk to handle 403 subscription limit errors
     // Using direct fetch to handle 403 status without throwing
-    const API_BASE_URL = "http://localhost:5050/api";
     const response = await fetch(`${API_BASE_URL}/submissions/generate-link`, {
       method: "POST",
       headers: {

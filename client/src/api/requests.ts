@@ -1,9 +1,9 @@
+import { API_BASE_URL } from "@/config/api";
+
 /**
  * A custom type defining which HTTP methods we will handle in this file
  */
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-
-const API_BASE_URL = "http://localhost:5050/api";
 
 /**
  * A wrapper around the built-in `fetch()` function that abstracts away some of

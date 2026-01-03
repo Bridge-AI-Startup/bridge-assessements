@@ -63,7 +63,7 @@ export async function createAssessment(
     };
 
     // Make request without assertOk to handle 403 subscription limit errors
-    const API_BASE_URL = "http://localhost:5050/api";
+    const API_BASE_URL = "https://bridge-assessements.onrender.com/api";
     const response = await fetch(`${API_BASE_URL}/assessments`, {
       method: "POST",
       headers: {
@@ -76,7 +76,10 @@ export async function createAssessment(
     const result = await response.json();
 
     // Check for subscription limit error (403 status)
-    if (response.status === 403 && result.error === "SUBSCRIPTION_LIMIT_REACHED") {
+    if (
+      response.status === 403 &&
+      result.error === "SUBSCRIPTION_LIMIT_REACHED"
+    ) {
       return {
         success: false,
         error: "SUBSCRIPTION_LIMIT_REACHED",
@@ -87,7 +90,8 @@ export async function createAssessment(
     if (!response.ok) {
       return {
         success: false,
-        error: result.error || `Failed to create assessment (${response.status})`,
+        error:
+          result.error || `Failed to create assessment (${response.status})`,
       };
     }
 
@@ -226,7 +230,8 @@ export async function updateAssessment(
       updateBody.starterFilesGitHubLink = data.starterFilesGitHubLink;
     }
     if (data.interviewerCustomInstructions !== undefined) {
-      updateBody.interviewerCustomInstructions = data.interviewerCustomInstructions;
+      updateBody.interviewerCustomInstructions =
+        data.interviewerCustomInstructions;
     }
     if (data.isSmartInterviewerEnabled !== undefined) {
       updateBody.isSmartInterviewerEnabled = data.isSmartInterviewerEnabled;
@@ -352,12 +357,7 @@ export async function generateAssessmentData(
     });
 
     // Backend returns generated data directly
-    if (
-      result &&
-      result.title &&
-      result.description &&
-      result.timeLimit
-    ) {
+    if (result && result.title && result.description && result.timeLimit) {
       console.log("✅ [generateAssessmentData] Successfully generated:", {
         title: result.title,
         descriptionLength: result.description.length,
