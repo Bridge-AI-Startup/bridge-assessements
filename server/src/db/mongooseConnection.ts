@@ -4,7 +4,8 @@ const MONGODB_URI = process.env.ATLAS_URI;
 
 if (!MONGODB_URI) {
   throw new Error(
-    "Please define the ATLAS_URI environment variable inside config.env"
+    "ATLAS_URI environment variable is required. " +
+      "Set it in config.env (local) or as an environment variable (production)."
   );
 }
 
