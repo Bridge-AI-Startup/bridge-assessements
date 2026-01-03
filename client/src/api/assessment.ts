@@ -1,5 +1,6 @@
 import { APIResult, get, post, patch, del, handleAPIError } from "./requests";
 import { auth } from "@/firebase/firebase";
+import { API_BASE_URL } from "@/config/api";
 
 export type Assessment = {
   _id: string;
@@ -63,7 +64,6 @@ export async function createAssessment(
     };
 
     // Make request without assertOk to handle 403 subscription limit errors
-    const API_BASE_URL = "https://bridge-assessements.onrender.com/api";
     const response = await fetch(`${API_BASE_URL}/assessments`, {
       method: "POST",
       headers: {

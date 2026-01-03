@@ -54,6 +54,7 @@ console.log("🔌 Setting up CORS middleware...");
 const allowedOrigins = [
   // Production domains (add your actual production domain here)
   process.env.FRONTEND_URL,
+  "https://www.bridge-jobs.com",
   // Development
   ...(process.env.NODE_ENV === "development"
     ? ["http://localhost:5173", "http://localhost:3000"]
