@@ -334,13 +334,15 @@ export async function generateAssessmentData(
       "characters"
     );
 
-    const response = await post(
-      "/assessments/generate",
-      { description: jobDescription },
-      {
+    // Use fetch directly to handle 403 errors without throwing
+    const response = await fetch(`${API_BASE_URL}/assessments/generate`, {
+      method: "POST",
+      headers: {
         Authorization: `Bearer ${authToken}`,
-      }
-    );
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ description: jobDescription }),
+    });
 
     console.log(
       "📥 [generateAssessmentData] Response status:",
@@ -348,6 +350,18 @@ export async function generateAssessmentData(
     );
 
     const result = await response.json();
+
+    // Check for subscription limit error (403 status)
+    if (
+      response.status === 403 &&
+      result.error === "SUBSCRIPTION_LIMIT_REACHED"
+    ) {
+      return {
+        success: false,
+        error: "SUBSCRIPTION_LIMIT_REACHED",
+      };
+    }
+
     console.log("📦 [generateAssessmentData] Response data:", {
       hasTitle: !!result.title,
       hasDescription: !!result.description,
@@ -355,6 +369,16 @@ export async function generateAssessmentData(
       hasTimeLimit: !!result.timeLimit,
       fullResult: result,
     });
+
+    // Check for other errors
+    if (!response.ok) {
+      return {
+        success: false,
+        error:
+          result.error ||
+          `Failed to generate assessment data (${response.status})`,
+      };
+    }
 
     // Backend returns generated data directly
     if (result && result.title && result.description && result.timeLimit) {

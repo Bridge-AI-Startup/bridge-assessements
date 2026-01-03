@@ -362,6 +362,38 @@ export const generateAssessmentData: RequestHandler = async (
   try {
     validationErrorParser(errors);
     const { description } = req.body as GenerateRequest;
+    const { uid } = req.body as { uid: string };
+
+    // Check subscription limits BEFORE generating (to avoid wasting AI credits)
+    if (uid) {
+      // Get MongoDB user ID from Firebase UID
+      const userId = await getUserIdFromFirebaseUid(uid);
+
+      // Get user to check subscription tier
+      const UserModel = (await import("../models/user.js")).default;
+      const user = await UserModel.findById(userId);
+      if (user) {
+        // Check subscription limits - use subscriptionStatus === "active" as source of truth
+        const subscriptionStatus = user.subscriptionStatus || (user as any).subscription?.subscriptionStatus;
+        const isSubscribed = subscriptionStatus === "active";
+        
+        if (!isSubscribed) {
+          // Count existing assessments for this user
+          const assessmentCount = await AssessmentModel.countDocuments({ userId });
+
+          // Free tier limit: 1 assessment
+          if (assessmentCount >= 1) {
+            return res.status(403).json({
+              error: "SUBSCRIPTION_LIMIT_REACHED",
+              message:
+                "You've reached the free tier limit of 1 assessment. Upgrade to create unlimited assessments.",
+              limit: 1,
+              current: assessmentCount,
+            });
+          }
+        }
+      }
+    }
 
     console.log(
       "🔄 [generateAssessmentData] Generating assessment data for description:",

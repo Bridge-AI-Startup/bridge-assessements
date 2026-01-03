@@ -179,6 +179,7 @@ export async function generateAssessmentComponents(
       };
     }
 
+    // Extract and validate timeLimit
     let timeLimit = result.timeLimit;
     console.log(
       "🔍 [AI] Raw timeLimit from API:",
@@ -186,12 +187,21 @@ export async function generateAssessmentComponents(
       typeof timeLimit
     );
 
-    // Handle timeLimit - could be string or number
-    if (typeof timeLimit === "string") {
+    // Handle timeLimit - could be string, number, or missing
+    if (timeLimit === undefined || timeLimit === null) {
+      console.warn("⚠️ [AI] timeLimit missing from AI response, using default 60");
+      timeLimit = 60;
+    } else if (typeof timeLimit === "string") {
       timeLimit = parseInt(timeLimit, 10);
+      if (isNaN(timeLimit)) {
+        console.warn("⚠️ [AI] timeLimit string could not be parsed, using default 60");
+        timeLimit = 60;
+      }
     }
+    
+    // Validate timeLimit range
     if (!timeLimit || isNaN(timeLimit) || timeLimit < 30) {
-      console.warn("⚠️ [AI] Invalid timeLimit, using default 60");
+      console.warn("⚠️ [AI] Invalid timeLimit (too low or invalid), using default 60");
       timeLimit = 60;
     }
     if (timeLimit > 480) {

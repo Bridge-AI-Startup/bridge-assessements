@@ -142,6 +142,27 @@ export default function CreateAssessment() {
             "error" in generateResult
               ? generateResult.error
               : "Failed to generate assessment data";
+          
+          // Check if it's a subscription limit error
+          if (errorMsg === "SUBSCRIPTION_LIMIT_REACHED" || errorMsg.includes("limit")) {
+            // Always show the error in the UI
+            setError(
+              "You've reached the free tier limit of 1 assessment. Upgrade to create unlimited assessments."
+            );
+            setIsGenerating(false);
+            
+            // Also show a confirm dialog to offer upgrade
+            const shouldUpgrade = window.confirm(
+              "You've reached the free tier limit of 1 assessment.\n\n" +
+              "Upgrade to create unlimited assessments.\n\n" +
+              "Would you like to view subscription plans?"
+            );
+            if (shouldUpgrade) {
+              window.location.href = createPageUrl("Subscription");
+            }
+            return;
+          }
+          
           console.error("❌ [CreateAssessment] Generation error:", errorMsg);
           setError(errorMsg);
           setIsGenerating(false);
@@ -200,6 +221,13 @@ export default function CreateAssessment() {
         
         // Check if it's a subscription limit error
         if (errorMsg === "SUBSCRIPTION_LIMIT_REACHED" || errorMsg.includes("limit")) {
+          // Always show the error in the UI
+          setError(
+            "You've reached the free tier limit of 1 assessment. Upgrade to create unlimited assessments."
+          );
+          setIsGenerating(false);
+          
+          // Also show a confirm dialog to offer upgrade
           const shouldUpgrade = window.confirm(
             "You've reached the free tier limit of 1 assessment.\n\n" +
             "Upgrade to create unlimited assessments.\n\n" +
@@ -208,7 +236,6 @@ export default function CreateAssessment() {
           if (shouldUpgrade) {
             window.location.href = createPageUrl("Subscription");
           }
-          setIsGenerating(false);
           return;
         }
         
@@ -455,10 +482,24 @@ export default function CreateAssessment() {
 
             {/* Error Message */}
             {error && (
-              <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 mt-4">
-                <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                <span>{error}</span>
-              </div>
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex items-start gap-2 p-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 mt-4"
+              >
+                <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-medium mb-1">{error}</p>
+                  {error.includes("free tier limit") && (
+                    <Link
+                      to={createPageUrl("Subscription")}
+                      className="text-red-800 hover:text-red-900 underline font-medium"
+                    >
+                      Upgrade to create unlimited assessments →
+                    </Link>
+                  )}
+                </div>
+              </motion.div>
             )}
           </div>
 

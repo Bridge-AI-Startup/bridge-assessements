@@ -44,16 +44,18 @@ INSTRUCTION PRIORITY (MUST BE FOLLOWED IN THIS ORDER):
 
 CRITICAL RULE: If the domain conflicts with user instructions or job description in any way, IGNORE the domain completely and proceed without it. The domain is purely decorative and must never override explicit requirements.
 
-You MUST output a valid JSON object with exactly these keys:
+You MUST output a valid JSON object with exactly these three keys (ALL THREE ARE REQUIRED):
 
 {
-“title”: string,
-“description”: string,
-“timeLimit”: number
+"title": string,
+"description": string,
+"timeLimit": number
 }
 
+CRITICAL: The "timeLimit" field is REQUIRED and must be included in your JSON response. Do not omit it.
+
 Hard constraints (do not violate):
-	•	timeLimit must be an integer between 30 and 480 (minutes)
+	•	timeLimit must be an integer between 30 and 480 (minutes) - THIS FIELD IS MANDATORY
 	•	The project must be realistically completable within the timeLimit by a strong candidate working solo
 	•	The description must be between 300–650 words
 	•	The project must be specific and concrete, not a generic “build an app”
