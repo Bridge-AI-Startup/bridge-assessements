@@ -349,13 +349,42 @@ export async function generateAssessmentData(
       response.status
     );
 
-    const result = await response.json();
+    let result;
+    try {
+      result = await response.json();
+    } catch (jsonError) {
+      // If JSON parsing fails, check if it's a 403
+      if (response.status === 403) {
+        return {
+          success: false,
+          error: "SUBSCRIPTION_LIMIT_REACHED",
+        };
+      }
+      throw jsonError;
+    }
 
-    // Check for subscription limit error (403 status)
-    if (
-      response.status === 403 &&
-      result.error === "SUBSCRIPTION_LIMIT_REACHED"
-    ) {
+    // Check for subscription limit error (403 status) - MUST be checked before other error handling
+    if (response.status === 403) {
+      console.log("🔍 [generateAssessmentData] 403 response detected:", result);
+      // Check multiple possible error formats
+      if (
+        result?.error === "SUBSCRIPTION_LIMIT_REACHED" ||
+        result?.message?.includes("free tier limit") ||
+        result?.message?.includes("limit") ||
+        JSON.stringify(result || {}).includes("SUBSCRIPTION_LIMIT_REACHED")
+      ) {
+        console.log(
+          "✅ [generateAssessmentData] Detected subscription limit error, returning early"
+        );
+        return {
+          success: false,
+          error: "SUBSCRIPTION_LIMIT_REACHED",
+        };
+      }
+      // If it's a 403 but we can't parse it, still return subscription limit error
+      console.warn(
+        "⚠️ [generateAssessmentData] 403 response but couldn't parse error format, assuming subscription limit"
+      );
       return {
         success: false,
         error: "SUBSCRIPTION_LIMIT_REACHED",
@@ -370,12 +399,20 @@ export async function generateAssessmentData(
       fullResult: result,
     });
 
-    // Check for other errors
+    // Check for other errors (but 403 should have been handled above)
     if (!response.ok) {
+      // Double-check for subscription limit in case we missed it
+      if (response.status === 403) {
+        return {
+          success: false,
+          error: "SUBSCRIPTION_LIMIT_REACHED",
+        };
+      }
       return {
         success: false,
         error:
-          result.error ||
+          result?.error ||
+          result?.message ||
           `Failed to generate assessment data (${response.status})`,
       };
     }

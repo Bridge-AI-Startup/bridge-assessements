@@ -143,15 +143,30 @@ export default function CreateAssessment() {
               ? generateResult.error
               : "Failed to generate assessment data";
           
-          // Check if it's a subscription limit error
-          if (errorMsg === "SUBSCRIPTION_LIMIT_REACHED" || errorMsg.includes("limit")) {
+          console.log("🔍 [CreateAssessment] Generate error:", errorMsg, generateResult);
+          
+          // Check if it's a subscription limit error (multiple ways it might appear)
+          const errorStr = String(errorMsg).toLowerCase();
+          const errorObjStr = JSON.stringify(generateResult || {}).toLowerCase();
+          
+          // Check error message and full error object for subscription limit indicators
+          const isSubscriptionLimit = 
+            errorMsg === "SUBSCRIPTION_LIMIT_REACHED" ||
+            errorStr.includes("subscription_limit_reached") ||
+            errorStr.includes("free tier limit") ||
+            errorStr.includes("limit") ||
+            errorStr.includes("403") ||
+            errorObjStr.includes("subscription_limit_reached") ||
+            errorObjStr.includes("free tier limit");
+          
+          if (isSubscriptionLimit) {
             // Always show the error in the UI
             setError(
               "You've reached the free tier limit of 1 assessment. Upgrade to create unlimited assessments."
             );
             setIsGenerating(false);
             
-            // Also show a confirm dialog to offer upgrade
+            // Show a confirm dialog to offer upgrade
             const shouldUpgrade = window.confirm(
               "You've reached the free tier limit of 1 assessment.\n\n" +
               "Upgrade to create unlimited assessments.\n\n" +
@@ -164,7 +179,11 @@ export default function CreateAssessment() {
           }
           
           console.error("❌ [CreateAssessment] Generation error:", errorMsg);
-          setError(errorMsg);
+          // Only show clean error messages, not raw JSON
+          const cleanError = errorMsg.length > 200 
+            ? "Failed to generate assessment. Please try again."
+            : errorMsg;
+          setError(cleanError);
           setIsGenerating(false);
           return;
         }
@@ -264,9 +283,41 @@ export default function CreateAssessment() {
         createPageUrl("AssessmentEditor") + `?id=${assessmentId}`;
     } catch (err) {
       console.error("❌ [CreateAssessment] Unexpected error:", err);
-      setError(
-        err.message || "An unexpected error occurred. Please try again."
-      );
+      
+      // Check if error message contains subscription limit info
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorStr = errorMessage.toLowerCase();
+      
+      // Check for subscription limit errors in multiple formats
+      if (
+        errorStr.includes("subscription_limit_reached") ||
+        errorStr.includes("free tier limit") ||
+        errorStr.includes("403") ||
+        errorStr.includes("limit") ||
+        (errorStr.includes("403") && errorStr.includes("subscription"))
+      ) {
+        // Handle as subscription limit error
+        setError(
+          "You've reached the free tier limit of 1 assessment. Upgrade to create unlimited assessments."
+        );
+        setIsGenerating(false);
+        
+        const shouldUpgrade = window.confirm(
+          "You've reached the free tier limit of 1 assessment.\n\n" +
+          "Upgrade to create unlimited assessments.\n\n" +
+          "Would you like to view subscription plans?"
+        );
+        if (shouldUpgrade) {
+          window.location.href = createPageUrl("Subscription");
+        }
+        return;
+      }
+      
+      // For other errors, show a clean error message (not the raw error object)
+      const cleanErrorMessage = errorMessage.length > 200 
+        ? "An unexpected error occurred. Please try again."
+        : errorMessage;
+      setError(cleanErrorMessage);
       setIsGenerating(false);
     }
   };
