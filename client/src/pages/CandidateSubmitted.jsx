@@ -29,7 +29,7 @@ export default function CandidateSubmitted() {
   useEffect(() => {
     if (!token) {
       // If no token, redirect to landing
-      navigate(createPageUrl("Landing"));
+      navigate("/");
       return;
     }
 

@@ -18,7 +18,7 @@ export default function BillingSuccess() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) {
-        navigate(createPageUrl("Landing"));
+        navigate("/");
         return;
       }
 

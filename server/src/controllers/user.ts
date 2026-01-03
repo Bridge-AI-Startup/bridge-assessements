@@ -141,7 +141,8 @@ export const loginUser: RequestHandler = async (req, res, next) => {
  * - Deletes all assessments (which cascades to submissions and Pinecone data)
  * - Deletes all submissions and their Pinecone data
  * - Deletes RepoIndex records
- * - Deletes user document
+ * - Deletes Firebase Auth user
+ * - Deletes user document from MongoDB
  */
 export const deleteAccount: RequestHandler = async (req, res, next) => {
   try {
@@ -243,9 +244,21 @@ export const deleteAccount: RequestHandler = async (req, res, next) => {
       console.log(`✅ [deleteAccount] Deleted assessment ${assessmentId}`);
     }
 
-    // Step 4: Delete the user document
+    // Step 4: Delete Firebase Auth user
+    try {
+      await firebaseAdminAuth.deleteUser(uid);
+      console.log(`✅ [deleteAccount] Deleted Firebase user ${uid}`);
+    } catch (firebaseError: any) {
+      // Log error but don't fail the deletion - Firebase user might already be deleted
+      console.error(
+        `⚠️ [deleteAccount] Failed to delete Firebase user ${uid}:`,
+        firebaseError.message
+      );
+    }
+
+    // Step 5: Delete the user document from MongoDB
     await UserModel.findByIdAndDelete(userId);
-    console.log(`✅ [deleteAccount] Deleted user ${userId}`);
+    console.log(`✅ [deleteAccount] Deleted user ${userId} from MongoDB`);
 
     res.status(200).json({
       success: true,

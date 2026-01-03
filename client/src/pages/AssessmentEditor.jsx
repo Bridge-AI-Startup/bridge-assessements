@@ -93,7 +93,7 @@ export default function AssessmentEditor() {
         console.warn(
           "⚠️ [AssessmentEditor] No user found, redirecting to landing"
         );
-        window.location.href = createPageUrl("Landing");
+        window.location.href = "/";
         return;
       }
     });

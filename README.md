@@ -146,15 +146,31 @@ A full-stack TypeScript application for creating and managing technical coding a
 
 #### For Production:
 
-1. In Stripe Dashboard, go to **Developers** → **Webhooks**
-2. Click **Add endpoint**
-3. Enter your production URL: `https://yourdomain.com/api/billing/webhook`
-4. Select events to listen for:
+1. **Log in to Stripe Dashboard**: Go to [https://dashboard.stripe.com](https://dashboard.stripe.com)
+2. **Navigate to Webhooks**: Go to **Developers** → **Webhooks**
+3. **Add endpoint**: Click **Add endpoint** button
+4. **Enter production URL**: 
+   ```
+   https://bridge-assessements.onrender.com/api/billing/webhook
+   ```
+   ⚠️ **Important**: Use your actual production backend URL if different
+5. **Select events to listen for**:
    - `checkout.session.completed`
    - `customer.subscription.created`
    - `customer.subscription.updated`
    - `customer.subscription.deleted`
-5. Copy the **Signing secret** and add it to your production environment variables
+6. **Copy the Signing secret**:
+   - After creating the endpoint, click on it to view details
+   - Under **Signing secret**, click **Reveal** or **Click to reveal**
+   - Copy the secret (starts with `whsec_`)
+7. **Add to production environment variables**:
+   - In Render (or your hosting platform), go to your service's **Environment** settings
+   - Add or update `STRIPE_WEBHOOK_SECRET` with the copied secret
+   - Save and redeploy if needed
+8. **Verify webhook is working**:
+   - In Stripe Dashboard → **Developers** → **Webhooks** → Your endpoint
+   - Check **Recent events** to see if webhooks are being delivered successfully
+   - Green checkmarks indicate successful deliveries
 
 ### 3. Verify Subscription Status Updates
 

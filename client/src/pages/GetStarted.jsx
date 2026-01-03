@@ -156,7 +156,7 @@ export default function GetStarted() {
         <Button
           variant="ghost"
           onClick={() => {
-            window.location.href = createPageUrl("Landing");
+            window.location.href = "/";
           }}
           className="absolute top-4 left-4 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-full p-2"
         >

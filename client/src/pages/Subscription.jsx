@@ -21,7 +21,7 @@ export default function Subscription() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) {
-        navigate(createPageUrl("Landing"));
+        navigate("/");
         return;
       }
 
@@ -110,7 +110,7 @@ export default function Subscription() {
     try {
       const user = auth.currentUser;
       if (!user) {
-        navigate(createPageUrl("Landing"));
+        navigate("/");
         return;
       }
 

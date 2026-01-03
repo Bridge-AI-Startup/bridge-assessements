@@ -37,7 +37,7 @@ export default function CreateAssessment() {
         console.warn(
           "⚠️ [CreateAssessment] No user found, redirecting to landing"
         );
-        window.location.href = createPageUrl("Landing");
+        window.location.href = "/";
         return;
       }
 

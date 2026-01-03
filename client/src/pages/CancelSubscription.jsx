@@ -36,7 +36,7 @@ export default function CancelSubscription() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (!user) {
-        navigate(createPageUrl("Landing"));
+        navigate("/");
         return;
       }
       setIsLoading(false);
@@ -54,7 +54,7 @@ export default function CancelSubscription() {
     try {
       const user = auth.currentUser;
       if (!user) {
-        navigate(createPageUrl("Landing"));
+        navigate("/");
         return;
       }
 

@@ -28,15 +28,28 @@ try {
         if (!jsonString) {
           throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON is empty");
         }
+        
+        // Try to parse the JSON
         serviceAccount = JSON.parse(jsonString);
         initializationMethod =
           "FIREBASE_SERVICE_ACCOUNT_JSON (environment variable)";
+        
+        // Validate the private key format (should start with "-----BEGIN PRIVATE KEY-----")
+        const account = serviceAccount as any;
+        if (account.private_key && !account.private_key.includes("BEGIN PRIVATE KEY")) {
+          console.warn(
+            "⚠️  Warning: private_key in FIREBASE_SERVICE_ACCOUNT_JSON doesn't appear to be in PEM format. " +
+            "This might cause 'Invalid JWT Signature' errors. " +
+            "Make sure the private_key includes newlines (\\n) or is properly escaped."
+          );
+        }
       } catch (parseError) {
         const errorMessage =
           parseError instanceof Error ? parseError.message : "Unknown error";
         throw new Error(
           `Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: ${errorMessage}. ` +
-            `Please ensure the environment variable contains valid JSON.`
+            `Please ensure the environment variable contains valid JSON. ` +
+            `Common issues: (1) Extra quotes around the JSON, (2) Missing newlines in private_key, (3) Invalid JSON syntax.`
         );
       }
     }
@@ -119,15 +132,36 @@ try {
         );
       }
 
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-      });
+      try {
+        admin.initializeApp({
+          credential: admin.credential.cert(serviceAccount),
+        });
 
-      firebaseAdmin = admin;
-      auth = firebaseAdmin.auth();
-      console.log(
-        `✅ Firebase Admin initialized successfully using ${initializationMethod}`
-      );
+        firebaseAdmin = admin;
+        auth = firebaseAdmin.auth();
+        console.log(
+          `✅ Firebase Admin initialized successfully using ${initializationMethod}`
+        );
+      } catch (initError: any) {
+        const errorMessage = initError?.message || "Unknown error";
+        
+        // Provide helpful error messages for common issues
+        if (errorMessage.includes("Invalid JWT Signature") || errorMessage.includes("invalid_grant")) {
+          throw new Error(
+            `Firebase Admin initialization failed: Invalid JWT Signature. ` +
+            `This usually means: (1) The service account key has been revoked/deleted in Firebase Console, ` +
+            `(2) The private_key in FIREBASE_SERVICE_ACCOUNT_JSON is corrupted or incorrectly formatted, ` +
+            `or (3) Server time is not synced. ` +
+            `Solution: Generate a new service account key from Firebase Console → Project Settings → Service Accounts ` +
+            `and update FIREBASE_SERVICE_ACCOUNT_JSON in your environment variables. ` +
+            `Original error: ${errorMessage}`
+          );
+        }
+        
+        throw new Error(
+          `Firebase Admin initialization failed: ${errorMessage}`
+        );
+      }
     }
   } else {
     // Already initialized
