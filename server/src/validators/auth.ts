@@ -40,9 +40,12 @@ const verifyAuthToken = async (
     req.body.uid = userInfo.uid;
 
     next(); // Proceed to the next middleware/route handler
-  } catch (e) {
+  } catch (e: any) {
     //Throws error if the token is not valid
-    console.log(e);
+    console.error("❌ [verifyAuthToken] Token verification failed:", e);
+    console.error("   Error message:", e?.message);
+    console.error("   Error code:", e?.code);
+    
     res
       .status(AuthError.INVALID_AUTH_TOKEN.status)
       .send(AuthError.INVALID_AUTH_TOKEN.displayMessage(true));

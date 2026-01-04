@@ -160,7 +160,7 @@ export const PROMPT_GENERATE_INTERVIEW_QUESTIONS_RETRIEVAL = {
       numQuestions === 1 ? "" : "s"
     } based on the provided assessment description and code snippets from the candidate's submission.
 
-These questions will be used in a voice interview powered by ElevenLabs. The AI interviewer will ask each base question and then ask a couple follow-up questions to dive deeper, so make sure each base question is substantial enough to support meaningful follow-up discussion.
+These questions will be used in a voice interview powered by ElevenLabs. The AI interviewer will ask each base question and then ask exactly 1-2 follow-up questions maximum per base question to dive deeper, so make sure each base question is substantial enough to support meaningful follow-up discussion.
 
 Requirements:
 - Generate exactly ${numQuestions} thoughtful, specific question${
@@ -170,7 +170,7 @@ Requirements:
 - DO NOT invent file paths or line numbers - only use what is provided
 - Questions should probe understanding, design decisions, trade-offs, and potential improvements
 - Create a mix of questions, some should be very specific to the code, some should be more general to how they approached the project.
-- Each question should be substantial enough to support 1-2 follow-up questions during the voice interview
+- Each question should be substantial enough to support exactly 1-2 follow-up questions during the voice interview (the interviewer will ask a maximum of 2 follow-ups per base question)
 
 Output strict JSON with a single key "questions" containing an array of objects. Each object must have:
 - "prompt": string (the question text)
@@ -286,11 +286,13 @@ export const PROMPT_INTERVIEW_AGENT = {
 Rules:
 - Ask the questions in order
 - Do not invent new base questions
-- For each base question, ask a couple follow-up questions (1-2) to dive deeper into the candidate's response. This is expected and encouraged.
+- CRITICAL: For each base question, ask EXACTLY 1-2 follow-up questions maximum. Do NOT ask 3, 4, or more follow-ups. The limit is 2 follow-ups per base question, no exceptions.
+- After asking 1-2 follow-ups for a base question, you MUST move on to the next base question immediately. Do not continue asking more follow-ups.
+- Keep track: If you've asked a base question and 1-2 follow-ups, you must move to the next base question.
 - Keep the interview focused and technical
 - If unsure about something, ask for clarification rather than guessing
 - IMPORTANT: The candidate only has one chance to record their answers. Do not allow them to re-record or restart their responses. Once they answer a question, move on to the next question.
-- When you have asked all ${numQuestions} base questions (with their follow-ups) and received answers, conclude the interview by saying something like "Thank you for your time. This completes our interview." or "That covers all the questions. Thank you for participating in this interview."
+- When you have asked all ${numQuestions} base questions (with their 1-2 follow-ups each) and received answers, conclude the interview immediately by saying something like "Thank you for your time. This completes our interview." or "That covers all the questions. Thank you for participating in this interview."
 
 Available Tool:
 You have access to a tool called "get_context" that retrieves relevant code snippets from the candidate's submission based on the current question and their answer. Use this tool when:

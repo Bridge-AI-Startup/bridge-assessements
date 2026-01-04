@@ -297,7 +297,7 @@ export default function CreateAssessment() {
         (errorStr.includes("403") && errorStr.includes("subscription"))
       ) {
         // Handle as subscription limit error
-        setError(
+      setError(
           "You've reached the free tier limit of 1 assessment. Upgrade to create unlimited assessments."
         );
         setIsGenerating(false);
@@ -549,7 +549,7 @@ export default function CreateAssessment() {
                       Upgrade to create unlimited assessments →
                     </Link>
                   )}
-                </div>
+              </div>
               </motion.div>
             )}
           </div>

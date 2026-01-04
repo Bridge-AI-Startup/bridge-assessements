@@ -92,30 +92,30 @@ try {
             "Get your service account key from: Firebase Console → Project Settings → Service Accounts"
         );
       } else {
-        console.warn(
-          "⚠️  Firebase Admin SDK not configured. Backend authentication will not work."
-        );
-        console.warn(
+      console.warn(
+        "⚠️  Firebase Admin SDK not configured. Backend authentication will not work."
+      );
+      console.warn(
           "   To fix this, set one of the following environment variables:"
-        );
-        console.warn(
+      );
+      console.warn(
           "   1. FIREBASE_SERVICE_ACCOUNT_JSON (JSON string from Firebase Console) - Recommended for production"
-        );
-        console.warn(
+      );
+      console.warn(
           "   2. FIREBASE_SERVICE_ACCOUNT_PATH (path to service account JSON file) - Local dev only"
-        );
-        console.warn(
-          "   Get your service account key from: Firebase Console → Project Settings → Service Accounts"
-        );
-        // Create a mock auth object that will throw helpful errors
-        auth = {
-          verifyIdToken: async () => {
-            throw new Error(
+      );
+      console.warn(
+        "   Get your service account key from: Firebase Console → Project Settings → Service Accounts"
+      );
+      // Create a mock auth object that will throw helpful errors
+      auth = {
+        verifyIdToken: async () => {
+          throw new Error(
               "Firebase Admin SDK not configured. Please set FIREBASE_SERVICE_ACCOUNT_JSON (production) or FIREBASE_SERVICE_ACCOUNT_PATH (local dev) as an environment variable."
-            );
-          },
+          );
+        },
         } as unknown as admin.auth.Auth;
-      }
+    }
     }
 
     // Initialize Firebase Admin if we have valid credentials
@@ -137,8 +137,8 @@ try {
           credential: admin.credential.cert(serviceAccount),
         });
 
-        firebaseAdmin = admin;
-        auth = firebaseAdmin.auth();
+      firebaseAdmin = admin;
+      auth = firebaseAdmin.auth();
         console.log(
           `✅ Firebase Admin initialized successfully using ${initializationMethod}`
         );

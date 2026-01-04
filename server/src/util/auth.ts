@@ -17,10 +17,28 @@ import UserModel from "../models/user.js";
  */
 export async function decodeAuthToken(token: string) {
   try {
+    // Check if Firebase Admin is properly initialized
+    if (!firebaseAdminAuth || typeof firebaseAdminAuth.verifyIdToken !== 'function') {
+      console.error("❌ [decodeAuthToken] Firebase Admin Auth is not initialized");
+      throw new Error("Firebase Admin SDK not initialized. Check server logs for initialization errors.");
+    }
+    
     const userInfo = await firebaseAdminAuth.verifyIdToken(token);
     return userInfo;
-  } catch (error) {
-    console.error("Token decode error:", error);
+  } catch (error: any) {
+    console.error("❌ [decodeAuthToken] Token verification failed:", error);
+    
+    // Provide more specific error messages
+    if (error?.code === 'auth/id-token-expired') {
+      console.error("   Token has expired");
+    } else if (error?.code === 'auth/id-token-revoked') {
+      console.error("   Token has been revoked");
+    } else if (error?.code === 'auth/argument-error') {
+      console.error("   Invalid token format");
+    } else if (error?.message?.includes('not initialized')) {
+      console.error("   Firebase Admin SDK not initialized");
+    }
+    
     throw AuthError.DECODE_ERROR;
   }
 }

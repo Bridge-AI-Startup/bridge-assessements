@@ -921,37 +921,6 @@ export default function Landing() {
         </div>
       </div>
 
-      {/* CTA Section */}
-      <div className="bg-[#1E3A8A] py-16 md:py-24">
-        <div className="max-w-4xl mx-auto px-6 text-center">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.5 }}
-          >
-            <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
-              Ready to Transform Your Hiring Process?
-            </h2>
-            <p className="text-blue-200 text-lg mb-8 max-w-2xl mx-auto">
-              Join teams who've replaced outdated assessments with Bridge's
-              AI-powered evaluation pipeline.
-            </p>
-            <Button
-              onClick={() =>
-                window.open(
-                  "https://calendly.com/smahadkar-ucsd/30min",
-                  "_blank"
-                )
-              }
-              className="bg-[#FFFF00] hover:bg-[#faed00] text-[#1E3A8A] px-8 py-3 h-auto rounded-xl font-semibold shadow-lg"
-            >
-              Book a Demo
-            </Button>
-          </motion.div>
-        </div>
-      </div>
-
       {/* Contact Section */}
       <div className="bg-gradient-to-b from-gray-50 to-white py-16 md:py-24">
         <div className="max-w-4xl mx-auto px-6">
@@ -1018,6 +987,37 @@ export default function Landing() {
                 </div>
               </div>
             </div>
+          </motion.div>
+        </div>
+      </div>
+
+      {/* CTA Section */}
+      <div className="bg-[#1E3A8A] py-16 md:py-24">
+        <div className="max-w-4xl mx-auto px-6 text-center">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.5 }}
+          >
+            <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
+              Ready to Transform Your Hiring Process?
+            </h2>
+            <p className="text-blue-200 text-lg mb-8 max-w-2xl mx-auto">
+              Join teams who've replaced outdated assessments with Bridge's
+              AI-powered evaluation pipeline.
+            </p>
+            <Button
+              onClick={() =>
+                window.open(
+                  "https://calendly.com/smahadkar-ucsd/30min",
+                  "_blank"
+                )
+              }
+              className="bg-[#FFFF00] hover:bg-[#faed00] text-[#1E3A8A] px-8 py-3 h-auto rounded-xl font-semibold shadow-lg"
+            >
+              Book a Demo
+            </Button>
           </motion.div>
         </div>
       </div>
