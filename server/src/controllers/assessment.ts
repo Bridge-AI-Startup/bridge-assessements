@@ -80,9 +80,10 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
     }
 
     // Check subscription limits - use subscriptionStatus === "active" as source of truth
-    const subscriptionStatus = user.subscriptionStatus || (user as any).subscription?.subscriptionStatus;
+    const subscriptionStatus =
+      user.subscriptionStatus || (user as any).subscription?.subscriptionStatus;
     const isSubscribed = subscriptionStatus === "active";
-    
+
     if (!isSubscribed) {
       // Count existing assessments for this user
       const assessmentCount = await AssessmentModel.countDocuments({ userId });
@@ -374,12 +375,16 @@ export const generateAssessmentData: RequestHandler = async (
       const user = await UserModel.findById(userId);
       if (user) {
         // Check subscription limits - use subscriptionStatus === "active" as source of truth
-        const subscriptionStatus = user.subscriptionStatus || (user as any).subscription?.subscriptionStatus;
+        const subscriptionStatus =
+          user.subscriptionStatus ||
+          (user as any).subscription?.subscriptionStatus;
         const isSubscribed = subscriptionStatus === "active";
-        
+
         if (!isSubscribed) {
           // Count existing assessments for this user
-          const assessmentCount = await AssessmentModel.countDocuments({ userId });
+          const assessmentCount = await AssessmentModel.countDocuments({
+            userId,
+          });
 
           // Free tier limit: 1 assessment
           if (assessmentCount >= 1) {
