@@ -1,19 +1,13 @@
+// CRITICAL: Load environment variables FIRST before any other imports
+// This must be the very first import to ensure env vars are available
+// when other modules are loaded
+import "./config/loadEnv.js";
+
 import express from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
-import { config } from "dotenv";
-import { existsSync } from "fs";
 import connectMongoose from "./db/mongooseConnection.js";
 import "./config/firebaseAdmin.js"; // Initialize Firebase Admin
-
-// Load config.env file if it exists (for local development)
-// In production (Render), environment variables are set directly
-if (existsSync("config.env")) {
-  config({ path: "config.env" });
-  console.log("📄 Loaded environment variables from config.env");
-} else {
-  console.log("📄 Using environment variables from system (production mode)");
-}
 import userRoutes from "./routes/user.js";
 import assessmentRoutes from "./routes/assessment.js";
 import submissionRoutes from "./routes/submission.js";
