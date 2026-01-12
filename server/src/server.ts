@@ -1,19 +1,33 @@
-import express from "express";
-import cors from "cors";
-import rateLimit from "express-rate-limit";
+// Load config.env file FIRST, before any other imports that might need env vars
 import { config } from "dotenv";
 import { existsSync } from "fs";
-import connectMongoose from "./db/mongooseConnection.js";
-import "./config/firebaseAdmin.js"; // Initialize Firebase Admin
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
 
-// Load config.env file if it exists (for local development)
-// In production (Render), environment variables are set directly
-if (existsSync("config.env")) {
-  config({ path: "config.env" });
+// Get the directory of the current file
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Try to load config.env from the server directory (where this file is located)
+const configPath = join(__dirname, "..", "config.env");
+
+if (existsSync(configPath)) {
+  config({ path: configPath });
   console.log("📄 Loaded environment variables from config.env");
+} else if (existsSync("config.env")) {
+  // Fallback: try relative path (if running from server directory)
+  config({ path: "config.env" });
+  console.log("📄 Loaded environment variables from config.env (relative path)");
 } else {
   console.log("📄 Using environment variables from system (production mode)");
 }
+
+// Now import other modules that might need environment variables
+import express from "express";
+import cors from "cors";
+import rateLimit from "express-rate-limit";
+import connectMongoose from "./db/mongooseConnection.js";
+import "./config/firebaseAdmin.js"; // Initialize Firebase Admin
 import userRoutes from "./routes/user.js";
 import assessmentRoutes from "./routes/assessment.js";
 import submissionRoutes from "./routes/submission.js";
