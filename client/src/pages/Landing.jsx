@@ -3,26 +3,12 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import {
-  ArrowRight,
-  Puzzle,
-  Hourglass,
-  FileWarning,
-  Brain,
-  CheckCircle,
-  LayoutDashboard,
-  Check,
-  MessageSquare,
-  Mail,
-  Phone,
-  Bug,
-} from "lucide-react";
+import { ArrowRight, X, Check, Clock } from "lucide-react";
 import { createPageUrl } from "@/utils";
 import PresetPills from "@/components/assessment/PresetPills";
 import AuthModal from "@/components/auth/AuthModal";
 import { auth } from "@/firebase/firebase";
 import bridgeLogo from "@/assets/bridge-logo.svg";
-import { Link } from "react-router-dom";
 
 export default function Landing() {
   const [creationMode, setCreationMode] = useState("ai"); // "ai" or "manual"
@@ -213,15 +199,21 @@ export default function Landing() {
           <div className="flex items-center gap-2">
             <Button
               onClick={() => {
-                const pricingSection = document.getElementById("pricing");
-                if (pricingSection) {
-                  pricingSection.scrollIntoView({ behavior: "smooth" });
-                }
+                window.location.href = createPageUrl("Pricing");
               }}
               variant="ghost"
               className="text-gray-700 hover:text-gray-900 rounded-full text-sm px-4 py-1.5 h-auto"
             >
               Pricing
+            </Button>
+            <Button
+              onClick={() => {
+                window.location.href = createPageUrl("Contact");
+              }}
+              variant="ghost"
+              className="text-gray-700 hover:text-gray-900 rounded-full text-sm px-4 py-1.5 h-auto"
+            >
+              Contact
             </Button>
             <Button
               onClick={() => {
@@ -543,451 +535,195 @@ export default function Landing() {
         </div>
       </div>
 
-      {/* Section 2 - Three-Card Comparison Grid */}
-      <div className="bg-white max-w-6xl mx-auto px-6 py-16 md:py-24">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.5 }}
-          className="text-center mb-12"
-        >
-          <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">
-            Why Traditional Hiring Methods Fall Short
-          </h2>
-        </motion.div>
-
-        <div className="grid md:grid-cols-3 gap-6">
-          {/* Card 1 */}
+      {/* Video Demo Section */}
+      <div className="bg-white py-16 md:py-24">
+        <div className="max-w-5xl mx-auto px-6">
           <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.5, delay: 0.1 }}
-            className="bg-gray-50 rounded-2xl p-6 border border-gray-100"
-          >
-            <div className="flex items-start gap-4 mb-4">
-              <div className="w-12 h-12 rounded-xl bg-orange-100 flex items-center justify-center flex-shrink-0">
-                <Puzzle className="w-6 h-6 text-orange-600" />
-              </div>
-              <h3 className="text-lg font-semibold text-gray-900 pt-2">
-                Coding puzzles miss the point.
-              </h3>
-            </div>
-            <p className="text-gray-600 leading-relaxed">
-              HackerRank and LeetCode dont test the practical skills engineers
-              use daily.
-            </p>
-          </motion.div>
-
-          {/* Card 2 */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.5, delay: 0.2 }}
-            className="bg-gray-50 rounded-2xl p-6 border border-gray-100"
-          >
-            <div className="flex items-start gap-4 mb-4">
-              <div className="w-12 h-12 rounded-xl bg-red-100 flex items-center justify-center flex-shrink-0">
-                <FileWarning className="w-6 h-6 text-red-600" />
-              </div>
-              <h3 className="text-lg font-semibold text-gray-900 pt-2">
-                Static assessments are outdated.
-              </h3>
-            </div>
-            <p className="text-gray-600 leading-relaxed">
-              Legacy platforms rely on fixed question banks that ignore your
-              stack, your requirements, and modern tools. Candidates can often
-              find the answers online.{" "}
-            </p>
-          </motion.div>
-
-          {/* Card 3 */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.5, delay: 0.3 }}
-            className="bg-gray-50 rounded-2xl p-6 border border-gray-100"
-          >
-            <div className="flex items-start gap-4 mb-4">
-              <div className="w-12 h-12 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0">
-                <Hourglass className="w-6 h-6 text-amber-600" />
-              </div>
-              <h3 className="text-lg font-semibold text-gray-900 pt-2">
-                Take-homes are slow to build, candidates drop off
-              </h3>
-            </div>
-            <p className="text-gray-600 leading-relaxed">
-              Teams spend hours creating and reviewing take-homes, while
-              candidates drop off and teams never know why.
-            </p>
-          </motion.div>
-        </div>
-      </div>
-
-      {/* Section 3 - How Bridge Works */}
-      <div className="bg-gradient-to-b from-gray-50 via-white to-gray-50 py-20 md:py-32 relative overflow-hidden">
-        {/* Decorative background elements */}
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-1/4 left-0 w-96 h-96 bg-[#FFFF00]/5 rounded-full blur-3xl -translate-x-1/2"></div>
-          <div className="absolute bottom-1/4 right-0 w-96 h-96 bg-blue-100/30 rounded-full blur-3xl translate-x-1/2"></div>
-        </div>
-
-        <div className="max-w-5xl mx-auto px-6 relative z-10">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 30 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
             transition={{ duration: 0.6 }}
+            className="text-center mb-12"
+          >
+            <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">
+              See Bridge in Action
+            </h2>
+            <p className="text-lg text-gray-600 max-w-2xl mx-auto">
+              Watch how Bridge transforms job descriptions into a comprehensive
+              pipeline
+            </p>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6, delay: 0.2 }}
+            className="relative w-full rounded-2xl overflow-hidden shadow-2xl bg-gray-900 aspect-video"
+          >
+            {/* Replace VIDEO_URL_HERE with your actual video URL or path */}
+            {/* Option 1: YouTube/Vimeo embed */}
+            <iframe
+              className="absolute inset-0 w-full h-full"
+              src="https://www.youtube.com/embed/VcXoKLQ14Zg?si=nh3IAQUBBI3pwOjm"
+              title="Bridge Demo Video"
+              frameBorder="0"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+            ></iframe>
+
+            {/* Option 2: Local video file - uncomment this and comment out iframe above */}
+            {/* 
+            <video
+              className="w-full h-full object-contain"
+              controls
+              autoPlay
+              muted
+              loop
+            >
+              <source src="/videos/bridge-demo.mp4" type="video/mp4" />
+              <source src="/videos/bridge-demo.webm" type="video/webm" />
+              Your browser does not support the video tag.
+            </video>
+            */}
+          </motion.div>
+        </div>
+      </div>
+
+      {/* Comparison Section - Traditional Hiring vs Bridge */}
+      <div className="bg-gray-50 py-20 md:py-32">
+        <div className="max-w-6xl mx-auto px-6">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.5 }}
             className="text-center mb-16"
           >
             <h2 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4 tracking-tight">
-              How Bridge Works
+              Traditional Hiring vs Bridge
             </h2>
-            <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-              A streamlined process that transforms how you evaluate technical
-              talent
-            </p>
           </motion.div>
 
-          <div className="grid md:grid-cols-2 gap-6">
-            {/* Feature 1 */}
+          <div className="grid md:grid-cols-2 gap-8">
+            {/* Traditional Hiring Methods Card */}
             <motion.div
               initial={{ opacity: 0, y: 30 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
-              transition={{ duration: 0.5, delay: 0.1 }}
-              className="bg-white rounded-3xl p-8 border border-gray-100 shadow-lg hover:shadow-xl transition-all duration-300 group"
+              transition={{ duration: 0.6, delay: 0.1 }}
+              className="bg-white rounded-2xl shadow-lg p-8 flex flex-col"
             >
-              <div className="flex items-start gap-4 mb-6">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-yellow-100 to-yellow-200 flex items-center justify-center flex-shrink-0 shadow-lg">
-                  <Brain className="w-8 h-8 text-[#1E3A8A]" />
+              {/* Header */}
+              <div className="flex items-center gap-3 mb-8">
+                <div className="w-12 h-12 rounded-lg bg-gray-200 flex items-center justify-center">
+                  <Clock className="w-6 h-6 text-gray-600" />
                 </div>
-                <h3 className="text-xl font-bold text-gray-900 pt-2">
-                  Custom Role-Specific Take-Homes
+                <h3 className="text-2xl font-bold text-gray-900">
+                  Traditional Hiring Methods
                 </h3>
               </div>
-              <p className="text-gray-600 leading-relaxed text-[15px]">
-                Paste in a job description. Bridge generates a practical project
-                aligned to your actual stack and requirements, not generic
-                puzzle-solving.
+
+              {/* Points List */}
+              <ul className="space-y-6 flex-grow mb-6">
+                <li className="flex items-start gap-3">
+                  <div className="flex-shrink-0 mt-0.5">
+                    <X className="w-5 h-5 text-gray-400" />
+                  </div>
+                  <p className="text-gray-700 leading-relaxed">
+                    Static assessments are outdated. Fixed question banks ignore
+                    your stack, and are easy to find online.
+                  </p>
+                </li>
+                <li className="flex items-start gap-3">
+                  <div className="flex-shrink-0 mt-0.5">
+                    <X className="w-5 h-5 text-gray-400" />
+                  </div>
+                  <p className="text-gray-700 leading-relaxed">
+                    Take-homes are slow to build, and candidates drop off
+                    without teams ever knowing why.
+                  </p>
+                </li>
+                <li className="flex items-start gap-3">
+                  <div className="flex-shrink-0 mt-0.5">
+                    <X className="w-5 h-5 text-gray-400" />
+                  </div>
+                  <p className="text-gray-700 leading-relaxed">
+                    Platforms like HackerRank and LeetCode test algorithm
+                    trivia, not real engineering work.
+                  </p>
+                </li>
+              </ul>
+
+              {/* Divider */}
+              <div className="border-t border-gray-200 my-6"></div>
+
+              {/* Summary */}
+              <p className="text-gray-600 font-medium text-center">
+                Exhausting. Low-response. Luck-based.
               </p>
             </motion.div>
 
-            {/* Feature 2 */}
+            {/* Bridge Card */}
             <motion.div
               initial={{ opacity: 0, y: 30 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
-              transition={{ duration: 0.5, delay: 0.2 }}
-              className="bg-white rounded-3xl p-8 border border-gray-100 shadow-lg hover:shadow-xl transition-all duration-300 group"
+              transition={{ duration: 0.6, delay: 0.2 }}
+              className="bg-white rounded-2xl shadow-lg p-8 flex flex-col"
             >
-              <div className="flex items-start gap-4 mb-6">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center flex-shrink-0 shadow-lg">
-                  <MessageSquare className="w-8 h-8 text-[#1E3A8A]" />
+              {/* Header */}
+              <div className="flex items-center gap-3 mb-8">
+                <div className="w-12 h-12 rounded-lg bg-[#1E3A8A] flex items-center justify-center overflow-hidden">
+                  <img
+                    src="/bridge-logo.svg"
+                    alt="Bridge"
+                    className="w-7 h-7 object-contain"
+                  />
                 </div>
-                <h3 className="text-xl font-bold text-gray-900 pt-2">
-                  AI Follow-Up Interview Based on the Candidate's Code
-                </h3>
+                <h3 className="text-2xl font-bold text-[#1E3A8A]">Bridge</h3>
               </div>
-              <p className="text-gray-600 leading-relaxed text-[15px]">
-                Bridge conducts a dynamic follow-up interview that probes a
-                candidate's reasoning, tradeoffs, and understanding of their own
-                implementation.
-              </p>
-            </motion.div>
 
-            {/* Feature 3 */}
-            <motion.div
-              initial={{ opacity: 0, y: 30 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.5, delay: 0.3 }}
-              className="bg-white rounded-3xl p-8 border border-gray-100 shadow-lg hover:shadow-xl transition-all duration-300 group"
-            >
-              <div className="flex items-start gap-4 mb-6">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-green-100 to-green-200 flex items-center justify-center flex-shrink-0 shadow-lg">
-                  <CheckCircle className="w-8 h-8 text-[#1E3A8A]" />
-                </div>
-                <h3 className="text-xl font-bold text-gray-900 pt-2">
-                  Understand Why Candidates Drop Off
-                </h3>
-              </div>
-              <p className="text-gray-600 leading-relaxed text-[15px]">
-                Bridge collects data on why candidates opt out, including their
-                reasons and feedback. See exactly where and why candidates drop
-                off in your process.
-              </p>
-            </motion.div>
+              {/* Points List */}
+              <ul className="space-y-6 flex-grow mb-6">
+                <li className="flex items-start gap-3">
+                  <div className="flex-shrink-0 mt-0.5">
+                    <Check className="w-5 h-5 text-[#1E3A8A]" />
+                  </div>
+                  <p className="text-gray-700 leading-relaxed">
+                    Bridge replaces fixed question banks with dynamic,
+                    role-specific projects tailored to your stack.
+                  </p>
+                </li>
+                <li className="flex items-start gap-3">
+                  <div className="flex-shrink-0 mt-0.5">
+                    <Check className="w-5 h-5 text-[#1E3A8A]" />
+                  </div>
+                  <p className="text-gray-700 leading-relaxed">
+                    Bridge automates take-homes and captures why candidates opt
+                    out.
+                  </p>
+                </li>
+                <li className="flex items-start gap-3">
+                  <div className="flex-shrink-0 mt-0.5">
+                    <Check className="w-5 h-5 text-[#1E3A8A]" />
+                  </div>
+                  <p className="text-gray-700 leading-relaxed">
+                    Bridge tests real engineering through projects and AI-led
+                    technical interviews.
+                  </p>
+                </li>
+              </ul>
 
-            {/* Feature 4 */}
-            <motion.div
-              initial={{ opacity: 0, y: 30 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.5, delay: 0.4 }}
-              className="bg-white rounded-3xl p-8 border border-gray-100 shadow-lg hover:shadow-xl transition-all duration-300 group"
-            >
-              <div className="flex items-start gap-4 mb-6">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-purple-100 to-purple-200 flex items-center justify-center flex-shrink-0 shadow-lg">
-                  <LayoutDashboard className="w-8 h-8 text-[#1E3A8A]" />
-                </div>
-                <h3 className="text-xl font-bold text-gray-900 pt-2">
-                  Send with a Link. Manage Everything in One Dashboard.
-                </h3>
-              </div>
-              <p className="text-gray-600 leading-relaxed text-[15px]">
-                No infrastructure. No email back-and-forth. Just one link and a
-                dashboard that handles it all.
+              {/* Divider */}
+              <div className="border-t border-gray-200 my-6"></div>
+
+              {/* Summary */}
+              <p className="text-[#1E3A8A] font-medium text-center">
+                Automatic. High-response. Skill-based.
               </p>
             </motion.div>
           </div>
-        </div>
-      </div>
-
-      {/* Pricing Section */}
-      <div
-        id="pricing"
-        className="bg-gradient-to-br from-[#f8f9fb] to-[#eef1f8] py-16 md:py-24"
-      >
-        <div className="max-w-6xl mx-auto px-6">
-          {/* Header */}
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.5 }}
-            className="text-center mb-12"
-          >
-            <h2 className="text-4xl font-bold text-gray-900 mb-4">
-              Choose Your Plan
-            </h2>
-            <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-              Start with our free tier to evaluate candidates, then upgrade for
-              unlimited access.
-            </p>
-          </motion.div>
-
-          {/* Pricing Cards */}
-          <div className="grid md:grid-cols-2 gap-8 max-w-5xl mx-auto">
-            {[
-              {
-                name: "Free",
-                subtitle: "Evaluation Access",
-                price: "$0",
-                period: "forever",
-                color: "blue",
-                description: "Full access. Evaluate up to 3 candidates.",
-                features: [
-                  "1 assessment",
-                  "Up to 3 candidate submissions total",
-                  "Full AI follow-up interview",
-                  "Assessment drop off analytics",
-                ],
-                cta: "Current Plan",
-                ctaVariant: "outline",
-                popular: false,
-              },
-              {
-                name: "Early Access",
-                subtitle: "Unlimited",
-                price: "$49",
-                period: "month",
-                color: "green",
-                description: "Unlimited candidates. Run your hiring on Bridge.",
-                features: [
-                  "Unlimited submissions",
-                  "Unlimited assessments",
-                  "Full AI follow-up interview",
-                  "Assessment drop off analytics",
-                ],
-                cta: "Upgrade Now",
-                ctaVariant: "default",
-                popular: true,
-              },
-            ].map((tier, index) => (
-              <motion.div
-                key={tier.name}
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: index * 0.1, duration: 0.5 }}
-                className={`relative bg-white rounded-2xl shadow-xl overflow-hidden border-2 ${
-                  tier.popular
-                    ? "border-green-500 scale-105"
-                    : "border-gray-200"
-                }`}
-              >
-                {tier.popular && (
-                  <div className="absolute top-0 right-0 bg-green-500 text-white px-4 py-1 text-sm font-semibold rounded-bl-lg">
-                    Popular
-                  </div>
-                )}
-
-                <div className="p-8">
-                  {/* Tier Header */}
-                  <div className="mb-6">
-                    <div
-                      className={`inline-block px-3 py-1 rounded-full text-xs font-semibold mb-3 ${
-                        tier.color === "blue"
-                          ? "bg-blue-100 text-blue-700"
-                          : "bg-green-100 text-green-700"
-                      }`}
-                    >
-                      {tier.subtitle}
-                    </div>
-                    <h3 className="text-3xl font-bold text-gray-900 mb-2">
-                      {tier.name}
-                    </h3>
-                    <div className="flex items-baseline gap-2 mb-2">
-                      <span className="text-5xl font-bold text-gray-900">
-                        {tier.price}
-                      </span>
-                      {tier.period !== "forever" && (
-                        <span className="text-gray-500">/{tier.period}</span>
-                      )}
-                    </div>
-                    <p className="text-gray-600 text-sm">{tier.description}</p>
-                  </div>
-
-                  {/* Features List */}
-                  <ul className="space-y-3 mb-8">
-                    {tier.features.map((feature, idx) => (
-                      <li key={idx} className="flex items-start gap-3">
-                        <Check
-                          className={`w-5 h-5 flex-shrink-0 mt-0.5 ${
-                            tier.color === "blue"
-                              ? "text-blue-600"
-                              : "text-green-600"
-                          }`}
-                        />
-                        <span className="text-gray-700">{feature}</span>
-                      </li>
-                    ))}
-                  </ul>
-
-                  {/* CTA Button */}
-                  <Button
-                    onClick={
-                      tier.popular
-                        ? () => {
-                            // Check if user is logged in
-                            const user = auth.currentUser;
-                            if (user) {
-                              window.location.href =
-                                createPageUrl("Subscription");
-                            } else {
-                              // Store flag to redirect to subscription after signup
-                              localStorage.setItem(
-                                "redirect_to_subscription",
-                                "true"
-                              );
-                              window.location.href =
-                                createPageUrl("GetStarted");
-                            }
-                          }
-                        : undefined
-                    }
-                    variant={tier.ctaVariant}
-                    disabled={!tier.popular}
-                    className={`w-full py-6 text-lg font-semibold ${
-                      tier.popular
-                        ? "bg-green-600 hover:bg-green-700 text-white"
-                        : "bg-gray-100 text-gray-600 cursor-not-allowed"
-                    }`}
-                  >
-                    {tier.cta}
-                  </Button>
-                </div>
-              </motion.div>
-            ))}
-          </div>
-
-          {/* Additional Info */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            whileInView={{ opacity: 1 }}
-            viewport={{ once: true }}
-            transition={{ delay: 0.3, duration: 0.5 }}
-            className="mt-12 text-center"
-          >
-            <p className="text-sm text-gray-500">
-              All plans include full access to BridgeAI features. Upgrade
-              anytime to unlock unlimited candidates.
-            </p>
-          </motion.div>
-        </div>
-      </div>
-
-      {/* Contact Section */}
-      <div className="bg-gradient-to-b from-gray-50 to-white py-16 md:py-24">
-        <div className="max-w-4xl mx-auto px-6">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.5 }}
-            className="text-center mb-12"
-          >
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[#1E3A8A]/10 mb-4">
-              <Bug className="w-8 h-8 text-[#1E3A8A]" />
-            </div>
-            <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">
-              Contact Us
-            </h2>
-            <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-              Found a bug or have a question? Contact us and we'll get back to
-              you as soon as possible.
-            </p>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.5, delay: 0.1 }}
-            className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8 md:p-12"
-          >
-            <div className="grid md:grid-cols-2 gap-8">
-              {/* Email */}
-              <div className="flex items-start gap-4">
-                <div className="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center flex-shrink-0">
-                  <Mail className="w-6 h-6 text-[#1E3A8A]" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                    Email
-                  </h3>
-                  <a
-                    href="mailto:saaz.m@icloud.com"
-                    className="text-[#1E3A8A] hover:text-[#152a66] hover:underline transition-colors"
-                  >
-                    saaz.m@icloud.com
-                  </a>
-                </div>
-              </div>
-
-              {/* Phone */}
-              <div className="flex items-start gap-4">
-                <div className="w-12 h-12 rounded-xl bg-green-100 flex items-center justify-center flex-shrink-0">
-                  <Phone className="w-6 h-6 text-[#1E3A8A]" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                    Phone
-                  </h3>
-                  <a
-                    href="tel:+18623370989"
-                    className="text-[#1E3A8A] hover:text-[#152a66] hover:underline transition-colors"
-                  >
-                    (862) 337-0989
-                  </a>
-                </div>
-              </div>
-            </div>
-          </motion.div>
         </div>
       </div>
 
