@@ -6,6 +6,9 @@ import { existsSync } from "fs";
 import connectMongoose from "./db/mongooseConnection.js";
 import "./config/firebaseAdmin.js"; // Initialize Firebase Admin
 
+// Import GitHub database connection
+import connectGitHubDB from "../../Bridge_Github/backend/src/config/database.js";
+
 // Load config.env file if it exists (for local development)
 // In production (Render), environment variables are set directly
 if (existsSync("config.env")) {
@@ -20,6 +23,12 @@ import submissionRoutes from "./routes/submission.js";
 import agentToolsRoutes from "./routes/agentTools.js";
 import webhookRoutes from "./routes/webhook.js";
 import billingRoutes from "./routes/billing.js";
+
+// Import GitHub routes from separate Bridge_Github project
+import githubAuthRoutes from "../../Bridge_Github/backend/src/routes/auth.routes.js";
+import githubUserRoutes from "../../Bridge_Github/backend/src/routes/user.routes.js";
+import githubAnalysisRoutes from "../../Bridge_Github/backend/src/routes/analysis.routes.js";
+import githubProfileRoutes from "../../Bridge_Github/backend/src/routes/github.routes.js";
 
 const PORT = process.env.PORT || 5050;
 const app = express();
@@ -253,6 +262,24 @@ console.log("     - POST /api/billing/checkout");
 console.log("     - GET /api/billing/status");
 console.log("     - POST /api/billing/webhook");
 
+// Bridge GitHub routes (namespaced under /api/github)
+console.log("\n🛣️  Registering Bridge GitHub routes...");
+app.use("/api/github/auth", apiLimiter);
+app.use("/api/github/auth", githubAuthRoutes);
+console.log("  ✅ /api/github/auth routes registered");
+
+app.use("/api/github/users", apiLimiter);
+app.use("/api/github/users", githubUserRoutes);
+console.log("  ✅ /api/github/users routes registered");
+
+app.use("/api/github/analysis", apiLimiter);
+app.use("/api/github/analysis", githubAnalysisRoutes);
+console.log("  ✅ /api/github/analysis routes registered");
+
+app.use("/api/github", apiLimiter);
+app.use("/api/github", githubProfileRoutes);
+console.log("  ✅ /api/github routes registered (analyze-user, profile, repos, etc.)");
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({
@@ -264,21 +291,30 @@ app.use((req, res) => {
 // Start server
 const startServer = async () => {
   try {
-    console.log("\n🔌 Connecting to database...");
-    // Connect to MongoDB with Mongoose (for User model)
-    console.log("   🔄 Connecting to MongoDB (Mongoose)...");
+    console.log("\n🔌 Connecting to databases...");
+
+    // Connect to MongoDB for Assessments (Mongoose)
+    console.log("   🔄 Connecting to Assessments MongoDB (Mongoose)...");
     await connectMongoose();
-    console.log("   ✅ MongoDB (Mongoose) connected");
+    console.log("   ✅ Assessments MongoDB connected");
+
+    // Connect to MongoDB for GitHub
+    console.log("   🔄 Connecting to GitHub MongoDB...");
+    await connectGitHubDB();
+    console.log("   ✅ GitHub MongoDB connected");
 
     // Start Express server
     console.log("\n🚀 Starting Express server...");
     app.listen(PORT, () => {
-      console.log(`\n${"=".repeat(60)}`);
-      console.log(`✅ Server is running!`);
+      console.log(`\n${"=".repeat(80)}`);
+      console.log(`✅ Unified Bridge Server is running!`);
       console.log(`📍 Port: ${PORT}`);
       console.log(`🌐 Health check: http://localhost:${PORT}/health`);
       console.log(`📡 API base: http://localhost:${PORT}/api`);
-      console.log(`${"=".repeat(60)}\n`);
+      console.log(`\n📦 Serving both platforms:`);
+      console.log(`   🎯 Bridge Assessments: /api/assessments/*, /api/users/*, etc.`);
+      console.log(`   🐙 Bridge GitHub: /api/github/*`);
+      console.log(`${"=".repeat(80)}\n`);
     });
   } catch (error) {
     console.error("\n❌ Failed to start server:", error);

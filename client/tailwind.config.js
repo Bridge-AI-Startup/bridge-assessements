@@ -1,7 +1,12 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
     darkMode: ["class"],
-    content: ["./index.html", "./src/**/*.{ts,tsx,js,jsx}"],
+    content: [
+      "./index.html",
+      "./src/**/*.{ts,tsx,js,jsx}",
+      // Include Bridge_Github components for proper Tailwind class compilation
+      "../Bridge_Github/frontend/src/**/*.{ts,tsx,js,jsx}",
+    ],
   theme: {
   	extend: {
   		borderRadius: {

@@ -11,6 +11,11 @@ import { Analytics } from "@vercel/analytics/react";
 import BillingSuccess from "./pages/BillingSuccess";
 import BillingCancel from "./pages/BillingCancel";
 
+// Import GitHub pages from separate Bridge_Github project using @github alias
+import GitHubLayout from "@github/pages/Layout.jsx";
+import GitHubAnalysisLanding from "@github/pages/GitHubAnalysisLanding.jsx";
+import GitHubAnalysis from "@github/pages/GitHubAnalysis.jsx";
+
 const { Pages, Layout, mainPage } = pagesConfig;
 const mainPageKey = mainPage ?? Object.keys(Pages)[0];
 const MainPage = mainPageKey ? Pages[mainPageKey] : <></>;
@@ -66,6 +71,41 @@ function App() {
               </LayoutWrapper>
             }
           />
+
+          {/* Bridge GitHub routes */}
+          <Route
+            path="/github"
+            element={
+              <GitHubLayout>
+                <GitHubAnalysisLanding />
+              </GitHubLayout>
+            }
+          />
+          <Route
+            path="/GitHubAnalysisLanding"
+            element={
+              <GitHubLayout>
+                <GitHubAnalysisLanding />
+              </GitHubLayout>
+            }
+          />
+          <Route
+            path="/GitHubAnalysis"
+            element={
+              <GitHubLayout>
+                <GitHubAnalysis />
+              </GitHubLayout>
+            }
+          />
+          <Route
+            path="/github/analysis"
+            element={
+              <GitHubLayout>
+                <GitHubAnalysis />
+              </GitHubLayout>
+            }
+          />
+
           <Route path="*" element={<PageNotFound />} />
         </Routes>
       </Router>

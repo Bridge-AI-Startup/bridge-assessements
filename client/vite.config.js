@@ -1,6 +1,7 @@
 import base44 from "@base44/vite-plugin"
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
+import path from 'path'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -12,5 +13,23 @@ export default defineConfig({
       legacySDKImports: process.env.BASE44_LEGACY_SDK_IMPORTS === 'true'
     }),
     react(),
-  ]
+  ],
+  resolve: {
+    alias: {
+      // Bridge Assessments aliases
+      '@': path.resolve(__dirname, './src'),
+      // Bridge GitHub alias - Bridge_Github is now inside bridge-assessements
+      '@github': path.resolve(__dirname, '../Bridge_Github/frontend/src'),
+    },
+    preserveSymlinks: true,
+  },
+  // Allow server to access files from Bridge_Github folder
+  server: {
+    fs: {
+      allow: [
+        // Allow serving files from the project root and Bridge_Github
+        path.resolve(__dirname, '../'),
+      ],
+    },
+  },
 });
