@@ -16,6 +16,9 @@ import { searchCodeChunks } from "../services/repoRetrieval.js";
 import RepoIndexModel from "../models/repoIndex.js";
 import { deleteNamespace } from "../util/pinecone.js";
 import { PROMPT_INTERVIEW_AGENT } from "../prompts/index.js";
+import { uploadLLMTrace, parseTraceFile } from "../util/fileUpload.js";
+import { logLLMEvent } from "../services/llmProxy/logger.js";
+import { executeAllTasks } from "../services/taskRunner/taskRunner.js";
 
 export type StartSubmissionRequest = {
   assessmentId: string;
@@ -420,6 +423,47 @@ export const submitSubmissionByToken: RequestHandler = async (
       });
     }
 
+    // NEW: Trigger task execution after submission (background); save results so workflow scoring can run
+    if (submission.llmWorkflow?.trace?.events?.length > 0) {
+      executeAllTasks(submission._id.toString())
+        .then(async (results) => {
+          const sub = await SubmissionModel.findById(submission._id);
+          if (!sub) return;
+          if (!sub.llmWorkflow) {
+            sub.llmWorkflow = {
+              trace: {
+                sessionId: "",
+                events: [],
+                totalTokens: 0,
+                totalCost: 0,
+                totalTime: 0,
+                totalCalls: 0,
+              },
+              taskResults: [],
+              scores: {},
+              evaluation: { harnessVersion: "1.0.0", tasksCompleted: 0, tasksTotal: 0 },
+            };
+          }
+          sub.llmWorkflow.taskResults = results;
+          sub.llmWorkflow.evaluation = sub.llmWorkflow.evaluation ?? {
+            harnessVersion: "1.0.0",
+            tasksCompleted: 0,
+            tasksTotal: 0,
+          };
+          sub.llmWorkflow.evaluation.tasksCompleted = results.filter(
+            (r: { status: string }) => r.status === "passed"
+          ).length;
+          sub.llmWorkflow.evaluation.tasksTotal = results.length;
+          await sub.save();
+        })
+        .catch((error) => {
+          console.error(
+            `[submitSubmissionByToken] Failed to execute tasks for submission ${submission._id}:`,
+            error
+          );
+        });
+    }
+
     res.status(200).json(updatedSubmission);
   } catch (error) {
     next(error);
@@ -547,11 +591,13 @@ export const getSubmissionsForAssessment: RequestHandler = async (
       throw AuthError.INVALID_AUTH_TOKEN; // Don't reveal if assessment exists
     }
 
-    // Get all submissions for this assessment
-    const submissions = await SubmissionModel.find({ assessmentId }).sort({
-      submittedAt: -1,
-      createdAt: -1,
-    });
+    // Get all submissions for this assessment (lean = plain objects so nested llmWorkflow.trace.events serialize correctly)
+    const submissions = await SubmissionModel.find({ assessmentId })
+      .sort({
+        submittedAt: -1,
+        createdAt: -1,
+      })
+      .lean();
 
     res.status(200).json(submissions);
   } catch (error) {
@@ -1365,6 +1411,347 @@ export const optOutByToken: RequestHandler = async (req, res, next) => {
     ).populate("assessmentId", "title description timeLimit");
 
     res.status(200).json(updatedSubmission);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Normalize trace JSON into an array of events.
+ * Accepts: { events: [] }, root array [], or { messages: [] } / { conversations: [] } / { turns: [] }.
+ */
+function normalizeTraceEvents(traceData: unknown): unknown[] | null {
+  if (Array.isArray(traceData)) return traceData;
+  if (!traceData || typeof traceData !== "object") return null;
+  const obj = traceData as Record<string, unknown>;
+  if (Array.isArray(obj.events)) return obj.events;
+  // Nested: { trace: { events: [] } } or { data: { events: [] } }
+  const nested = (obj.trace || obj.data) as Record<string, unknown> | undefined;
+  if (nested && typeof nested === "object" && Array.isArray(nested.events))
+    return nested.events;
+  if (Array.isArray(obj.messages))
+    return obj.messages.map((m: any) => ({
+      type: "llm_call",
+      timestamp: m.timestamp || new Date().toISOString(),
+      model: m.model,
+      provider: m.provider,
+      prompt: m.prompt ?? m.content ?? (m.role === "user" ? m.content : ""),
+      response: m.response ?? m.content ?? (m.role === "assistant" ? m.content : ""),
+      tokens: m.tokens ?? { input: 0, output: 0, total: 0 },
+      latency: m.latency,
+      cost: m.cost,
+      metadata: m.metadata ?? {},
+    }));
+  if (Array.isArray(obj.conversations)) {
+    const events: any[] = [];
+    for (const conv of obj.conversations) {
+      if (Array.isArray(conv.messages))
+        events.push(
+          ...conv.messages.map((m: any) => ({
+            type: "llm_call",
+            timestamp: m.timestamp || conv.timestamp || new Date().toISOString(),
+            model: conv.model || m.model,
+            provider: conv.provider || m.provider,
+            prompt: m.prompt ?? m.content ?? (m.role === "user" ? m.content : ""),
+            response: m.response ?? m.content ?? (m.role === "assistant" ? m.content : ""),
+            tokens: m.tokens ?? conv.tokens ?? { input: 0, output: 0, total: 0 },
+            latency: m.latency ?? conv.latency,
+            cost: m.cost ?? conv.cost,
+            metadata: m.metadata ?? conv.metadata ?? {},
+          }))
+        );
+    }
+    return events.length ? events : null;
+  }
+  if (Array.isArray(obj.turns))
+    return obj.turns.map((t: any) => ({
+      type: "llm_call",
+      timestamp: t.timestamp || new Date().toISOString(),
+      model: t.model,
+      provider: t.provider,
+      prompt: t.prompt ?? t.user_input ?? t.input ?? "",
+      response: t.response ?? t.assistant_output ?? t.output ?? "",
+      tokens: t.tokens ?? { input: 0, output: 0, total: 0 },
+      latency: t.latency,
+      cost: t.cost,
+      metadata: t.metadata ?? {},
+    }));
+  if (Array.isArray(obj.conversation)) return obj.conversation;
+  if (Array.isArray(obj.calls)) return obj.calls;
+  return null;
+}
+
+/**
+ * Upload LLM trace file
+ * POST /api/submissions/token/:token/upload-trace
+ * Public endpoint (candidate access)
+ */
+export const uploadLLMTraceByToken: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  uploadLLMTrace(req, res, async (err) => {
+    if (err) {
+      const message =
+        err.message && err.message.includes("Unexpected end of form")
+          ? "Upload failed: file may be empty or corrupted. Please choose a valid JSON trace file and try again."
+          : err.message;
+      return res.status(400).json({ error: message });
+    }
+
+    try {
+      const { token } = req.params;
+      const file = req.file;
+
+      if (!file) {
+        return res.status(400).json({ error: "LLM trace file is required" });
+      }
+
+      const submission = await SubmissionModel.findOne({ token });
+      if (!submission) {
+        return res.status(404).json({ error: "Submission not found" });
+      }
+
+      if (submission.status !== "in-progress") {
+        return res.status(400).json({
+          error: "Can only upload trace during active assessment",
+        });
+      }
+
+      // Parse trace file
+      const traceData = parseTraceFile(file);
+
+      // Normalize: accept { events }, root array, or { messages/conversations/turns }
+      const events = normalizeTraceEvents(traceData);
+      if (!Array.isArray(events)) {
+        const received =
+          traceData && typeof traceData === "object"
+            ? Object.keys(traceData).join(", ") || "(empty object)"
+            : typeof traceData;
+        return res.status(400).json({
+          error: `Invalid trace format: expected an object with "events" array (or a root array). Received keys: ${received}. Add an "events" array with your LLM call entries.`,
+        });
+      }
+
+      // Generate or use existing session ID (top-level or under trace/data)
+      const top = traceData as Record<string, unknown> | null;
+      const nested = top?.trace || top?.data;
+      const rawSessionId =
+        typeof top?.sessionId === "string"
+          ? top.sessionId
+          : nested && typeof nested === "object" && typeof (nested as Record<string, unknown>).sessionId === "string"
+            ? (nested as Record<string, unknown>).sessionId
+            : null;
+      const sessionId =
+        typeof rawSessionId === "string" && rawSessionId
+          ? rawSessionId
+          : `session_${submission._id}_${Date.now()}`;
+
+      // Process and store trace events (normalize prompt/response from any common JSON keys)
+      for (const event of events) {
+        const e = event as any;
+        const promptVal =
+          e.prompt ??
+          e.content ??
+          e.input ??
+          e.user_input ??
+          e.userMessage ??
+          e.user_message ??
+          e.question ??
+          e.humanMessage ??
+          e.human ??
+          e.text ??
+          e.messages?.[0]?.content ??
+          e.data?.prompt ??
+          e.data?.input ??
+          e.data?.content ??
+          e.payload?.prompt ??
+          e.payload?.input ??
+          e.payload?.content ??
+          (Array.isArray(e.messages) && e.messages[0]?.content != null
+            ? (typeof e.messages[0].content === "string"
+                ? e.messages[0].content
+                : JSON.stringify(e.messages[0].content))
+            : undefined);
+        const responseVal =
+          e.response ??
+          e.output ??
+          e.assistant_output ??
+          e.assistantMessage ??
+          e.assistant_message ??
+          e.answer ??
+          e.aiMessage ??
+          e.ai ??
+          e.completion ??
+          (e.role === "assistant" ? e.content : undefined) ??
+          e.messages?.[1]?.content ??
+          (e.response && typeof e.response === "object" && "content" in e.response
+            ? e.response.content
+            : undefined) ??
+          e.data?.response ??
+          e.data?.output ??
+          e.data?.content ??
+          e.payload?.response ??
+          e.payload?.output ??
+          e.payload?.content ??
+          (Array.isArray(e.messages) && e.messages[1]?.content != null
+            ? (typeof e.messages[1].content === "string"
+                ? e.messages[1].content
+                : JSON.stringify(e.messages[1].content))
+            : undefined);
+        await logLLMEvent({
+          submissionId: submission._id.toString(),
+          sessionId,
+          type: e.type || "llm_call",
+          timestamp: e.timestamp ? new Date(e.timestamp) : new Date(),
+          model: e.model,
+          provider: e.provider,
+          prompt:
+            promptVal != null
+              ? typeof promptVal === "string"
+                ? promptVal
+                : JSON.stringify(promptVal)
+              : undefined,
+          response: responseVal,
+          tokens: e.tokens,
+          latency: e.latency,
+          cost: e.cost,
+          metadata: e.metadata,
+        });
+      }
+
+      // Update evaluation metadata
+      if (!submission.llmWorkflow) {
+        submission.llmWorkflow = {
+          trace: {
+            sessionId,
+            events: [],
+            totalTokens: 0,
+            totalCost: 0,
+            totalTime: 0,
+            totalCalls: 0,
+          },
+          taskResults: [],
+          scores: {},
+          evaluation: {
+            harnessVersion: "1.0.0",
+            tasksCompleted: 0,
+            tasksTotal: 0,
+          },
+        };
+      }
+
+      submission.llmWorkflow.evaluation.startedAt =
+        submission.llmWorkflow.evaluation.startedAt || new Date();
+      await submission.save();
+
+      res.json({
+        message: "Trace uploaded successfully",
+        eventsProcessed: events.length,
+        sessionId,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+};
+
+/**
+ * Calculate workflow scores for a submission
+ * POST /api/submissions/:submissionId/calculate-workflow-scores
+ * Employer only (auth required)
+ */
+export const calculateWorkflowScoresHandler: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { submissionId } = req.params;
+    const uid = (req as any).user?.uid;
+
+    if (!uid) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const userId = await getUserIdFromFirebaseUid(uid);
+
+    // Verify ownership
+    const submission = await SubmissionModel.findById(submissionId).populate(
+      "assessmentId"
+    );
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    const assessment = submission.assessmentId as any;
+    if (assessment.userId.toString() !== userId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    // Calculate workflow scores
+    const { calculateWorkflowScores } = await import(
+      "../services/workflowScoring/workflowScorer.js"
+    );
+    const scores = await calculateWorkflowScores(submissionId);
+
+    // Save scores to submission
+    submission.llmWorkflow = submission.llmWorkflow || {
+      trace: { sessionId: "", events: [], totalTokens: 0, totalCost: 0, totalTime: 0, totalCalls: 0 },
+      taskResults: [],
+      scores: {},
+      evaluation: { harnessVersion: "1.0.0", tasksCompleted: 0, tasksTotal: 0 },
+    };
+    submission.llmWorkflow.scores = scores;
+    submission.llmWorkflow.scores.calculatedAt = new Date();
+    submission.llmWorkflow.scores.calculationVersion = "1.0.0";
+    await submission.save();
+
+    res.json(scores);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Calculate full scores (completeness + workflow) for a submission
+ * POST /api/submissions/:submissionId/calculate-scores
+ * Employer only (auth required)
+ */
+export const calculateScoresHandler: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { submissionId } = req.params;
+    const uid = (req as any).user?.uid;
+
+    if (!uid) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const userId = await getUserIdFromFirebaseUid(uid);
+
+    const submission = await SubmissionModel.findById(submissionId).populate(
+      "assessmentId"
+    );
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    const assessment = submission.assessmentId as any;
+    if (assessment.userId.toString() !== userId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const { calculateAndSaveScores } = await import(
+      "../services/scoring.js"
+    );
+    const result = await calculateAndSaveScores(submissionId);
+
+    res.json(result);
   } catch (error) {
     next(error);
   }

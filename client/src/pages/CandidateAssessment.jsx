@@ -18,6 +18,7 @@ import {
   startAssessment,
   submitAssessment,
   optOutAssessment,
+  uploadLLMTrace,
 } from "@/api/submission";
 import { createPageUrl } from "@/utils";
 import bridgeLogo from "@/assets/bridge-logo.svg";
@@ -38,6 +39,9 @@ export default function CandidateAssessment() {
   const [showOptOutModal, setShowOptOutModal] = useState(false);
   const [optOutReason, setOptOutReason] = useState("");
   const [isOptingOut, setIsOptingOut] = useState(false);
+  const [llmTraceFile, setLlmTraceFile] = useState(null);
+  const [traceUploaded, setTraceUploaded] = useState(false);
+  const [isUploadingTrace, setIsUploadingTrace] = useState(false);
 
   // Load submission on mount
   useEffect(() => {
@@ -184,9 +188,37 @@ export default function CandidateAssessment() {
     }
   };
 
+  const handleUploadTrace = async () => {
+    if (!llmTraceFile || !token) return;
+
+    setIsUploadingTrace(true);
+    try {
+      const result = await uploadLLMTrace(token, llmTraceFile);
+      if (result.success) {
+        setTraceUploaded(true);
+        alert("Trace uploaded successfully!");
+      } else {
+        const errorMsg =
+          "error" in result ? result.error : "Failed to upload trace";
+        alert(errorMsg);
+      }
+    } catch (error) {
+      console.error("Error uploading trace:", error);
+      alert("Failed to upload trace");
+    } finally {
+      setIsUploadingTrace(false);
+    }
+  };
+
   const handleSubmit = async () => {
     if (!githubUrl.trim()) {
       alert("Please enter a GitHub repository URL");
+      return;
+    }
+
+    // Check trace uploaded
+    if (!traceUploaded) {
+      alert("Please upload your LLM trace file before submitting");
       return;
     }
 
@@ -649,6 +681,82 @@ export default function CandidateAssessment() {
                 </div>
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  LLM Interaction Trace * (Required)
+                </label>
+                <Input
+                  type="file"
+                  accept=".json"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      setLlmTraceFile(file);
+                    }
+                  }}
+                />
+                {llmTraceFile && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Selected: {llmTraceFile.name}
+                  </p>
+                )}
+                <Button
+                  onClick={handleUploadTrace}
+                  disabled={!llmTraceFile || traceUploaded || isUploadingTrace}
+                  variant="outline"
+                  className="mt-2"
+                >
+                  {isUploadingTrace
+                    ? "Uploading..."
+                    : traceUploaded
+                    ? "Trace Uploaded ✓"
+                    : "Upload Trace"}
+                </Button>
+                <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg mt-2">
+                  <p className="text-sm text-yellow-800">
+                    <strong>Required:</strong> Upload your LLM conversation trace
+                    (JSON file) so we can evaluate your workflow. Your file must
+                    be JSON with an <code className="bg-yellow-100 px-1 rounded">events</code> array;
+                    each event should include the user input and the assistant
+                    response so they transfer correctly.
+                  </p>
+                  <details className="mt-2 text-sm text-yellow-800">
+                    <summary className="cursor-pointer font-medium">
+                      Accepted trace format (click to expand)
+                    </summary>
+                    <p className="mt-2 mb-1">
+                      Use one of these shapes. For each event, we look for
+                      <strong> user text</strong> under:{" "}
+                      <code>prompt</code>, <code>input</code>, <code>content</code>,{" "}
+                      <code>user_input</code>, <code>userMessage</code>, <code>question</code>,{" "}
+                      or <code>messages[0].content</code>. We look for{" "}
+                      <strong>assistant text</strong> under:{" "}
+                      <code>response</code>, <code>output</code>, <code>assistant_output</code>,{" "}
+                      <code>assistantMessage</code>, <code>answer</code>, or{" "}
+                      <code>messages[1].content</code>.
+                    </p>
+                    <pre className="mt-2 p-2 bg-yellow-100 rounded text-xs overflow-x-auto">
+{`{
+  "events": [
+    {
+      "prompt": "Your question or prompt to the LLM",
+      "response": "The LLM's reply"
+    }
+  ]
+}`}
+                    </pre>
+                    <p className="mt-2 text-xs">
+                      If your export uses different keys (e.g.{" "}
+                      <code>userMessage</code> / <code>assistantMessage</code> or{" "}
+                      <code>input</code> / <code>output</code>), they are also
+                      accepted. Ensure the JSON is valid and each event
+                      contains the actual conversation text so it appears in
+                      the evaluation.
+                    </p>
+                  </details>
+                </div>
+              </div>
+
               <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
                 <p className="text-sm text-blue-800">
                   <strong>Note:</strong> Please include any additional context,
@@ -662,6 +770,7 @@ export default function CandidateAssessment() {
                   onClick={handleSubmit}
                   disabled={
                     !githubUrl ||
+                    !traceUploaded ||
                     isSubmitting ||
                     (timeRemaining !== null && timeRemaining <= 0)
                   }
