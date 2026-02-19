@@ -1,0 +1,9 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies (do not commit - npm install restores these)
+node_modules/
+
+# Vite pre-bundled deps (regenerated on build)
+client/node_modules/.vite/
