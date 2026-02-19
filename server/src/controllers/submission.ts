@@ -16,7 +16,11 @@ import { searchCodeChunks } from "../services/repoRetrieval.js";
 import RepoIndexModel from "../models/repoIndex.js";
 import { deleteNamespace } from "../util/pinecone.js";
 import { PROMPT_INTERVIEW_AGENT } from "../prompts/index.js";
-import { uploadLLMTrace, parseTraceFile } from "../util/fileUpload.js";
+import {
+  uploadLLMTrace,
+  parseTraceFile,
+  parseTraceMarkdown,
+} from "../util/fileUpload.js";
 import { logLLMEvent } from "../services/llmProxy/logger.js";
 import { executeAllTasks } from "../services/taskRunner/taskRunner.js";
 
@@ -1519,34 +1523,53 @@ export const uploadLLMTraceByToken: RequestHandler = async (
         });
       }
 
-      // Parse trace file
-      const traceData = parseTraceFile(file);
+      const isMarkdown =
+        file.originalname.endsWith(".md") ||
+        file.mimetype === "text/markdown" ||
+        file.mimetype === "text/x-markdown";
 
-      // Normalize: accept { events }, root array, or { messages/conversations/turns }
-      const events = normalizeTraceEvents(traceData);
-      if (!Array.isArray(events)) {
-        const received =
-          traceData && typeof traceData === "object"
-            ? Object.keys(traceData).join(", ") || "(empty object)"
-            : typeof traceData;
-        return res.status(400).json({
-          error: `Invalid trace format: expected an object with "events" array (or a root array). Received keys: ${received}. Add an "events" array with your LLM call entries.`,
-        });
+      let events: any[];
+      let sessionId: string;
+      let markdownSessionMetadata: { totalTokens?: number; totalCost?: number; totalTimeMs?: number } | undefined;
+
+      if (isMarkdown) {
+        const parsed = parseTraceMarkdown(file);
+        events = parsed.events.map((e) => ({
+          type: "llm_call",
+          prompt: e.prompt,
+          response: e.response,
+          tokens: e.tokens ?? { input: 0, output: 0, total: 0 },
+          latency: e.latency ?? 0,
+          cost: e.cost ?? 0,
+        }));
+        sessionId = `session_${submission._id}_${Date.now()}`;
+        markdownSessionMetadata = parsed.sessionMetadata;
+      } else {
+        const traceData = parseTraceFile(file);
+        const normalized = normalizeTraceEvents(traceData);
+        if (!Array.isArray(normalized)) {
+          const received =
+            traceData && typeof traceData === "object"
+              ? Object.keys(traceData).join(", ") || "(empty object)"
+              : typeof traceData;
+          return res.status(400).json({
+            error: `Invalid trace format: expected an object with "events" array (or a root array). Received keys: ${received}. Add an "events" array with your LLM call entries.`,
+          });
+        }
+        events = normalized;
+        const top = traceData as Record<string, unknown> | null;
+        const nested = top?.trace || top?.data;
+        const rawSessionId =
+          typeof top?.sessionId === "string"
+            ? top.sessionId
+            : nested && typeof nested === "object" && typeof (nested as Record<string, unknown>).sessionId === "string"
+              ? (nested as Record<string, unknown>).sessionId
+              : null;
+        sessionId =
+          typeof rawSessionId === "string" && rawSessionId
+            ? rawSessionId
+            : `session_${submission._id}_${Date.now()}`;
       }
-
-      // Generate or use existing session ID (top-level or under trace/data)
-      const top = traceData as Record<string, unknown> | null;
-      const nested = top?.trace || top?.data;
-      const rawSessionId =
-        typeof top?.sessionId === "string"
-          ? top.sessionId
-          : nested && typeof nested === "object" && typeof (nested as Record<string, unknown>).sessionId === "string"
-            ? (nested as Record<string, unknown>).sessionId
-            : null;
-      const sessionId =
-        typeof rawSessionId === "string" && rawSessionId
-          ? rawSessionId
-          : `session_${submission._id}_${Date.now()}`;
 
       // Process and store trace events (normalize prompt/response from any common JSON keys)
       for (const event of events) {
@@ -1621,30 +1644,50 @@ export const uploadLLMTraceByToken: RequestHandler = async (
         });
       }
 
-      // Update evaluation metadata
-      if (!submission.llmWorkflow) {
-        submission.llmWorkflow = {
-          trace: {
-            sessionId,
-            events: [],
-            totalTokens: 0,
-            totalCost: 0,
-            totalTime: 0,
-            totalCalls: 0,
-          },
-          taskResults: [],
-          scores: {},
-          evaluation: {
-            harnessVersion: "1.0.0",
-            tasksCompleted: 0,
-            tasksTotal: 0,
-          },
-        };
+      if (markdownSessionMetadata) {
+        const sub = await SubmissionModel.findById(submission._id);
+        if (sub?.llmWorkflow?.trace) {
+          if (markdownSessionMetadata.totalTokens != null)
+            sub.llmWorkflow.trace.totalTokens = markdownSessionMetadata.totalTokens;
+          if (markdownSessionMetadata.totalCost != null)
+            sub.llmWorkflow.trace.totalCost = markdownSessionMetadata.totalCost;
+          if (markdownSessionMetadata.totalTimeMs != null)
+            sub.llmWorkflow.trace.totalTime = markdownSessionMetadata.totalTimeMs;
+          await sub.save();
+        }
       }
 
-      submission.llmWorkflow.evaluation.startedAt =
-        submission.llmWorkflow.evaluation.startedAt || new Date();
-      await submission.save();
+      // Update evaluation metadata
+      const subForEval = await SubmissionModel.findById(submission._id);
+      if (subForEval) {
+        if (!subForEval.llmWorkflow) {
+          subForEval.llmWorkflow = {
+            trace: {
+              sessionId,
+              events: [],
+              totalTokens: 0,
+              totalCost: 0,
+              totalTime: 0,
+              totalCalls: 0,
+            },
+            taskResults: [],
+            scores: {},
+            evaluation: {
+              harnessVersion: "1.0.0",
+              tasksCompleted: 0,
+              tasksTotal: 0,
+            },
+          };
+        }
+        subForEval.llmWorkflow.evaluation = subForEval.llmWorkflow.evaluation ?? {
+          harnessVersion: "1.0.0",
+          tasksCompleted: 0,
+          tasksTotal: 0,
+        };
+        subForEval.llmWorkflow.evaluation.startedAt =
+          subForEval.llmWorkflow.evaluation.startedAt || new Date();
+        await subForEval.save();
+      }
 
       res.json({
         message: "Trace uploaded successfully",
@@ -1652,7 +1695,15 @@ export const uploadLLMTraceByToken: RequestHandler = async (
         sessionId,
       });
     } catch (error) {
-      next(error);
+      const message = error instanceof Error ? error.message : "Upload failed";
+      const isValidation =
+        message.includes("Markdown trace") ||
+        message.includes("User/Assistant") ||
+        message.includes("Invalid trace") ||
+        message.includes("JSON");
+      res
+        .status(isValidation ? 400 : 500)
+        .json({ error: message });
     }
   });
 };

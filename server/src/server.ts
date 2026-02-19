@@ -15,6 +15,7 @@ import agentToolsRoutes from "./routes/agentTools.js";
 import webhookRoutes from "./routes/webhook.js";
 import billingRoutes from "./routes/billing.js";
 import llmProxyRoutes from "./routes/llmProxy.js";
+import { errorHandler } from "./errors/handler.js";
 
 const PORT = process.env.PORT || 5050;
 const app = express();
@@ -273,6 +274,9 @@ app.use((req, res) => {
     path: req.originalUrl,
   });
 });
+
+// Error handler (must be last; ensures next(error) returns JSON, not HTML)
+app.use(errorHandler);
 
 // Start server
 const startServer = async () => {

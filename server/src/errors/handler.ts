@@ -25,5 +25,5 @@ export const errorHandler = (
     return;
   }
   console.log("Internal Error", err);
-  res.status(500).send("Unknown Error. Try Again");
+  res.status(500).json({ error: "Unknown Error. Try Again" });
 };

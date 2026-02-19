@@ -687,7 +687,7 @@ export default function CandidateAssessment() {
                 </label>
                 <Input
                   type="file"
-                  accept=".json"
+                  accept=".json,.md"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (file) {
@@ -715,10 +715,11 @@ export default function CandidateAssessment() {
                 <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg mt-2">
                   <p className="text-sm text-yellow-800">
                     <strong>Required:</strong> Upload your LLM conversation trace
-                    (JSON file) so we can evaluate your workflow. Your file must
-                    be JSON with an <code className="bg-yellow-100 px-1 rounded">events</code> array;
-                    each event should include the user input and the assistant
-                    response so they transfer correctly.
+                    as <strong>JSON or Markdown (.md)</strong>. JSON: use an{" "}
+                    <code className="bg-yellow-100 px-1 rounded">events</code> array.
+                    Markdown: use <code className="bg-yellow-100 px-1 rounded">## User</code> /{" "}
+                    <code className="bg-yellow-100 px-1 rounded">## Assistant</code> sections;
+                    optional metadata block at end for total tokens, cost, and time.
                   </p>
                   <details className="mt-2 text-sm text-yellow-800">
                     <summary className="cursor-pointer font-medium">
