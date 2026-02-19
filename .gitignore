@@ -7,3 +7,6 @@ node_modules/
 
 # Vite pre-bundled deps (regenerated on build)
 client/node_modules/.vite/
+
+# Build output
+client/dist/

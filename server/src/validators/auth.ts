@@ -36,8 +36,10 @@ const verifyAuthToken = async (
   try {
     //This is where we actually check if the token is valid and get user from firebase
     const userInfo: DecodedIdToken = await decodeAuthToken(token);
-    // Add user info to the request body
+    // Add user info to the request body (used by e.g. assessment controllers)
     req.body.uid = userInfo.uid;
+    // Also set req.user so handlers that read req.user.uid work (e.g. submission, taskRunner)
+    (req as any).user = { uid: userInfo.uid };
 
     next(); // Proceed to the next middleware/route handler
   } catch (e: any) {

@@ -17,7 +17,8 @@ export type AIUseCase =
   | "assessment_generation" // Generate assessment components from job description
   | "assessment_chat" // Chat with assessment AI assistant
   | "interview_questions" // Generate interview questions from code
-  | "interview_summary"; // Generate interview summary from transcript
+  | "interview_summary" // Generate interview summary from transcript
+  | "workflow_evaluation"; // LLM workflow evaluation proxy
 
 /**
  * Get the provider for a specific use case
