@@ -1,0 +1,12 @@
+Senior Backend Engineer – Python
+
+We need a senior backend engineer to design and build scalable services.
+
+Requirements:
+- 5+ years backend experience; strong Python (FastAPI, Django, or similar)
+- Experience with distributed systems, message queues (e.g. RabbitMQ, Kafka), and caching (Redis)
+- Experience with relational and document databases; schema design and migrations
+- Track record of owning production services: observability, incident response, and on-call
+- Strong communication and mentoring skills
+
+Nice to have: Kubernetes, event-driven architecture, security or compliance experience.

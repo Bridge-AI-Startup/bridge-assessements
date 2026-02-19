@@ -1,0 +1,11 @@
+Full-Stack Engineer
+
+We're hiring a full-stack engineer to own features from API to UI.
+
+Requirements:
+- Experience with a backend framework (Node.js, Python, or Go) and a frontend framework (React, Vue, or Angular)
+- Experience with SQL databases and REST or GraphQL APIs
+- Comfort with Git, code review, and writing tests
+- Ability to scope and deliver features independently
+
+Nice to have: DevOps basics, Docker, cloud (AWS/GCP).

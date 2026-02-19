@@ -1,0 +1,7 @@
+{
+  "backend-node": {
+    "title": "User API with auth and rate limiting",
+    "description": "## Scenario\n\nYou're extending the backend for **TaskFlow**...\n\n## What you will build\n\n...",
+    "timeLimit": 120
+  }
+}

@@ -1,0 +1,9 @@
+# Eval runs (generated assessment outputs)
+server/eval_runs/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/

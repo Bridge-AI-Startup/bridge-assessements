@@ -1,0 +1,12 @@
+Frontend Engineer – React
+
+We need a frontend engineer to build and maintain our web application.
+
+Requirements:
+- 2+ years experience with React and TypeScript
+- Experience with state management (Redux, Zustand, or similar) and React Query
+- Familiarity with responsive design, accessibility (a11y), and modern CSS
+- Comfort with testing (Jest, React Testing Library, or Playwright)
+- Ability to work with REST or GraphQL APIs
+
+Nice to have: Next.js, design systems, performance optimization.

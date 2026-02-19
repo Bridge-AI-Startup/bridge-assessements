@@ -1,0 +1,12 @@
+Mobile Engineer – React Native
+
+We're looking for a mobile engineer to build and maintain our cross-platform app.
+
+Requirements:
+- 2+ years experience with React Native and TypeScript/JavaScript
+- Experience with native modules, debugging on iOS and Android, and app store releases
+- Familiarity with state management and API integration
+- Comfort with testing (Jest, Detox, or similar)
+- Understanding of mobile UX and performance (startup time, list performance)
+
+Nice to have: Expo, Swift/Kotlin, CI/CD for mobile.

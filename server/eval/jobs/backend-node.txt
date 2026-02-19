@@ -1,0 +1,12 @@
+Backend Engineer – Node.js
+
+We're looking for a backend engineer to build and maintain APIs and services.
+
+Requirements:
+- 2+ years experience with Node.js and TypeScript
+- Experience with REST APIs and relational databases (PostgreSQL)
+- Familiarity with authentication (JWT, OAuth) and rate limiting
+- Comfort with testing (unit and integration)
+- Good communication and collaboration skills
+
+Nice to have: Redis, message queues, Docker/Kubernetes.
