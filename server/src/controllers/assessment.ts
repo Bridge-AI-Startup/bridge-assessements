@@ -12,6 +12,8 @@ import { processAssessmentChat } from "../services/assessmentChat.js";
 
 export type GenerateRequest = {
   description: string;
+  stack?: string;
+  level?: string;
   uid: string; // Added by verifyAuthToken middleware
 };
 
@@ -362,7 +364,7 @@ export const generateAssessmentData: RequestHandler = async (
   const errors = validationResult(req);
   try {
     validationErrorParser(errors);
-    const { description } = req.body as GenerateRequest;
+    const { description, stack, level } = req.body as GenerateRequest;
     const { uid } = req.body as { uid: string };
 
     // Check subscription limits BEFORE generating (to avoid wasting AI credits)
@@ -405,12 +407,19 @@ export const generateAssessmentData: RequestHandler = async (
       description.substring(0, 50) + "..."
     );
 
-    // Generate all components using OpenAI
+    // Generate all components via two-step chain (extract requirements → generate assessment)
+    const options =
+      stack != null || level != null
+        ? {
+            ...(stack != null && { stack: stack as "frontend-react" | "frontend-vue" | "backend-node" | "backend-python" | "mobile-react-native" | "fullstack" | "generic" }),
+            ...(level != null && { level: level as "junior" | "mid" | "senior" }),
+          }
+        : undefined;
     const {
       title,
       description: generatedDescription,
       timeLimit,
-    } = await generateAssessmentComponents(description);
+    } = await generateAssessmentComponents(description, options);
 
     console.log("🔍 [generateAssessmentData] Generated components:", {
       title,

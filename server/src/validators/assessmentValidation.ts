@@ -80,4 +80,28 @@ export const updateAssessmentValidation = [
   makeOptionalTimeLimitValidator(),
 ];
 
-export const generateAssessmentValidation = [makeDescriptionValidator()];
+const makeOptionalStackValidator = () =>
+  body("stack")
+    .optional()
+    .isIn([
+      "frontend-react",
+      "frontend-vue",
+      "backend-node",
+      "backend-python",
+      "mobile-react-native",
+      "fullstack",
+      "generic",
+    ])
+    .withMessage("stack must be one of: frontend-react, frontend-vue, backend-node, backend-python, mobile-react-native, fullstack, generic");
+
+const makeOptionalLevelValidator = () =>
+  body("level")
+    .optional()
+    .isIn(["junior", "mid", "senior"])
+    .withMessage("level must be one of: junior, mid, senior");
+
+export const generateAssessmentValidation = [
+  makeDescriptionValidator(),
+  makeOptionalStackValidator(),
+  makeOptionalLevelValidator(),
+];

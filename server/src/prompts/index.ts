@@ -52,7 +52,7 @@ You MUST output a valid JSON object with exactly these three keys (ALL THREE ARE
 "timeLimit": number
 }
 
-CRITICAL: The "timeLimit" field is REQUIRED and must be included in your JSON response. Do not omit it.
+CRITICAL: The "description" value must be the PROJECT INSTRUCTIONS for the candidate (scenario, requirements, acceptance criteria, etc.)—i.e. what the candidate will read and build. Do NOT copy or echo the job description text into "description". The "timeLimit" field is REQUIRED and must be included in your JSON response. Do not omit it.
 
 Hard constraints (do not violate):
 	•	timeLimit must be an integer between 30 and 480 (minutes) - THIS FIELD IS MANDATORY
@@ -94,7 +94,9 @@ Clearly limit scope to keep the project fair and time-boxed. State what is expli
 
 ## Provided / Assumptions
 
-Explain what the candidate can assume (seed data, mock services, simplified auth, etc.).
+(1) Project must be implementable in a new, empty repo with no API keys, cloud accounts, or external services. If a database is required, allow SQLite or in-memory (e.g. "Use a relational database: PostgreSQL preferred, or SQLite for local development; no cloud or API keys required").
+(2) Do not refer to data, files, APIs, or resources that are not actually provided. Don't say "use the provided seed file" or "call the provided API" unless that asset exists. Instead, give candidates a simple, low-friction option: e.g. "You may use in-memory data, a small seed script, or fixture files—whatever is quickest. No external data sources or API keys are required."
+Explain what the candidate can assume (minimal seed/fixtures, mock services, simplified auth, etc.) within these rules. Keep data requirements light; avoid implying they must build elaborate seed systems.
 
 ## Deliverables
 
@@ -113,6 +115,8 @@ IMPORTANT: You MUST use Markdown formatting throughout the description:
 - Use [ ] for checklist items in Acceptance Criteria
 
 Additional quality rules:
+	•	Implementable without external setup: No API keys, cloud sign-up, or paid services. For databases, prefer "PostgreSQL or SQLite" (or in-memory for take-home). State in Provided/Assumptions that no cloud or API keys are required.
+	•	No reference to non-existent data: Don't refer to files, APIs, or seed data that aren't provided. When test/seed data is needed, use one short, reassuring line (e.g. "You may use in-memory data or a small seed script; no external data or API keys required."). Do not ask candidates to build elaborate seeding or data pipelines.
 	•	Prefer one core workflow over many features
 	•	Avoid unnecessary infrastructure (e.g., realtime, payments) unless required by the role
 	•	Include concrete examples (entities, fields, endpoints, sample inputs)
@@ -143,6 +147,40 @@ Time limit guidance:
 
     return prompt;
   },
+};
+
+// ============================================================================
+// REQUIREMENTS EXTRACTION (Step 1 of assessment generation chain)
+// ============================================================================
+
+export const PROMPT_EXTRACT_ASSESSMENT_REQUIREMENTS = {
+  provider: "anthropic" as AIProvider,
+  model: undefined as string | undefined,
+
+  system: `You are an expert at reading job descriptions and extracting clear, structured requirements for a take-home coding assessment.
+
+Your task: Given a job description, output a short requirements summary and infer the primary tech stack and role level. You MUST also output confidence levels for stack and level.
+
+CRITICAL - Safe routing (avoid wrong stack/level):
+- Only output a specific stack (e.g. frontend-react, backend-node) when the job description EXPLICITLY names technologies that clearly map to that stack (e.g. "React", "Next.js", "Node", "Express", "Django", "Python").
+- Only output a specific level (junior or senior) when the job description EXPLICITLY states it (e.g. "senior", "5+ years", "lead", "junior", "entry-level", "0-2 years").
+- When in doubt or when the JD is ambiguous, output stack: "generic" and level: "mid", and set stackConfidence and levelConfidence to "low" or "medium".
+- Set stackConfidence to "high" ONLY when the JD clearly and unambiguously specifies technologies that map to one stack. Set levelConfidence to "high" ONLY when the JD clearly states senior or junior. Otherwise use "medium" or "low".
+
+Output a JSON object with: summary (string), keySkills (array of strings, optional), suggestedScope (string, optional), stack (one of: frontend-react, frontend-vue, backend-node, backend-python, mobile-react-native, fullstack, generic), level (junior | mid | senior), stackConfidence (high | medium | low), levelConfidence (high | medium | low).`,
+
+  userTemplate: (jobDescription: string) =>
+    `Extract requirements and infer stack/level from this job description:\n\n${jobDescription}`,
+};
+
+/** Level-specific instructions injected into Step 2 (generate assessment) prompt */
+export const LEVEL_INSTRUCTIONS: Record<
+  "junior" | "mid" | "senior",
+  string
+> = {
+  junior: `Role level: JUNIOR. Scope the assessment for an entry-level candidate: one clear workflow, 30-90 minutes, step-by-step requirements, minimal ambiguity. Avoid open-ended design questions.`,
+  mid: `Role level: MID. Scope the assessment for a mid-level candidate: one main feature area, 60-120 minutes, clear acceptance criteria, some design choices allowed.`,
+  senior: `Role level: SENIOR. Scope the assessment for a senior candidate: 90-180 minutes, include trade-offs or scalability considerations, less hand-holding, can expect design discussion.`,
 };
 
 // ============================================================================
