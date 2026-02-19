@@ -1,3 +1,7 @@
+/**
+ * Legacy AI provider (raw OpenAI/Anthropic SDK). Not used by assessment generation.
+ * Assessment generation uses assessmentGeneration.ts + langchainAI.ts only.
+ */
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";

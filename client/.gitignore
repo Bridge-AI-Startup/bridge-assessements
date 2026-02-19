@@ -1,0 +1,3 @@
+# Local env overrides (do not commit)
+.env.local
+env.local
