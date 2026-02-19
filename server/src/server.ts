@@ -14,6 +14,8 @@ import submissionRoutes from "./routes/submission.js";
 import agentToolsRoutes from "./routes/agentTools.js";
 import webhookRoutes from "./routes/webhook.js";
 import billingRoutes from "./routes/billing.js";
+import llmProxyRoutes from "./routes/llmProxy.js";
+import { errorHandler } from "./errors/handler.js";
 
 const PORT = process.env.PORT || 5050;
 const app = express();
@@ -152,8 +154,21 @@ app.use(
 );
 
 // Standard JSON body parser for all other routes
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Skip body parsing for multipart/form-data so multer can read the stream (upload-trace)
+app.use((req, res, next) => {
+  const contentType = req.get("Content-Type") || "";
+  if (contentType.includes("multipart/form-data")) {
+    return next();
+  }
+  express.json()(req, res, next);
+});
+app.use((req, res, next) => {
+  const contentType = req.get("Content-Type") || "";
+  if (contentType.includes("multipart/form-data")) {
+    return next();
+  }
+  express.urlencoded({ extended: true })(req, res, next);
+});
 
 console.log("✅ Body parsing configured");
 
@@ -166,7 +181,7 @@ app.use((req, res, next) => {
   process.stdout.write(`   IP: ${req.ip || req.connection.remoteAddress}\n`);
   console.log(`📨 [${timestamp}] ${req.method} ${req.originalUrl}`);
   console.log(`   IP: ${req.ip || req.connection.remoteAddress}`);
-  if (Object.keys(req.body).length > 0) {
+  if (req.body && Object.keys(req.body).length > 0) {
     console.log(
       `   Body:`,
       JSON.stringify(req.body, null, 2).substring(0, 200)
@@ -247,6 +262,11 @@ console.log("     - POST /api/billing/checkout");
 console.log("     - GET /api/billing/status");
 console.log("     - POST /api/billing/webhook");
 
+app.use("/api/llm-proxy", apiLimiter); // Apply general limit
+app.use("/api/llm-proxy", llmProxyRoutes);
+console.log("  ✅ /api/llm-proxy routes registered");
+console.log("     - POST /api/llm-proxy/chat");
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({
@@ -254,6 +274,9 @@ app.use((req, res) => {
     path: req.originalUrl,
   });
 });
+
+// Error handler (must be last; ensures next(error) returns JSON, not HTML)
+app.use(errorHandler);
 
 // Start server
 const startServer = async () => {

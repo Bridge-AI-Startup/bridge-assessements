@@ -1,6 +1,7 @@
 import express from "express";
 
 import * as SubmissionController from "../controllers/submission.js";
+import * as TaskRunnerController from "../controllers/taskRunner.js";
 import { verifyAuthToken } from "../validators/auth.js";
 import {
   verifySubmissionAccess,
@@ -122,6 +123,33 @@ router.post(
 
 // Public endpoint - Opt out of assessment by token
 router.post("/token/:token/opt-out", SubmissionController.optOutByToken);
+
+// Public endpoint - Upload LLM trace (controller runs multer internally; do not add uploadLLMTrace here or body is consumed twice)
+router.post(
+  "/token/:token/upload-trace",
+  SubmissionController.uploadLLMTraceByToken
+);
+
+// Employer endpoint - Execute tasks
+router.post(
+  "/:submissionId/execute-tasks",
+  [verifyAuthToken],
+  TaskRunnerController.executeAllTasksForSubmission
+);
+
+// Employer endpoint - Calculate workflow scores
+router.post(
+  "/:submissionId/calculate-workflow-scores",
+  [verifyAuthToken],
+  SubmissionController.calculateWorkflowScoresHandler
+);
+
+// Employer endpoint - Calculate full scores (completeness + workflow)
+router.post(
+  "/:submissionId/calculate-scores",
+  [verifyAuthToken],
+  SubmissionController.calculateScoresHandler
+);
 
 // Public endpoint - Final submission
 // Must come before /:id route

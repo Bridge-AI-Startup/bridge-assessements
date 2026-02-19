@@ -15,6 +15,8 @@ import {
   Copy,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
+  BarChart3,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,9 +35,11 @@ import {
   getSubmissionsForAssessment,
   deleteSubmission,
 } from "@/api/submission";
+import { Progress } from "@/components/ui/progress";
 import { getAssessment } from "@/api/assessment";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
+import { API_BASE_URL } from "@/config/api";
 
 export default function SubmissionsDashboard() {
   const [searchParams] = useSearchParams();
@@ -50,9 +54,24 @@ export default function SubmissionsDashboard() {
   const [currentUser, setCurrentUser] = useState(null);
   const [selectedInterview, setSelectedInterview] = useState(null);
   const [showInterviewModal, setShowInterviewModal] = useState(false);
+  const [selectedEvaluationSubmission, setSelectedEvaluationSubmission] =
+    useState(null);
+  const [showEvaluationModal, setShowEvaluationModal] = useState(false);
+  const [expandedChatIndices, setExpandedChatIndices] = useState(new Set());
+  const [expandedRawJsonIndices, setExpandedRawJsonIndices] = useState(
+    new Set()
+  );
   const [isDropoffAnalysisExpanded, setIsDropoffAnalysisExpanded] =
     useState(false);
   const { toast } = useToast();
+
+  // Reset expanded LLM call indices when opening evaluation for a different submission
+  useEffect(() => {
+    if (selectedEvaluationSubmission?._id) {
+      setExpandedChatIndices(new Set());
+      setExpandedRawJsonIndices(new Set());
+    }
+  }, [selectedEvaluationSubmission?._id]);
 
   // Wait for auth state to be ready
   useEffect(() => {
@@ -441,6 +460,99 @@ export default function SubmissionsDashboard() {
     });
   };
 
+  // Derive prompt/response text from trace event (supports multiple JSON shapes from API)
+  const getEventPromptText = (event) => {
+    if (!event || typeof event !== "object") return "—";
+    const raw =
+      event.prompt ??
+      event.content ??
+      event.input ??
+      event.user_input ??
+      event.userMessage ??
+      event.user_message ??
+      event.question ??
+      event.humanMessage ??
+      event.text ??
+      event.messages?.[0]?.content ??
+      event.metadata?.prompt ??
+      event.metadata?.input ??
+      event.metadata?.content ??
+      event.data?.prompt ??
+      event.data?.input ??
+      event.payload?.prompt ??
+      event.payload?.input;
+    if (raw != null) {
+      return typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
+    }
+    if (Array.isArray(event.messages)) {
+      const userParts = event.messages
+        .filter((m) => m?.role === "user" && m?.content != null)
+        .map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)));
+      if (userParts.length) return userParts.join("\n\n");
+    }
+    return extractFirstStringValues(event, 1)[0] ?? "—";
+  };
+  const getEventResponseText = (event) => {
+    if (!event || typeof event !== "object") return "—";
+    if (event.response != null) {
+      if (typeof event.response === "string") return event.response;
+      if (
+        event.response &&
+        typeof event.response === "object" &&
+        "content" in event.response
+      )
+        return typeof event.response.content === "string"
+          ? event.response.content
+          : JSON.stringify(event.response.content, null, 2);
+      return JSON.stringify(event.response, null, 2);
+    }
+    const raw =
+      event.output ??
+      event.assistant_output ??
+      event.assistantMessage ??
+      event.assistant_message ??
+      event.answer ??
+      event.aiMessage ??
+      event.completion ??
+      (event.role === "assistant" ? event.content : null) ??
+      event.messages?.[1]?.content ??
+      event.metadata?.response ??
+      event.metadata?.output ??
+      event.metadata?.content ??
+      event.data?.response ??
+      event.data?.output ??
+      event.payload?.response ??
+      event.payload?.output;
+    if (raw != null) {
+      return typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
+    }
+    if (Array.isArray(event.messages)) {
+      const assistantParts = event.messages
+        .filter((m) => m?.role === "assistant" && m?.content != null)
+        .map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)));
+      if (assistantParts.length) return assistantParts.join("\n\n");
+    }
+    return extractFirstStringValues(event, 2)[1] ?? "—";
+  };
+  // Fallback: collect first N string values from object (recursive, skip short/keys) for raw JSON hookup
+  const extractFirstStringValues = (obj, maxCount) => {
+    const out = [];
+    const seen = new Set();
+    const visit = (v) => {
+      if (out.length >= maxCount) return;
+      if (typeof v === "string" && v.length > 10 && !seen.has(v)) {
+        seen.add(v);
+        out.push(v);
+      } else if (Array.isArray(v)) {
+        v.forEach(visit);
+      } else if (v && typeof v === "object" && v.constructor === Object) {
+        Object.values(v).forEach(visit);
+      }
+    };
+    visit(obj);
+    return out;
+  };
+
   const handleViewInterview = (submission) => {
     setSelectedInterview(submission);
     setShowInterviewModal(true);
@@ -802,6 +914,9 @@ export default function SubmissionsDashboard() {
                   <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Time Spent
                   </th>
+                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Score
+                  </th>
                   <th className="text-right px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Actions
                   </th>
@@ -872,6 +987,156 @@ export default function SubmissionsDashboard() {
                       <td className="px-5 py-4 text-sm text-gray-600">
                         {formatTimeSpent(submission.timeSpent)}
                       </td>
+                      <td className="px-5 py-4">
+                        {(() => {
+                          const overall =
+                            submission.scores?.overall != null
+                              ? submission.scores.overall
+                              : submission.llmWorkflow?.scores?.overall?.score;
+                          const showCalculate =
+                            submission.status === "submitted" &&
+                            submission.scores?.overall == null;
+                          if (overall !== undefined && overall !== null) {
+                            return (
+                              <div
+                                className="flex flex-col gap-0.5"
+                                title={
+                                  [
+                                    submission.scores?.completeness?.score !=
+                                    null
+                                      ? `Completeness: ${submission.scores.completeness.score}%`
+                                      : null,
+                                    submission.llmWorkflow?.scores?.overall
+                                      ?.score != null
+                                      ? `Workflow: ${submission.llmWorkflow.scores.overall.score}/100`
+                                      : null,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" · ") || undefined
+                                }
+                              >
+                                <div className="flex items-center gap-2">
+                                  <span className="text-lg font-bold">
+                                    {overall}
+                                  </span>
+                                  <span className="text-xs text-gray-500">
+                                    /100
+                                  </span>
+                                </div>
+                                {(submission.scores?.completeness?.score !=
+                                  null ||
+                                  submission.llmWorkflow?.scores?.overall
+                                    ?.score != null) && (
+                                  <span className="text-xs text-gray-500">
+                                    {submission.scores?.completeness?.score !=
+                                      null && (
+                                      <span>
+                                        Completeness:{" "}
+                                        {
+                                          submission.scores.completeness.score
+                                        }
+                                        %
+                                      </span>
+                                    )}
+                                    {submission.scores?.completeness?.score !=
+                                      null &&
+                                      submission.llmWorkflow?.scores?.overall
+                                        ?.score != null && " · "}
+                                    {submission.llmWorkflow?.scores?.overall
+                                      ?.score != null && (
+                                      <span>
+                                        Workflow:{" "}
+                                        {
+                                          submission.llmWorkflow.scores.overall
+                                            .score
+                                        }
+                                        /100
+                                      </span>
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          }
+                          if (showCalculate) {
+                            return (
+                              <Button
+                                onClick={async () => {
+                                  if (!currentUser) {
+                                    toast({
+                                      title: "Not signed in",
+                                      description: "Please sign in to calculate scores.",
+                                      variant: "destructive",
+                                    });
+                                    return;
+                                  }
+                                  try {
+                                    const token =
+                                      await currentUser.getIdToken();
+                                    const response = await fetch(
+                                      `${API_BASE_URL}/submissions/${submission._id}/calculate-scores`,
+                                      {
+                                        method: "POST",
+                                        headers: {
+                                          Authorization: `Bearer ${token}`,
+                                        },
+                                      }
+                                    );
+                                    if (response.ok) {
+                                      const submissionsResult =
+                                        await getSubmissionsForAssessment(
+                                          assessmentId,
+                                          token
+                                        );
+                                      if (submissionsResult.success) {
+                                        setSubmissions(
+                                          submissionsResult.data || []
+                                        );
+                                        toast({
+                                          title: "Scores calculated",
+                                          description:
+                                            "Completeness and workflow scores have been updated.",
+                                        });
+                                      }
+                                    } else {
+                                      const data = await response
+                                        .json()
+                                        .catch(() => ({}));
+                                      toast({
+                                        title: "Scoring failed",
+                                        description:
+                                          data.error ||
+                                          data.message ||
+                                          "Repo may not be indexed or workflow data missing.",
+                                        variant: "destructive",
+                                      });
+                                    }
+                                  } catch (error) {
+                                    console.error(
+                                      "Error calculating scores:",
+                                      error
+                                    );
+                                    toast({
+                                      title: "Scoring failed",
+                                      description:
+                                        error.message ||
+                                        "An unexpected error occurred.",
+                                      variant: "destructive",
+                                    });
+                                  }
+                                }}
+                                size="sm"
+                                variant="outline"
+                              >
+                                Calculate scores
+                              </Button>
+                            );
+                          }
+                          return (
+                            <span className="text-xs text-gray-400">—</span>
+                          );
+                        })()}
+                      </td>
                       <td className="px-5 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
                           {/* Copy Link */}
@@ -884,6 +1149,23 @@ export default function SubmissionsDashboard() {
                           >
                             <Copy className="w-4 h-4" />
                           </Button>
+                          {/* LLM Evaluation (when workflow data exists) */}
+                          {(submission.llmWorkflow?.trace?.events?.length > 0 ||
+                            submission.llmWorkflow?.taskResults?.length > 0 ||
+                            submission.llmWorkflow?.scores) && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setSelectedEvaluationSubmission(submission);
+                                setShowEvaluationModal(true);
+                              }}
+                              className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10"
+                              title="View LLM workflow evaluation"
+                            >
+                              <BarChart3 className="w-4 h-4" />
+                            </Button>
+                            )}
                           {/* GitHub Link (if submitted) */}
                           {submission.status === "submitted" &&
                             submission.githubLink && (
@@ -1167,6 +1449,458 @@ export default function SubmissionsDashboard() {
               <div className="text-center py-8 text-gray-500">
                 <MessageSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
                 <p>No interview data available</p>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* LLM Workflow Evaluation Modal */}
+        <Dialog
+          open={showEvaluationModal}
+          onOpenChange={(open) => {
+            if (!open) {
+              setShowEvaluationModal(false);
+              setSelectedEvaluationSubmission(null);
+            }
+          }}
+        >
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <BarChart3 className="w-5 h-5" />
+                LLM Workflow Evaluation
+                {selectedEvaluationSubmission && (
+                  <span className="text-sm font-normal text-gray-500">
+                    – {selectedEvaluationSubmission.candidateName ||
+                      "Unknown Candidate"}
+                  </span>
+                )}
+              </DialogTitle>
+              <DialogDescription>
+                Trace, task results, and workflow scores for this submission
+              </DialogDescription>
+            </DialogHeader>
+
+            {selectedEvaluationSubmission?.llmWorkflow ? (
+              <div className="space-y-6 mt-4">
+                {/* Evaluation metadata */}
+                {selectedEvaluationSubmission.llmWorkflow.evaluation && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900 mb-2">
+                      Evaluation
+                    </h3>
+                    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                      <div>
+                        <p className="text-gray-500">Tasks</p>
+                        <p className="font-medium">
+                          {selectedEvaluationSubmission.llmWorkflow.evaluation
+                            .tasksCompleted ?? "—"}
+                          /
+                          {selectedEvaluationSubmission.llmWorkflow.evaluation
+                            .tasksTotal ?? "—"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Harness</p>
+                        <p className="font-medium">
+                          {selectedEvaluationSubmission.llmWorkflow.evaluation
+                            .harnessVersion ?? "—"}
+                        </p>
+                      </div>
+                      {selectedEvaluationSubmission.llmWorkflow.evaluation
+                        .startedAt && (
+                        <div>
+                          <p className="text-gray-500">Started</p>
+                          <p className="font-medium">
+                            {formatDate(
+                              selectedEvaluationSubmission.llmWorkflow
+                                .evaluation.startedAt
+                            )}
+                          </p>
+                        </div>
+                      )}
+                      {selectedEvaluationSubmission.llmWorkflow.evaluation
+                        .completedAt && (
+                        <div>
+                          <p className="text-gray-500">Completed</p>
+                          <p className="font-medium">
+                            {formatDate(
+                              selectedEvaluationSubmission.llmWorkflow
+                                .evaluation.completedAt
+                            )}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Trace summary */}
+                {selectedEvaluationSubmission.llmWorkflow.trace && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900 mb-2">
+                      Trace
+                    </h3>
+                    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
+                      <div>
+                        <p className="text-gray-500">Events</p>
+                        <p className="font-medium">
+                          {selectedEvaluationSubmission.llmWorkflow.trace
+                            .events?.length ?? 0}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Total tokens</p>
+                        <p className="font-medium">
+                          {selectedEvaluationSubmission.llmWorkflow.trace
+                            .totalTokens ?? "—"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Total cost</p>
+                        <p className="font-medium">
+                          {selectedEvaluationSubmission.llmWorkflow.trace
+                            .totalCost != null
+                            ? `$${Number(
+                                selectedEvaluationSubmission.llmWorkflow.trace
+                                  .totalCost
+                              ).toFixed(4)}`
+                            : "—"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Total time</p>
+                        <p className="font-medium">
+                          {selectedEvaluationSubmission.llmWorkflow.trace
+                            .totalTime != null
+                            ? `${(
+                                selectedEvaluationSubmission.llmWorkflow.trace
+                                  .totalTime / 1000
+                              ).toFixed(1)}s`
+                            : "—"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">LLM calls</p>
+                        <p className="font-medium">
+                          {selectedEvaluationSubmission.llmWorkflow.trace
+                            .totalCalls ?? "—"}
+                        </p>
+                      </div>
+                    </div>
+                    {selectedEvaluationSubmission.llmWorkflow.trace
+                      .sessionId && (
+                      <p className="text-xs text-gray-500 mt-2 font-mono">
+                        Session:{" "}
+                        {
+                          selectedEvaluationSubmission.llmWorkflow.trace
+                            .sessionId
+                        }
+                      </p>
+                    )}
+
+                    {/* LLM calls / chats - all events with dropdown response */}
+                    {selectedEvaluationSubmission.llmWorkflow.trace.events
+                      ?.length > 0 && (
+                      <div className="mt-4">
+                        <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wider mb-3">
+                          LLM calls ({selectedEvaluationSubmission.llmWorkflow.trace.events.length})
+                        </h4>
+                        <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+                          {selectedEvaluationSubmission.llmWorkflow.trace.events.map(
+                            (event, idx) => {
+                              const isExpanded = expandedChatIndices.has(idx);
+                              const promptText = getEventPromptText(event);
+                              const responseText =
+                                getEventResponseText(event);
+                              return (
+                                <div
+                                  key={idx}
+                                  className="border border-gray-200 rounded-lg overflow-hidden bg-white text-sm"
+                                >
+                                  <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center gap-2">
+                                    <span className="font-medium text-gray-800">
+                                      Call {idx + 1}
+                                    </span>
+                                    {event.type && (
+                                      <Badge className="bg-gray-200 text-gray-700 text-xs">
+                                        {event.type}
+                                      </Badge>
+                                    )}
+                                    {event.model && (
+                                      <span className="text-gray-500 text-xs">
+                                        {event.model}
+                                      </span>
+                                    )}
+                                    {event.tokens?.total != null && (
+                                      <span className="text-gray-500 text-xs">
+                                        {event.tokens.total} tokens
+                                      </span>
+                                    )}
+                                    {event.latency != null && (
+                                      <span className="text-gray-500 text-xs">
+                                        {event.latency}ms
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="px-3 py-2 border-b border-gray-100">
+                                    <p className="text-xs font-medium text-gray-500 mb-1">
+                                      Prompt
+                                    </p>
+                                    <div className="text-gray-800 whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
+                                      {promptText.length > 500
+                                        ? promptText.slice(0, 500) + "..."
+                                        : promptText}
+                                      {promptText.length > 500 && (
+                                        <span className="text-gray-400 text-xs">
+                                          {" "}
+                                          ({promptText.length} chars)
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="px-3 py-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setExpandedChatIndices((prev) => {
+                                          const next = new Set(prev);
+                                          if (next.has(idx)) next.delete(idx);
+                                          else next.add(idx);
+                                          return next;
+                                        });
+                                      }}
+                                      className="flex items-center gap-1 text-[#1E3A8A] hover:underline font-medium text-xs"
+                                    >
+                                      {isExpanded ? (
+                                        <ChevronDown className="w-3.5 h-3.5" />
+                                      ) : (
+                                        <ChevronRight className="w-3.5 h-3.5" />
+                                      )}
+                                      {isExpanded
+                                        ? "Hide response"
+                                        : "Show response"}
+                                    </button>
+                                    {isExpanded && (
+                                      <div className="mt-2 p-2 bg-gray-50 rounded border border-gray-200 text-gray-800 whitespace-pre-wrap break-words max-h-64 overflow-y-auto font-mono text-xs">
+                                        {responseText}
+                                      </div>
+                                    )}
+                                    <div className="mt-2 pt-2 border-t border-gray-100">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setExpandedRawJsonIndices((prev) => {
+                                            const next = new Set(prev);
+                                            if (next.has(idx)) next.delete(idx);
+                                            else next.add(idx);
+                                            return next;
+                                          });
+                                        }}
+                                        className="text-gray-500 hover:text-gray-700 text-xs"
+                                      >
+                                        {expandedRawJsonIndices.has(idx)
+                                          ? "Hide raw JSON"
+                                          : "View raw JSON"}
+                                      </button>
+                                      {expandedRawJsonIndices.has(idx) && (
+                                        <pre className="mt-2 p-2 bg-gray-100 rounded border border-gray-200 text-gray-700 whitespace-pre-wrap break-words max-h-48 overflow-y-auto font-mono text-xs">
+                                          {JSON.stringify(event, null, 2)}
+                                        </pre>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            }
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Task results */}
+                {selectedEvaluationSubmission.llmWorkflow.taskResults?.length >
+                  0 && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900 mb-2">
+                      Task results
+                    </h3>
+                    <div className="border border-gray-200 rounded-lg overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50 border-b border-gray-200">
+                          <tr>
+                            <th className="text-left px-3 py-2 font-medium text-gray-700">
+                              Task
+                            </th>
+                            <th className="text-left px-3 py-2 font-medium text-gray-700">
+                              Status
+                            </th>
+                            <th className="text-left px-3 py-2 font-medium text-gray-700">
+                              Tests
+                            </th>
+                            <th className="text-left px-3 py-2 font-medium text-gray-700">
+                              Time
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {selectedEvaluationSubmission.llmWorkflow.taskResults.map(
+                            (task, idx) => (
+                              <tr key={idx} className="hover:bg-gray-50/50">
+                                <td className="px-3 py-2">
+                                  {task.taskName || task.taskId || "—"}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <Badge
+                                    className={
+                                      task.status === "passed"
+                                        ? "bg-green-100 text-green-700"
+                                        : "bg-red-100 text-red-700"
+                                    }
+                                  >
+                                    {task.status}
+                                  </Badge>
+                                </td>
+                                <td className="px-3 py-2">
+                                  {task.testResults
+                                    ? `${task.testResults.passed ?? 0}/${task.testResults.total ?? 0} passed`
+                                    : "—"}
+                                </td>
+                                <td className="px-3 py-2">
+                                  {task.executionTime != null
+                                    ? `${(task.executionTime / 1000).toFixed(1)}s`
+                                    : "—"}
+                                </td>
+                              </tr>
+                            )
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Workflow scores */}
+                {selectedEvaluationSubmission.llmWorkflow.scores && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900 mb-2">
+                      Workflow scores
+                    </h3>
+                    <div className="space-y-3">
+                      {selectedEvaluationSubmission.llmWorkflow.scores.overall
+                        ?.score != null && (
+                        <div className="flex items-center gap-3 p-3 bg-[#1E3A8A]/5 rounded-lg border border-[#1E3A8A]/20">
+                          <span className="text-lg font-bold text-[#1E3A8A]">
+                            Overall:{" "}
+                            {
+                              selectedEvaluationSubmission.llmWorkflow.scores
+                                .overall.score
+                            }
+                            /100
+                          </span>
+                          {selectedEvaluationSubmission.llmWorkflow.scores
+                            .overall.reasonCodes?.length > 0 && (
+                            <span className="text-xs text-gray-600">
+                              {selectedEvaluationSubmission.llmWorkflow.scores.overall.reasonCodes.join(
+                                ", "
+                              )}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {[
+                          {
+                            key: "correctness",
+                            label: "Correctness",
+                            max: 40,
+                            s: selectedEvaluationSubmission.llmWorkflow.scores
+                              .correctness,
+                          },
+                          {
+                            key: "efficiency",
+                            label: "Efficiency",
+                            max: 20,
+                            s: selectedEvaluationSubmission.llmWorkflow.scores
+                              .efficiency,
+                          },
+                          {
+                            key: "promptQuality",
+                            label: "Prompt quality",
+                            max: 15,
+                            s: selectedEvaluationSubmission.llmWorkflow.scores
+                              .promptQuality,
+                          },
+                          {
+                            key: "structure",
+                            label: "Structure",
+                            max: 20,
+                            s: selectedEvaluationSubmission.llmWorkflow.scores
+                              .structure,
+                          },
+                          {
+                            key: "reliability",
+                            label: "Reliability",
+                            max: 5,
+                            s: selectedEvaluationSubmission.llmWorkflow.scores
+                              .reliability,
+                          },
+                        ].map(
+                          ({ key, label, max, s }) =>
+                            s?.score != null && (
+                              <div
+                                key={key}
+                                className="p-3 bg-gray-50 rounded-lg border border-gray-200 text-sm"
+                              >
+                                <div className="flex justify-between items-center">
+                                  <span className="font-medium text-gray-700">
+                                    {label}
+                                  </span>
+                                  <span className="font-semibold">
+                                    {s.score}/{max}
+                                  </span>
+                                </div>
+                                {s.evidence &&
+                                  typeof s.evidence === "object" &&
+                                  Object.keys(s.evidence).length > 0 && (
+                                    <p className="text-xs text-gray-500 mt-1 truncate">
+                                      {Object.entries(s.evidence)
+                                        .filter(
+                                          ([_, v]) =>
+                                            v != null &&
+                                            v !== "" &&
+                                            v !== false
+                                        )
+                                        .map(([k, v]) => `${k}: ${v}`)
+                                        .join(" · ")}
+                                    </p>
+                                  )}
+                              </div>
+                            )
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {!selectedEvaluationSubmission.llmWorkflow.evaluation &&
+                  !selectedEvaluationSubmission.llmWorkflow.trace &&
+                  !(
+                    selectedEvaluationSubmission.llmWorkflow.taskResults?.length >
+                    0
+                  ) &&
+                  !selectedEvaluationSubmission.llmWorkflow.scores && (
+                    <p className="text-sm text-gray-500">
+                      No evaluation data for this submission.
+                    </p>
+                  )}
+              </div>
+            ) : (
+              <div className="py-8 text-center text-gray-500">
+                <BarChart3 className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                <p>No LLM workflow data for this submission.</p>
               </div>
             )}
           </DialogContent>
