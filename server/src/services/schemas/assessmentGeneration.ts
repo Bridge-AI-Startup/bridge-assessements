@@ -20,11 +20,11 @@ const roleLevelSchema = z.enum(["junior", "mid", "senior"]);
 
 const routingConfidenceSchema = z.enum(["high", "medium", "low"]);
 
-/** Final assessment output (Step 2) */
+/** Final assessment output (Step 2). timeLimit defaults to 60 when LLM omits it. */
 export const assessmentOutputSchema = z.object({
   title: z.string().max(100),
   description: z.string().min(50),
-  timeLimit: z.number().int().min(30).max(480),
+  timeLimit: z.number().int().min(30).max(480).default(60),
 });
 
 export type AssessmentOutput = z.infer<typeof assessmentOutputSchema>;
