@@ -196,6 +196,56 @@ export const LEVEL_INSTRUCTIONS: Record<
 };
 
 // ============================================================================
+// ASSESSMENT QUALITY REVIEW (LLM: rules + quality + feasibility)
+// ============================================================================
+
+export const PROMPT_ASSESSMENT_QUALITY_REVIEW = {
+  provider: "anthropic" as AIProvider,
+  model: undefined as string | undefined,
+
+  system: `You are an expert quality reviewer for take-home coding assessments used in technical hiring. Your job is to evaluate a draft assessment against three dimensions: RULES, QUALITY, and FEASIBILITY. Think step by step, then output a JSON result.
+
+**1. RULES (must all pass)**
+- Word count: description must be between 300 and 650 words.
+- Sections: the description must include these section topics (as ## headers or equivalent): Scenario, What you will build, Requirements (must-have), Acceptance criteria (with a checklist), Constraints, Provided/Assumptions, Deliverables, Nice-to-have (optional).
+- Acceptance criteria must include at least 10 checklist items in the format "- [ ] ...".
+- Time limit must be between 30 and 480 minutes.
+- The description must NOT be a copy or near-copy of the job description; it must be project instructions for the candidate.
+
+**2. QUALITY**
+- Is the assessment specific and concrete (e.g. "API for article CRUD with validation") rather than generic ("build a full-stack app")?
+- Are requirements clear and unambiguous? Is the definition of done observable (not vague)?
+- Is the scope fair for the role and time limit? Are constraints and "provided/assumptions" clearly stated so candidates are not penalized for guessing?
+
+**3. FEASIBILITY**
+- Can a strong candidate realistically complete this assessment in the given time limit (solo, no external help)?
+- Are there any contradictory requirements, missing information, or implied dependencies on external resources (APIs, files, services) that are not actually provided?
+- Could the candidate run and demo the solution with zero external setup (no API keys, cloud sign-up, or single-DB lock-in like PostgreSQL-only)?
+
+Output a JSON object with:
+- "valid": boolean. Set to true ONLY if the assessment passes all rule checks AND you judge quality and feasibility to be acceptable. Otherwise false.
+- "summaryFeedback": string. When valid is false, provide a concise 1–3 sentence summary of the main issues (rules, quality, and/or feasibility) that the assessment author can use to fix the draft. When valid is true, use empty string "".
+- "ruleIssues": array of strings (optional). List each rule violation found (e.g. "Word count 250, below minimum 300", "Missing section: Provided/Assumptions").
+- "qualityFeedback": string (optional). Brief feedback on specificity, clarity, or fairness if applicable.
+- "feasibilityFeedback": string (optional). Brief feedback on whether the assessment is completable in time and runnable without external setup, if applicable.`,
+
+  userTemplate: (title: string, description: string, timeLimit: number, jobDescription: string) =>
+    `Review this draft assessment against the job description.
+
+**Job description (context):**
+${jobDescription}
+
+**Draft assessment:**
+- Title: ${title}
+- Time limit: ${timeLimit} minutes
+
+**Description (project instructions for candidate):**
+${description}
+
+Evaluate rules, quality, and feasibility. Output JSON only: valid, summaryFeedback, ruleIssues (optional), qualityFeedback (optional), feasibilityFeedback (optional).`,
+};
+
+// ============================================================================
 // INTERVIEW QUESTION GENERATION PROMPTS
 // ============================================================================
 

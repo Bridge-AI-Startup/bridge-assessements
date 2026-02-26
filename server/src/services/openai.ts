@@ -22,6 +22,7 @@ export async function generateAssessmentComponents(
   title: string;
   description: string;
   timeLimit: number;
+  reviewFeedback?: string;
 }> {
   return generateAssessmentComponentsFromChain(jobDescription, options);
 }

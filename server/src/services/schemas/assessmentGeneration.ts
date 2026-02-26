@@ -24,7 +24,7 @@ const routingConfidenceSchema = z.enum(["high", "medium", "low"]);
 export const assessmentOutputSchema = z.object({
   title: z.string().max(100),
   description: z.string().min(50),
-  timeLimit: z.number().int().min(30).max(480).default(60),
+  timeLimit: z.coerce.number().int().min(30).max(480).default(60),
 });
 
 export type AssessmentOutput = z.infer<typeof assessmentOutputSchema>;
@@ -41,3 +41,14 @@ export const requirementsExtractionSchema = z.object({
 });
 
 export type RequirementsExtraction = z.infer<typeof requirementsExtractionSchema>;
+
+/** LLM quality review result: rules, quality, and feasibility check. */
+export const assessmentReviewSchema = z.object({
+  valid: z.boolean().describe("True only if the assessment passes rules, quality, and feasibility checks"),
+  summaryFeedback: z.string().describe("When valid is false: concise summary of all issues for the user. When valid is true: empty string"),
+  ruleIssues: z.array(z.string()).optional().describe("List of rule violations (word count, sections, checklist count, time limit, JD echo)"),
+  qualityFeedback: z.string().optional().describe("Subjective quality concerns: specificity, clarity, fairness, definition of done"),
+  feasibilityFeedback: z.string().optional().describe("Feasibility concerns: completable in time, no contradictions, no missing info, runnable with zero external setup"),
+});
+
+export type AssessmentReviewResult = z.infer<typeof assessmentReviewSchema>;
