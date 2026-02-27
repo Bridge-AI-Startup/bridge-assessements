@@ -5,9 +5,9 @@
 
 import { RequestHandler } from "express";
 import { AuthError } from "../errors/auth.js";
-import { getUserIdFromFirebaseUid } from "../util/auth.js";
+import { getUserIdFromFirebaseUid } from "../utils/auth.js";
 import UserModel from "../models/user.js";
-import { isSubscribed } from "../util/subscription.js";
+import { isSubscribed } from "../utils/subscription.js";
 
 /**
  * Middleware that requires an active subscription

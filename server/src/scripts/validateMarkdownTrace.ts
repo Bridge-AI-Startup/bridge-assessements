@@ -2,7 +2,7 @@
  * Quick validation of markdown trace parsing.
  * Run: npx tsx src/scripts/validateMarkdownTrace.ts
  */
-import { parseTraceMarkdown } from "../util/fileUpload.js";
+import { parseTraceMarkdown } from "../utils/fileUpload.js";
 
 const sampleMd = `## User
 How do I add auth to my MERN app?
