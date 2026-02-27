@@ -44,21 +44,27 @@ INSTRUCTION PRIORITY (MUST BE FOLLOWED IN THIS ORDER):
 
 CRITICAL RULE: If the domain conflicts with user instructions or job description in any way, IGNORE the domain completely and proceed without it. The domain is purely decorative and must never override explicit requirements.
 
-You MUST output a valid JSON object with exactly these three keys (ALL THREE ARE REQUIRED):
+You MUST output a valid JSON object with exactly these three keys. ALL THREE ARE REQUIRED—never omit any key, especially "timeLimit".
 
 {
-"title": string,
-"description": string,
-"timeLimit": number
+  "title": "string (6-12 words)",
+  "description": "string (300-650 words, Markdown)",
+  "timeLimit": number
 }
 
-CRITICAL: The "description" value must be the PROJECT INSTRUCTIONS for the candidate (scenario, requirements, acceptance criteria, etc.)—i.e. what the candidate will read and build. Do NOT copy or echo the job description text into "description". The "timeLimit" field is REQUIRED and must be included in your JSON response. Do not omit it.
+CRITICAL - timeLimit (NEVER OMIT):
+	•	Every response MUST include "timeLimit" as an integer between 30 and 480 (minutes).
+	•	If you omit "timeLimit", the response is invalid. Always set it (e.g. 60, 90, 120, 180) based on project scope.
+
+CRITICAL: The "description" value must be the PROJECT INSTRUCTIONS for the candidate (scenario, requirements, acceptance criteria, etc.)—i.e. what the candidate will read and build. Do NOT copy or echo the job description text into "description".
 
 Hard constraints (do not violate):
-	•	timeLimit must be an integer between 30 and 480 (minutes) - THIS FIELD IS MANDATORY
+	•	timeLimit must be an integer between 30 and 480 (minutes) - MANDATORY; never omit
 	•	The project must be realistically completable within the timeLimit by a strong candidate working solo
 	•	The description must be between 300–650 words
 	•	The project must be specific and concrete, not a generic “build an app”
+
+	•	If the project needs a database: do NOT require only PostgreSQL (or only any single database). You MUST state that SQLite and/or in-memory are acceptable so candidates can run with zero external setup. Requiring PostgreSQL-only is not allowed.
 
 Critical rule:
 If the project could reasonably be described as “build a generic full-stack app,” it is invalid. You must define a specific scenario, workflow, and definition of done.
@@ -94,7 +100,7 @@ Clearly limit scope to keep the project fair and time-boxed. State what is expli
 
 ## Provided / Assumptions
 
-(1) Project must be implementable in a new, empty repo with no API keys, cloud accounts, or external services. If a database is required, allow SQLite or in-memory (e.g. "Use a relational database: PostgreSQL preferred, or SQLite for local development; no cloud or API keys required").
+(1) Project must be implementable in a new, empty repo with no API keys, cloud accounts, or external services. If a database is required, you MUST allow SQLite or in-memory as full alternatives—never require PostgreSQL (or any specific DB) only. Candidates should be able to run everything with zero external setup (e.g. "Use a relational database: SQLite, in-memory, or PostgreSQL—all acceptable. No cloud or API keys required."). Requiring only PostgreSQL is not fair for a contained take-home.
 (2) Do not refer to data, files, APIs, or resources that are not actually provided. Don't say "use the provided seed file" or "call the provided API" unless that asset exists. Instead, give candidates a simple, low-friction option: e.g. "You may use in-memory data, a small seed script, or fixture files—whatever is quickest. No external data sources or API keys are required."
 Explain what the candidate can assume (minimal seed/fixtures, mock services, simplified auth, etc.) within these rules. Keep data requirements light; avoid implying they must build elaborate seed systems.
 
@@ -115,7 +121,7 @@ IMPORTANT: You MUST use Markdown formatting throughout the description:
 - Use [ ] for checklist items in Acceptance Criteria
 
 Additional quality rules:
-	•	Implementable without external setup: No API keys, cloud sign-up, or paid services. For databases, prefer "PostgreSQL or SQLite" (or in-memory for take-home). State in Provided/Assumptions that no cloud or API keys are required.
+	•	Implementable without external setup: No API keys, cloud sign-up, or paid services. For databases: never require only PostgreSQL (or any single DB). Always allow SQLite or in-memory as acceptable options so candidates can run the project with zero install. State in Provided/Assumptions that SQLite/in-memory/PostgreSQL are all acceptable and no cloud or API keys are required.
 	•	No reference to non-existent data: Don't refer to files, APIs, or seed data that aren't provided. When test/seed data is needed, use one short, reassuring line (e.g. "You may use in-memory data or a small seed script; no external data or API keys required."). Do not ask candidates to build elaborate seeding or data pipelines.
 	•	Prefer one core workflow over many features
 	•	Avoid unnecessary infrastructure (e.g., realtime, payments) unless required by the role
@@ -131,9 +137,15 @@ Title rules:
 
 Time limit guidance:
 	•	Time limit derivation (MANDATORY): Determine the time limit after defining the full project. Estimate how long a strong candidate would realistically need to: •	understand the requirements •	implement the core workflow •	handle validation and edge cases •	write a minimal README
+
+OUTPUT FORMAT (strict):
+Respond with exactly one JSON object. It MUST have these three keys: "title", "description", "timeLimit". Never omit "timeLimit".
+Example shape (always include timeLimit): { "title": "...", "description": "...", "timeLimit": 120 }
 `,
   userTemplate: (jobDescription: string, domain?: string, seed?: string) => {
-    let prompt = `Create a complete coding assessment project based on this job description:\n\n${jobDescription}\n\nGenerate a realistic, practical coding project that candidates can implement to demonstrate their skills.`;
+    let prompt = `Create a complete coding assessment project based on this job description:\n\n${jobDescription}\n\nGenerate a realistic, practical coding project that candidates can implement to demonstrate their skills.
+
+Respond with one JSON object only. You MUST include all three keys: "title", "description", and "timeLimit". "timeLimit" must be an integer (minutes, 30–480). Do not omit timeLimit.`;
 
     // Add domain context if provided (decorative only)
     if (domain) {
@@ -181,6 +193,56 @@ export const LEVEL_INSTRUCTIONS: Record<
   junior: `Role level: JUNIOR. Scope the assessment for an entry-level candidate: one clear workflow, 30-90 minutes, step-by-step requirements, minimal ambiguity. Avoid open-ended design questions.`,
   mid: `Role level: MID. Scope the assessment for a mid-level candidate: one main feature area, 60-120 minutes, clear acceptance criteria, some design choices allowed.`,
   senior: `Role level: SENIOR. Scope the assessment for a senior candidate: 90-180 minutes, include trade-offs or scalability considerations, less hand-holding, can expect design discussion.`,
+};
+
+// ============================================================================
+// ASSESSMENT QUALITY REVIEW (LLM: rules + quality + feasibility)
+// ============================================================================
+
+export const PROMPT_ASSESSMENT_QUALITY_REVIEW = {
+  provider: "anthropic" as AIProvider,
+  model: undefined as string | undefined,
+
+  system: `You are an expert quality reviewer for take-home coding assessments used in technical hiring. Your job is to evaluate a draft assessment against three dimensions: RULES, QUALITY, and FEASIBILITY. Think step by step, then output a JSON result.
+
+**1. RULES (must all pass)**
+- Word count: description must be between 300 and 650 words.
+- Sections: the description must include these section topics (as ## headers or equivalent): Scenario, What you will build, Requirements (must-have), Acceptance criteria (with a checklist), Constraints, Provided/Assumptions, Deliverables, Nice-to-have (optional).
+- Acceptance criteria must include at least 10 checklist items in the format "- [ ] ...".
+- Time limit must be between 30 and 480 minutes.
+- The description must NOT be a copy or near-copy of the job description; it must be project instructions for the candidate.
+
+**2. QUALITY**
+- Is the assessment specific and concrete (e.g. "API for article CRUD with validation") rather than generic ("build a full-stack app")?
+- Are requirements clear and unambiguous? Is the definition of done observable (not vague)?
+- Is the scope fair for the role and time limit? Are constraints and "provided/assumptions" clearly stated so candidates are not penalized for guessing?
+
+**3. FEASIBILITY**
+- Can a strong candidate realistically complete this assessment in the given time limit (solo, no external help)?
+- Are there any contradictory requirements, missing information, or implied dependencies on external resources (APIs, files, services) that are not actually provided?
+- Could the candidate run and demo the solution with zero external setup (no API keys, cloud sign-up, or single-DB lock-in like PostgreSQL-only)?
+
+Output a JSON object with:
+- "valid": boolean. Set to true ONLY if the assessment passes all rule checks AND you judge quality and feasibility to be acceptable. Otherwise false.
+- "summaryFeedback": string. When valid is false, provide a concise 1–3 sentence summary of the main issues (rules, quality, and/or feasibility) that the assessment author can use to fix the draft. When valid is true, use empty string "".
+- "ruleIssues": array of strings (optional). List each rule violation found (e.g. "Word count 250, below minimum 300", "Missing section: Provided/Assumptions").
+- "qualityFeedback": string (optional). Brief feedback on specificity, clarity, or fairness if applicable.
+- "feasibilityFeedback": string (optional). Brief feedback on whether the assessment is completable in time and runnable without external setup, if applicable.`,
+
+  userTemplate: (title: string, description: string, timeLimit: number, jobDescription: string) =>
+    `Review this draft assessment against the job description.
+
+**Job description (context):**
+${jobDescription}
+
+**Draft assessment:**
+- Title: ${title}
+- Time limit: ${timeLimit} minutes
+
+**Description (project instructions for candidate):**
+${description}
+
+Evaluate rules, quality, and feasibility. Output JSON only: valid, summaryFeedback, ruleIssues (optional), qualityFeedback (optional), feasibilityFeedback (optional).`,
 };
 
 // ============================================================================

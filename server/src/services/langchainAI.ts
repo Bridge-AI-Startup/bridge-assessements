@@ -6,7 +6,9 @@ import {
   SystemMessage,
   AIMessage,
 } from "@langchain/core/messages";
+import { StructuredOutputParser } from "@langchain/core/output_parsers";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import type { z } from "zod";
 
 export type AIProvider = "openai" | "anthropic" | "gemini";
 
@@ -314,6 +316,49 @@ export async function createChatCompletion(
     );
     throw error;
   }
+}
+
+/**
+ * Create a chat completion and parse the response as structured output matching the given Zod schema.
+ * Uses StructuredOutputParser to get format instructions and validate the response.
+ * Use this when you need typed, validated output instead of raw JSON string.
+ */
+export async function createChatCompletionWithStructuredOutput<T extends z.ZodTypeAny>(
+  useCase: AIUseCase,
+  messages: ChatMessage[],
+  schema: T,
+  options: {
+    temperature?: number;
+    maxTokens?: number;
+    provider?: AIProvider;
+    model?: string;
+  } = {}
+): Promise<{ result: z.infer<T>; model?: string; provider: AIProvider }> {
+  const parser = StructuredOutputParser.fromZodSchema(schema);
+  const formatInstructions = parser.getFormatInstructions();
+
+  const systemMessage = messages.find((m) => m.role === "system");
+  const updatedMessages: ChatMessage[] = [
+    {
+      role: "system",
+      content: systemMessage
+        ? `${systemMessage.content}\n\n${formatInstructions}`
+        : formatInstructions,
+    },
+    ...messages.filter((m) => m.role !== "system"),
+  ];
+
+  const response = await createChatCompletion(useCase, updatedMessages, {
+    ...options,
+    responseFormat: { type: "json_object" },
+  });
+
+  const parsed = await parser.parse(response.content);
+  return {
+    result: parsed as z.infer<T>,
+    model: response.model,
+    provider: response.provider,
+  };
 }
 
 /**
