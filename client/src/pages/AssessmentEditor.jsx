@@ -4,7 +4,6 @@ import ReactMarkdown from "react-markdown";
 import {
   FileText,
   Plus,
-  Eye,
   Share2,
   Clock,
   BrainCircuit,
@@ -28,17 +27,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   getAssessment,
   updateAssessment,
   chatWithAssessment,
 } from "@/api/assessment";
-import { generateShareLink } from "@/api/submission";
+import { generateShareLink, sendInvites } from "@/api/submission";
 import { auth } from "@/firebase/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 import DocumentBlock from "@/components/assessment/DocumentBlock";
 import AISidebar from "@/components/assessment/AISidebar";
-import CandidatePreviewModal from "@/components/assessment/CandidatePreviewModal";
+import { BulkInviteContent } from "@/components/BulkInviteModal";
 
 export default function AssessmentEditor() {
   const [searchParams] = useSearchParams();
@@ -46,7 +46,6 @@ export default function AssessmentEditor() {
 
   const [isLoading, setIsLoading] = useState(false);
   const [isFetchingAssessment, setIsFetchingAssessment] = useState(true);
-  const [showPreview, setShowPreview] = useState(false);
   const [assessmentData, setAssessmentData] = useState(null); // Store DB assessment data
   const [authReady, setAuthReady] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
@@ -61,10 +60,15 @@ export default function AssessmentEditor() {
   const [isSmartInterviewerEnabled, setIsSmartInterviewerEnabled] =
     useState(true);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [shareTab, setShareTab] = useState("single");
   const [candidateName, setCandidateName] = useState("");
+  const [candidateEmail, setCandidateEmail] = useState("");
   const [generatedLink, setGeneratedLink] = useState("");
+  const [generatedSubmissionId, setGeneratedSubmissionId] = useState("");
   const [isGeneratingLink, setIsGeneratingLink] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
   const [interviewerPrompt, setInterviewerPrompt] = useState("");
   const [contextSections, setContextSections] = useState([]);
   const [timeLimit, setTimeLimit] = useState({ hours: 4, minutes: 0 });
@@ -610,23 +614,20 @@ export default function AssessmentEditor() {
   };
 
   const handleShare = () => {
-    setShowShareModal(true);
+    setShareTab("single");
     setCandidateName("");
+    setCandidateEmail("");
     setGeneratedLink("");
+    setGeneratedSubmissionId("");
     setLinkCopied(false);
+    setIsSendingEmail(false);
+    setEmailSent(false);
+    setShowShareModal(true);
   };
 
   const handleGenerateLink = async () => {
-    if (!candidateName.trim()) {
-      alert("Please enter a candidate name");
-      return;
-    }
-
-    if (!assessmentId || !currentUser) {
-      alert("Cannot generate link: missing assessment data or user");
-      return;
-    }
-
+    if (!candidateName.trim()) return;
+    if (!assessmentId || !currentUser) return;
     setIsGeneratingLink(true);
     try {
       const token = await currentUser.getIdToken();
@@ -634,30 +635,20 @@ export default function AssessmentEditor() {
         {
           assessmentId,
           candidateName: candidateName.trim(),
+          ...(candidateEmail.trim() && { candidateEmail: candidateEmail.trim() }),
         },
         token
       );
-
       if (result.success) {
         setGeneratedLink(result.data.shareLink);
+        setGeneratedSubmissionId(result.data.submissionId);
       } else {
-        const errorMsg =
-          "error" in result ? result.error : "Failed to generate link";
-
-        // Check if it's a subscription limit error
-        if (
-          errorMsg.includes("SUBSCRIPTION_LIMIT_REACHED") ||
-          errorMsg.includes("limit")
-        ) {
-          // Show upgrade modal or redirect to subscription page
+        const errorMsg = "error" in result ? result.error : "Failed to generate link";
+        if (errorMsg.includes("SUBSCRIPTION_LIMIT_REACHED") || errorMsg.includes("limit")) {
           const shouldUpgrade = window.confirm(
-            "You've reached the free tier limit of 3 candidate submissions.\n\n" +
-              "Upgrade to continue inviting unlimited candidates.\n\n" +
-              "Would you like to view subscription plans?"
+            "You've reached the free tier limit of 3 candidate submissions.\n\nUpgrade to continue inviting unlimited candidates.\n\nWould you like to view subscription plans?"
           );
-          if (shouldUpgrade) {
-            window.location.href = createPageUrl("Subscription");
-          }
+          if (shouldUpgrade) window.location.href = createPageUrl("Subscription");
         } else {
           alert(errorMsg);
         }
@@ -677,9 +668,25 @@ export default function AssessmentEditor() {
         setLinkCopied(true);
         setTimeout(() => setLinkCopied(false), 2000);
       } catch (error) {
-        console.error("Failed to copy link:", error);
         alert("Failed to copy link to clipboard");
       }
+    }
+  };
+
+  const handleSendEmail = async () => {
+    if (!generatedSubmissionId) return;
+    setIsSendingEmail(true);
+    try {
+      const result = await sendInvites([generatedSubmissionId]);
+      if (result.success) {
+        setEmailSent(true);
+      } else {
+        alert("error" in result ? result.error : "Failed to send email");
+      }
+    } catch (error) {
+      alert("Failed to send email. Please try again.");
+    } finally {
+      setIsSendingEmail(false);
     }
   };
 
@@ -1188,14 +1195,6 @@ export default function AssessmentEditor() {
                   </Button>
                 </Link>
                 <Button
-                  onClick={() => setShowPreview(true)}
-                  variant="outline"
-                  className="px-5 h-10 rounded-full text-sm border-gray-200 text-gray-700 hover:bg-gray-50"
-                >
-                  <Eye className="w-4 h-4 mr-2" />
-                  Preview candidate view
-                </Button>
-                <Button
                   onClick={handleShare}
                   className="px-5 h-10 rounded-full text-sm bg-[#FFFF00] hover:bg-[#faed00] text-[#1E3A8A] font-semibold shadow-sm hover:shadow-md hover:scale-105 transition-all"
                 >
@@ -1228,114 +1227,114 @@ export default function AssessmentEditor() {
         </div>
       </div>
 
-      {/* Preview Modal */}
-      <CandidatePreviewModal
-        isOpen={showPreview}
-        onClose={() => setShowPreview(false)}
-        assessment={assessment}
-      />
 
-      {/* Share Link Modal */}
-      <Dialog open={showShareModal} onOpenChange={setShowShareModal}>
-        <DialogContent className="sm:max-w-[500px]">
+      {/* Share Modal — single candidate or bulk import */}
+      <Dialog open={showShareModal} onOpenChange={(open) => { if (!open) setShowShareModal(false); }}>
+        <DialogContent className="sm:max-w-[580px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Generate Assessment Link</DialogTitle>
+            <DialogTitle>Share Assessment</DialogTitle>
             <DialogDescription>
-              Enter the candidate's name to generate a unique shareable link for
-              this assessment.
+              Send to one candidate or import multiple at once.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-4">
-            {!generatedLink ? (
-              <>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Candidate Name *
-                  </label>
-                  <Input
-                    value={candidateName}
-                    onChange={(e) => setCandidateName(e.target.value)}
-                    placeholder="Enter candidate's full name"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && candidateName.trim()) {
-                        handleGenerateLink();
-                      }
-                    }}
-                    autoFocus
-                  />
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-                  <p className="text-sm text-green-800 mb-2">
-                    Link generated successfully!
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      value={generatedLink}
-                      readOnly
-                      className="flex-1 bg-white"
-                    />
-                    <Button
-                      onClick={handleCopyLink}
-                      size="sm"
-                      variant="outline"
-                      className="flex-shrink-0"
-                    >
-                      {linkCopied ? (
-                        <>
-                          <Check className="w-4 h-4 mr-2" />
-                          Copied!
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-4 h-4 mr-2" />
-                          Copy
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </div>
-                <p className="text-xs text-gray-500">
-                  Share this link with the candidate. They will be able to
-                  access and complete the assessment.
-                </p>
-              </>
-            )}
-          </div>
+          <Tabs value={shareTab} onValueChange={(v) => { setShareTab(v); setGeneratedLink(""); setGeneratedSubmissionId(""); setCandidateName(""); setCandidateEmail(""); setEmailSent(false); }} className="mt-2">
+            <TabsList className="w-full mb-4">
+              <TabsTrigger value="single" className="flex-1">Single candidate</TabsTrigger>
+              <TabsTrigger value="bulk" className="flex-1">Multiple candidates</TabsTrigger>
+            </TabsList>
 
-          <DialogFooter>
-            {!generatedLink ? (
-              <>
-                <Button
-                  variant="outline"
-                  onClick={() => setShowShareModal(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleGenerateLink}
-                  disabled={!candidateName.trim() || isGeneratingLink}
-                  className="bg-[#1E3A8A] hover:bg-[#152a66]"
-                >
-                  {isGeneratingLink ? "Generating..." : "Generate Link"}
-                </Button>
-              </>
-            ) : (
-              <Button
-                onClick={() => {
-                  setShowShareModal(false);
-                  setGeneratedLink("");
-                  setCandidateName("");
-                }}
-                className="bg-[#1E3A8A] hover:bg-[#152a66]"
-              >
-                Done
-              </Button>
-            )}
-          </DialogFooter>
+            {/* Single candidate tab */}
+            <TabsContent value="single">
+              <div className="space-y-4 py-2">
+                {!generatedLink ? (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Candidate Name *
+                      </label>
+                      <Input
+                        value={candidateName}
+                        onChange={(e) => setCandidateName(e.target.value)}
+                        placeholder="Enter candidate's full name"
+                        autoFocus
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Candidate Email <span className="text-gray-400 font-normal">(optional — required to send invite)</span>
+                      </label>
+                      <Input
+                        value={candidateEmail}
+                        onChange={(e) => setCandidateEmail(e.target.value)}
+                        placeholder="candidate@example.com"
+                        type="email"
+                        onKeyDown={(e) => { if (e.key === "Enter" && candidateName.trim()) handleGenerateLink(); }}
+                      />
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setShowShareModal(false)}>Cancel</Button>
+                      <Button
+                        onClick={handleGenerateLink}
+                        disabled={!candidateName.trim() || isGeneratingLink}
+                        className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                      >
+                        {isGeneratingLink ? "Generating..." : "Generate Link"}
+                      </Button>
+                    </DialogFooter>
+                  </>
+                ) : (
+                  <>
+                    <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                      <p className="text-sm text-green-800 mb-2">Link generated successfully!</p>
+                      <div className="flex items-center gap-2">
+                        <Input value={generatedLink} readOnly className="flex-1 bg-white text-sm" />
+                        <Button onClick={handleCopyLink} size="sm" variant="outline" className="flex-shrink-0">
+                          {linkCopied ? (
+                            <><Check className="w-4 h-4 mr-2" />Copied!</>
+                          ) : (
+                            <><Copy className="w-4 h-4 mr-2" />Copy</>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                    {candidateEmail.trim() && (
+                      <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
+                        <span className="text-sm text-gray-600">Send invite email to <span className="font-medium text-gray-900">{candidateEmail.trim()}</span></span>
+                        <Button
+                          onClick={handleSendEmail}
+                          disabled={isSendingEmail || emailSent}
+                          size="sm"
+                          className="bg-[#1E3A8A] hover:bg-[#152a66] flex-shrink-0 ml-3"
+                        >
+                          {emailSent ? (
+                            <><Check className="w-4 h-4 mr-2" />Sent!</>
+                          ) : isSendingEmail ? "Sending..." : "Send Email"}
+                        </Button>
+                      </div>
+                    )}
+                    <p className="text-xs text-gray-500">Share this link with the candidate. They will be able to access and complete the assessment.</p>
+                    <DialogFooter>
+                      <Button
+                        onClick={() => { setShowShareModal(false); setGeneratedLink(""); setCandidateName(""); setCandidateEmail(""); setEmailSent(false); }}
+                        className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                      >
+                        Done
+                      </Button>
+                    </DialogFooter>
+                  </>
+                )}
+              </div>
+            </TabsContent>
+
+            {/* Bulk import tab */}
+            <TabsContent value="bulk">
+              <BulkInviteContent
+                assessmentId={assessmentId}
+                onDone={() => setShowShareModal(false)}
+              />
+            </TabsContent>
+          </Tabs>
         </DialogContent>
       </Dialog>
     </div>

@@ -4,23 +4,23 @@ import { validationResult } from "express-validator";
 import { AuthError } from "../errors/auth.js";
 import AssessmentModel from "../models/assessment.js";
 import SubmissionModel from "../models/submission.js";
-import validationErrorParser from "../util/validationErrorParser.js";
-import { parseGithubRepoUrl, resolvePinnedCommit } from "../util/github.js";
+import validationErrorParser from "../utils/validationErrorParser.js";
+import { parseGithubRepoUrl, resolvePinnedCommit } from "../utils/github.js";
 import {
   downloadAndExtractRepoSnapshot,
   cleanupRepoSnapshot,
-} from "../util/repoSnapshot.js";
+} from "../utils/repoSnapshot.js";
 import { generateInterviewQuestionsFromRetrieval } from "../services/interviewGeneration.js";
 import { indexSubmissionRepo } from "../services/repoIndexing.js";
 import { searchCodeChunks } from "../services/repoRetrieval.js";
 import RepoIndexModel from "../models/repoIndex.js";
-import { deleteNamespace } from "../util/pinecone.js";
+import { deleteNamespace } from "../utils/pinecone.js";
 import { PROMPT_INTERVIEW_AGENT } from "../prompts/index.js";
 import {
   uploadLLMTrace,
   parseTraceFile,
   parseTraceMarkdown,
-} from "../util/fileUpload.js";
+} from "../utils/fileUpload.js";
 import { logLLMEvent } from "../services/llmProxy/logger.js";
 import { executeAllTasks } from "../services/taskRunner/taskRunner.js";
 
@@ -1299,6 +1299,7 @@ export const searchCode: RequestHandler = async (req, res, next) => {
 export type GenerateShareLinkRequest = {
   assessmentId: string;
   candidateName: string;
+  candidateEmail?: string;
   uid: string; // Added by verifyAuthToken middleware
 };
 
@@ -1310,7 +1311,7 @@ export const generateShareLink: RequestHandler = async (req, res, next) => {
   const errors = validationResult(req);
   try {
     validationErrorParser(errors);
-    const { assessmentId, candidateName, uid } =
+    const { assessmentId, candidateName, candidateEmail, uid } =
       req.body as GenerateShareLinkRequest;
 
     // Get MongoDB user ID from Firebase UID
@@ -1362,6 +1363,7 @@ export const generateShareLink: RequestHandler = async (req, res, next) => {
     const submission = await SubmissionModel.create({
       assessmentId,
       candidateName: candidateName.trim(),
+      ...(candidateEmail && { candidateEmail: candidateEmail.trim().toLowerCase() }),
       status: "pending",
       // startedAt will be null until candidate starts
     });
@@ -1803,6 +1805,205 @@ export const calculateScoresHandler: RequestHandler = async (
     const result = await calculateAndSaveScores(submissionId);
 
     res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Bulk candidate invite types
+// ---------------------------------------------------------------------------
+
+export type BulkGenerateLinksRequest = {
+  assessmentId: string;
+  candidates: Array<{ name: string; email: string }>;
+  uid: string; // Added by verifyAuthToken middleware
+};
+
+export type SendInvitesRequest = {
+  submissionIds: string[];
+  uid: string; // Added by verifyAuthToken middleware
+};
+
+// ---------------------------------------------------------------------------
+// bulkGenerateLinks
+// ---------------------------------------------------------------------------
+
+/**
+ * Bulk generate share links for multiple candidates (employer endpoint - auth required).
+ * Creates one Submission per candidate (skips duplicates with status "pending").
+ * POST /api/submissions/bulk-generate-links
+ */
+export const bulkGenerateLinks: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+
+    const { assessmentId, candidates, uid } =
+      req.body as BulkGenerateLinksRequest;
+
+    // Resolve MongoDB user ID from Firebase UID
+    const userId = await getUserIdFromFirebaseUid(uid);
+
+    // Verify the assessment exists and belongs to this user
+    const assessment = await AssessmentModel.findOne({
+      _id: assessmentId,
+      userId,
+    });
+
+    if (!assessment) {
+      throw AuthError.INVALID_AUTH_TOKEN; // Don't reveal whether assessment exists
+    }
+
+    const appUrl =
+      process.env.APP_URL || process.env.FRONTEND_URL || "http://localhost:5173";
+
+    const results: Array<{
+      submissionId: string;
+      token: string;
+      shareLink: string;
+      candidateName: string;
+      candidateEmail: string;
+    }> = [];
+
+    for (const candidate of candidates) {
+      const normalizedEmail = candidate.email.toLowerCase().trim();
+
+      // Check for an existing pending submission for this email + assessment
+      const existing = await SubmissionModel.findOne({
+        assessmentId,
+        candidateEmail: normalizedEmail,
+        status: "pending",
+      });
+
+      if (existing) {
+        // Return the existing submission rather than creating a duplicate
+        const shareLink = `${appUrl}/candidate-assessment?token=${existing.token}`;
+        results.push({
+          submissionId: existing._id.toString(),
+          token: existing.token,
+          shareLink,
+          candidateName: existing.candidateName ?? candidate.name,
+          candidateEmail: normalizedEmail,
+        });
+        continue;
+      }
+
+      const submission = await SubmissionModel.create({
+        assessmentId,
+        candidateName: candidate.name.trim(),
+        candidateEmail: normalizedEmail,
+        status: "pending",
+      });
+
+      const shareLink = `${appUrl}/candidate-assessment?token=${submission.token}`;
+      results.push({
+        submissionId: submission._id.toString(),
+        token: submission.token,
+        shareLink,
+        candidateName: submission.candidateName ?? candidate.name,
+        candidateEmail: normalizedEmail,
+      });
+    }
+
+    res.status(201).json({ submissions: results });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// sendInvites
+// ---------------------------------------------------------------------------
+
+/**
+ * Send invite emails to candidates for existing submissions (employer endpoint - auth required).
+ * Sends all emails in parallel via Promise.allSettled.
+ * POST /api/submissions/send-invites
+ */
+export const sendInvites: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+
+    const { submissionIds, uid } = req.body as SendInvitesRequest;
+
+    // Resolve MongoDB user ID from Firebase UID
+    const userId = await getUserIdFromFirebaseUid(uid);
+
+    const appUrl =
+      process.env.APP_URL || process.env.FRONTEND_URL || "http://localhost:5173";
+
+    const { sendCandidateInvite } = await import("../services/email.js");
+
+    // Build a send task for each submission ID
+    const sendTasks = submissionIds.map(async (submissionId) => {
+      // Look up submission and populate assessment for ownership check + title
+      const submission = await SubmissionModel.findById(submissionId).populate<{
+        assessmentId: { _id: unknown; userId: unknown; title: string };
+      }>("assessmentId");
+
+      if (!submission) {
+        throw new Error(`Submission not found: ${submissionId}`);
+      }
+
+      // Verify ownership: the assessment must belong to the authenticated user
+      const assessment = submission.assessmentId as {
+        _id: unknown;
+        userId: unknown;
+        title: string;
+      };
+      if (!assessment || assessment.userId?.toString() !== userId) {
+        throw new Error(
+          `Access denied for submission: ${submissionId}`
+        );
+      }
+
+      if (!submission.candidateEmail) {
+        throw new Error(
+          `No email address on submission: ${submissionId}`
+        );
+      }
+
+      const shareLink = `${appUrl}/candidate-assessment?token=${submission.token}`;
+      const assessmentTitle = assessment.title ?? "Technical Assessment";
+
+      const result = await sendCandidateInvite(
+        submission.candidateEmail,
+        submission.candidateName ?? "Candidate",
+        assessmentTitle,
+        shareLink
+      );
+
+      if (!result.success) {
+        throw new Error(result.error ?? "Email send failed");
+      }
+    });
+
+    const settled = await Promise.allSettled(sendTasks);
+
+    let sent = 0;
+    let failed = 0;
+    const errorMessages: string[] = [];
+
+    for (const outcome of settled) {
+      if (outcome.status === "fulfilled") {
+        sent += 1;
+      } else {
+        failed += 1;
+        errorMessages.push(
+          outcome.reason instanceof Error
+            ? outcome.reason.message
+            : String(outcome.reason)
+        );
+      }
+    }
+
+    res.status(200).json({
+      sent,
+      failed,
+      ...(errorMessages.length > 0 ? { errors: errorMessages } : {}),
+    });
   } catch (error) {
     next(error);
   }

@@ -24,6 +24,24 @@ router.post(
   SubmissionController.generateShareLink
 );
 
+// Employer endpoint - Bulk generate share links for multiple candidates (auth required)
+// Must come before /:id route
+router.post(
+  "/bulk-generate-links",
+  [verifyAuthToken],
+  SubmissionValidator.bulkGenerateLinksValidation,
+  SubmissionController.bulkGenerateLinks
+);
+
+// Employer endpoint - Send invite emails to candidates (auth required)
+// Must come before /:id route
+router.post(
+  "/send-invites",
+  [verifyAuthToken],
+  SubmissionValidator.sendInvitesValidation,
+  SubmissionController.sendInvites
+);
+
 // Public endpoint - Get submission by token (for candidate access via URL)
 // Must come before /:id route
 router.get("/token/:token", SubmissionController.getSubmissionByToken);

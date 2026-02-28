@@ -6,7 +6,7 @@
 import { RequestHandler } from "express";
 import Stripe from "stripe";
 import { stripe } from "../services/stripe.js";
-import { getUserIdFromFirebaseUid } from "../util/auth.js";
+import { getUserIdFromFirebaseUid } from "../utils/auth.js";
 import UserModel from "../models/user.js";
 import { AuthError } from "../errors/auth.js";
 

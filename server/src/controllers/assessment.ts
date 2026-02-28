@@ -5,9 +5,9 @@ import { AuthError } from "../errors/auth.js";
 import AssessmentModel from "../models/assessment.js";
 import SubmissionModel from "../models/submission.js";
 import RepoIndexModel from "../models/repoIndex.js";
-import { deleteNamespace } from "../util/pinecone.js";
-import validationErrorParser from "../util/validationErrorParser.js";
-import { generateAssessmentComponents } from "../services/openai.js";
+import { deleteNamespace } from "../utils/pinecone.js";
+import validationErrorParser from "../utils/validationErrorParser.js";
+import { generateAssessmentComponents } from "../services/assessmentGeneration.js";
 import { processAssessmentChat } from "../services/assessmentChat.js";
 
 export type GenerateRequest = {

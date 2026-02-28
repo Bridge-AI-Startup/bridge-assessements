@@ -109,4 +109,66 @@ export const generateShareLinkValidation = [
     .trim()
     .notEmpty()
     .withMessage("candidateName cannot be empty"),
+  makeCandidateEmailValidator(),
+];
+
+// Validators for bulk generating share links (employer endpoint)
+export const bulkGenerateLinksValidation = [
+  body("assessmentId")
+    .exists()
+    .withMessage("assessmentId is required")
+    .bail()
+    .isMongoId()
+    .withMessage("assessmentId must be a valid MongoDB ObjectId"),
+  body("candidates")
+    .exists()
+    .withMessage("candidates is required")
+    .bail()
+    .isArray({ min: 1 })
+    .withMessage("candidates must be a non-empty array")
+    .bail()
+    .custom((value: unknown[]) => {
+      if (value.length > 100) {
+        throw new Error("candidates must contain at most 100 entries");
+      }
+      return true;
+    }),
+  body("candidates.*.name")
+    .exists()
+    .withMessage("each candidate must have a name")
+    .bail()
+    .isString()
+    .withMessage("candidate name must be a string")
+    .bail()
+    .trim()
+    .notEmpty()
+    .withMessage("candidate name cannot be empty"),
+  body("candidates.*.email")
+    .exists()
+    .withMessage("each candidate must have an email")
+    .bail()
+    .isEmail()
+    .withMessage("candidate email must be a valid email address")
+    .bail()
+    .normalizeEmail(),
+];
+
+// Validators for sending invite emails (employer endpoint)
+export const sendInvitesValidation = [
+  body("submissionIds")
+    .exists()
+    .withMessage("submissionIds is required")
+    .bail()
+    .isArray({ min: 1 })
+    .withMessage("submissionIds must be a non-empty array")
+    .bail()
+    .custom((value: unknown[]) => {
+      if (value.length > 100) {
+        throw new Error("submissionIds must contain at most 100 entries");
+      }
+      return true;
+    }),
+  body("submissionIds.*")
+    .isMongoId()
+    .withMessage("each submissionId must be a valid MongoDB ObjectId"),
 ];

@@ -16,7 +16,7 @@ import mongoose from "mongoose";
 import { readFileSync } from "fs";
 import SubmissionModel from "../models/submission.js";
 import connectMongoose from "../db/mongooseConnection.js";
-import { parseTraceMarkdown } from "../util/fileUpload.js";
+import { parseTraceMarkdown } from "../utils/fileUpload.js";
 import crypto from "crypto";
 
 async function main() {

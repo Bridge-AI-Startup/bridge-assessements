@@ -21,7 +21,7 @@ import connectMongoose from "../db/mongooseConnection.js";
 import {
   downloadAndExtractRepoSnapshot,
   cleanupRepoSnapshot,
-} from "../util/repoSnapshot.js";
+} from "../utils/repoSnapshot.js";
 
 const TOTAL_TIME_SECONDS = 3600; // 1 hour
 const TOTAL_TOKENS = 82000;

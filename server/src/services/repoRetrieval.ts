@@ -6,8 +6,8 @@
  */
 
 import RepoIndexModel from "../models/repoIndex.js";
-import { generateEmbedding } from "../util/embeddings.js";
-import { queryPinecone } from "../util/pinecone.js";
+import { generateEmbedding } from "../utils/embeddings.js";
+import { queryPinecone } from "../utils/pinecone.js";
 
 export interface CodeChunk {
   path: string;

@@ -14,7 +14,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "zod": "^3.23.0",
     "@anthropic-ai/sdk": "^0.24.0",
     "@google/generative-ai": "^0.21.0",
     "@langchain/anthropic": "^0.2.0",
@@ -32,9 +31,11 @@
     "mongoose": "^9.0.0",
     "multer": "^1.4.5-lts.1",
     "openai": "^6.10.0",
+    "resend": "^6.9.2",
     "stripe": "^17.7.0",
     "tsx": "^4.7.0",
-    "unzipper": "^0.12.3"
+    "unzipper": "^0.12.3",
+    "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/multer": "^2.0.0",

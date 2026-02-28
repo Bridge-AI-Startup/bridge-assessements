@@ -1,7 +1,7 @@
 import { RequestHandler } from "express";
 import { executeTask, executeAllTasks } from "../services/taskRunner/taskRunner.js";
 import SubmissionModel from "../models/submission.js";
-import { getUserIdFromFirebaseUid } from "../util/auth.js";
+import { getUserIdFromFirebaseUid } from "../utils/auth.js";
 
 /**
  * Execute a single task for a submission
