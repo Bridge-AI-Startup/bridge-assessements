@@ -1878,7 +1878,7 @@ export const bulkGenerateLinks: RequestHandler = async (req, res, next) => {
 
       if (existing) {
         // Return the existing submission rather than creating a duplicate
-        const shareLink = `${appUrl}/candidate-assessment?token=${existing.token}`;
+        const shareLink = `${appUrl}/CandidateAssessment?token=${existing.token}`;
         results.push({
           submissionId: existing._id.toString(),
           token: existing.token,
@@ -1896,7 +1896,7 @@ export const bulkGenerateLinks: RequestHandler = async (req, res, next) => {
         status: "pending",
       });
 
-      const shareLink = `${appUrl}/candidate-assessment?token=${submission.token}`;
+      const shareLink = `${appUrl}/CandidateAssessment?token=${submission.token}`;
       results.push({
         submissionId: submission._id.toString(),
         token: submission.token,
@@ -1965,7 +1965,7 @@ export const sendInvites: RequestHandler = async (req, res, next) => {
         );
       }
 
-      const shareLink = `${appUrl}/candidate-assessment?token=${submission.token}`;
+      const shareLink = `${appUrl}/CandidateAssessment?token=${submission.token}`;
       const assessmentTitle = assessment.title ?? "Technical Assessment";
 
       const result = await sendCandidateInvite(
