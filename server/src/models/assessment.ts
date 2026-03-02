@@ -59,6 +59,12 @@ const AssessmentSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+
+    // Evaluation criteria for grading submissions
+    evaluationCriteria: {
+      type: [String],
+      default: [],
+    },
   },
   {
     timestamps: true, // Adds createdAt and updatedAt automatically

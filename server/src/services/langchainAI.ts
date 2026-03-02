@@ -20,7 +20,11 @@ export type AIUseCase =
   | "assessment_chat" // Chat with assessment AI assistant
   | "interview_questions" // Generate interview questions from code
   | "interview_summary" // Generate interview summary from transcript
-  | "workflow_evaluation"; // LLM workflow evaluation proxy
+  | "workflow_evaluation" // LLM workflow evaluation proxy
+  | "transcript_evaluation" // Evaluate candidate screen recording transcripts
+  | "suggest_criteria" // Suggest evaluation criteria from a job description
+  | "criterion_grounding" // Ground raw criterion into observable behaviors
+  | "criterion_validation"; // Check if criterion is evaluable from screen recording
 
 /**
  * Get the provider for a specific use case
@@ -237,17 +241,11 @@ export async function createChatCompletion(
   );
 
   try {
-    // Create model with overrides if provided
-    const chatModel =
-      options.provider && options.model
-        ? createChatModel(options.provider, options.model, {
-            temperature: options.temperature ?? 0.7,
-            maxTokens: options.maxTokens ?? 1000,
-          })
-        : getChatModelForUseCase(useCase, {
-            temperature: options.temperature ?? 0.7,
-            maxTokens: options.maxTokens ?? 1000,
-          });
+    // Use computed provider/model (respects env overrides, then prompt config, then use-case defaults)
+    const chatModel = createChatModel(provider, model, {
+      temperature: options.temperature ?? 0.7,
+      maxTokens: options.maxTokens ?? 1000,
+    });
 
     const langChainMessages = convertToLangChainMessages(messages);
 
@@ -370,6 +368,11 @@ export function initializeLangChainAI(): void {
     "assessment_chat",
     "interview_questions",
     "interview_summary",
+    "workflow_evaluation",
+    "transcript_evaluation",
+    "suggest_criteria",
+    "criterion_grounding",
+    "criterion_validation",
   ];
 
   console.log("✅ LangChain AI initialized");

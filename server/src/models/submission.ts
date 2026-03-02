@@ -428,6 +428,18 @@ const SubmissionSchema = new mongoose.Schema(
         completedAt: { type: Date, default: null },
       },
     },
+
+    // Screen recording transcript (Stage 1 VLM output: array of TranscriptEvent)
+    screenRecordingTranscript: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+
+    // Evaluation report (result of the full evaluation pipeline)
+    evaluationReport: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
   },
   {
     timestamps: true, // Adds createdAt and updatedAt automatically

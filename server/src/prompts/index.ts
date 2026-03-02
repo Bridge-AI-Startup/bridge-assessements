@@ -186,10 +186,7 @@ Output a JSON object with: summary (string), keySkills (array of strings, option
 };
 
 /** Level-specific instructions injected into Step 2 (generate assessment) prompt */
-export const LEVEL_INSTRUCTIONS: Record<
-  "junior" | "mid" | "senior",
-  string
-> = {
+export const LEVEL_INSTRUCTIONS: Record<"junior" | "mid" | "senior", string> = {
   junior: `Role level: JUNIOR. Scope the assessment for an entry-level candidate: one clear workflow, 30-90 minutes, step-by-step requirements, minimal ambiguity. Avoid open-ended design questions.`,
   mid: `Role level: MID. Scope the assessment for a mid-level candidate: one main feature area, 60-120 minutes, clear acceptance criteria, some design choices allowed.`,
   senior: `Role level: SENIOR. Scope the assessment for a senior candidate: 90-180 minutes, include trade-offs or scalability considerations, less hand-holding, can expect design discussion.`,
@@ -229,7 +226,12 @@ Output a JSON object with:
 - "qualityFeedback": string (optional). Brief feedback on specificity, clarity, or fairness if applicable.
 - "feasibilityFeedback": string (optional). Brief feedback on whether the assessment is completable in time and runnable without external setup, if applicable.`,
 
-  userTemplate: (title: string, description: string, timeLimit: number, jobDescription: string) =>
+  userTemplate: (
+    title: string,
+    description: string,
+    timeLimit: number,
+    jobDescription: string,
+  ) =>
     `Review this draft assessment against the job description.
 
 **Job description (context):**
@@ -305,7 +307,7 @@ Example format:
   userTemplate: (
     assessmentDescription: string,
     codeContext: string,
-    availableAnchorsList: string
+    availableAnchorsList: string,
   ) => `Assessment Description:
 ${assessmentDescription}
 
@@ -333,7 +335,7 @@ export const PROMPT_ASSESSMENT_CHAT = {
     description: string,
     timeLimit: number,
     testCasesSection: string,
-    sectionRestriction: string
+    sectionRestriction: string,
   ) => `You are Bridge AI, an expert assistant for creating and refining technical coding assessments. 
 Your role is to help users modify their assessments based on their requests.
 
@@ -379,7 +381,7 @@ export const PROMPT_INTERVIEW_AGENT = {
   template: (
     numQuestions: number,
     questionsList: string,
-    customInstructions?: string
+    customInstructions?: string,
   ) => {
     const basePrompt = `You are a technical interviewer conducting a live verbal interview powered by ElevenLabs.
 
@@ -413,6 +415,218 @@ ${questionsList}`;
 
     return basePrompt;
   },
+};
+
+// ============================================================================
+// TRANSCRIPT EVALUATION PROMPTS
+// ============================================================================
+
+export const PROMPT_GROUND_CRITERION = {
+  provider: "anthropic" as AIProvider,
+  model: "claude-3-haiku-20240307",
+
+  system: `You are an expert technical hiring evaluator. Your job is to convert a vague or high-level hiring criterion into a structured, observable definition that can be used to evaluate a candidate's screen recording transcript.
+
+The transcript contains a sequence of timestamped actions. Each action has one of the following types — you MUST only use these exact strings when populating relevant_action_types:
+- "ai_prompt"   — the candidate sent a message to an AI assistant
+- "ai_response" — the candidate received a response from an AI assistant
+- "coding"      — the candidate was writing or editing code
+- "testing"     — the candidate was running or reviewing tests
+- "reading"     — the candidate was reading documentation, code, or other text
+- "searching"   — the candidate was searching the web or a codebase
+- "idle"        — no meaningful activity was detected
+
+CRITICAL: The relevant_action_types field MUST contain only values from the list above. Any other string is invalid.
+
+Your output MUST be a JSON object with exactly these fields:
+{
+  "original": string,
+  "definition": string,
+  "positive_indicators": string[],
+  "negative_indicators": string[],
+  "relevant_action_types": string[]
+}`,
+
+  userTemplate: (criterion: string) =>
+    `Convert this hiring criterion into a structured, observable definition.
+
+CRITERION: "${criterion}"
+
+Return a JSON object with exactly these fields:
+{
+  "original": "${criterion}",
+  "definition": "A clear, concise explanation of what this criterion means in the context of a coding assessment",
+  "positive_indicators": ["Observable behavior 1 that shows the candidate meets this criterion", "..."],
+  "negative_indicators": ["Observable behavior 1 that shows the candidate does not meet this criterion", "..."],
+  "relevant_action_types": ["one or more of: ai_prompt, ai_response, coding, testing, reading, searching, idle"]
+}
+
+Rules:
+- positive_indicators and negative_indicators must describe concrete, observable behaviors visible in a transcript
+- relevant_action_types must contain only values from: "ai_prompt", "ai_response", "coding", "testing", "reading", "searching", "idle"
+- Include 3-6 items in each indicator list`,
+};
+
+export const PROMPT_EVALUATE_CRITERION = {
+  provider: "anthropic" as AIProvider,
+  model: "claude-3-haiku-20240307",
+
+  system: `You are an expert technical hiring evaluator. You are given a hiring criterion and a transcript of a candidate's screen recording session during a coding assessment.
+
+Your job is to evaluate how well the candidate met the criterion based solely on what is observable in the transcript.
+
+CRITICAL RULES:
+1. Find evidence FIRST. Read through the entire transcript and collect specific timestamped moments before forming any judgment.
+2. Score LAST. Only decide the score after you have assembled your evidence. Never work backwards from a score.
+3. Only reference events that actually appear in the transcript. Do not infer, assume, or extrapolate beyond what is described.
+4. Use the exact ts and ts_end values from the transcript in your evidence items.
+5. If there is little or no relevant evidence in the transcript, return confidence: "low" and score accordingly. Never fake certainty.
+6. The criterion has already been approved as evaluable from a screen recording. You must produce a score from observable behavior only. Do not state that the criterion is "not evaluable" or refuse to score. If evidence is weak or ambiguous, use low confidence and explain in the verdict; still assign a score (1-10).
+
+SCORING GUIDE:
+- 9-10: Strong, consistent evidence across multiple moments. Candidate clearly demonstrated this behavior.
+- 7-8: Good evidence with minor gaps. Candidate mostly demonstrated this behavior.
+- 5-6: Mixed evidence. Some positive signals but also gaps or contradictions.
+- 3-4: Weak evidence. Little sign of this behavior, or mostly negative signals.
+- 1-2: Clear evidence of the opposite behavior, or complete absence when it was expected.
+
+CONFIDENCE GUIDE:
+- high: Multiple clear moments of evidence directly relevant to the criterion.
+- medium: Some relevant evidence but it is partial, indirect, or limited to one moment.
+- low: Very little relevant content in the transcript, or the transcript does not cover the scenarios needed to evaluate this criterion.`,
+
+  userTemplate: (criterion: string, transcriptJson: string) =>
+    `CRITERION: ${criterion}
+
+TRANSCRIPT:
+${transcriptJson}
+
+Evaluate the candidate on this criterion. Remember: collect evidence from the transcript first, then assign a score and confidence based on what you found.
+
+Respond with a JSON object with exactly these fields:
+{
+  "criterion": "${criterion}",
+  "evidence": [{ "ts": number, "ts_end": number, "observation": string }],
+  "score": number (1-10),
+  "confidence": "high" | "medium" | "low",
+  "verdict": string (one paragraph summary)
+}
+
+In all string fields (criterion, observation, verdict), escape any double quotes inside the string with backslash (e.g. \\"). When citing code or test cases, you may use single quotes instead to avoid escaping.`,
+};
+
+export const PROMPT_VALIDATE_CRITERION = {
+  provider: "anthropic" as AIProvider,
+  model: "claude-3-haiku-20240307",
+
+  system: `You are a validator for hiring evaluation criteria. Your job is to decide whether a given criterion is evaluable from a screen recording of a candidate doing a coding assessment.
+
+A criterion is EVALUABLE only if it describes observable behavior that is directly visible in a screen recording. Ask yourself: could a reviewer watching the recording see concrete evidence for or against this criterion?
+
+EVALUABLE examples:
+- "Reviews AI-generated code before accepting it" — you can see the candidate reading the diff before clicking Accept
+- "Runs tests after implementing a feature" — you can see terminal output and test commands
+- "Reads the problem statement before starting to code" — you can see them scrolling through the brief
+- "Uses AI prompts that are specific and scoped" — you can see what they typed into the AI tool
+- "Breaks the problem into smaller tasks before coding" — you can see planning behavior in the recording
+
+NOT EVALUABLE examples:
+- "Shows good culture fit" — this is not observable in a screen recording
+- "Is a team player" — there is no team interaction in a solo screen recording
+- "Has good communication skills" — a screen recording of coding does not capture this
+- "Is passionate about their work" — subjective, not observable from a screen
+- "Would be a good mentor" — cannot be observed in a solo coding session
+
+When a criterion is NOT evaluable, explain clearly why it cannot be assessed from a screen recording and suggest how the criterion could be reformulated to describe a concrete, observable behavior instead.
+
+Respond with a JSON object: { "valid": boolean, "reason": string (only when valid is false) }`,
+
+  userTemplate: (criterion: string) =>
+    `Is the following criterion evaluable from a screen recording of a candidate doing a coding assessment?
+
+CRITERION: ${criterion}
+
+Respond with JSON: { "valid": boolean, "reason": string (only when valid is false, explaining why and suggesting how to reformulate) }`,
+};
+
+export const PROMPT_SUGGEST_CRITERIA = {
+  provider: "anthropic" as AIProvider,
+  model: "claude-3-haiku-20240307",
+
+  system: `You are an expert technical hiring evaluator. Given a job description, your task is to generate 8–12 evaluation criteria that can be used to assess a candidate's screen recording of a coding assessment session.
+
+CRITICAL RULES — what makes a good criterion:
+1. Every criterion MUST describe an observable behavior visible on screen during a coding session. A reviewer watching a silent screen recording must be able to confirm or deny the behavior happened.
+2. Criteria MUST be specific and actionable, not character traits or soft skills.
+3. Criteria MUST be tailored to the role described in the job description. Use the seniority level, tech stack, and responsibilities to determine what behaviors matter most.
+
+EXAMPLES OF VALID CRITERIA (observable on screen):
+- "Reviews AI-generated code before accepting it"
+- "Tests their work after implementing each feature"
+- "Reads the full requirements before starting to code"
+- "Checks error messages before making changes"
+- "Looks up documentation when encountering an unfamiliar API"
+- "Refactors duplicated code rather than copying it"
+- "Writes or runs tests after implementing a function"
+- "Uses version control (e.g. git commits) during the session"
+- "Breaks the problem into smaller steps before coding"
+- "Validates edge cases in their implementation"
+- "Reviews their own code before submitting"
+- "Uses debugging tools rather than only print statements"
+
+EXAMPLES OF INVALID CRITERIA (NOT observable on screen — do not use these):
+- "Shows culture fit"
+- "Communicates well"
+- "Has a positive attitude"
+- "Demonstrates teamwork"
+- "Is passionate about the role"
+
+ROLE-LEVEL GUIDANCE:
+- Junior roles: Emphasize criteria around reading requirements carefully, looking up documentation, running/testing code frequently, asking for clarification, and following instructions step by step.
+- Mid-level roles: Emphasize criteria around structuring work, handling errors properly, writing clean and readable code, and validating assumptions.
+- Senior roles: Emphasize criteria around code quality, optimization decisions, refactoring, reviewing generated or existing code critically, and handling complexity and edge cases.
+
+Output a JSON object with exactly this shape:
+{ "criteria": string[] }
+
+The array must contain between 8 and 12 criteria strings. Each string should be a concise, imperative phrase (10–15 words maximum).`,
+
+  userTemplate: (jobDescription: string) =>
+    `Generate 8–12 observable screen-recording evaluation criteria for a candidate being assessed for the following role.
+
+JOB DESCRIPTION:
+${jobDescription}
+
+Tailor the criteria to the seniority level, responsibilities, and tech stack described above. Every criterion must be something a reviewer can observe in a silent screen recording of a coding session.
+
+Respond with a JSON object only: { "criteria": string[] }`,
+};
+
+// ============================================================================
+// TRANSCRIPT SESSION SUMMARY (screen recording narrative)
+// ============================================================================
+
+export const PROMPT_TRANSCRIPT_SESSION_SUMMARY = {
+  provider: "anthropic" as AIProvider,
+  model: "claude-3-haiku-20240307",
+
+  system: `You are an expert at summarizing screen recording sessions from coding assessments. You are given a transcript of timestamped events describing what was visible on the candidate's screen (e.g. reading the problem, editing code, running tests, using AI tools).
+
+Your task is to write a single narrative paragraph (3–6 sentences) that describes what the candidate did during the session at a high level. Focus on:
+- What problems or tasks they worked on
+- How they approached the work (reading requirements, coding, testing, using AI)
+- Key moments (e.g. fixing a bug after a failed test, refactoring, asking the AI for help)
+- The overall flow of the session
+
+Write in past tense, factual and neutral. Do not evaluate or score the candidate — only describe what happened. This summary will appear at the top of an evaluation report to give the reader context before they see per-criterion scores.`,
+
+  userTemplate: (transcriptJson: string) =>
+    `Summarize this screen recording transcript as a single narrative paragraph describing what the candidate did during the session. Do not evaluate — only describe.
+
+TRANSCRIPT:
+${transcriptJson}
+
+Respond with a single paragraph (3–6 sentences), no JSON.`,
 };
 
 // ============================================================================

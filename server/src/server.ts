@@ -15,6 +15,7 @@ import agentToolsRoutes from "./routes/agentTools.js";
 import webhookRoutes from "./routes/webhook.js";
 import billingRoutes from "./routes/billing.js";
 import llmProxyRoutes from "./routes/llmProxy.js";
+import evaluationRoutes from "./routes/evaluation.js";
 import { errorHandler } from "./errors/handler.js";
 
 const PORT = process.env.PORT || 5050;
@@ -266,6 +267,13 @@ app.use("/api/llm-proxy", apiLimiter); // Apply general limit
 app.use("/api/llm-proxy", llmProxyRoutes);
 console.log("  ✅ /api/llm-proxy routes registered");
 console.log("     - POST /api/llm-proxy/chat");
+
+app.use("/api", apiLimiter);
+app.use("/api", evaluationRoutes);
+console.log("  ✅ Evaluation routes registered");
+console.log("     - POST /api/evaluate");
+console.log("     - POST /api/validate-criterion");
+console.log("     - POST /api/suggest-criteria");
 
 // 404 handler
 app.use((req, res) => {
