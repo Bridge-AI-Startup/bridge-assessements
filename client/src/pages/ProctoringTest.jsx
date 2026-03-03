@@ -9,6 +9,7 @@ import {
   CheckCircle,
   AlertCircle,
   Trash2,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import ConsentScreen from "@/components/proctoring/ConsentScreen";
@@ -28,6 +29,8 @@ import {
   getSession,
   generateTranscript,
   getTranscriptContent,
+  refineTranscript,
+  getRefinedTranscriptContent,
   recordSidecarEvents,
 } from "@/api/proctoring";
 
@@ -117,6 +120,64 @@ function TranscriptReadableView({ content }) {
   );
 }
 
+function RefinedTranscriptView({ content }) {
+  const segments = content
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const ta = typeof a.ts === "number" ? a.ts : new Date(a.ts).getTime();
+      const tb = typeof b.ts === "number" ? b.ts : new Date(b.ts).getTime();
+      return ta - tb;
+    });
+
+  if (segments.length === 0) {
+    return <p className="text-sm text-gray-400 italic">No refined segments found.</p>;
+  }
+
+  const formatTime = (val) => {
+    if (val === undefined || val === null) return "";
+    if (typeof val === "number") {
+      const mins = Math.floor(val / 60);
+      const secs = Math.floor(val % 60);
+      return `${mins}:${secs.toString().padStart(2, "0")}`;
+    }
+    try {
+      return new Date(val).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    } catch {
+      return String(val);
+    }
+  };
+
+  return (
+    <div className="space-y-2 max-h-[600px] overflow-auto">
+      {segments.map((seg, i) => (
+        <div
+          key={i}
+          className="flex gap-3 py-2 border-b border-gray-100 last:border-0"
+        >
+          <div className="flex-shrink-0 text-[11px] font-mono text-gray-400 pt-0.5 w-24 text-right">
+            {formatTime(seg.ts)}
+            {seg.ts_end != null && seg.ts_end !== seg.ts && (
+              <span className="text-gray-300"> — {formatTime(seg.ts_end)}</span>
+            )}
+          </div>
+          <p className="text-sm text-gray-700 leading-relaxed">
+            {seg.description || "(empty)"}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function ProctoringTest() {
   const [phase, setPhase] = useState(PHASE.SETUP);
   const [sessionId, setSessionId] = useState(null);
@@ -127,6 +188,8 @@ export default function ProctoringTest() {
   const [transcriptStatus, setTranscriptStatus] = useState(null);
   const [transcriptContent, setTranscriptContent] = useState(null);
   const [transcriptView, setTranscriptView] = useState("readable"); // "readable" or "raw"
+  const [refineStatus, setRefineStatus] = useState(null);
+  const [refinedContent, setRefinedContent] = useState(null);
   const [showResharePrompt, setShowResharePrompt] = useState(false);
   const sidecarBufferRef = useRef([]);
 
@@ -318,6 +381,38 @@ export default function ProctoringTest() {
           setTranscriptStatus("failed");
           setError(
             sessionResult.data.transcript?.error || "Transcript generation failed"
+          );
+        }
+      }
+    }, 3000);
+  };
+
+  const handleRefineTranscript = async () => {
+    setRefineStatus("generating");
+    const result = await refineTranscript(sessionId);
+    if (!result.success) {
+      setRefineStatus("failed");
+      setError(result.error || "Transcript refinement failed");
+      return;
+    }
+    // Poll for completion
+    const poll = setInterval(async () => {
+      const sessionResult = await getSession(sessionId);
+      if (sessionResult.success) {
+        setSessionData(sessionResult.data);
+        const status = sessionResult.data.transcript?.refinedStatus;
+        if (status === "completed") {
+          clearInterval(poll);
+          setRefineStatus("completed");
+          const refinedResult = await getRefinedTranscriptContent(sessionId);
+          if (refinedResult.success) {
+            setRefinedContent(refinedResult.data);
+          }
+        } else if (status === "failed") {
+          clearInterval(poll);
+          setRefineStatus("failed");
+          setError(
+            sessionResult.data.transcript?.refinedError || "Refinement failed"
           );
         }
       }
@@ -652,6 +747,65 @@ export default function ProctoringTest() {
               )}
             </div>
 
+            {/* Refined transcript */}
+            {transcriptStatus === "completed" && (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <Sparkles className="w-5 h-5 text-violet-600" />
+                  <h2 className="text-lg font-semibold text-gray-900">
+                    Refined Transcript
+                  </h2>
+                </div>
+
+                {!refineStatus && (
+                  <div>
+                    <p className="text-sm text-gray-500 mb-4">
+                      Process the raw OCR transcript through GPT-4o to clean up
+                      artifacts, merge duplicate segments, and produce human-readable
+                      descriptions of the candidate's activity.
+                    </p>
+                    <Button
+                      onClick={handleRefineTranscript}
+                      className="bg-violet-600 hover:bg-violet-700 text-white"
+                    >
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      Refine Transcript
+                    </Button>
+                  </div>
+                )}
+
+                {refineStatus === "generating" && (
+                  <div className="flex items-center gap-3 text-violet-600">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span className="text-sm">
+                      Refining transcript... This may take a minute.
+                    </span>
+                  </div>
+                )}
+
+                {refineStatus === "completed" && refinedContent && (
+                  <div>
+                    <div className="flex items-center gap-2 text-green-600 mb-3">
+                      <CheckCircle className="w-4 h-4" />
+                      <span className="text-sm font-medium">
+                        Transcript refined successfully
+                      </span>
+                    </div>
+                    <RefinedTranscriptView content={refinedContent} />
+                  </div>
+                )}
+
+                {refineStatus === "failed" && (
+                  <div className="flex items-center gap-2 text-red-600">
+                    <AlertCircle className="w-4 h-4" />
+                    <span className="text-sm">
+                      Refinement failed. Check server logs.
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Frame debug viewer */}
             <FrameDebugViewer sessionId={sessionId} />
 
@@ -666,6 +820,8 @@ export default function ProctoringTest() {
                   setSessionData(null);
                   setTranscriptStatus(null);
                   setTranscriptContent(null);
+                  setRefineStatus(null);
+                  setRefinedContent(null);
                   setError(null);
                 }}
               >
