@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
@@ -21,6 +21,22 @@ import {
 } from "@/api/submission";
 import { createPageUrl } from "@/utils";
 import bridgeLogo from "@/assets/bridge-logo.svg";
+import useScreenCapture from "@/hooks/useScreenCapture";
+import ConsentScreen from "@/components/proctoring/ConsentScreen";
+import RecordingIndicator from "@/components/proctoring/RecordingIndicator";
+import {
+  createProctoringSession,
+  grantConsent,
+  recordSidecarEvents,
+  completeSession as completeProctoringSession,
+} from "@/api/proctoring";
+import useScreenshotCapture from "@/hooks/useScreenshotCapture";
+import useFrameUpload from "@/hooks/useFrameUpload";
+import useFrameDedup from "@/hooks/useFrameDedup";
+import ResharePrompt from "@/components/proctoring/ResharePrompt";
+import StreamStatusPanel from "@/components/proctoring/StreamStatusPanel";
+import { createVideoRecorder } from "@/lib/captureUtils";
+import { uploadVideoChunk } from "@/api/proctoring";
 
 export default function CandidateAssessment() {
   const [searchParams] = useSearchParams();
@@ -38,6 +54,37 @@ export default function CandidateAssessment() {
   const [showOptOutModal, setShowOptOutModal] = useState(false);
   const [optOutReason, setOptOutReason] = useState("");
   const [isOptingOut, setIsOptingOut] = useState(false);
+
+  // Proctoring state
+  const [showConsent, setShowConsent] = useState(false);
+  const [proctoringEnabled, setProctoringEnabled] = useState(false);
+  const [proctoringSessionId, setProctoringSessionId] = useState(null);
+  const screenCapture = useScreenCapture();
+  const proctoringDeclinedRef = useRef(false);
+  const sidecarBufferRef = useRef([]);
+
+  // Screenshot capture (only when proctoring is active)
+  const { consumeFrames, frameCount } = useScreenshotCapture(
+    screenCapture.streams,
+    { enabled: proctoringEnabled && screenCapture.isSharing }
+  );
+
+  // Frame upload pipeline
+  const { uploadedCount, failedCount, flush: flushFrames } = useFrameUpload({
+    sessionId: proctoringSessionId,
+    token,
+    consumeFrames,
+    enabled: proctoringEnabled && !!proctoringSessionId,
+  });
+
+  // Frame dedup
+  const { shouldKeepFrame, duplicatesSkipped } = useFrameDedup();
+
+  // Stream lost state for reshare prompt
+  const [showResharePrompt, setShowResharePrompt] = useState(false);
+
+  // Video recording refs
+  const videoRecordersRef = useRef([]);
 
   // Load submission on mount
   useEffect(() => {
@@ -159,13 +206,170 @@ export default function CandidateAssessment() {
     return () => clearInterval(interval);
   }, [timeRemaining]);
 
-  const handleStart = async () => {
+  // Sidecar event capture: blur/focus/visibilitychange/copy/paste
+  useEffect(() => {
+    if (!proctoringEnabled || !proctoringSessionId || !token) return;
+
+    const pushEvent = (type, metadata = {}) => {
+      sidecarBufferRef.current.push({ type, timestamp: Date.now(), metadata });
+    };
+
+    const onBlur = () => pushEvent("window_blur");
+    const onFocus = () => pushEvent("window_focus");
+    const onVisibility = () => {
+      pushEvent(document.hidden ? "window_blur" : "window_focus");
+    };
+    const onCopy = () => pushEvent("clipboard_copy");
+    const onPaste = () => pushEvent("clipboard_paste");
+
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    document.addEventListener("copy", onCopy);
+    document.addEventListener("paste", onPaste);
+
+    // Flush buffer every 10 seconds
+    const flushInterval = setInterval(async () => {
+      if (sidecarBufferRef.current.length === 0) return;
+      const events = [...sidecarBufferRef.current];
+      sidecarBufferRef.current = [];
+      await recordSidecarEvents(proctoringSessionId, token, events);
+    }, 10000);
+
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+      document.removeEventListener("copy", onCopy);
+      document.removeEventListener("paste", onPaste);
+      clearInterval(flushInterval);
+    };
+  }, [proctoringEnabled, proctoringSessionId, token]);
+
+  // Stream lost/restored handlers
+  useEffect(() => {
+    if (!proctoringEnabled) return;
+
+    screenCapture.onStreamLost(() => {
+      setShowResharePrompt(true);
+      sidecarBufferRef.current.push({
+        type: "stream_lost",
+        timestamp: Date.now(),
+        metadata: {},
+      });
+    });
+
+    screenCapture.onStreamRestored(() => {
+      setShowResharePrompt(false);
+      sidecarBufferRef.current.push({
+        type: "stream_restored",
+        timestamp: Date.now(),
+        metadata: {},
+      });
+    });
+  }, [proctoringEnabled, screenCapture]);
+
+  // Video recording — start MediaRecorder for each stream
+  useEffect(() => {
+    if (!proctoringEnabled || !proctoringSessionId || !token) return;
+    if (screenCapture.streams.length === 0) return;
+
+    // Start recorders for new streams that don't have one yet
+    const currentRecorders = videoRecordersRef.current;
+    const existingIndices = new Set(currentRecorders.map((r) => r.screenIndex));
+
+    for (const { stream, screenIndex } of screenCapture.streams) {
+      if (existingIndices.has(screenIndex)) continue;
+
+      try {
+        const { recorder, chunks, stop } = createVideoRecorder(stream, 30000);
+        const recorderEntry = { screenIndex, recorder, chunks, stop };
+
+        // Upload chunks as they arrive
+        recorder.ondataavailable = async (e) => {
+          if (e.data.size > 0 && proctoringSessionId) {
+            await uploadVideoChunk(proctoringSessionId, token, e.data, {
+              screenIndex,
+              startTime: Date.now() - 30000,
+              endTime: Date.now(),
+            });
+          }
+        };
+
+        videoRecordersRef.current.push(recorderEntry);
+      } catch (err) {
+        console.warn(`Could not start video recording for screen ${screenIndex}:`, err);
+      }
+    }
+
+    return () => {
+      // Stop all recorders on cleanup
+      videoRecordersRef.current.forEach((r) => r.stop());
+      videoRecordersRef.current = [];
+    };
+  }, [proctoringEnabled, proctoringSessionId, token, screenCapture.streams]);
+
+  // beforeunload — flush remaining frames
+  useEffect(() => {
+    if (!proctoringEnabled) return;
+
+    const onBeforeUnload = () => {
+      flushFrames();
+    };
+
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [proctoringEnabled, flushFrames]);
+
+  const handleReshare = async () => {
+    const stream = await screenCapture.startCapture();
+    if (stream) {
+      setShowResharePrompt(false);
+    }
+  };
+
+  const handleStartClick = () => {
     if (!token) {
       alert("No token provided");
       return;
     }
+    // Show consent screen before starting
+    setShowConsent(true);
+  };
 
+  const handleConsentGranted = async () => {
+    setShowConsent(false);
     setIsStarting(true);
+    try {
+      const stream = await screenCapture.startCapture();
+      if (stream) {
+        setProctoringEnabled(true);
+
+        // Create proctoring session and grant consent
+        const sessionResult = await createProctoringSession(token);
+        if (sessionResult.success) {
+          const sid = sessionResult.data._id;
+          setProctoringSessionId(sid);
+          await grantConsent(sid, token, 1);
+        }
+      }
+      // Start the assessment regardless of capture success
+      await doStartAssessment();
+    } catch (err) {
+      console.error("Error starting screen capture:", err);
+      // Still start the assessment even if capture fails
+      await doStartAssessment();
+    }
+  };
+
+  const handleConsentDeclined = async () => {
+    setShowConsent(false);
+    proctoringDeclinedRef.current = true;
+    setIsStarting(true);
+    await doStartAssessment();
+  };
+
+  const doStartAssessment = async () => {
     try {
       const result = await startAssessment(token);
       if (result.success) {
@@ -197,6 +401,14 @@ export default function CandidateAssessment() {
 
     setIsSubmitting(true);
     try {
+      // Flush remaining frames and complete proctoring session
+      if (proctoringEnabled) {
+        await flushFrames();
+        if (proctoringSessionId) {
+          await completeProctoringSession(proctoringSessionId, token);
+        }
+        screenCapture.stopCapture();
+      }
       const result = await submitAssessment(token, githubUrl.trim());
       if (result.success) {
         // Redirect to submitted page
@@ -429,7 +641,7 @@ export default function CandidateAssessment() {
 
             {/* Start Button */}
             <Button
-              onClick={handleStart}
+              onClick={handleStartClick}
               disabled={isStarting}
               className="w-full bg-[#1E3A8A] hover:bg-[#152a66] text-white py-6 text-lg rounded-xl disabled:opacity-50 mb-3"
             >
@@ -446,6 +658,16 @@ export default function CandidateAssessment() {
             </button>
           </div>
         </motion.div>
+
+        {/* Consent Screen Overlay */}
+        {showConsent && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <ConsentScreen
+              onConsent={handleConsentGranted}
+              onDecline={handleConsentDeclined}
+            />
+          </div>
+        )}
 
         {/* Opt Out Modal - Available in both states */}
         {showOptOutModal && (
@@ -497,6 +719,29 @@ export default function CandidateAssessment() {
   // Started state - show submission form
   return (
     <div className="min-h-screen bg-[#f8f9fb]">
+      {/* Recording Indicator */}
+      {proctoringEnabled && screenCapture.isSharing && (
+        <RecordingIndicator streamCount={screenCapture.streams.length} />
+      )}
+
+      {/* Stream Status Panel */}
+      {proctoringEnabled && (
+        <StreamStatusPanel
+          frameCount={frameCount}
+          uploadedCount={uploadedCount}
+          failedCount={failedCount}
+          duplicatesSkipped={duplicatesSkipped}
+        />
+      )}
+
+      {/* Reshare Prompt */}
+      {showResharePrompt && (
+        <ResharePrompt
+          onReshare={handleReshare}
+          onDismiss={() => setShowResharePrompt(false)}
+        />
+      )}
+
       {/* Top Bar */}
       <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">

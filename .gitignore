@@ -10,3 +10,6 @@ client/node_modules/.vite/
 
 # Build output
 client/dist/
+
+# Environment secrets
+server/config.env

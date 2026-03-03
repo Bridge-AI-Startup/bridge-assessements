@@ -16,6 +16,7 @@ import webhookRoutes from "./routes/webhook.js";
 import billingRoutes from "./routes/billing.js";
 import llmProxyRoutes from "./routes/llmProxy.js";
 import evaluationRoutes from "./routes/evaluation.js";
+import proctoringRoutes from "./routes/proctoring.js";
 import { errorHandler } from "./errors/handler.js";
 
 const PORT = process.env.PORT || 5050;
@@ -41,7 +42,7 @@ if (nodeEnv === "production") {
 
 console.log(`📋 Environment: ${nodeEnv}`);
 console.log(
-  `🌐 Frontend URL: ${process.env.FRONTEND_URL || "http://localhost:5173"}`
+  `🌐 Frontend URL: ${process.env.FRONTEND_URL || "http://localhost:5173"}`,
 );
 
 // Middleware
@@ -73,13 +74,13 @@ app.use(
         callback(null, true);
       } else {
         console.warn(
-          `⚠️ [CORS] Blocked request from unauthorized origin: ${origin}`
+          `⚠️ [CORS] Blocked request from unauthorized origin: ${origin}`,
         );
         callback(new Error("Not allowed by CORS"));
       }
     },
     credentials: true,
-  })
+  }),
 );
 console.log("✅ CORS configured with origin validation");
 console.log(`   Allowed origins: ${allowedOrigins.join(", ")}`);
@@ -151,7 +152,7 @@ app.use(
       (req as any).body = {};
     }
     next();
-  }
+  },
 );
 
 // Standard JSON body parser for all other routes
@@ -185,7 +186,7 @@ app.use((req, res, next) => {
   if (req.body && Object.keys(req.body).length > 0) {
     console.log(
       `   Body:`,
-      JSON.stringify(req.body, null, 2).substring(0, 200)
+      JSON.stringify(req.body, null, 2).substring(0, 200),
     );
   }
   if (Object.keys(req.query).length > 0) {
@@ -243,7 +244,7 @@ console.log("     - GET /api/submissions/:id");
 console.log("     - PATCH /api/submissions/:id");
 console.log("     - POST /api/submissions/:id/submit");
 console.log(
-  "     - GET /api/submissions/assessments/:id/submissions (employer)"
+  "     - GET /api/submissions/assessments/:id/submissions (employer)",
 );
 
 app.use("/api/agent-tools", apiLimiter); // Apply general limit
@@ -274,6 +275,16 @@ console.log("  ✅ Evaluation routes registered");
 console.log("     - POST /api/evaluate");
 console.log("     - POST /api/validate-criterion");
 console.log("     - POST /api/suggest-criteria");
+app.use("/api/proctoring", proctoringRoutes);
+console.log("  ✅ /api/proctoring routes registered");
+console.log("     - POST /api/proctoring/sessions");
+console.log("     - POST /api/proctoring/sessions/:sessionId/consent");
+console.log("     - POST /api/proctoring/sessions/:sessionId/frames");
+console.log("     - POST /api/proctoring/sessions/:sessionId/events");
+console.log("     - POST /api/proctoring/sessions/:sessionId/complete");
+console.log(
+  "     - POST /api/proctoring/sessions/:sessionId/generate-transcript",
+);
 
 // 404 handler
 app.use((req, res) => {
