@@ -78,12 +78,21 @@ export async function extractSmartFrames(
   }
 
   // Real wall-clock start time for timestamp computation
+  // Priority: captureStartedAt > first video chunk startTime > session createdAt
   const captureStartedAt =
     session.stats?.captureStartedAt ||
-    (session.videoChunks[0] as any)?.startTime;
+    (session.videoChunks[0] as any)?.startTime ||
+    (session as any).createdAt;
   const realStartTime = captureStartedAt
     ? new Date(captureStartedAt).getTime()
     : Date.now();
+
+  // Sanity check: if the resolved time is before year 2020, something is wrong
+  if (realStartTime < new Date("2020-01-01").getTime()) {
+    console.warn(
+      `[videoExtractor] WARNING: realStartTime resolved to ${new Date(realStartTime).toISOString()}, falling back to Date.now()`
+    );
+  }
 
   console.log(
     `[videoExtractor] Session start: ${new Date(realStartTime).toISOString()}`
@@ -119,24 +128,24 @@ export async function extractSmartFrames(
         chunkPaths.push(chunkPath);
       }
 
-      // Step 2: Merge chunks if multiple
+      // Step 2: Merge chunks if multiple.
+      // MediaRecorder timeslice chunks are NOT standalone files — only the
+      // first chunk has the WebM/EBML header. Subsequent chunks are raw
+      // Cluster elements. So we binary-concatenate them into a single file
+      // rather than using ffmpeg's concat demuxer (which expects each file
+      // to be independently decodable).
       let videoPath: string;
       if (chunkPaths.length === 1) {
         videoPath = chunkPaths[0];
       } else {
-        const concatListPath = path.join(tmpDir, "concat.txt");
-        await fs.writeFile(
-          concatListPath,
-          chunkPaths.map((p) => `file '${p}'`).join("\n")
-        );
         videoPath = path.join(tmpDir, "merged.webm");
         console.log(
-          `[videoExtractor] Merging ${chunkPaths.length} chunks...`
+          `[videoExtractor] Binary-merging ${chunkPaths.length} chunks...`
         );
-        await execAsync(
-          `"${FFMPEG_PATH}" -f concat -safe 0 -i "${concatListPath}" -c copy "${videoPath}" 2>&1`,
-          { maxBuffer: 50 * 1024 * 1024 }
+        const chunkBuffers = await Promise.all(
+          chunkPaths.map((p) => fs.readFile(p))
         );
+        await fs.writeFile(videoPath, Buffer.concat(chunkBuffers));
       }
 
       // Step 3: Get video duration
@@ -155,7 +164,7 @@ export async function extractSmartFrames(
       );
 
       await execAsync(
-        `"${FFMPEG_PATH}" -i "${videoPath}" -vf "fps=${fps}" "${candidatesDir}/frame_%06d.png" 2>&1`,
+        `"${FFMPEG_PATH}" -f matroska -analyzeduration 10000000 -probesize 10000000 -i "${videoPath}" -vf "fps=${fps}" "${candidatesDir}/frame_%06d.png" 2>&1`,
         { maxBuffer: 100 * 1024 * 1024 }
       );
 
@@ -293,7 +302,7 @@ function computePixelDiff(bufA: Buffer, bufB: Buffer): number {
 async function getVideoDuration(videoPath: string): Promise<number> {
   try {
     const { stdout } = await execAsync(
-      `"${FFMPEG_PATH}" -i "${videoPath}" 2>&1 | grep -o "Duration: [^,]*"`,
+      `"${FFMPEG_PATH}" -f matroska -analyzeduration 10000000 -probesize 10000000 -i "${videoPath}" 2>&1 | grep -o "Duration: [^,]*"`,
       { shell: "/bin/bash" }
     );
     const match = stdout.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
@@ -310,7 +319,7 @@ async function getVideoDuration(videoPath: string): Promise<number> {
 
   try {
     await execAsync(
-      `"${FFMPEG_PATH}" -i "${videoPath}" -f null - 2>&1`,
+      `"${FFMPEG_PATH}" -f matroska -analyzeduration 10000000 -probesize 10000000 -i "${videoPath}" -f null - 2>&1`,
       { maxBuffer: 10 * 1024 * 1024 }
     );
   } catch (err: any) {

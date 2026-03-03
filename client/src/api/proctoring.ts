@@ -198,6 +198,29 @@ export async function getTranscriptContent(
 }
 
 /**
+ * Get debug frame data for a session (dev only).
+ * Returns extracted frames as thumbnails with region detection bounding boxes.
+ */
+export async function getDebugFrames(
+  sessionId: string,
+  options: { maxFrames?: number; detect?: boolean } = {}
+): Promise<APIResult<any>> {
+  try {
+    const params = new URLSearchParams();
+    if (options.maxFrames) params.set("maxFrames", String(options.maxFrames));
+    if (options.detect === false) params.set("detect", "false");
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    const response = await get(
+      `/proctoring/sessions/${sessionId}/debug-frames${qs}`
+    );
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
  * Upload a video chunk. Uses raw fetch with FormData.
  */
 export async function uploadVideoChunk(

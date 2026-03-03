@@ -7,6 +7,7 @@ export interface TranscriptSegment {
   ts: string;
   ts_end?: string;
   screen: number;
+  region?: string;
   app?: string;
   description?: string;
   text_content?: string;
@@ -34,6 +35,7 @@ function parseBatchOutput(text: string): TranscriptSegment[] {
           ts: parsed.ts,
           ts_end: parsed.ts_end || undefined,
           screen: parsed.screen ?? 0,
+          region: parsed.region || undefined,
           app: parsed.app || undefined,
           description: parsed.description || undefined,
           text_content: parsed.text_content || undefined,

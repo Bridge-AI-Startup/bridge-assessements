@@ -262,13 +262,129 @@ export const uploadVideoChunk: RequestHandler = async (req, res, next) => {
 
     const result = await storeVideoChunk(sessionId, file.buffer, {
       screenIndex: parseInt(req.body.screenIndex) || 0,
-      startTime: new Date(parseInt(req.body.startTime) || Date.now()),
+      startTime: new Date(req.body.startTime || Date.now()),
       endTime: req.body.endTime
-        ? new Date(parseInt(req.body.endTime))
+        ? new Date(req.body.endTime)
         : undefined,
     });
 
     res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /api/proctoring/sessions/:sessionId/debug-frames  (DEV ONLY)
+// Returns extracted frames as base64 thumbnails with region detection bounding boxes.
+export const getDebugFrames: RequestHandler = async (req, res, next) => {
+  try {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    const { sessionId } = req.params;
+    const maxFrames = Math.min(parseInt(req.query.maxFrames as string) || 20, 50);
+    const runDetection = req.query.detect !== "false";
+
+    const { prepareSessionForTranscript } = await import(
+      "../services/capture/framePrep.js"
+    );
+    const { detectRegions, cropRegions } = await import(
+      "../ai/transcript/regionDetector.js"
+    );
+    const sharp = (await import("sharp")).default;
+
+    const prepared = await prepareSessionForTranscript(sessionId);
+
+    if (prepared.frames.length === 0) {
+      return res.json({ frames: [], totalFrames: 0 });
+    }
+
+    // Sample frames evenly if too many
+    const step = Math.max(1, Math.floor(prepared.frames.length / maxFrames));
+    const sampledFrames = prepared.frames.filter((_, i) => i % step === 0).slice(0, maxFrames);
+
+    const debugFrames = [];
+
+    for (let i = 0; i < sampledFrames.length; i++) {
+      const frame = sampledFrames[i];
+
+      // Return full-resolution frame as PNG
+      const framePng = await sharp(frame.buffer)
+        .png()
+        .toBuffer();
+
+      const frameData: any = {
+        index: prepared.frames.indexOf(frame),
+        capturedAt: frame.capturedAt.toISOString(),
+        screenIndex: frame.screenIndex,
+        width: frame.width,
+        height: frame.height,
+        thumbnail: `data:image/png;base64,${framePng.toString("base64")}`,
+        regions: [],
+        crops: [],
+      };
+
+      // Run region detection on every frame individually
+      if (runDetection) {
+        try {
+          const regions = await detectRegions({
+            buffer: frame.buffer,
+            capturedAt: frame.capturedAt,
+            screenIndex: frame.screenIndex,
+          });
+          frameData.regions = regions;
+
+          // Crop each region
+          const cropped = await cropRegions(
+            frame.buffer,
+            frame.width,
+            frame.height,
+            regions
+          );
+
+          for (const crop of cropped) {
+            frameData.crops.push({
+              regionType: crop.regionType,
+              confidence: crop.confidence,
+              thumbnail: `data:image/png;base64,${crop.buffer.toString("base64")}`,
+            });
+          }
+        } catch (err) {
+          frameData.detectionError = err instanceof Error ? err.message : String(err);
+        }
+      }
+
+      debugFrames.push(frameData);
+    }
+
+    // Also include transcript segments if available
+    const session = await ProctoringSessionModel.findById(sessionId);
+    let transcriptSegments: any[] = [];
+    if (session?.transcript?.status === "completed" && session.transcript.storageKey) {
+      const { getFrameStorage } = await import("../services/capture/storage.js");
+      const storage = getFrameStorage();
+      const content = await storage.getTranscript(session.transcript.storageKey);
+      transcriptSegments = content
+        .split("\n")
+        .filter(Boolean)
+        .map((line: string) => {
+          try {
+            return JSON.parse(line);
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+    }
+
+    res.json({
+      frames: debugFrames,
+      totalFrames: prepared.frames.length,
+      sampledCount: sampledFrames.length,
+      transcriptSegments,
+      tokenUsage: session?.transcript?.tokenUsage || null,
+    });
   } catch (error) {
     next(error);
   }

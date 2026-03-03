@@ -20,6 +20,7 @@ import useScreenshotCapture from "@/hooks/useScreenshotCapture";
 import useFrameDedup from "@/hooks/useFrameDedup";
 import useFrameUpload from "@/hooks/useFrameUpload";
 import useVideoRecording from "@/hooks/useVideoRecording";
+import FrameDebugViewer from "@/components/proctoring/FrameDebugViewer";
 import {
   createTestProctoringSession,
   grantConsent,
@@ -48,6 +49,74 @@ const PHASE = {
   COMPLETED: "completed",
 };
 
+const REGION_STYLES = {
+  ai_chat: { bg: "bg-amber-50", border: "border-amber-200", badge: "bg-amber-100 text-amber-700", label: "AI Chat" },
+  terminal: { bg: "bg-emerald-50", border: "border-emerald-200", badge: "bg-emerald-100 text-emerald-700", label: "Terminal" },
+  editor: { bg: "bg-blue-50", border: "border-blue-200", badge: "bg-blue-100 text-blue-700", label: "Editor" },
+  file_tree: { bg: "bg-purple-50", border: "border-purple-200", badge: "bg-purple-100 text-purple-700", label: "File Tree" },
+  browser: { bg: "bg-red-50", border: "border-red-200", badge: "bg-red-100 text-red-700", label: "Browser" },
+};
+
+const DEFAULT_STYLE = { bg: "bg-gray-50", border: "border-gray-200", badge: "bg-gray-100 text-gray-700", label: "Unknown" };
+
+function TranscriptReadableView({ content }) {
+  const segments = content
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+
+  if (segments.length === 0) {
+    return <p className="text-sm text-gray-400 italic">No transcript segments found.</p>;
+  }
+
+  const formatTime = (iso) => {
+    if (!iso) return "";
+    try {
+      return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    } catch {
+      return iso;
+    }
+  };
+
+  return (
+    <div className="space-y-3 max-h-[600px] overflow-auto">
+      {segments.map((seg, i) => {
+        const style = REGION_STYLES[seg.region] || DEFAULT_STYLE;
+        return (
+          <div
+            key={i}
+            className={`rounded-lg border ${style.border} ${style.bg} p-3`}
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${style.badge}`}>
+                {style.label}
+              </span>
+              {seg.app && seg.app !== style.label && (
+                <span className="text-[10px] text-gray-500">{seg.app}</span>
+              )}
+              <span className="text-[10px] text-gray-400 font-mono ml-auto">
+                {formatTime(seg.ts)}
+                {seg.ts_end && seg.ts_end !== seg.ts && ` — ${formatTime(seg.ts_end)}`}
+              </span>
+            </div>
+            <pre className="text-xs text-gray-700 whitespace-pre-wrap break-words font-mono leading-relaxed">
+              {seg.text_content || seg.text || "(empty)"}
+            </pre>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function ProctoringTest() {
   const [phase, setPhase] = useState(PHASE.SETUP);
   const [sessionId, setSessionId] = useState(null);
@@ -57,6 +126,7 @@ export default function ProctoringTest() {
   const [loading, setLoading] = useState(false);
   const [transcriptStatus, setTranscriptStatus] = useState(null);
   const [transcriptContent, setTranscriptContent] = useState(null);
+  const [transcriptView, setTranscriptView] = useState("readable"); // "readable" or "raw"
   const [showResharePrompt, setShowResharePrompt] = useState(false);
   const sidecarBufferRef = useRef([]);
 
@@ -256,7 +326,7 @@ export default function ProctoringTest() {
 
   return (
     <div className="min-h-screen bg-gray-50 py-12 px-4">
-      <div className="max-w-2xl mx-auto">
+      <div className={`mx-auto ${phase === PHASE.COMPLETED ? "max-w-4xl" : "max-w-2xl"}`}>
         {/* Header */}
         <div className="text-center mb-8">
           <div className="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center mx-auto mb-3">
@@ -521,25 +591,54 @@ export default function ProctoringTest() {
 
               {transcriptStatus === "completed" && transcriptContent && (
                 <div>
-                  <div className="flex items-center gap-2 text-green-600 mb-3">
-                    <CheckCircle className="w-4 h-4" />
-                    <span className="text-sm font-medium">
-                      Transcript generated successfully
-                    </span>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2 text-green-600">
+                      <CheckCircle className="w-4 h-4" />
+                      <span className="text-sm font-medium">
+                        Transcript generated successfully
+                      </span>
+                    </div>
+                    <div className="flex items-center bg-gray-100 rounded-lg p-0.5 text-xs">
+                      <button
+                        onClick={() => setTranscriptView("readable")}
+                        className={`px-2.5 py-1 rounded-md transition-colors ${
+                          transcriptView === "readable"
+                            ? "bg-white shadow-sm text-gray-900 font-medium"
+                            : "text-gray-500 hover:text-gray-700"
+                        }`}
+                      >
+                        Readable
+                      </button>
+                      <button
+                        onClick={() => setTranscriptView("raw")}
+                        className={`px-2.5 py-1 rounded-md transition-colors ${
+                          transcriptView === "raw"
+                            ? "bg-white shadow-sm text-gray-900 font-medium"
+                            : "text-gray-500 hover:text-gray-700"
+                        }`}
+                      >
+                        Raw JSON
+                      </button>
+                    </div>
                   </div>
-                  <pre className="bg-gray-900 text-gray-100 rounded-lg p-4 text-xs overflow-auto max-h-96 font-mono">
-                    {transcriptContent
-                      .split("\n")
-                      .filter(Boolean)
-                      .map((line) => {
-                        try {
-                          return JSON.stringify(JSON.parse(line), null, 2);
-                        } catch {
-                          return line;
-                        }
-                      })
-                      .join("\n\n")}
-                  </pre>
+
+                  {transcriptView === "raw" ? (
+                    <pre className="bg-gray-900 text-gray-100 rounded-lg p-4 text-xs overflow-auto max-h-96 font-mono">
+                      {transcriptContent
+                        .split("\n")
+                        .filter(Boolean)
+                        .map((line) => {
+                          try {
+                            return JSON.stringify(JSON.parse(line), null, 2);
+                          } catch {
+                            return line;
+                          }
+                        })
+                        .join("\n\n")}
+                    </pre>
+                  ) : (
+                    <TranscriptReadableView content={transcriptContent} />
+                  )}
                 </div>
               )}
 
@@ -552,6 +651,9 @@ export default function ProctoringTest() {
                 </div>
               )}
             </div>
+
+            {/* Frame debug viewer */}
+            <FrameDebugViewer sessionId={sessionId} />
 
             {/* Start over */}
             <div className="text-center">

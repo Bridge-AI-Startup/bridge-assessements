@@ -97,6 +97,8 @@ export async function storeVideoChunk(
       "stats.videoStats.totalChunks": 1,
       "stats.videoStats.totalVideoSizeBytes": buffer.length,
     },
+    $min: { "stats.captureStartedAt": metadata.startTime },
+    $max: { "stats.captureEndedAt": metadata.startTime },
   });
 
   return { storageKey };

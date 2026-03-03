@@ -92,6 +92,11 @@ router.post(
 );
 
 router.get(
+  "/sessions/:sessionId/debug-frames",
+  ProctoringController.getDebugFrames
+);
+
+router.get(
   "/sessions/by-submission/:submissionId",
   [verifyAuthToken],
   ProctoringValidator.getSessionBySubmissionValidation,
