@@ -13,6 +13,8 @@ import {
   MessageSquare,
   Trash2,
   Copy,
+  Check,
+  Send,
   ChevronDown,
   ChevronUp,
   ChevronRight,
@@ -34,6 +36,7 @@ import { createPageUrl } from "@/utils";
 import {
   getSubmissionsForAssessment,
   deleteSubmission,
+  sendInvites,
 } from "@/api/submission";
 import { Progress } from "@/components/ui/progress";
 import { getAssessment } from "@/api/assessment";
@@ -57,19 +60,15 @@ export default function SubmissionsDashboard() {
   const [selectedEvaluationSubmission, setSelectedEvaluationSubmission] =
     useState(null);
   const [showEvaluationModal, setShowEvaluationModal] = useState(false);
-  const [expandedChatIndices, setExpandedChatIndices] = useState(new Set());
-  const [expandedRawJsonIndices, setExpandedRawJsonIndices] = useState(
-    new Set()
-  );
+  const [expandedEvidenceCriteria, setExpandedEvidenceCriteria] = useState(new Set());
   const [isDropoffAnalysisExpanded, setIsDropoffAnalysisExpanded] =
     useState(false);
   const { toast } = useToast();
 
-  // Reset expanded LLM call indices when opening evaluation for a different submission
+  // Reset expanded evidence when opening evaluation for a different submission
   useEffect(() => {
     if (selectedEvaluationSubmission?._id) {
-      setExpandedChatIndices(new Set());
-      setExpandedRawJsonIndices(new Set());
+      setExpandedEvidenceCriteria(new Set());
     }
   }, [selectedEvaluationSubmission?._id]);
 
@@ -388,6 +387,20 @@ export default function SubmissionsDashboard() {
     return matchesSearch && matchesStatus;
   });
 
+  const getSubmissionScore = (sub) => {
+    const evaluable =
+      sub.evaluationReport?.criteria_results?.filter((r) => r.evaluable) ?? [];
+    if (evaluable.length === 0) return -1;
+    const sum = evaluable.reduce((s, r) => s + r.score, 0);
+    return sum / evaluable.length;
+  };
+
+  const sortedSubmissions = [...filteredSubmissions].sort((a, b) => {
+    const scoreA = getSubmissionScore(a);
+    const scoreB = getSubmissionScore(b);
+    return scoreB - scoreA;
+  });
+
   const formatTimeSpent = (minutes) => {
     if (!minutes) return "—";
     if (minutes < 60) return `${minutes}m`;
@@ -460,99 +473,6 @@ export default function SubmissionsDashboard() {
     });
   };
 
-  // Derive prompt/response text from trace event (supports multiple JSON shapes from API)
-  const getEventPromptText = (event) => {
-    if (!event || typeof event !== "object") return "—";
-    const raw =
-      event.prompt ??
-      event.content ??
-      event.input ??
-      event.user_input ??
-      event.userMessage ??
-      event.user_message ??
-      event.question ??
-      event.humanMessage ??
-      event.text ??
-      event.messages?.[0]?.content ??
-      event.metadata?.prompt ??
-      event.metadata?.input ??
-      event.metadata?.content ??
-      event.data?.prompt ??
-      event.data?.input ??
-      event.payload?.prompt ??
-      event.payload?.input;
-    if (raw != null) {
-      return typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
-    }
-    if (Array.isArray(event.messages)) {
-      const userParts = event.messages
-        .filter((m) => m?.role === "user" && m?.content != null)
-        .map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)));
-      if (userParts.length) return userParts.join("\n\n");
-    }
-    return extractFirstStringValues(event, 1)[0] ?? "—";
-  };
-  const getEventResponseText = (event) => {
-    if (!event || typeof event !== "object") return "—";
-    if (event.response != null) {
-      if (typeof event.response === "string") return event.response;
-      if (
-        event.response &&
-        typeof event.response === "object" &&
-        "content" in event.response
-      )
-        return typeof event.response.content === "string"
-          ? event.response.content
-          : JSON.stringify(event.response.content, null, 2);
-      return JSON.stringify(event.response, null, 2);
-    }
-    const raw =
-      event.output ??
-      event.assistant_output ??
-      event.assistantMessage ??
-      event.assistant_message ??
-      event.answer ??
-      event.aiMessage ??
-      event.completion ??
-      (event.role === "assistant" ? event.content : null) ??
-      event.messages?.[1]?.content ??
-      event.metadata?.response ??
-      event.metadata?.output ??
-      event.metadata?.content ??
-      event.data?.response ??
-      event.data?.output ??
-      event.payload?.response ??
-      event.payload?.output;
-    if (raw != null) {
-      return typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
-    }
-    if (Array.isArray(event.messages)) {
-      const assistantParts = event.messages
-        .filter((m) => m?.role === "assistant" && m?.content != null)
-        .map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)));
-      if (assistantParts.length) return assistantParts.join("\n\n");
-    }
-    return extractFirstStringValues(event, 2)[1] ?? "—";
-  };
-  // Fallback: collect first N string values from object (recursive, skip short/keys) for raw JSON hookup
-  const extractFirstStringValues = (obj, maxCount) => {
-    const out = [];
-    const seen = new Set();
-    const visit = (v) => {
-      if (out.length >= maxCount) return;
-      if (typeof v === "string" && v.length > 10 && !seen.has(v)) {
-        seen.add(v);
-        out.push(v);
-      } else if (Array.isArray(v)) {
-        v.forEach(visit);
-      } else if (v && typeof v === "object" && v.constructor === Object) {
-        Object.values(v).forEach(visit);
-      }
-    };
-    visit(obj);
-    return out;
-  };
-
   const handleViewInterview = (submission) => {
     setSelectedInterview(submission);
     setShowInterviewModal(true);
@@ -560,6 +480,11 @@ export default function SubmissionsDashboard() {
 
   const [submissionToDelete, setSubmissionToDelete] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  const [shareModalSubmission, setShareModalSubmission] = useState(null);
+  const [shareLinkCopied, setShareLinkCopied] = useState(false);
+  const [shareEmailSending, setShareEmailSending] = useState(false);
+  const [shareEmailSent, setShareEmailSent] = useState(false);
 
   const handleDeleteClick = (submission) => {
     setSubmissionToDelete(submission);
@@ -616,6 +541,63 @@ export default function SubmissionsDashboard() {
         description: "Failed to copy link to clipboard",
         variant: "destructive",
       });
+    }
+  };
+
+  const openShareModal = (submission) => {
+    setShareModalSubmission(submission);
+    setShareLinkCopied(false);
+    setShareEmailSending(false);
+    setShareEmailSent(false);
+  };
+
+  const closeShareModal = () => {
+    setShareModalSubmission(null);
+    setShareLinkCopied(false);
+    setShareEmailSending(false);
+    setShareEmailSent(false);
+  };
+
+  const handleCopyLinkInModal = async () => {
+    if (!shareModalSubmission) return;
+    const link = getCandidateLink(shareModalSubmission);
+    try {
+      await navigator.clipboard.writeText(link);
+      setShareLinkCopied(true);
+      toast({ title: "Link copied", description: "Invite link copied to clipboard." });
+      setTimeout(() => setShareLinkCopied(false), 2000);
+    } catch (error) {
+      toast({
+        title: "Failed to copy",
+        description: "Failed to copy link to clipboard",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSendInviteEmail = async () => {
+    if (!shareModalSubmission?._id || !currentUser) return;
+    setShareEmailSending(true);
+    try {
+      const result = await sendInvites([shareModalSubmission._id]);
+      if (result.success) {
+        setShareEmailSent(true);
+        toast({ title: "Invite sent", description: "Invite email sent to candidate." });
+      } else {
+        toast({
+          title: "Failed to send email",
+          description: result.error || "Could not send invite email.",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Failed to send email",
+        description: error.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setShareEmailSending(false);
     }
   };
 
@@ -879,7 +861,7 @@ export default function SubmissionsDashboard() {
             <div className="w-8 h-8 border-2 border-[#1E3A8A]/30 border-t-[#1E3A8A] rounded-full animate-spin mx-auto mb-4"></div>
             <p className="text-gray-500">Loading submissions...</p>
           </div>
-        ) : filteredSubmissions.length === 0 ? (
+        ) : sortedSubmissions.length === 0 ? (
           <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
             <Users className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-gray-900 mb-2">
@@ -923,7 +905,7 @@ export default function SubmissionsDashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {filteredSubmissions.map((submission) => {
+                {sortedSubmissions.map((submission) => {
                   const candidateName = submission.candidateName || "Unknown";
                   const candidateEmail = submission.candidateEmail || "";
                   const initials = candidateName
@@ -989,79 +971,48 @@ export default function SubmissionsDashboard() {
                       </td>
                       <td className="px-5 py-4">
                         {(() => {
-                          const overall =
-                            submission.scores?.overall != null
-                              ? submission.scores.overall
-                              : submission.llmWorkflow?.scores?.overall?.score;
+                          const evaluableCriteria =
+                            submission.evaluationReport?.criteria_results?.filter(
+                              (r) => r.evaluable
+                            ) ?? [];
+                          const analysisAvg =
+                            evaluableCriteria.length > 0
+                              ? (
+                                  evaluableCriteria.reduce(
+                                    (s, r) => s + r.score,
+                                    0
+                                  ) / evaluableCriteria.length
+                                ).toFixed(1)
+                              : null;
                           const showCalculate =
                             submission.status === "submitted" &&
                             submission.scores?.overall == null;
-                          if (overall !== undefined && overall !== null) {
+                          const openEvaluation = () => {
+                            setSelectedEvaluationSubmission(submission);
+                            setShowEvaluationModal(true);
+                          };
+                          if (analysisAvg != null) {
                             return (
-                              <div
-                                className="flex flex-col gap-0.5"
-                                title={
-                                  [
-                                    submission.scores?.completeness?.score !=
-                                    null
-                                      ? `Completeness: ${submission.scores.completeness.score}%`
-                                      : null,
-                                    submission.llmWorkflow?.scores?.overall
-                                      ?.score != null
-                                      ? `Workflow: ${submission.llmWorkflow.scores.overall.score}/100`
-                                      : null,
-                                  ]
-                                    .filter(Boolean)
-                                    .join(" · ") || undefined
-                                }
-                              >
-                                <div className="flex items-center gap-2">
-                                  <span className="text-lg font-bold">
-                                    {overall}
-                                  </span>
-                                  <span className="text-xs text-gray-500">
-                                    /100
-                                  </span>
-                                </div>
-                                {(submission.scores?.completeness?.score !=
-                                  null ||
-                                  submission.llmWorkflow?.scores?.overall
-                                    ?.score != null) && (
-                                  <span className="text-xs text-gray-500">
-                                    {submission.scores?.completeness?.score !=
-                                      null && (
-                                      <span>
-                                        Completeness:{" "}
-                                        {
-                                          submission.scores.completeness.score
-                                        }
-                                        %
-                                      </span>
-                                    )}
-                                    {submission.scores?.completeness?.score !=
-                                      null &&
-                                      submission.llmWorkflow?.scores?.overall
-                                        ?.score != null && " · "}
-                                    {submission.llmWorkflow?.scores?.overall
-                                      ?.score != null && (
-                                      <span>
-                                        Workflow:{" "}
-                                        {
-                                          submission.llmWorkflow.scores.overall
-                                            .score
-                                        }
-                                        /100
-                                      </span>
-                                    )}
-                                  </span>
-                                )}
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-lg font-bold text-gray-900">
+                                  {analysisAvg}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={openEvaluation}
+                                  className="text-left text-xs text-[#1E3A8A] hover:underline"
+                                  title="View evaluation"
+                                >
+                                  View evaluation
+                                </button>
                               </div>
                             );
                           }
                           if (showCalculate) {
                             return (
-                              <Button
-                                onClick={async () => {
+                              <div className="flex flex-col gap-1">
+                                <Button
+                                  onClick={async () => {
                                   if (!currentUser) {
                                     toast({
                                       title: "Not signed in",
@@ -1130,6 +1081,7 @@ export default function SubmissionsDashboard() {
                               >
                                 Calculate scores
                               </Button>
+                              </div>
                             );
                           }
                           return (
@@ -1139,33 +1091,19 @@ export default function SubmissionsDashboard() {
                       </td>
                       <td className="px-5 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
-                          {/* Copy Link */}
+                          {/* Share / Copy link — opens popup to copy or send email */}
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => handleCopyLink(submission)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openShareModal(submission);
+                            }}
                             className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10"
-                            title="Copy candidate assessment link"
+                            title="Share assessment link or send invite email"
                           >
-                            <Copy className="w-4 h-4" />
+                            <Send className="w-4 h-4" />
                           </Button>
-                          {/* LLM Evaluation (when workflow data exists) */}
-                          {(submission.llmWorkflow?.trace?.events?.length > 0 ||
-                            submission.llmWorkflow?.taskResults?.length > 0 ||
-                            submission.llmWorkflow?.scores) && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => {
-                                setSelectedEvaluationSubmission(submission);
-                                setShowEvaluationModal(true);
-                              }}
-                              className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10"
-                              title="View LLM workflow evaluation"
-                            >
-                              <BarChart3 className="w-4 h-4" />
-                            </Button>
-                            )}
                           {/* GitHub Link (if submitted) */}
                           {submission.status === "submitted" &&
                             submission.githubLink && (
@@ -1239,6 +1177,96 @@ export default function SubmissionsDashboard() {
                 {isDeleting ? "Deleting..." : "Delete"}
               </Button>
             </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Share assessment link modal — copy link or send invite email */}
+        <Dialog
+          open={!!shareModalSubmission}
+          onOpenChange={(open) => {
+            if (!open) closeShareModal();
+          }}
+        >
+          <DialogContent className="sm:max-w-[500px]">
+            <DialogHeader>
+              <DialogTitle>Share assessment link</DialogTitle>
+              <DialogDescription>
+                Copy the link or send an invite email to{" "}
+                {shareModalSubmission?.candidateName || "the candidate"}.
+              </DialogDescription>
+            </DialogHeader>
+            {shareModalSubmission && (
+              <div className="space-y-4 py-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={getCandidateLink(shareModalSubmission)}
+                    readOnly
+                    className="flex-1 bg-gray-50 text-sm font-mono"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCopyLinkInModal}
+                    className="flex-shrink-0"
+                  >
+                    {shareLinkCopied ? (
+                      <>
+                        <Check className="w-4 h-4 mr-2" />
+                        Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-4 h-4 mr-2" />
+                        Copy
+                      </>
+                    )}
+                  </Button>
+                </div>
+                {shareModalSubmission.candidateEmail ? (
+                  <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg gap-3">
+                    <span className="text-sm text-gray-600">
+                      Send invite email to{" "}
+                      <span className="font-medium text-gray-900">
+                        {shareModalSubmission.candidateEmail}
+                      </span>
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleSendInviteEmail}
+                      disabled={shareEmailSending || shareEmailSent}
+                      className="bg-[#1E3A8A] hover:bg-[#152a66] flex-shrink-0"
+                    >
+                      {shareEmailSent ? (
+                        <>
+                          <Check className="w-4 h-4 mr-2" />
+                          Sent
+                        </>
+                      ) : shareEmailSending ? (
+                        "Sending..."
+                      ) : (
+                        "Send email"
+                      )}
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-500">
+                    No email on file for this candidate. Add an email when
+                    generating the link to enable sending invite emails.
+                  </p>
+                )}
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    onClick={closeShareModal}
+                    className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                  >
+                    Done
+                  </Button>
+                </div>
+              </div>
+            )}
           </DialogContent>
         </Dialog>
 
@@ -1477,432 +1505,91 @@ export default function SubmissionsDashboard() {
                 )}
               </DialogTitle>
               <DialogDescription>
-                Trace, task results, and workflow scores for this submission
+                Screen recording analysis: session summary and criteria scores with evidence.
               </DialogDescription>
             </DialogHeader>
 
-            {selectedEvaluationSubmission?.llmWorkflow ? (
-              <div className="space-y-6 mt-4">
-                {/* Evaluation metadata */}
-                {selectedEvaluationSubmission.llmWorkflow.evaluation && (
+            {/* Screen recording evaluation (when assessment had evaluation criteria) */}
+            {selectedEvaluationSubmission?.evaluationReport && (
+              <div className="space-y-4 mt-4 border-b border-gray-200 pb-6">
+                <h3 className="text-sm font-semibold text-gray-900">
+                  Screen recording evaluation
+                </h3>
+                {selectedEvaluationSubmission.evaluationReport.session_summary && (
                   <div>
-                    <h3 className="text-sm font-semibold text-gray-900 mb-2">
-                      Evaluation
-                    </h3>
-                    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-                      <div>
-                        <p className="text-gray-500">Tasks</p>
-                        <p className="font-medium">
-                          {selectedEvaluationSubmission.llmWorkflow.evaluation
-                            .tasksCompleted ?? "—"}
-                          /
-                          {selectedEvaluationSubmission.llmWorkflow.evaluation
-                            .tasksTotal ?? "—"}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">Harness</p>
-                        <p className="font-medium">
-                          {selectedEvaluationSubmission.llmWorkflow.evaluation
-                            .harnessVersion ?? "—"}
-                        </p>
-                      </div>
-                      {selectedEvaluationSubmission.llmWorkflow.evaluation
-                        .startedAt && (
-                        <div>
-                          <p className="text-gray-500">Started</p>
-                          <p className="font-medium">
-                            {formatDate(
-                              selectedEvaluationSubmission.llmWorkflow
-                                .evaluation.startedAt
-                            )}
-                          </p>
-                        </div>
-                      )}
-                      {selectedEvaluationSubmission.llmWorkflow.evaluation
-                        .completedAt && (
-                        <div>
-                          <p className="text-gray-500">Completed</p>
-                          <p className="font-medium">
-                            {formatDate(
-                              selectedEvaluationSubmission.llmWorkflow
-                                .evaluation.completedAt
-                            )}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Trace summary */}
-                {selectedEvaluationSubmission.llmWorkflow.trace && (
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-900 mb-2">
-                      Trace
-                    </h3>
-                    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
-                      <div>
-                        <p className="text-gray-500">Events</p>
-                        <p className="font-medium">
-                          {selectedEvaluationSubmission.llmWorkflow.trace
-                            .events?.length ?? 0}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">Total tokens</p>
-                        <p className="font-medium">
-                          {selectedEvaluationSubmission.llmWorkflow.trace
-                            .totalTokens ?? "—"}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">Total cost</p>
-                        <p className="font-medium">
-                          {selectedEvaluationSubmission.llmWorkflow.trace
-                            .totalCost != null
-                            ? `$${Number(
-                                selectedEvaluationSubmission.llmWorkflow.trace
-                                  .totalCost
-                              ).toFixed(4)}`
-                            : "—"}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">Total time</p>
-                        <p className="font-medium">
-                          {selectedEvaluationSubmission.llmWorkflow.trace
-                            .totalTime != null
-                            ? `${(
-                                selectedEvaluationSubmission.llmWorkflow.trace
-                                  .totalTime / 1000
-                              ).toFixed(1)}s`
-                            : "—"}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">LLM calls</p>
-                        <p className="font-medium">
-                          {selectedEvaluationSubmission.llmWorkflow.trace
-                            .totalCalls ?? "—"}
-                        </p>
-                      </div>
-                    </div>
-                    {selectedEvaluationSubmission.llmWorkflow.trace
-                      .sessionId && (
-                      <p className="text-xs text-gray-500 mt-2 font-mono">
-                        Session:{" "}
-                        {
-                          selectedEvaluationSubmission.llmWorkflow.trace
-                            .sessionId
-                        }
-                      </p>
-                    )}
-
-                    {/* LLM calls / chats - all events with dropdown response */}
-                    {selectedEvaluationSubmission.llmWorkflow.trace.events
-                      ?.length > 0 && (
-                      <div className="mt-4">
-                        <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wider mb-3">
-                          LLM calls ({selectedEvaluationSubmission.llmWorkflow.trace.events.length})
-                        </h4>
-                        <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
-                          {selectedEvaluationSubmission.llmWorkflow.trace.events.map(
-                            (event, idx) => {
-                              const isExpanded = expandedChatIndices.has(idx);
-                              const promptText = getEventPromptText(event);
-                              const responseText =
-                                getEventResponseText(event);
-                              return (
-                                <div
-                                  key={idx}
-                                  className="border border-gray-200 rounded-lg overflow-hidden bg-white text-sm"
-                                >
-                                  <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center gap-2">
-                                    <span className="font-medium text-gray-800">
-                                      Call {idx + 1}
-                                    </span>
-                                    {event.type && (
-                                      <Badge className="bg-gray-200 text-gray-700 text-xs">
-                                        {event.type}
-                                      </Badge>
-                                    )}
-                                    {event.model && (
-                                      <span className="text-gray-500 text-xs">
-                                        {event.model}
-                                      </span>
-                                    )}
-                                    {event.tokens?.total != null && (
-                                      <span className="text-gray-500 text-xs">
-                                        {event.tokens.total} tokens
-                                      </span>
-                                    )}
-                                    {event.latency != null && (
-                                      <span className="text-gray-500 text-xs">
-                                        {event.latency}ms
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="px-3 py-2 border-b border-gray-100">
-                                    <p className="text-xs font-medium text-gray-500 mb-1">
-                                      Prompt
-                                    </p>
-                                    <div className="text-gray-800 whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
-                                      {promptText.length > 500
-                                        ? promptText.slice(0, 500) + "..."
-                                        : promptText}
-                                      {promptText.length > 500 && (
-                                        <span className="text-gray-400 text-xs">
-                                          {" "}
-                                          ({promptText.length} chars)
-                                        </span>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div className="px-3 py-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setExpandedChatIndices((prev) => {
-                                          const next = new Set(prev);
-                                          if (next.has(idx)) next.delete(idx);
-                                          else next.add(idx);
-                                          return next;
-                                        });
-                                      }}
-                                      className="flex items-center gap-1 text-[#1E3A8A] hover:underline font-medium text-xs"
-                                    >
-                                      {isExpanded ? (
-                                        <ChevronDown className="w-3.5 h-3.5" />
-                                      ) : (
-                                        <ChevronRight className="w-3.5 h-3.5" />
-                                      )}
-                                      {isExpanded
-                                        ? "Hide response"
-                                        : "Show response"}
-                                    </button>
-                                    {isExpanded && (
-                                      <div className="mt-2 p-2 bg-gray-50 rounded border border-gray-200 text-gray-800 whitespace-pre-wrap break-words max-h-64 overflow-y-auto font-mono text-xs">
-                                        {responseText}
-                                      </div>
-                                    )}
-                                    <div className="mt-2 pt-2 border-t border-gray-100">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setExpandedRawJsonIndices((prev) => {
-                                            const next = new Set(prev);
-                                            if (next.has(idx)) next.delete(idx);
-                                            else next.add(idx);
-                                            return next;
-                                          });
-                                        }}
-                                        className="text-gray-500 hover:text-gray-700 text-xs"
-                                      >
-                                        {expandedRawJsonIndices.has(idx)
-                                          ? "Hide raw JSON"
-                                          : "View raw JSON"}
-                                      </button>
-                                      {expandedRawJsonIndices.has(idx) && (
-                                        <pre className="mt-2 p-2 bg-gray-100 rounded border border-gray-200 text-gray-700 whitespace-pre-wrap break-words max-h-48 overflow-y-auto font-mono text-xs">
-                                          {JSON.stringify(event, null, 2)}
-                                        </pre>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            }
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Task results */}
-                {selectedEvaluationSubmission.llmWorkflow.taskResults?.length >
-                  0 && (
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-900 mb-2">
-                      Task results
-                    </h3>
-                    <div className="border border-gray-200 rounded-lg overflow-hidden">
-                      <table className="w-full text-sm">
-                        <thead className="bg-gray-50 border-b border-gray-200">
-                          <tr>
-                            <th className="text-left px-3 py-2 font-medium text-gray-700">
-                              Task
-                            </th>
-                            <th className="text-left px-3 py-2 font-medium text-gray-700">
-                              Status
-                            </th>
-                            <th className="text-left px-3 py-2 font-medium text-gray-700">
-                              Tests
-                            </th>
-                            <th className="text-left px-3 py-2 font-medium text-gray-700">
-                              Time
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100">
-                          {selectedEvaluationSubmission.llmWorkflow.taskResults.map(
-                            (task, idx) => (
-                              <tr key={idx} className="hover:bg-gray-50/50">
-                                <td className="px-3 py-2">
-                                  {task.taskName || task.taskId || "—"}
-                                </td>
-                                <td className="px-3 py-2">
-                                  <Badge
-                                    className={
-                                      task.status === "passed"
-                                        ? "bg-green-100 text-green-700"
-                                        : "bg-red-100 text-red-700"
-                                    }
-                                  >
-                                    {task.status}
-                                  </Badge>
-                                </td>
-                                <td className="px-3 py-2">
-                                  {task.testResults
-                                    ? `${task.testResults.passed ?? 0}/${task.testResults.total ?? 0} passed`
-                                    : "—"}
-                                </td>
-                                <td className="px-3 py-2">
-                                  {task.executionTime != null
-                                    ? `${(task.executionTime / 1000).toFixed(1)}s`
-                                    : "—"}
-                                </td>
-                              </tr>
-                            )
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {/* Workflow scores */}
-                {selectedEvaluationSubmission.llmWorkflow.scores && (
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-900 mb-2">
-                      Workflow scores
-                    </h3>
-                    <div className="space-y-3">
-                      {selectedEvaluationSubmission.llmWorkflow.scores.overall
-                        ?.score != null && (
-                        <div className="flex items-center gap-3 p-3 bg-[#1E3A8A]/5 rounded-lg border border-[#1E3A8A]/20">
-                          <span className="text-lg font-bold text-[#1E3A8A]">
-                            Overall:{" "}
-                            {
-                              selectedEvaluationSubmission.llmWorkflow.scores
-                                .overall.score
-                            }
-                            /100
-                          </span>
-                          {selectedEvaluationSubmission.llmWorkflow.scores
-                            .overall.reasonCodes?.length > 0 && (
-                            <span className="text-xs text-gray-600">
-                              {selectedEvaluationSubmission.llmWorkflow.scores.overall.reasonCodes.join(
-                                ", "
-                              )}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {[
-                          {
-                            key: "correctness",
-                            label: "Correctness",
-                            max: 40,
-                            s: selectedEvaluationSubmission.llmWorkflow.scores
-                              .correctness,
-                          },
-                          {
-                            key: "efficiency",
-                            label: "Efficiency",
-                            max: 20,
-                            s: selectedEvaluationSubmission.llmWorkflow.scores
-                              .efficiency,
-                          },
-                          {
-                            key: "promptQuality",
-                            label: "Prompt quality",
-                            max: 15,
-                            s: selectedEvaluationSubmission.llmWorkflow.scores
-                              .promptQuality,
-                          },
-                          {
-                            key: "structure",
-                            label: "Structure",
-                            max: 20,
-                            s: selectedEvaluationSubmission.llmWorkflow.scores
-                              .structure,
-                          },
-                          {
-                            key: "reliability",
-                            label: "Reliability",
-                            max: 5,
-                            s: selectedEvaluationSubmission.llmWorkflow.scores
-                              .reliability,
-                          },
-                        ].map(
-                          ({ key, label, max, s }) =>
-                            s?.score != null && (
-                              <div
-                                key={key}
-                                className="p-3 bg-gray-50 rounded-lg border border-gray-200 text-sm"
-                              >
-                                <div className="flex justify-between items-center">
-                                  <span className="font-medium text-gray-700">
-                                    {label}
-                                  </span>
-                                  <span className="font-semibold">
-                                    {s.score}/{max}
-                                  </span>
-                                </div>
-                                {s.evidence &&
-                                  typeof s.evidence === "object" &&
-                                  Object.keys(s.evidence).length > 0 && (
-                                    <p className="text-xs text-gray-500 mt-1 truncate">
-                                      {Object.entries(s.evidence)
-                                        .filter(
-                                          ([_, v]) =>
-                                            v != null &&
-                                            v !== "" &&
-                                            v !== false
-                                        )
-                                        .map(([k, v]) => `${k}: ${v}`)
-                                        .join(" · ")}
-                                    </p>
-                                  )}
-                              </div>
-                            )
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {!selectedEvaluationSubmission.llmWorkflow.evaluation &&
-                  !selectedEvaluationSubmission.llmWorkflow.trace &&
-                  !(
-                    selectedEvaluationSubmission.llmWorkflow.taskResults?.length >
-                    0
-                  ) &&
-                  !selectedEvaluationSubmission.llmWorkflow.scores && (
-                    <p className="text-sm text-gray-500">
-                      No evaluation data for this submission.
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">Session summary</p>
+                    <p className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3 border border-gray-200 whitespace-pre-wrap">
+                      {selectedEvaluationSubmission.evaluationReport.session_summary}
                     </p>
-                  )}
-              </div>
-            ) : (
-              <div className="py-8 text-center text-gray-500">
-                <BarChart3 className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                <p>No LLM workflow data for this submission.</p>
+                  </div>
+                )}
+                {selectedEvaluationSubmission.evaluationReport.criteria_results?.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Criteria results</p>
+                    <div className="space-y-3">
+                      {(() => {
+                        const evaluable = selectedEvaluationSubmission.evaluationReport.criteria_results.filter((r) => r.evaluable);
+                        const avg = evaluable.length ? evaluable.reduce((s, r) => s + r.score, 0) / evaluable.length : null;
+                        return evaluable.length > 0 ? (
+                          <p className="text-xs text-gray-600 mb-2">
+                            Overall score (evaluable criteria): <strong>{avg != null ? (Math.round(avg * 10) / 10).toFixed(1) : "—"}</strong>/10
+                          </p>
+                        ) : null;
+                      })()}
+                      {selectedEvaluationSubmission.evaluationReport.criteria_results.map((r, i) => (
+                        <div key={i} className="bg-gray-50 rounded-lg p-3 border border-gray-200 text-sm">
+                          <p className="font-medium text-gray-800 mb-1">{r.criterion}</p>
+                          <div className="flex flex-wrap gap-2 mb-1.5">
+                            <span className="text-gray-600">Score: <strong>{r.score}</strong>/10</span>
+                            <span className="text-gray-500">Confidence: {r.confidence}</span>
+                            {!r.evaluable && <span className="text-amber-600 text-xs">Not evaluable</span>}
+                          </div>
+                          <p className="text-gray-700 text-xs leading-relaxed">{r.verdict}</p>
+                          {r.evidence?.length > 0 && (
+                            <div className="mt-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setExpandedEvidenceCriteria((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(i)) next.delete(i);
+                                    else next.add(i);
+                                    return next;
+                                  });
+                                }}
+                                className="text-[#1E3A8A] hover:underline text-xs font-medium"
+                              >
+                                Evidence: {r.evidence.length} moment(s) {expandedEvidenceCriteria.has(i) ? "▼" : "▶"}
+                              </button>
+                              {expandedEvidenceCriteria.has(i) && (
+                                <ul className="mt-2 space-y-2 pl-3 border-l-2 border-gray-200">
+                                  {r.evidence.map((ev, evIdx) => (
+                                    <li key={evIdx} className="text-xs text-gray-700">
+                                      <span className="text-gray-500 font-medium">
+                                        {ev.ts}s–{ev.ts_end}s
+                                      </span>
+                                      <p className="mt-0.5 text-gray-600">{ev.observation}</p>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
+
+            {selectedEvaluationSubmission && !selectedEvaluationSubmission?.evaluationReport && (
+              <div className="py-8 text-center text-gray-500 mt-4">
+                <BarChart3 className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                <p>No evaluation data for this submission.</p>
+              </div>
+            )}
+
           </DialogContent>
         </Dialog>
 

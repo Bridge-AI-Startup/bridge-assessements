@@ -21,11 +21,15 @@ import {
 } from "../types/evaluation.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const transcriptsDir = join(__dirname, "evals/transcripts");
 
-const transcriptPath = join(__dirname, "evals/transcripts/sample_two_sum.json");
-const transcript: TranscriptEvent[] = JSON.parse(
-  readFileSync(transcriptPath, "utf-8"),
-);
+function loadTranscript(filename: string): TranscriptEvent[] {
+  return JSON.parse(
+    readFileSync(join(transcriptsDir, filename), "utf-8"),
+  );
+}
+
+const transcript = loadTranscript("sample_two_sum.json");
 
 const TEST_CRITERION = "Reviews AI generated code before accepting";
 const TEST_JD =
@@ -162,14 +166,18 @@ const FULL_PIPELINE_CRITERIA = [
   "Uses AI as a crutch rather than a tool",
 ];
 
-async function testFullPipeline() {
-  header("PHASE 4: FULL PIPELINE (orchestrator)");
-
+async function runFullPipelineForTranscript(
+  transcriptName: string,
+  transcriptData: TranscriptEvent[],
+) {
   console.log(
-    `\nRunning orchestrator with ${FULL_PIPELINE_CRITERIA.length} criteria...\n`,
+    `\n--- Transcript: ${transcriptName} (${transcriptData.length} events) ---\n`,
   );
   try {
-    const report = await evaluateTranscript(transcript, FULL_PIPELINE_CRITERIA);
+    const report = await evaluateTranscript(
+      transcriptData,
+      FULL_PIPELINE_CRITERIA,
+    );
     console.log("SESSION SUMMARY:");
     console.log(report.session_summary);
     const avg = averageScoreOverEvaluableCriteria(report.criteria_results);
@@ -185,6 +193,22 @@ async function testFullPipeline() {
   } catch (err) {
     console.error(`ERROR: ${err}`);
   }
+}
+
+async function testFullPipeline() {
+  header("PHASE 4: FULL PIPELINE (orchestrator)");
+
+  console.log(
+    `\nRunning orchestrator with ${FULL_PIPELINE_CRITERIA.length} criteria on each transcript.\n`,
+  );
+
+  await runFullPipelineForTranscript("sample_two_sum.json", transcript);
+
+  const weakTranscript = loadTranscript("sample_weak_candidate.json");
+  await runFullPipelineForTranscript(
+    "sample_weak_candidate.json",
+    weakTranscript,
+  );
 }
 
 async function run() {

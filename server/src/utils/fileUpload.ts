@@ -1,34 +1,4 @@
 import multer from "multer";
-import { Request } from "express";
-
-// Configure multer for JSON file uploads
-const storage = multer.memoryStorage(); // Store in memory for processing
-
-const fileFilter = (
-  req: Request,
-  file: Express.Multer.File,
-  cb: multer.FileFilterCallback
-) => {
-  const ok =
-    file.mimetype === "application/json" ||
-    file.originalname.endsWith(".json") ||
-    file.mimetype === "text/markdown" ||
-    file.mimetype === "text/x-markdown" ||
-    file.originalname.endsWith(".md");
-  if (ok) {
-    cb(null, true);
-  } else {
-    cb(new Error("Only JSON or Markdown (.md) files are allowed"));
-  }
-};
-
-export const uploadLLMTrace = multer({
-  storage,
-  fileFilter,
-  limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB max
-  },
-}).single("llmTrace"); // Field name: "llmTrace"
 
 export function parseTraceFile(file: Express.Multer.File): any {
   try {

@@ -12,6 +12,7 @@ export type Assessment = {
   starterFilesGitHubLink?: string;
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
+  evaluationCriteria?: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -23,6 +24,7 @@ export type AssessmentCreate = {
   numInterviewQuestions?: number;
   starterFilesGitHubLink?: string;
   interviewerCustomInstructions?: string;
+  evaluationCriteria?: string[];
 };
 
 export type AssessmentUpdate = {
@@ -33,6 +35,7 @@ export type AssessmentUpdate = {
   starterFilesGitHubLink?: string;
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
+  evaluationCriteria?: string[];
 };
 
 /**
@@ -57,11 +60,15 @@ export async function createAssessment(
       title: string;
       description: string;
       timeLimit: number;
+      evaluationCriteria?: string[];
     } = {
       title: data.title,
       description: data.description,
       timeLimit: data.timeLimit,
     };
+    if (data.evaluationCriteria && data.evaluationCriteria.length > 0) {
+      requestBody.evaluationCriteria = data.evaluationCriteria;
+    }
 
     // Make request without assertOk to handle 403 subscription limit errors
     const response = await fetch(`${API_BASE_URL}/assessments`, {
@@ -212,6 +219,7 @@ export async function updateAssessment(
       starterFilesGitHubLink?: string;
       interviewerCustomInstructions?: string;
       isSmartInterviewerEnabled?: boolean;
+      evaluationCriteria?: string[];
     } = {};
 
     if (data.title !== undefined) {
@@ -235,6 +243,9 @@ export async function updateAssessment(
     }
     if (data.isSmartInterviewerEnabled !== undefined) {
       updateBody.isSmartInterviewerEnabled = data.isSmartInterviewerEnabled;
+    }
+    if (data.evaluationCriteria !== undefined) {
+      updateBody.evaluationCriteria = data.evaluationCriteria;
     }
 
     const response = await patch(`/assessments/${id}`, updateBody, {

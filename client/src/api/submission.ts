@@ -71,6 +71,18 @@ export type Submission = {
   timeRemaining?: number | null; // Minutes remaining (calculated server-side)
   createdAt: string;
   updatedAt: string;
+  /** Screen recording evaluation report when assessment has evaluation criteria */
+  evaluationReport?: {
+    session_summary: string;
+    criteria_results: Array<{
+      criterion: string;
+      score: number;
+      confidence: string;
+      verdict: string;
+      evidence: unknown[];
+      evaluable: boolean;
+    }>;
+  };
 };
 
 /**
@@ -532,33 +544,3 @@ export async function sendInvites(
   }
 }
 
-/**
- * Upload LLM trace file (candidate endpoint)
- */
-export async function uploadLLMTrace(
-  token: string,
-  file: File
-): Promise<APIResult<{ sessionId: string; eventsProcessed: number }>> {
-  try {
-    const formData = new FormData();
-    formData.append("llmTrace", file);
-
-    const response = await fetch(`${API_BASE_URL}/submissions/token/${token}/upload-trace`, {
-      method: "POST",
-      body: formData,
-    });
-
-    const result = await response.json();
-
-    if (result.sessionId) {
-      return { success: true, data: result };
-    }
-
-    return {
-      success: false,
-      error: result.error || "Failed to upload trace",
-    };
-  } catch (error) {
-    return handleAPIError(error);
-  }
-}

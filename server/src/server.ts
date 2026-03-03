@@ -155,7 +155,7 @@ app.use(
 );
 
 // Standard JSON body parser for all other routes
-// Skip body parsing for multipart/form-data so multer can read the stream (upload-trace)
+// Skip body parsing for multipart/form-data so multer can read the stream
 app.use((req, res, next) => {
   const contentType = req.get("Content-Type") || "";
   if (contentType.includes("multipart/form-data")) {

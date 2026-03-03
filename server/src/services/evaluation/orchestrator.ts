@@ -7,21 +7,33 @@ import type {
   TranscriptEvent,
   EvaluationReport,
   CriterionResult,
+  GroundedCriterion,
 } from "../../types/evaluation.js";
 
+export type EvaluateTranscriptOptions = {
+  /** Pre-grounded criteria from assessment (same order as criteria). When present, ground step is skipped. */
+  groundings?: GroundedCriterion[];
+};
+
 /**
- * Run the full evaluation pipeline: validate → ground → retrieve → evaluate
+ * Run the full evaluation pipeline: validate → ground (or use provided groundings) → retrieve → evaluate
  * per criterion, plus a session summary. All criteria are processed in parallel;
  * session summary runs in parallel with them.
  */
 export async function evaluateTranscript(
   transcript: TranscriptEvent[],
-  criteria: string[]
+  criteria: string[],
+  options?: EvaluateTranscriptOptions
 ): Promise<EvaluationReport> {
+  const groundings = options?.groundings;
+  const usePreGrounded =
+    Array.isArray(groundings) &&
+    groundings.length === criteria.length;
+
   const [criteriaResults, session_summary] = await Promise.all([
     Promise.all(
-      criteria.map((criterion) =>
-        evaluateOneCriterion(transcript, criterion)
+      criteria.map((criterion, i) =>
+        evaluateOneCriterion(transcript, criterion, usePreGrounded ? groundings![i] : undefined)
       )
     ),
     generateSessionSummary(transcript),
@@ -35,7 +47,8 @@ export async function evaluateTranscript(
 
 async function evaluateOneCriterion(
   transcript: TranscriptEvent[],
-  criterion: string
+  criterion: string,
+  preGrounded?: GroundedCriterion
 ): Promise<CriterionResult> {
   const validation = await validateCriterion(criterion);
   if (!validation.valid) {
@@ -51,7 +64,10 @@ async function evaluateOneCriterion(
     };
   }
 
-  const grounded = await groundCriterion(criterion);
+  const grounded =
+    preGrounded && preGrounded.original === criterion
+      ? preGrounded
+      : await groundCriterion(criterion);
   const filtered = retrieveRelevantEvents(transcript, grounded);
   const result = await evaluateCriterionWithGrounding(
     grounded,

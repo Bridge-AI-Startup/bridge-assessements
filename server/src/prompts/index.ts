@@ -482,8 +482,9 @@ CRITICAL RULES:
 4. Use the exact ts and ts_end values from the transcript in your evidence items.
 5. If there is little or no relevant evidence in the transcript, return confidence: "low" and score accordingly. Never fake certainty.
 6. The criterion has already been approved as evaluable from a screen recording. You must produce a score from observable behavior only. Do not state that the criterion is "not evaluable" or refuse to score. If evidence is weak or ambiguous, use low confidence and explain in the verdict; still assign a score (1-10).
+7. FAIRNESS: Score only from the evidence you list. Two candidates who show the same evidence must get the same score. Do not use subjective judgment beyond what the evidence supports. Your score must be strictly justified by the number and clarity of evidence items.
 
-SCORING GUIDE:
+SCORING GUIDE (apply consistently; same evidence pattern → same score):
 - 9-10: Strong, consistent evidence across multiple moments. Candidate clearly demonstrated this behavior.
 - 7-8: Good evidence with minor gaps. Candidate mostly demonstrated this behavior.
 - 5-6: Mixed evidence. Some positive signals but also gaps or contradictions.
@@ -553,51 +554,62 @@ export const PROMPT_SUGGEST_CRITERIA = {
   provider: "anthropic" as AIProvider,
   model: "claude-3-haiku-20240307",
 
-  system: `You are an expert technical hiring evaluator. Given a job description, your task is to generate 8–12 evaluation criteria that can be used to assess a candidate's screen recording of a coding assessment session.
+  system: `You are an expert technical hiring evaluator. Given a job description, your task is to generate no more than 5 evaluation criteria that can be used to assess a candidate's screen recording of a coding assessment session.
 
 CRITICAL RULES — what makes a good criterion:
 1. Every criterion MUST describe an observable behavior visible on screen during a coding session. A reviewer watching a silent screen recording must be able to confirm or deny the behavior happened.
 2. Criteria MUST be specific and actionable, not character traits or soft skills.
 3. Criteria MUST be tailored to the role described in the job description. Use the seniority level, tech stack, and responsibilities to determine what behaviors matter most.
+4. NEVER use vague or subjective phrases. Name the exact action or moment a reviewer would see. Avoid "best practices", "clean code", "good quality", "proper X", "attention to detail" without specifying what the candidate does on screen.
+5. FOCUS ON CODE PRACTICES. Prefer criteria about how they code, test, debug, read requirements, and structure work. You may include one or two criteria about AI use (e.g. how they use an AI assistant during the session) when relevant — but keep the majority focused on observable coding behavior, not soft skills or tool preferences.
 
-EXAMPLES OF VALID CRITERIA (observable on screen):
-- "Reviews AI-generated code before accepting it"
+AVOID VAGUE CRITERIA (do not use phrases like these):
+- "Follows best practices for X" → instead: e.g. "Resizes browser or checks layout at multiple viewport widths"
+- "Writes clean/readable code" → instead: e.g. "Refactors duplicated code or renames variables for clarity"
+- "Demonstrates good code quality" → instead: name a concrete action (runs tests, handles errors, etc.)
+- "Uses proper design patterns" → instead: e.g. "Splits logic into smaller functions or modules"
+- "Shows attention to detail" → instead: e.g. "Re-reads requirements after a test failure"
+
+EXAMPLES OF VALID CRITERIA (concrete, observable on screen):
+
+Code practices (prioritize these):
 - "Tests their work after implementing each feature"
 - "Reads the full requirements before starting to code"
 - "Checks error messages before making changes"
 - "Looks up documentation when encountering an unfamiliar API"
 - "Refactors duplicated code rather than copying it"
 - "Writes or runs tests after implementing a function"
-- "Uses version control (e.g. git commits) during the session"
 - "Breaks the problem into smaller steps before coding"
 - "Validates edge cases in their implementation"
 - "Reviews their own code before submitting"
 - "Uses debugging tools rather than only print statements"
 
-EXAMPLES OF INVALID CRITERIA (NOT observable on screen — do not use these):
-- "Shows culture fit"
-- "Communicates well"
-- "Has a positive attitude"
-- "Demonstrates teamwork"
-- "Is passionate about the role"
+AI use (include one or two when relevant; must be observable):
+- "Reviews AI-generated code before accepting it"
+- "Edits or adapts AI suggestions rather than pasting them verbatim"
+- "Asks the AI for clarification or optimization, then implements themselves"
 
-ROLE-LEVEL GUIDANCE:
-- Junior roles: Emphasize criteria around reading requirements carefully, looking up documentation, running/testing code frequently, asking for clarification, and following instructions step by step.
-- Mid-level roles: Emphasize criteria around structuring work, handling errors properly, writing clean and readable code, and validating assumptions.
-- Senior roles: Emphasize criteria around code quality, optimization decisions, refactoring, reviewing generated or existing code critically, and handling complexity and edge cases.
+EXAMPLES OF INVALID CRITERIA (do not use these):
+- Soft/subjective: "Shows culture fit", "Communicates well", "Has a positive attitude", "Demonstrates teamwork"
+- Vague: "Follows best practices for responsive UI design", "Writes clean code", "Demonstrates good code quality", "Uses proper error handling" (use a specific behavior instead, e.g. "Checks error messages before making changes")
+
+ROLE-LEVEL GUIDANCE (keep criteria focused on code practices):
+- Junior roles: Reading requirements carefully, looking up documentation, running tests frequently, following instructions step by step.
+- Mid-level roles: Structuring work, checking errors and fixing them, refactoring duplication, validating assumptions with tests.
+- Senior roles: Optimization decisions, refactoring, reviewing AI-generated or existing code critically, handling edge cases. You may include one criterion on how they use AI (e.g. reviewing AI output before accepting).
 
 Output a JSON object with exactly this shape:
 { "criteria": string[] }
 
-The array must contain between 8 and 12 criteria strings. Each string should be a concise, imperative phrase (10–15 words maximum).`,
+The array must contain no more than 5 criteria strings. Each string should be a concise, imperative phrase (10–15 words maximum).`,
 
   userTemplate: (jobDescription: string) =>
-    `Generate 8–12 observable screen-recording evaluation criteria for a candidate being assessed for the following role.
+    `Generate no more than 5 observable screen-recording evaluation criteria for a candidate being assessed for the following role.
 
 JOB DESCRIPTION:
 ${jobDescription}
 
-Tailor the criteria to the seniority level, responsibilities, and tech stack described above. Every criterion must be something a reviewer can observe in a silent screen recording of a coding session.
+Tailor the criteria to the seniority level, responsibilities, and tech stack described above. Focus on code practices (testing, debugging, reading requirements, refactoring, handling errors). You may include one or two criteria about how they use AI during the session (e.g. reviews AI-generated code before accepting, or edits AI suggestions rather than pasting verbatim). Every criterion must be a concrete, observable action, not a vague phrase like "best practices" or "clean code".
 
 Respond with a JSON object only: { "criteria": string[] }`,
 };

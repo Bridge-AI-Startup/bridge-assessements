@@ -12,14 +12,83 @@ import type {
 /** True if the result is based on observable evidence; false when the model effectively said "not evaluable". */
 function isEvaluable(parsed: {
   evidence: unknown[];
-  verdict: string;
+  verdict?: string;
 }): boolean {
-  if (parsed.evidence.length > 0) return true;
-  const v = parsed.verdict.toLowerCase();
+  if (parsed.evidence?.length > 0) return true;
+  const v = (parsed.verdict ?? "").toLowerCase();
   return !(
     /not evaluable|cannot be (directly )?observed|not observable/.test(v) ||
     v.includes("cannot be directly observed")
   );
+}
+
+/** Build a valid CriterionResult from raw LLM output when schema parse fails (missing/invalid fields). */
+function fallbackCriterionResult(
+  raw: Record<string, unknown>,
+  criterion: string,
+): CriterionResult {
+  const evidence: Array<{ ts: number; ts_end: number; observation: string }> = [];
+  if (Array.isArray(raw.evidence)) {
+    for (const item of raw.evidence) {
+      if (
+        item &&
+        typeof item === "object" &&
+        typeof (item as Record<string, unknown>).ts === "number" &&
+        typeof (item as Record<string, unknown>).ts_end === "number" &&
+        typeof (item as Record<string, unknown>).observation === "string"
+      ) {
+        evidence.push({
+          ts: (item as Record<string, unknown>).ts as number,
+          ts_end: (item as Record<string, unknown>).ts_end as number,
+          observation: (item as Record<string, unknown>).observation as string,
+        });
+      }
+    }
+  }
+  const score =
+    typeof raw.score === "number" && raw.score >= 1 && raw.score <= 10
+      ? Math.round(raw.score)
+      : 1;
+  const confidence =
+    raw.confidence === "high" || raw.confidence === "medium" || raw.confidence === "low"
+      ? raw.confidence
+      : "low";
+  const verdict =
+    typeof raw.verdict === "string" && raw.verdict.trim()
+      ? raw.verdict.trim()
+      : "Evaluation incomplete; model did not return required fields (score, confidence, verdict).";
+
+  return {
+    criterion,
+    evidence,
+    score,
+    confidence,
+    verdict,
+    evaluable: false,
+  };
+}
+
+/** Parse and validate LLM response; on schema failure use fallback so the pipeline never crashes. */
+function parseCriterionResult(
+  content: string,
+  criterion: string,
+): CriterionResult {
+  const unwrapped = unwrapObject(parseEvaluatorJson(content));
+  const raw =
+    unwrapped !== null &&
+    typeof unwrapped === "object" &&
+    !Array.isArray(unwrapped)
+      ? (unwrapped as Record<string, unknown>)
+      : {};
+  const parsed = criterionResultSchema.safeParse(raw);
+  if (parsed.success) {
+    return {
+      ...parsed.data,
+      criterion,
+      evaluable: isEvaluable(parsed.data),
+    };
+  }
+  return fallbackCriterionResult(raw, criterion);
 }
 
 /**
@@ -76,21 +145,13 @@ export async function evaluateCriterion(
     {
       provider: PROMPT_EVALUATE_CRITERION.provider,
       model: PROMPT_EVALUATE_CRITERION.model,
-      temperature: 0.2,
+      temperature: 0,
       maxTokens: 2048,
       responseFormat: { type: "json_object" },
     },
   );
 
-  const parsed = criterionResultSchema.parse(
-    unwrapObject(parseEvaluatorJson(content)),
-  );
-
-  return {
-    ...parsed,
-    criterion,
-    evaluable: isEvaluable(parsed),
-  };
+  return parseCriterionResult(content, criterion);
 }
 
 /**
@@ -119,7 +180,7 @@ ${grounded.negative_indicators.map((n) => `- ${n}`).join("\n")}
 TRANSCRIPT:
 ${transcriptJson}
 
-Evaluate the candidate on this criterion using the definition and indicators above. Remember: collect evidence from the transcript first, then assign a score and confidence based on what you found.
+Evaluate the candidate on this criterion using the definition and indicators above. Remember: collect evidence from the transcript first, then assign a score and confidence based only on that evidence. Same evidence pattern must yield the same score (fairness).
 
 Respond with a JSON object with exactly these fields:
 {
@@ -143,19 +204,11 @@ In all string fields (criterion, observation, verdict), escape any double quotes
     {
       provider: PROMPT_EVALUATE_CRITERION.provider,
       model: PROMPT_EVALUATE_CRITERION.model,
-      temperature: 0.2,
+      temperature: 0,
       maxTokens: 2048,
       responseFormat: { type: "json_object" },
     },
   );
 
-  const parsed = criterionResultSchema.parse(
-    unwrapObject(parseEvaluatorJson(content)),
-  );
-
-  return {
-    ...parsed,
-    criterion: originalCriterion,
-    evaluable: isEvaluable(parsed),
-  };
+  return parseCriterionResult(content, originalCriterion);
 }
