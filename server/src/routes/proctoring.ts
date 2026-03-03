@@ -91,6 +91,17 @@ router.post(
   ProctoringController.generateSessionTranscript
 );
 
+router.post(
+  "/sessions/:sessionId/refine-transcript",
+  ...transcriptAuthMiddleware,
+  ProctoringController.refineSessionTranscript
+);
+
+router.get(
+  "/sessions/:sessionId/transcript/refined",
+  ProctoringController.getRefinedTranscript
+);
+
 router.get(
   "/sessions/:sessionId/debug-frames",
   ProctoringController.getDebugFrames

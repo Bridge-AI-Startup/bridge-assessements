@@ -221,6 +221,41 @@ export async function getDebugFrames(
 }
 
 /**
+ * Trigger AI transcript refinement (converts raw OCR to clean descriptions).
+ */
+export async function refineTranscript(
+  sessionId: string
+): Promise<APIResult<{ storageKey: string; segmentCount: number }>> {
+  try {
+    const response = await post(
+      `/proctoring/sessions/${sessionId}/refine-transcript`,
+      {}
+    );
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Get the refined JSONL transcript content for a session.
+ */
+export async function getRefinedTranscriptContent(
+  sessionId: string
+): Promise<APIResult<string>> {
+  try {
+    const response = await get(
+      `/proctoring/sessions/${sessionId}/transcript/refined`
+    );
+    const text = await response.text();
+    return { success: true, data: text };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
  * Upload a video chunk. Uses raw fetch with FormData.
  */
 export async function uploadVideoChunk(

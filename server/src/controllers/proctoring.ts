@@ -225,6 +225,48 @@ export const generateSessionTranscript: RequestHandler = async (
   }
 };
 
+// POST /api/proctoring/sessions/:sessionId/refine-transcript
+export const refineSessionTranscript: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { sessionId } = req.params;
+
+    const { refineTranscript } = await import(
+      "../ai/transcript/refiner.js"
+    );
+
+    const result = await refineTranscript(sessionId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /api/proctoring/sessions/:sessionId/transcript/refined
+export const getRefinedTranscript: RequestHandler = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await ProctoringSessionModel.findById(sessionId);
+    if (!session) throw ProctoringError.SESSION_NOT_FOUND;
+
+    if (session.transcript.refinedStatus !== "completed" || !session.transcript.refinedStorageKey) {
+      return res.status(404).json({ error: "Refined transcript not available" });
+    }
+
+    const { getFrameStorage } = await import("../services/capture/storage.js");
+    const storage = getFrameStorage();
+    const content = await storage.getTranscript(session.transcript.refinedStorageKey);
+
+    res.setHeader("Content-Type", "application/jsonl");
+    res.send(content);
+  } catch (error) {
+    next(error);
+  }
+};
+
 // GET /api/proctoring/sessions/by-submission/:submissionId
 export const getSessionBySubmission: RequestHandler = async (
   req,

@@ -63,6 +63,10 @@ export function isRegionDetectionEnabled(): boolean {
   return process.env.TRANSCRIPT_REGION_DETECTION !== "false";
 }
 
+// ---------------------------------------------------------------------------
+// Text strip sampling
+// ---------------------------------------------------------------------------
+
 /**
  * Sample text from horizontal strips of the image using Tesseract.
  * Returns text snippets with their approximate vertical position (as % of image height).
@@ -99,6 +103,7 @@ async function sampleTextStrips(
           width: imageWidth,
           height: clampedHeight,
         })
+        .withMetadata({ density: 72 })
         .png()
         .toBuffer();
 
@@ -149,8 +154,10 @@ export async function detectRegions(
 
   // Sample text from strips to help identify region types
   const textHints = await sampleTextStrips(frame.buffer, imgWidth, imgHeight);
+
   console.log(
-    `[regionDetector] Detecting regions with ${model}${textHints ? " (with text hints)" : ""}...`
+    `[regionDetector] Detecting regions with ${model}` +
+      `${textHints ? " (with text hints)" : ""}...`
   );
 
   try {
@@ -258,6 +265,7 @@ export async function cropRegions(
           width: clampedWidth,
           height: clampedHeight,
         })
+        .withMetadata({ density: 72 })
         .png()
         .toBuffer();
 

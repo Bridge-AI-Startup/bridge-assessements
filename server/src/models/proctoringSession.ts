@@ -81,6 +81,20 @@ const ProctoringSessionSchema = new mongoose.Schema(
         completion: { type: Number, default: 0 },
         total: { type: Number, default: 0 },
       },
+      // Refined transcript (AI post-processing of raw OCR)
+      refinedStatus: {
+        type: String,
+        enum: ["not_started", "generating", "completed", "failed"],
+        default: "not_started",
+      },
+      refinedStorageKey: { type: String, default: null },
+      refinedAt: { type: Date, default: null },
+      refinedError: { type: String, default: null },
+      refinedTokenUsage: {
+        prompt: { type: Number, default: 0 },
+        completion: { type: Number, default: 0 },
+        total: { type: Number, default: 0 },
+      },
     },
     videoChunks: [
       {
