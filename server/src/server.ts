@@ -15,6 +15,7 @@ import agentToolsRoutes from "./routes/agentTools.js";
 import webhookRoutes from "./routes/webhook.js";
 import billingRoutes from "./routes/billing.js";
 import llmProxyRoutes from "./routes/llmProxy.js";
+import proctoringRoutes from "./routes/proctoring.js";
 import { errorHandler } from "./errors/handler.js";
 
 const PORT = process.env.PORT || 5050;
@@ -266,6 +267,16 @@ app.use("/api/llm-proxy", apiLimiter); // Apply general limit
 app.use("/api/llm-proxy", llmProxyRoutes);
 console.log("  ✅ /api/llm-proxy routes registered");
 console.log("     - POST /api/llm-proxy/chat");
+
+app.use("/api/proctoring", apiLimiter); // Apply general limit
+app.use("/api/proctoring", proctoringRoutes);
+console.log("  ✅ /api/proctoring routes registered");
+console.log("     - POST /api/proctoring/sessions");
+console.log("     - POST /api/proctoring/sessions/:sessionId/consent");
+console.log("     - POST /api/proctoring/sessions/:sessionId/frames");
+console.log("     - POST /api/proctoring/sessions/:sessionId/events");
+console.log("     - POST /api/proctoring/sessions/:sessionId/complete");
+console.log("     - POST /api/proctoring/sessions/:sessionId/generate-transcript");
 
 // 404 handler
 app.use((req, res) => {

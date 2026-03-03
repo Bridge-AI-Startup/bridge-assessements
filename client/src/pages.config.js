@@ -13,6 +13,7 @@ import BillingCancel from "./pages/BillingCancel";
 import CancelSubscription from "./pages/CancelSubscription";
 import Pricing from "./pages/Pricing";
 import Contact from "./pages/Contact";
+import ProctoringTest from "./pages/ProctoringTest";
 
 export const PAGES = {
   CreateAssessment: CreateAssessment,
@@ -30,6 +31,7 @@ export const PAGES = {
   CancelSubscription: CancelSubscription,
   Pricing: Pricing,
   Contact: Contact,
+  ProctoringTest: ProctoringTest,
 };
 
 export const pagesConfig = {

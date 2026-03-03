@@ -1,0 +1,600 @@
+import { useState, useEffect, useCallback, useRef } from "react";
+import { motion } from "framer-motion";
+import {
+  Monitor,
+  Play,
+  Square,
+  FileText,
+  Loader2,
+  CheckCircle,
+  AlertCircle,
+  Trash2,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import ConsentScreen from "@/components/proctoring/ConsentScreen";
+import RecordingIndicator from "@/components/proctoring/RecordingIndicator";
+import StreamStatusPanel from "@/components/proctoring/StreamStatusPanel";
+import ResharePrompt from "@/components/proctoring/ResharePrompt";
+import useScreenCapture from "@/hooks/useScreenCapture";
+import useScreenshotCapture from "@/hooks/useScreenshotCapture";
+import useFrameDedup from "@/hooks/useFrameDedup";
+import useFrameUpload from "@/hooks/useFrameUpload";
+import useVideoRecording from "@/hooks/useVideoRecording";
+import {
+  createTestProctoringSession,
+  grantConsent,
+  completeSession,
+  getSession,
+  generateTranscript,
+  getTranscriptContent,
+  recordSidecarEvents,
+} from "@/api/proctoring";
+
+/**
+ * Standalone test page for the proctoring/screen capture feature.
+ * Bypasses the normal assessment flow so you can test recording + transcription directly.
+ *
+ * DEV ONLY — the server endpoint returns 404 in production.
+ *
+ * To remove this test page and all related test infrastructure, run:
+ *   node scripts/remove-proctoring-test.js
+ * from the project root (see PROCTORING_TEST_TEARDOWN.md for details).
+ */
+
+const PHASE = {
+  SETUP: "setup",
+  CONSENT: "consent",
+  RECORDING: "recording",
+  COMPLETED: "completed",
+};
+
+export default function ProctoringTest() {
+  const [phase, setPhase] = useState(PHASE.SETUP);
+  const [sessionId, setSessionId] = useState(null);
+  const [token, setToken] = useState(null);
+  const [sessionData, setSessionData] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [transcriptStatus, setTranscriptStatus] = useState(null);
+  const [transcriptContent, setTranscriptContent] = useState(null);
+  const [showResharePrompt, setShowResharePrompt] = useState(false);
+  const sidecarBufferRef = useRef([]);
+
+  // Proctoring hooks
+  const {
+    streams,
+    isSharing,
+    startCapture,
+    stopCapture,
+    streamLost,
+    onStreamLost,
+    onStreamRestored,
+  } = useScreenCapture();
+
+  const { consumeFrames, frameCount } = useScreenshotCapture(streams, {
+    intervalMs: 15000, // Screenshots are fallback — video is primary
+    enabled: phase === PHASE.RECORDING && isSharing,
+  });
+
+  // Video recording (primary capture method)
+  const {
+    isRecording: isVideoRecording,
+    chunkCount: videoChunkCount,
+    uploadedChunks: videoUploadedChunks,
+    failedChunks: videoFailedChunks,
+    totalVideoBytes,
+    videoFailed,
+    stopRecording: stopVideoRecording,
+  } = useVideoRecording(streams, {
+    sessionId,
+    token,
+    enabled: phase === PHASE.RECORDING && isSharing,
+  });
+
+  const { shouldKeepFrame, duplicatesSkipped } = useFrameDedup();
+
+  // Wrap consumeFrames with dedup
+  const consumeDedupedFrames = useCallback(async () => {
+    const raw = consumeFrames();
+    const kept = [];
+    for (const frame of raw) {
+      const keep = await shouldKeepFrame(frame.blob, frame.screenIndex);
+      if (keep) kept.push(frame);
+    }
+    return kept;
+  }, [consumeFrames, shouldKeepFrame]);
+
+  // Use a ref wrapper so useFrameUpload gets a sync function
+  const dedupedQueueRef = useRef([]);
+  useEffect(() => {
+    if (phase !== PHASE.RECORDING || !isSharing) return;
+    const interval = setInterval(async () => {
+      const frames = await consumeDedupedFrames();
+      dedupedQueueRef.current.push(...frames);
+    }, 4000); // slightly faster than upload interval
+    return () => clearInterval(interval);
+  }, [phase, isSharing, consumeDedupedFrames]);
+
+  const consumeFromDedupQueue = useCallback(() => {
+    const frames = [...dedupedQueueRef.current];
+    dedupedQueueRef.current = [];
+    return frames;
+  }, []);
+
+  const { uploadedCount, failedCount, isUploading, flush } = useFrameUpload({
+    sessionId,
+    token,
+    consumeFrames: consumeFromDedupQueue,
+    enabled: phase === PHASE.RECORDING && isSharing,
+  });
+
+  // Stream lost/restored handlers
+  useEffect(() => {
+    onStreamLost(() => {
+      setShowResharePrompt(true);
+      sidecarBufferRef.current.push({
+        type: "stream_lost",
+        timestamp: Date.now(),
+      });
+    });
+    onStreamRestored(() => {
+      setShowResharePrompt(false);
+      sidecarBufferRef.current.push({
+        type: "stream_restored",
+        timestamp: Date.now(),
+      });
+    });
+  }, [onStreamLost, onStreamRestored]);
+
+  // Sidecar events flush
+  useEffect(() => {
+    if (phase !== PHASE.RECORDING || !sessionId || !token) return;
+    const interval = setInterval(async () => {
+      if (sidecarBufferRef.current.length === 0) return;
+      const events = [...sidecarBufferRef.current];
+      sidecarBufferRef.current = [];
+      await recordSidecarEvents(sessionId, token, events);
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [phase, sessionId, token]);
+
+  // --- Phase handlers ---
+
+  const handleCreateSession = async () => {
+    setLoading(true);
+    setError(null);
+    const result = await createTestProctoringSession();
+    if (result.success) {
+      setSessionId(result.data.session._id);
+      setToken(result.data.token);
+      setPhase(PHASE.CONSENT);
+    } else {
+      setError(result.error || "Failed to create test session");
+    }
+    setLoading(false);
+  };
+
+  const handleConsent = async () => {
+    setLoading(true);
+    const stream = await startCapture();
+    if (!stream) {
+      setError("Screen share was denied");
+      setLoading(false);
+      return;
+    }
+    await grantConsent(sessionId, token, 1);
+    setPhase(PHASE.RECORDING);
+    setLoading(false);
+  };
+
+  const handleDecline = () => {
+    setError("Recording declined. You need to consent to test proctoring.");
+  };
+
+  const handleStopRecording = async () => {
+    setLoading(true);
+    // Stop video recording first (flushes final chunk)
+    await stopVideoRecording();
+    // Final screenshot flush
+    await flush();
+    // Flush sidecar events
+    if (sidecarBufferRef.current.length > 0) {
+      const events = [...sidecarBufferRef.current];
+      sidecarBufferRef.current = [];
+      await recordSidecarEvents(sessionId, token, events);
+    }
+    // Complete session
+    await completeSession(sessionId, token);
+    stopCapture();
+    // Fetch final session data
+    const sessionResult = await getSession(sessionId);
+    if (sessionResult.success) {
+      setSessionData(sessionResult.data);
+    }
+    setPhase(PHASE.COMPLETED);
+    setLoading(false);
+  };
+
+  const handleReshare = async () => {
+    const stream = await startCapture();
+    if (stream) {
+      setShowResharePrompt(false);
+    }
+  };
+
+  const handleGenerateTranscript = async () => {
+    setTranscriptStatus("generating");
+    const result = await generateTranscript(sessionId);
+    if (!result.success) {
+      setTranscriptStatus("failed");
+      setError(result.error || "Transcript generation failed");
+      return;
+    }
+    // Poll for completion
+    const poll = setInterval(async () => {
+      const sessionResult = await getSession(sessionId);
+      if (sessionResult.success) {
+        setSessionData(sessionResult.data);
+        const status = sessionResult.data.transcript?.status;
+        if (status === "completed") {
+          clearInterval(poll);
+          setTranscriptStatus("completed");
+          const transcriptResult = await getTranscriptContent(sessionId);
+          if (transcriptResult.success) {
+            setTranscriptContent(transcriptResult.data);
+          }
+        } else if (status === "failed") {
+          clearInterval(poll);
+          setTranscriptStatus("failed");
+          setError(
+            sessionResult.data.transcript?.error || "Transcript generation failed"
+          );
+        }
+      }
+    }, 3000);
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 py-12 px-4">
+      <div className="max-w-2xl mx-auto">
+        {/* Header */}
+        <div className="text-center mb-8">
+          <div className="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center mx-auto mb-3">
+            <Monitor className="w-6 h-6 text-purple-600" />
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900">
+            Proctoring Test Page
+          </h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Dev-only page to test screen recording and transcript generation
+          </p>
+          <div className="mt-2 inline-flex items-center gap-1.5 bg-yellow-50 text-yellow-700 text-xs px-2.5 py-1 rounded-full border border-yellow-200">
+            <AlertCircle className="w-3 h-3" />
+            Development only — disabled in production
+          </div>
+        </div>
+
+        {/* Error banner */}
+        {error && (
+          <div className="mb-6 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            {error}
+            <button
+              onClick={() => setError(null)}
+              className="ml-auto text-red-500 hover:text-red-700"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Phase: Setup */}
+        {phase === PHASE.SETUP && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center"
+          >
+            <p className="text-gray-600 mb-6">
+              This creates a dummy submission and proctoring session so you can
+              test the full recording pipeline without setting up an assessment.
+            </p>
+            <Button
+              onClick={handleCreateSession}
+              disabled={loading}
+              className="bg-purple-600 hover:bg-purple-700 text-white"
+            >
+              {loading ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Play className="w-4 h-4 mr-2" />
+              )}
+              Create Test Session
+            </Button>
+          </motion.div>
+        )}
+
+        {/* Phase: Consent */}
+        {phase === PHASE.CONSENT && (
+          <ConsentScreen onConsent={handleConsent} onDecline={handleDecline} />
+        )}
+
+        {/* Phase: Recording */}
+        {phase === PHASE.RECORDING && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white rounded-xl shadow-sm border border-gray-200 p-8"
+          >
+            <div className="text-center mb-6">
+              <h2 className="text-lg font-semibold text-gray-900">
+                Recording in Progress
+              </h2>
+              <p className="text-sm text-gray-500 mt-1">
+                Your screen is being captured. Do some work, switch tabs, etc. to
+                generate interesting transcript data.
+              </p>
+            </div>
+
+            {/* Video recording stats */}
+            <div className="mb-4">
+              <div className="flex items-center gap-2 mb-2">
+                <div className={`w-2 h-2 rounded-full ${isVideoRecording ? "bg-red-500 animate-pulse" : videoFailed ? "bg-yellow-500" : "bg-gray-300"}`} />
+                <span className="text-xs font-medium text-gray-600">
+                  {isVideoRecording ? "Video Recording Active" : videoFailed ? "Video Failed — Screenshot Fallback" : "Video Idle"}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-3 text-sm">
+                <div className="bg-blue-50 rounded-lg p-3">
+                  <div className="text-gray-500">Video Chunks</div>
+                  <div className="text-2xl font-mono font-bold text-blue-600">
+                    {videoChunkCount}
+                  </div>
+                </div>
+                <div className="bg-blue-50 rounded-lg p-3">
+                  <div className="text-gray-500">Chunks Uploaded</div>
+                  <div className="text-2xl font-mono font-bold text-green-600">
+                    {videoUploadedChunks}
+                  </div>
+                </div>
+                <div className="bg-blue-50 rounded-lg p-3">
+                  <div className="text-gray-500">Video Size</div>
+                  <div className="text-2xl font-mono font-bold text-blue-600">
+                    {(totalVideoBytes / 1024 / 1024).toFixed(1)} MB
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Screenshot fallback stats */}
+            <div className="grid grid-cols-2 gap-4 mb-6 text-sm">
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-gray-500">Screenshots (Fallback)</div>
+                <div className="text-2xl font-mono font-bold text-gray-900">
+                  {frameCount}
+                </div>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-gray-500">Screenshots Uploaded</div>
+                <div className="text-2xl font-mono font-bold text-green-600">
+                  {uploadedCount}
+                </div>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-gray-500">Duplicates Skipped</div>
+                <div className="text-2xl font-mono font-bold text-gray-400">
+                  {duplicatesSkipped}
+                </div>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-gray-500">Failed Uploads</div>
+                <div className="text-2xl font-mono font-bold text-red-500">
+                  {failedCount}
+                </div>
+              </div>
+            </div>
+
+            <div className="text-center">
+              <Button
+                onClick={handleStopRecording}
+                disabled={loading}
+                variant="destructive"
+                className="px-8"
+              >
+                {loading ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Square className="w-4 h-4 mr-2" />
+                )}
+                Stop Recording & Complete
+              </Button>
+            </div>
+
+            {sessionId && (
+              <p className="text-xs text-gray-400 text-center mt-4 font-mono">
+                Session: {sessionId}
+              </p>
+            )}
+          </motion.div>
+        )}
+
+        {/* Phase: Completed */}
+        {phase === PHASE.COMPLETED && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="space-y-6"
+          >
+            {/* Session summary */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <div className="flex items-center gap-2 mb-4">
+                <CheckCircle className="w-5 h-5 text-green-600" />
+                <h2 className="text-lg font-semibold text-gray-900">
+                  Session Complete
+                </h2>
+              </div>
+
+              {sessionData && (
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <span className="text-gray-500">Total Frames:</span>{" "}
+                    <span className="font-mono">
+                      {sessionData.stats?.totalFrames || 0}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Unique Frames:</span>{" "}
+                    <span className="font-mono">
+                      {sessionData.stats?.uniqueFrames || 0}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Deduped:</span>{" "}
+                    <span className="font-mono">
+                      {sessionData.stats?.duplicatesSkipped || 0}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Total Size:</span>{" "}
+                    <span className="font-mono">
+                      {(
+                        (sessionData.stats?.totalSizeBytes || 0) /
+                        1024 /
+                        1024
+                      ).toFixed(2)}{" "}
+                      MB
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Video Chunks:</span>{" "}
+                    <span className="font-mono">
+                      {sessionData.videoChunks?.length || 0}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Video Size:</span>{" "}
+                    <span className="font-mono">
+                      {(totalVideoBytes / 1024 / 1024).toFixed(2)} MB
+                    </span>
+                  </div>
+                  <div className="col-span-2">
+                    <span className="text-gray-500">Session ID:</span>{" "}
+                    <span className="font-mono text-xs">{sessionId}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Transcript generation */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <div className="flex items-center gap-2 mb-4">
+                <FileText className="w-5 h-5 text-blue-600" />
+                <h2 className="text-lg font-semibold text-gray-900">
+                  Transcript Generation
+                </h2>
+              </div>
+
+              {!transcriptStatus && (
+                <div>
+                  <p className="text-sm text-gray-500 mb-4">
+                    Generate an AI transcript from the recorded video using
+                    GPT-4o vision (falls back to screenshots if no video).
+                  </p>
+                  <Button
+                    onClick={handleGenerateTranscript}
+                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                  >
+                    <FileText className="w-4 h-4 mr-2" />
+                    Generate Transcript
+                  </Button>
+                </div>
+              )}
+
+              {transcriptStatus === "generating" && (
+                <div className="flex items-center gap-3 text-blue-600">
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <span className="text-sm">
+                    Generating transcript... This may take a minute.
+                  </span>
+                </div>
+              )}
+
+              {transcriptStatus === "completed" && transcriptContent && (
+                <div>
+                  <div className="flex items-center gap-2 text-green-600 mb-3">
+                    <CheckCircle className="w-4 h-4" />
+                    <span className="text-sm font-medium">
+                      Transcript generated successfully
+                    </span>
+                  </div>
+                  <pre className="bg-gray-900 text-gray-100 rounded-lg p-4 text-xs overflow-auto max-h-96 font-mono">
+                    {transcriptContent
+                      .split("\n")
+                      .filter(Boolean)
+                      .map((line) => {
+                        try {
+                          return JSON.stringify(JSON.parse(line), null, 2);
+                        } catch {
+                          return line;
+                        }
+                      })
+                      .join("\n\n")}
+                  </pre>
+                </div>
+              )}
+
+              {transcriptStatus === "failed" && (
+                <div className="flex items-center gap-2 text-red-600">
+                  <AlertCircle className="w-4 h-4" />
+                  <span className="text-sm">
+                    Transcript generation failed. Check server logs.
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Start over */}
+            <div className="text-center">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setPhase(PHASE.SETUP);
+                  setSessionId(null);
+                  setToken(null);
+                  setSessionData(null);
+                  setTranscriptStatus(null);
+                  setTranscriptContent(null);
+                  setError(null);
+                }}
+              >
+                Start New Test Session
+              </Button>
+            </div>
+          </motion.div>
+        )}
+      </div>
+
+      {/* Floating indicators */}
+      {phase === PHASE.RECORDING && isSharing && (
+        <>
+          <RecordingIndicator streamCount={streams.length} />
+          <StreamStatusPanel
+            frameCount={frameCount}
+            uploadedCount={uploadedCount}
+            failedCount={failedCount}
+            duplicatesSkipped={duplicatesSkipped}
+            isUploading={isUploading}
+          />
+        </>
+      )}
+
+      {/* Reshare prompt */}
+      {showResharePrompt && (
+        <ResharePrompt
+          onReshare={handleReshare}
+          onDismiss={() => setShowResharePrompt(false)}
+        />
+      )}
+    </div>
+  );
+}

@@ -448,3 +448,45 @@ ${transcript}
 
 Generate a neutral summary (200-400 words) that describes what was discussed in the interview.`,
 };
+
+// ============================================================================
+// PROCTORING TRANSCRIPT
+// ============================================================================
+
+export const PROMPT_TRANSCRIPT_SYSTEM = `You are an OCR system. You extract text from screenshots. You do NOT summarize, describe, or analyze. You COPY the exact text visible on screen.
+
+OUTPUT FORMAT: One JSON object per line (JSONL).
+{"ts":"2024-01-15T10:30:00.000Z","ts_end":"2024-01-15T10:30:15.000Z","screen":0,"app":"VS Code","text_content":"[the exact text you see on screen]"}
+
+FIELDS:
+- ts / ts_end: ISO 8601 timestamps for when this content was visible
+- screen: screen index (0-based)
+- app: application name visible in title bar (e.g. "VS Code", "Terminal", "Chrome", "Claude Code", "Cursor", "ChatGPT")
+- text_content: THE EXACT TEXT ON SCREEN, copied character-for-character. This is the ONLY field that matters.
+
+RULES — YOU MUST FOLLOW THESE EXACTLY:
+
+1. text_content must contain the LITERAL TEXT visible on screen. Not a description. Not a summary. The actual characters.
+   WRONG: "User is viewing a Jupyter notebook"
+   WRONG: "Code editor showing a React component"
+   RIGHT: "import React from 'react';\\nfunction App() {\\n  return <div>Hello</div>;\\n}"
+
+2. For code editors: copy the visible code exactly, including line numbers if shown, indentation, and the filename from the tab/title bar.
+
+3. For terminals: copy the command prompt, the command typed, and all output text exactly.
+
+4. For chat/AI interfaces (Claude Code, ChatGPT, Copilot, Cursor, any messaging UI): copy EVERY message verbatim including sender labels. Example:
+   "Human: how do I fix this error?\\nAssistant: The error is caused by..."
+
+5. For browsers: copy the URL bar content and the main text content of the page.
+
+6. If the screen has multiple panels (editor + terminal, code + chat), label each section:
+   [Editor] exact code here
+   [Terminal] exact terminal text here
+   [AI Chat] exact messages here
+
+7. If text is too small or blurry to read, write [illegible] for that portion. Do NOT guess.
+
+8. Group consecutive frames with identical content into one entry (extend ts_end). Start a new entry when text changes.
+
+9. Do NOT add commentary, analysis, or interpretation. Only output the text you literally see.`;
