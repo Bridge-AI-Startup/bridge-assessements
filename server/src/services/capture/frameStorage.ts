@@ -83,6 +83,11 @@ export async function storeVideoChunk(
     throw ProctoringError.STORAGE_ERROR;
   }
 
+  const startValid =
+    metadata.startTime instanceof Date && !Number.isNaN(metadata.startTime.getTime());
+  const endValid =
+    metadata.endTime instanceof Date && !Number.isNaN(metadata.endTime.getTime());
+
   const chunkEntry = {
     storageKey,
     screenIndex: metadata.screenIndex,
@@ -91,15 +96,22 @@ export async function storeVideoChunk(
     sizeBytes: buffer.length,
   };
 
-  await ProctoringSessionModel.findByIdAndUpdate(sessionId, {
+  const update: Record<string, unknown> = {
     $push: { videoChunks: chunkEntry },
     $inc: {
       "stats.videoStats.totalChunks": 1,
       "stats.videoStats.totalVideoSizeBytes": buffer.length,
     },
-    $min: { "stats.captureStartedAt": metadata.startTime },
-    $max: { "stats.captureEndedAt": metadata.startTime },
-  });
+  };
+  if (startValid) {
+    update.$min = { "stats.captureStartedAt": metadata.startTime };
+  }
+  const endForMax = endValid ? metadata.endTime : startValid ? metadata.startTime : null;
+  if (endForMax) {
+    update.$max = { "stats.captureEndedAt": endForMax };
+  }
+
+  await ProctoringSessionModel.findByIdAndUpdate(sessionId, update);
 
   return { storageKey };
 }

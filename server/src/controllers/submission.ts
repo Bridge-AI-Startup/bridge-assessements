@@ -18,8 +18,133 @@ import { deleteNamespace } from "../utils/pinecone.js";
 import { PROMPT_INTERVIEW_AGENT } from "../prompts/index.js";
 import { logLLMEvent } from "../services/llmProxy/logger.js";
 import { executeAllTasks } from "../services/taskRunner/taskRunner.js";
-import { dummyScreenRecordingTranscript } from "../data/dummyTranscript.js";
+import ProctoringSessionModel from "../models/proctoringSession.js";
+import { getProctoringTranscriptForSubmission } from "../services/evaluation/proctoringTranscriptAdapter.js";
 import { evaluateTranscript } from "../services/evaluation/orchestrator.js";
+import { generateTranscript } from "../ai/transcript/generator.js";
+import { jsonlToScreenMoments } from "../services/evaluation/momentGrouper.js";
+import { interpretChunked } from "../services/evaluation/interpreterChunked.js";
+import { interpretStateful } from "../services/evaluation/interpreterStateful.js";
+import { getFrameStorage } from "../services/capture/storage.js";
+
+const TRANSCRIPT_POLL_INTERVAL_MS = 15000;
+const TRANSCRIPT_POLL_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Background: ensure proctoring session has a transcript (generate if needed), then load it,
+ * set on submission, and run screen-recording evaluation. Does not block submit response.
+ */
+async function ensureProctoringTranscriptAndEvaluate(
+  submissionId: string
+): Promise<void> {
+  const sub = await SubmissionModel.findById(submissionId).populate(
+    "assessmentId"
+  );
+  if (!sub) return;
+  const assessment = sub.assessmentId as any;
+  const criteria = assessment?.evaluationCriteria;
+  if (!Array.isArray(criteria) || criteria.length === 0) return;
+
+  const session = await ProctoringSessionModel.findOne({
+    submissionId: submissionId as any,
+  });
+  if (!session) {
+    console.warn(
+      `[ensureProctoringTranscriptAndEvaluate] No proctoring session for submission ${submissionId}; transcript will not be attached. Was proctoring started (consent granted) for this attempt?`
+    );
+    return;
+  }
+
+  const status = session.transcript?.status ?? "not_started";
+
+  if (status === "generating") {
+    const deadline = Date.now() + TRANSCRIPT_POLL_MAX_WAIT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, TRANSCRIPT_POLL_INTERVAL_MS));
+      const updated = await ProctoringSessionModel.findById(session._id);
+      if (!updated) return;
+      const s = updated.transcript?.status ?? "not_started";
+      if (s === "completed") break;
+      if (s === "failed") return;
+    }
+  }
+
+  if (status === "not_started" || status === "failed") {
+    try {
+      await generateTranscript(session._id.toString());
+    } catch (err) {
+      console.error(
+        `[ensureProctoringTranscriptAndEvaluate] Transcript generation failed for submission ${submissionId}:`,
+        err
+      );
+      return;
+    }
+  }
+
+  const transcript = await getProctoringTranscriptForSubmission(submissionId);
+  if (!transcript || transcript.length === 0) return;
+
+  const updatedSub = await SubmissionModel.findById(submissionId);
+  if (!updatedSub) return;
+  (updatedSub as any).screenRecordingTranscript = transcript;
+  await updatedSub.save();
+
+  // Activity interpretation: enrich raw transcript with behavioral observations
+  try {
+    const rawJsonl = await loadRawJsonlForSubmission(submissionId);
+    if (rawJsonl) {
+      const moments = jsonlToScreenMoments(rawJsonl);
+      if (moments.length > 0) {
+        const strategy = (process.env.INTERPRETER_STRATEGY || "stateful") as "chunked" | "stateful";
+        const enriched = strategy === "chunked"
+          ? await interpretChunked(moments)
+          : await interpretStateful(moments);
+        const subForEnriched = await SubmissionModel.findById(submissionId);
+        if (subForEnriched) {
+          (subForEnriched as any).enrichedTranscript = enriched;
+          await subForEnriched.save();
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(
+      `[ensureProctoringTranscriptAndEvaluate] Activity interpretation failed for ${submissionId}:`,
+      err
+    );
+  }
+
+  try {
+    const report = await evaluateTranscript(transcript, criteria, {
+      groundings: assessment.evaluationCriteriaGroundings,
+    });
+    const subAfter = await SubmissionModel.findById(submissionId);
+    if (!subAfter) return;
+    (subAfter as any).evaluationReport = report;
+    (subAfter as any).evaluationStatus = "completed";
+    await subAfter.save();
+  } catch (err) {
+    console.error(
+      `[ensureProctoringTranscriptAndEvaluate] Evaluation failed for submission ${submissionId}:`,
+      err
+    );
+    const subAfter = await SubmissionModel.findById(submissionId);
+    if (subAfter) {
+      (subAfter as any).evaluationStatus = "failed";
+      await subAfter.save();
+    }
+  }
+}
+
+async function loadRawJsonlForSubmission(submissionId: string): Promise<string | null> {
+  try {
+    const session = await ProctoringSessionModel.findOne({ submissionId: submissionId as any });
+    if (!session?.transcript?.storageKey) return null;
+    const storage = getFrameStorage();
+    return await storage.getTranscript(session.transcript.storageKey);
+  } catch {
+    return null;
+  }
+}
 
 export type StartSubmissionRequest = {
   assessmentId: string;
@@ -400,14 +525,36 @@ export const submitSubmissionByToken: RequestHandler = async (
       submission.status === "expired" ? "expired" : "submitted";
     submission.submittedAt = new Date();
 
-    (submission as any).screenRecordingTranscript = dummyScreenRecordingTranscript;
-
     await submission.save();
 
     const updatedSubmission = await SubmissionModel.findOne({ token }).populate(
       "assessmentId",
       "title description timeLimit"
     );
+
+    // Background: generate proctoring transcript if needed, then run screen-recording evaluation
+    const submissionIdStr = submission._id.toString();
+    await SubmissionModel.findByIdAndUpdate(submissionIdStr, {
+      $set: { evaluationStatus: "pending" },
+    });
+    ensureProctoringTranscriptAndEvaluate(submissionIdStr)
+      .then(async () => {
+        const sub = await SubmissionModel.findById(submissionIdStr);
+        if (!sub) return;
+        (sub as any).evaluationStatus = (sub as any).evaluationReport
+          ? "completed"
+          : "failed";
+        await sub.save();
+      })
+      .catch((err) => {
+        console.error(
+          `[submitSubmissionByToken] ensureProctoringTranscriptAndEvaluate failed for ${submission._id}:`,
+          err
+        );
+        SubmissionModel.findByIdAndUpdate(submissionIdStr, {
+          $set: { evaluationStatus: "failed" },
+        }).catch(() => {});
+      });
 
     // Trigger repository indexing in the background (fire-and-forget)
     // This doesn't block the submission response
@@ -462,32 +609,6 @@ export const submitSubmissionByToken: RequestHandler = async (
         .catch((error) => {
           console.error(
             `[submitSubmissionByToken] Failed to execute tasks for submission ${submission._id}:`,
-            error
-          );
-        });
-    }
-
-    // Run screen-recording evaluation when assessment has criteria (background)
-    const assessmentByToken = submission.assessmentId as any;
-    const criteria = assessmentByToken?.evaluationCriteria;
-    const transcript = (submission as any).screenRecordingTranscript;
-    if (
-      transcript &&
-      Array.isArray(criteria) &&
-      criteria.length > 0
-    ) {
-      evaluateTranscript(transcript, criteria, {
-        groundings: assessmentByToken.evaluationCriteriaGroundings,
-      })
-        .then(async (report) => {
-          const sub = await SubmissionModel.findById(submission._id);
-          if (!sub) return;
-          (sub as any).evaluationReport = report;
-          await sub.save();
-        })
-        .catch((error) => {
-          console.error(
-            `[submitSubmissionByToken] Failed to evaluate transcript for submission ${submission._id}:`,
             error
           );
         });
@@ -565,13 +686,20 @@ export const submitSubmission: RequestHandler = async (req, res, next) => {
     submission.status = "submitted";
     submission.submittedAt = new Date();
 
-    (submission as any).screenRecordingTranscript = dummyScreenRecordingTranscript;
-
     await submission.save();
 
     const updatedSubmission = await SubmissionModel.findById(id).populate(
       "assessmentId",
       "title description timeLimit"
+    );
+
+    // Background: generate proctoring transcript if needed, then run screen-recording evaluation
+    ensureProctoringTranscriptAndEvaluate(submission._id.toString()).catch(
+      (err) =>
+        console.error(
+          `[submitSubmission] ensureProctoringTranscriptAndEvaluate failed for ${submission._id}:`,
+          err
+        )
     );
 
     // Trigger repository indexing in the background (fire-and-forget)
@@ -589,32 +717,6 @@ export const submitSubmission: RequestHandler = async (req, res, next) => {
           error
         );
       });
-    }
-
-    // Run screen-recording evaluation when assessment has criteria (background)
-    const assessmentById = submission.assessmentId as any;
-    const criteriaById = assessmentById?.evaluationCriteria;
-    const transcriptById = (submission as any).screenRecordingTranscript;
-    if (
-      transcriptById &&
-      Array.isArray(criteriaById) &&
-      criteriaById.length > 0
-    ) {
-      evaluateTranscript(transcriptById, criteriaById, {
-        groundings: assessmentById.evaluationCriteriaGroundings,
-      })
-        .then(async (report) => {
-          const sub = await SubmissionModel.findById(submission._id);
-          if (!sub) return;
-          (sub as any).evaluationReport = report;
-          await sub.save();
-        })
-        .catch((error) => {
-          console.error(
-            `[submitSubmission] Failed to evaluate transcript for submission ${submission._id}:`,
-            error
-          );
-        });
     }
 
     res.status(200).json(updatedSubmission);

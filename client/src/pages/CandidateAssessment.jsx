@@ -341,23 +341,24 @@ export default function CandidateAssessment() {
     setShowConsent(false);
     setIsStarting(true);
     try {
-      const stream = await screenCapture.startCapture();
-      if (stream) {
+      // Create proctoring session as soon as consent is granted so it exists even if capture fails
+      const sessionResult = await createProctoringSession(token);
+      if (sessionResult.success) {
+        const sid = sessionResult.data._id;
+        setProctoringSessionId(sid);
+        await grantConsent(sid, token, 1);
         setProctoringEnabled(true);
-
-        // Create proctoring session and grant consent
-        const sessionResult = await createProctoringSession(token);
-        if (sessionResult.success) {
-          const sid = sessionResult.data._id;
-          setProctoringSessionId(sid);
-          await grantConsent(sid, token, 1);
-        }
       }
-      // Start the assessment regardless of capture success
+
+      const stream = await screenCapture.startCapture();
+      if (stream && sessionResult?.success) {
+        // Capture started; session already created above
+      }
+      // Start the assessment regardless of capture/session success
       await doStartAssessment();
     } catch (err) {
-      console.error("Error starting screen capture:", err);
-      // Still start the assessment even if capture fails
+      console.error("Error starting screen capture or proctoring session:", err);
+      // Still start the assessment even if something fails
       await doStartAssessment();
     }
   };

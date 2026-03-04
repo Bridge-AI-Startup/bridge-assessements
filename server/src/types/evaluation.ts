@@ -64,3 +64,44 @@ export type ValidationResult = {
   valid: boolean
   reason?: string                     // if invalid, explanation of why and how to reformulate
 }
+
+// ============================================================================
+// Activity Interpreter types (raw transcript → behavioral insights)
+// ============================================================================
+
+/** A single region snapshot within a screen moment. */
+export type RegionSnapshot = {
+  region: string
+  app: string
+  text_content: string
+}
+
+/** One point-in-time capture of the full screen, grouping all visible regions. */
+export type ScreenMoment = {
+  ts: string
+  ts_end: string
+  regions: RegionSnapshot[]
+}
+
+/** A single enriched event produced by the activity interpreter. */
+export type EnrichedTranscriptEvent = {
+  ts: number
+  ts_end: number
+  behavioral_summary: string
+  intent: string
+  regions_present: string[]
+  ai_tool: string | null
+  raw_regions: { region: string; text_content: string }[]
+}
+
+/** Full enriched transcript with metadata. */
+export type EnrichedTranscript = {
+  events: EnrichedTranscriptEvent[]
+  session_narrative: string
+  strategy: "chunked" | "stateful"
+  processing_stats: {
+    llm_calls: number
+    total_tokens: number
+    processing_time_ms: number
+  }
+}

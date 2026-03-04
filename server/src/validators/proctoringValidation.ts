@@ -5,12 +5,6 @@ import { body, param } from "express-validator";
  */
 
 export const createSessionValidation = [
-  body("submissionId")
-    .exists()
-    .withMessage("submissionId is required")
-    .bail()
-    .isMongoId()
-    .withMessage("submissionId must be a valid MongoDB ObjectId"),
   body("token")
     .exists()
     .withMessage("token is required")
@@ -83,8 +77,13 @@ export const sidecarEventValidation = [
     .exists()
     .withMessage("event timestamp is required")
     .bail()
-    .isISO8601()
-    .withMessage("event timestamp must be a valid ISO 8601 date"),
+    .custom((val) => {
+      const date =
+        typeof val === "number" ? new Date(val) : new Date(val as string);
+      if (Number.isNaN(date.getTime()))
+        throw new Error("event timestamp must be a valid date or Unix ms");
+      return true;
+    }),
   body("token")
     .exists()
     .withMessage("token is required")

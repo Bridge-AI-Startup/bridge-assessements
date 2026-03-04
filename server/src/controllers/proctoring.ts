@@ -302,12 +302,29 @@ export const uploadVideoChunk: RequestHandler = async (req, res, next) => {
       return res.status(403).json({ error: "Invalid token" });
     }
 
+    const startRaw = req.body.startTime ?? Date.now();
+    const endRaw = req.body.endTime;
+    const startTime =
+      typeof startRaw === "number" || /^\d+$/.test(String(startRaw))
+        ? new Date(Number(startRaw))
+        : new Date(startRaw);
+    const endTime =
+      endRaw == null
+        ? undefined
+        : typeof endRaw === "number" || /^\d+$/.test(String(endRaw))
+          ? new Date(Number(endRaw))
+          : new Date(endRaw);
+    if (Number.isNaN(startTime.getTime())) {
+      return res.status(400).json({ error: "Invalid startTime" });
+    }
+    if (endTime !== undefined && Number.isNaN(endTime.getTime())) {
+      return res.status(400).json({ error: "Invalid endTime" });
+    }
+
     const result = await storeVideoChunk(sessionId, file.buffer, {
       screenIndex: parseInt(req.body.screenIndex) || 0,
-      startTime: new Date(req.body.startTime || Date.now()),
-      endTime: req.body.endTime
-        ? new Date(req.body.endTime)
-        : undefined,
+      startTime,
+      endTime,
     });
 
     res.json(result);

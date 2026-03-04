@@ -34,3 +34,54 @@ export const groundedCriterionSchema = z.object({
 });
 
 export type GroundedCriterionSchema = z.infer<typeof groundedCriterionSchema>;
+
+// ============================================================================
+// Activity Interpreter schemas
+// ============================================================================
+
+/** Raw LLM output event — uses moment indices instead of timestamps. */
+export const llmEventSchema = z.object({
+  moment_range: z.tuple([z.number().int(), z.number().int()]).describe("[start_index, end_index] inclusive — which moments this event covers"),
+  behavioral_summary: z.string().describe("1-2 sentence description of what the candidate is doing, not what is on screen"),
+  intent: z.string().describe("Freeform intent label, e.g. 'debugging', 'asking AI for full solution', 'reading problem constraints'"),
+  ai_tool: z.string().nullable().describe("AI tool being used if any: 'cursor', 'claude', 'chatgpt', 'copilot', or null"),
+});
+
+export type LlmEventSchema = z.infer<typeof llmEventSchema>;
+
+/** Final enriched event with computed timestamps (produced in code, not by the LLM). */
+export const enrichedEventSchema = z.object({
+  ts: z.number().min(0).describe("Start timestamp in seconds since session start"),
+  ts_end: z.number().min(0).describe("End timestamp in seconds since session start"),
+  behavioral_summary: z.string().describe("1-2 sentence description of what the candidate is doing, not what is on screen"),
+  intent: z.string().describe("Freeform intent label, e.g. 'debugging', 'asking AI for full solution', 'reading problem constraints'"),
+  ai_tool: z.string().nullable().describe("AI tool being used if any: 'cursor', 'claude', 'chatgpt', 'copilot', or null"),
+});
+
+export type EnrichedEventSchema = z.infer<typeof enrichedEventSchema>;
+
+export const interpreterBatchOutputSchema = z.object({
+  events: z.array(llmEventSchema).describe("Behavioral events referencing moment indices"),
+  running_summary: z.string().describe("Updated running summary of the full session so far, to carry forward to the next batch"),
+});
+
+export type InterpreterBatchOutputSchema = z.infer<typeof interpreterBatchOutputSchema>;
+
+export const activityBoundariesSchema = z.object({
+  chunks: z.array(z.object({
+    start_moment: z.number().describe("Index of the first moment in this chunk (0-based)"),
+    end_moment: z.number().describe("Index of the last moment in this chunk (inclusive, 0-based)"),
+    label: z.string().describe("Short label for the activity phase, e.g. 'reading problem', 'debugging cycle', 'AI-assisted refactoring'"),
+  })).describe("Activity chunks covering all moments, in order"),
+});
+
+export type ActivityBoundariesSchema = z.infer<typeof activityBoundariesSchema>;
+
+export const llmJudgeScoreSchema = z.object({
+  accuracy: z.number().min(1).max(5).describe("Does the behavioral description match the raw OCR? No hallucinated actions. 1=many hallucinations, 5=fully accurate"),
+  specificity: z.number().min(1).max(5).describe("Is the description precise or vague? 1=very vague, 5=very specific"),
+  behavioral_insight: z.number().min(1).max(5).describe("Does it describe what the candidate is DOING vs just what is on screen? 1=screen description only, 5=rich behavioral insight"),
+  justification: z.string().describe("Brief explanation of the scores"),
+});
+
+export type LlmJudgeScoreSchema = z.infer<typeof llmJudgeScoreSchema>;

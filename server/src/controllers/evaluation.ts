@@ -4,11 +4,14 @@ import { validationResult } from "express-validator";
 import { AuthError } from "../errors/auth.js";
 import AssessmentModel from "../models/assessment.js";
 import SubmissionModel from "../models/submission.js";
+import ProctoringSessionModel from "../models/proctoringSession.js";
 import validationErrorParser from "../utils/validationErrorParser.js";
 import { evaluateTranscript } from "../services/evaluation/orchestrator.js";
+import { getProctoringTranscriptForSubmission } from "../services/evaluation/proctoringTranscriptAdapter.js";
 import { validateCriterion } from "../services/evaluation/validator.js";
 import { suggestCriteria } from "../services/evaluation/suggestCriteria.js";
 import type { TranscriptEvent } from "../types/evaluation.js";
+import { generateTranscript } from "../ai/transcript/generator.js";
 
 async function getUserIdFromFirebaseUid(firebaseUid: string): Promise<string> {
   const UserModel = (await import("../models/user.js")).default;
@@ -52,15 +55,42 @@ export const evaluate: RequestHandler = async (req, res, next) => {
       const assessment = submission.assessmentId as {
         userId?: unknown;
         evaluationCriteria?: string[];
+        evaluationCriteriaGroundings?: unknown[];
       };
       if (!assessment || assessment.userId?.toString() !== userId) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const screenTranscript = (submission as any).screenRecordingTranscript;
+      let screenTranscript = (submission as any).screenRecordingTranscript;
       if (!Array.isArray(screenTranscript) || screenTranscript.length === 0) {
+        screenTranscript = await getProctoringTranscriptForSubmission(submissionId);
+      }
+      if (!screenTranscript || screenTranscript.length === 0) {
+        const session = await ProctoringSessionModel.findOne({ submissionId });
+        if (session) {
+          const status = session.transcript?.status ?? "not_started";
+          if (status === "not_started" || status === "failed") {
+            try {
+              await generateTranscript(session._id.toString());
+              screenTranscript = await getProctoringTranscriptForSubmission(submissionId);
+            } catch (genErr) {
+              const msg = genErr instanceof Error ? genErr.message : String(genErr);
+              return res.status(400).json({
+                error: `Transcript generation failed: ${msg}. Ensure proctoring captured frames and transcript generation is enabled.`,
+              });
+            }
+          } else if (status === "generating") {
+            return res.status(202).json({
+              error: "Transcript is still being generated. Please try again in a few minutes.",
+            });
+          } else {
+            screenTranscript = await getProctoringTranscriptForSubmission(submissionId);
+          }
+        }
+      }
+      if (!screenTranscript || screenTranscript.length === 0) {
         return res.status(400).json({
           error:
-            "Submission has no screen recording transcript. Add screenRecordingTranscript to run evaluation.",
+            "No screen recording transcript. The candidate must complete the assessment with proctoring enabled so a transcript can be generated. If proctoring was used, try running evaluation again in a moment.",
         });
       }
       const criteriaList = assessment.evaluationCriteria ?? [];
@@ -71,9 +101,12 @@ export const evaluate: RequestHandler = async (req, res, next) => {
       }
       const report = await evaluateTranscript(
         screenTranscript as TranscriptEvent[],
-        criteriaList
+        criteriaList,
+        { groundings: assessment.evaluationCriteriaGroundings }
       );
       (submission as any).evaluationReport = report;
+      (submission as any).screenRecordingTranscript = screenTranscript;
+      (submission as any).evaluationStatus = "completed";
       await submission.save();
       return res.status(200).json({ report });
     }

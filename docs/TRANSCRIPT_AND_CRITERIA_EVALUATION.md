@@ -63,13 +63,13 @@ Inputs: Transcript, Criteria, Groundings (optional)
 
 ## Where things live
 
-| What | Where |
-|------|--------|
-| Transcript | `Submission.screenRecordingTranscript` |
-| Criteria | `Assessment.evaluationCriteria` |
-| Groundings | `Assessment.evaluationCriteriaGroundings` (optional) |
-| Report | `Submission.evaluationReport` |
-| Run eval | Auto on submit, or `POST /evaluation/evaluate-transcript` with `submissionId` |
+| What       | Where                                                                         |
+| ---------- | ----------------------------------------------------------------------------- |
+| Transcript | `Submission.screenRecordingTranscript`                                        |
+| Criteria   | `Assessment.evaluationCriteria`                                               |
+| Groundings | `Assessment.evaluationCriteriaGroundings` (optional)                          |
+| Report     | `Submission.evaluationReport`                                                 |
+| Run eval   | Auto on submit, or `POST /evaluation/evaluate-transcript` with `submissionId` |
 
 ---
 

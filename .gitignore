@@ -13,3 +13,6 @@ client/dist/
 
 # Environment secrets
 server/config.env
+
+# Proctoring runtime data (frames, video, transcripts) — use object storage in production
+server/storage/

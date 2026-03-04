@@ -15,10 +15,12 @@ import {
   Copy,
   Check,
   Send,
+  Share2,
   ChevronDown,
   ChevronUp,
   ChevronRight,
   BarChart3,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +29,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -37,8 +40,12 @@ import {
   getSubmissionsForAssessment,
   deleteSubmission,
   sendInvites,
+  generateShareLink,
 } from "@/api/submission";
+import { runSubmissionEvaluation } from "@/api/evaluation";
 import { Progress } from "@/components/ui/progress";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { BulkInviteContent } from "@/components/BulkInviteModal";
 import { getAssessment } from "@/api/assessment";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
@@ -63,6 +70,7 @@ export default function SubmissionsDashboard() {
   const [expandedEvidenceCriteria, setExpandedEvidenceCriteria] = useState(new Set());
   const [isDropoffAnalysisExpanded, setIsDropoffAnalysisExpanded] =
     useState(false);
+  const [evaluatingSubmissionId, setEvaluatingSubmissionId] = useState(null);
   const { toast } = useToast();
 
   // Reset expanded evidence when opening evaluation for a different submission
@@ -127,6 +135,31 @@ export default function SubmissionsDashboard() {
   useEffect(() => {
     loadSubmissions();
   }, [loadSubmissions]);
+
+  // Poll submissions while any have evaluation pending (background job after submit)
+  useEffect(() => {
+    const hasPending = submissions.some(
+      (s) =>
+        s.status === "submitted" &&
+        s.evaluationStatus === "pending" &&
+        !s.evaluationReport?.criteria_results?.length
+    );
+    if (!hasPending || !assessmentId || !currentUser) return;
+
+    const POLL_MS = 5000;
+    const MAX_POLLS = 60; // 5 min
+    let polls = 0;
+    const interval = setInterval(async () => {
+      polls++;
+      try {
+        const token = await currentUser.getIdToken();
+        const result = await getSubmissionsForAssessment(assessmentId, token);
+        if (result.success) setSubmissions(result.data || []);
+      } catch (_) {}
+      if (polls >= MAX_POLLS) clearInterval(interval);
+    }, POLL_MS);
+    return () => clearInterval(interval);
+  }, [submissions, assessmentId, currentUser]);
 
   // Calculate stats from real data
   const stats = React.useMemo(() => {
@@ -486,6 +519,17 @@ export default function SubmissionsDashboard() {
   const [shareEmailSending, setShareEmailSending] = useState(false);
   const [shareEmailSent, setShareEmailSent] = useState(false);
 
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareTab, setShareTab] = useState("single");
+  const [shareCandidateName, setShareCandidateName] = useState("");
+  const [shareCandidateEmail, setShareCandidateEmail] = useState("");
+  const [generatedShareLink, setGeneratedShareLink] = useState("");
+  const [generatedShareSubmissionId, setGeneratedShareSubmissionId] = useState("");
+  const [isGeneratingShareLink, setIsGeneratingShareLink] = useState(false);
+  const [shareLinkCopiedInModal, setShareLinkCopiedInModal] = useState(false);
+  const [shareEmailSendingForGenerated, setShareEmailSendingForGenerated] = useState(false);
+  const [shareEmailSentForGenerated, setShareEmailSentForGenerated] = useState(false);
+
   const handleDeleteClick = (submission) => {
     setSubmissionToDelete(submission);
   };
@@ -598,6 +642,100 @@ export default function SubmissionsDashboard() {
       });
     } finally {
       setShareEmailSending(false);
+    }
+  };
+
+  const resetShareModalState = () => {
+    setGeneratedShareLink("");
+    setGeneratedShareSubmissionId("");
+    setShareCandidateName("");
+    setShareCandidateEmail("");
+    setShareEmailSentForGenerated(false);
+  };
+
+  const handleGenerateShareLink = async () => {
+    if (!shareCandidateName.trim() || !assessmentId || !currentUser) return;
+    setIsGeneratingShareLink(true);
+    try {
+      const token = await currentUser.getIdToken();
+      const result = await generateShareLink(
+        {
+          assessmentId,
+          candidateName: shareCandidateName.trim(),
+          ...(shareCandidateEmail.trim() && { candidateEmail: shareCandidateEmail.trim() }),
+        },
+        token
+      );
+      if (result.success) {
+        setGeneratedShareLink(result.data.shareLink);
+        setGeneratedShareSubmissionId(result.data.submissionId);
+        loadSubmissions();
+      } else {
+        const errorMsg = "error" in result ? result.error : "Failed to generate link";
+        if (errorMsg.includes("SUBSCRIPTION_LIMIT_REACHED") || errorMsg.includes("limit")) {
+          toast({
+            title: "Limit reached",
+            description: "Free tier allows 3 submissions. Upgrade to invite more candidates.",
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Failed to generate link",
+            description: errorMsg,
+            variant: "destructive",
+          });
+        }
+      }
+    } catch (error) {
+      toast({
+        title: "Failed to generate link",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGeneratingShareLink(false);
+    }
+  };
+
+  const handleCopyGeneratedShareLink = async () => {
+    if (!generatedShareLink) return;
+    try {
+      await navigator.clipboard.writeText(generatedShareLink);
+      setShareLinkCopiedInModal(true);
+      toast({ title: "Link copied", description: "Assessment link copied to clipboard." });
+      setTimeout(() => setShareLinkCopiedInModal(false), 2000);
+    } catch {
+      toast({
+        title: "Failed to copy",
+        description: "Could not copy to clipboard",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSendEmailForGeneratedLink = async () => {
+    if (!generatedShareSubmissionId) return;
+    setShareEmailSendingForGenerated(true);
+    try {
+      const result = await sendInvites([generatedShareSubmissionId]);
+      if (result.success) {
+        setShareEmailSentForGenerated(true);
+        toast({ title: "Invite sent", description: "Invite email sent to candidate." });
+      } else {
+        toast({
+          title: "Failed to send email",
+          description: "error" in result ? result.error : "Please try again.",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Failed to send email",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setShareEmailSendingForGenerated(false);
     }
   };
 
@@ -846,6 +984,20 @@ export default function SubmissionsDashboard() {
               <option value="expired">Expired</option>
             </select>
           </div>
+          {assessmentId && (
+            <Button
+              type="button"
+              onClick={() => {
+                setShowShareModal(true);
+                setShareTab("single");
+                resetShareModalState();
+              }}
+              className="bg-[#1E3A8A] hover:bg-[#152a66] ml-auto flex items-center gap-2"
+            >
+              <Share2 className="w-4 h-4" />
+              Share assessment
+            </Button>
+          )}
         </motion.div>
 
         {/* Error Message */}
@@ -984,13 +1136,29 @@ export default function SubmissionsDashboard() {
                                   ) / evaluableCriteria.length
                                 ).toFixed(1)
                               : null;
-                          const showCalculate =
+                          const hasEvaluationReport =
+                            submission.evaluationReport?.criteria_results?.filter(
+                              (r) => r.evaluable
+                            )?.length > 0;
+                          const showRunEvaluation =
                             submission.status === "submitted" &&
-                            submission.scores?.overall == null;
+                            !hasEvaluationReport;
+                          // Show loading when server says pending, or when no status yet but just submitted (e.g. within last 5 min)
+                          const submittedRecently =
+                            submission.submittedAt &&
+                            Date.now() - new Date(submission.submittedAt).getTime() < 5 * 60 * 1000;
+                          const evaluationPending =
+                            !hasEvaluationReport &&
+                            (submission.evaluationStatus === "pending" ||
+                              (submission.status === "submitted" &&
+                                submission.evaluationStatus !== "failed" &&
+                                submittedRecently));
                           const openEvaluation = () => {
                             setSelectedEvaluationSubmission(submission);
                             setShowEvaluationModal(true);
                           };
+                          const isEvaluating =
+                            evaluatingSubmissionId === submission._id;
                           if (analysisAvg != null) {
                             return (
                               <div className="flex flex-col gap-0.5">
@@ -1008,79 +1176,92 @@ export default function SubmissionsDashboard() {
                               </div>
                             );
                           }
-                          if (showCalculate) {
+                          if (evaluationPending) {
+                            return (
+                              <div className="flex items-center gap-2 text-sm text-gray-500">
+                                <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+                                <span>Evaluating…</span>
+                              </div>
+                            );
+                          }
+                          if (showRunEvaluation) {
                             return (
                               <div className="flex flex-col gap-1">
                                 <Button
-                                  onClick={async () => {
-                                  if (!currentUser) {
-                                    toast({
-                                      title: "Not signed in",
-                                      description: "Please sign in to calculate scores.",
-                                      variant: "destructive",
-                                    });
-                                    return;
-                                  }
-                                  try {
-                                    const token =
-                                      await currentUser.getIdToken();
-                                    const response = await fetch(
-                                      `${API_BASE_URL}/submissions/${submission._id}/calculate-scores`,
-                                      {
-                                        method: "POST",
-                                        headers: {
-                                          Authorization: `Bearer ${token}`,
-                                        },
+                                    onClick={async () => {
+                                      if (!currentUser) {
+                                        toast({
+                                          title: "Not signed in",
+                                          description: "Please sign in to run evaluation.",
+                                          variant: "destructive",
+                                        });
+                                        return;
                                       }
-                                    );
-                                    if (response.ok) {
-                                      const submissionsResult =
-                                        await getSubmissionsForAssessment(
-                                          assessmentId,
-                                          token
-                                        );
-                                      if (submissionsResult.success) {
-                                        setSubmissions(
-                                          submissionsResult.data || []
+                                      setEvaluatingSubmissionId(submission._id);
+                                      try {
+                                        const token =
+                                          await currentUser.getIdToken();
+                                        const result =
+                                          await runSubmissionEvaluation(
+                                            submission._id,
+                                            token
+                                          );
+                                        if (result.success) {
+                                          const submissionsResult =
+                                            await getSubmissionsForAssessment(
+                                              assessmentId,
+                                              token
+                                            );
+                                          if (submissionsResult.success) {
+                                            setSubmissions(
+                                              submissionsResult.data || []
+                                            );
+                                            setSelectedEvaluationSubmission(
+                                              submissionsResult.data?.find(
+                                                (s) => s._id === submission._id
+                                              ) ?? submission
+                                            );
+                                            toast({
+                                              title: "Evaluation complete",
+                                              description:
+                                                "Screen recording evaluation has been updated.",
+                                            });
+                                          }
+                                        } else {
+                                          const errMsg =
+                                            "error" in result
+                                              ? result.error
+                                              : "Evaluation failed";
+                                          toast({
+                                            title: "Evaluation failed",
+                                            description: errMsg,
+                                            variant: "destructive",
+                                          });
+                                        }
+                                      } catch (error) {
+                                        console.error(
+                                          "Error running evaluation:",
+                                          error
                                         );
                                         toast({
-                                          title: "Scores calculated",
+                                          title: "Evaluation failed",
                                           description:
-                                            "Completeness and workflow scores have been updated.",
+                                            error?.message ||
+                                            "An unexpected error occurred.",
+                                          variant: "destructive",
                                         });
+                                      } finally {
+                                        setEvaluatingSubmissionId(null);
                                       }
-                                    } else {
-                                      const data = await response
-                                        .json()
-                                        .catch(() => ({}));
-                                      toast({
-                                        title: "Scoring failed",
-                                        description:
-                                          data.error ||
-                                          data.message ||
-                                          "Repo may not be indexed or workflow data missing.",
-                                        variant: "destructive",
-                                      });
-                                    }
-                                  } catch (error) {
-                                    console.error(
-                                      "Error calculating scores:",
-                                      error
-                                    );
-                                    toast({
-                                      title: "Scoring failed",
-                                      description:
-                                        error.message ||
-                                        "An unexpected error occurred.",
-                                      variant: "destructive",
-                                    });
-                                  }
-                                }}
-                                size="sm"
-                                variant="outline"
-                              >
-                                Calculate scores
-                              </Button>
+                                    }}
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={isEvaluating}
+                                  >
+                                    {isEvaluating
+                                      ? "Running…"
+                                      : "Run evaluation"}
+                                  </Button>
                               </div>
                             );
                           }
@@ -1180,7 +1361,192 @@ export default function SubmissionsDashboard() {
           </DialogContent>
         </Dialog>
 
-        {/* Share assessment link modal — copy link or send invite email */}
+        {/* Share assessment modal — single candidate or bulk import */}
+        <Dialog
+          open={showShareModal}
+          onOpenChange={(open) => {
+            if (!open) {
+              setShowShareModal(false);
+              resetShareModalState();
+            }
+          }}
+        >
+          <DialogContent className="sm:max-w-[580px] max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Share assessment</DialogTitle>
+              <DialogDescription>
+                Generate a link for one candidate or import multiple at once.
+              </DialogDescription>
+            </DialogHeader>
+            <Tabs
+              value={shareTab}
+              onValueChange={(v) => {
+                setShareTab(v);
+                resetShareModalState();
+              }}
+              className="mt-2"
+            >
+              <TabsList className="w-full mb-4">
+                <TabsTrigger value="single" className="flex-1">
+                  Single candidate
+                </TabsTrigger>
+                <TabsTrigger value="bulk" className="flex-1">
+                  Multiple candidates
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="single">
+                <div className="space-y-4 py-2">
+                  {!generatedShareLink ? (
+                    <>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Candidate name *
+                        </label>
+                        <Input
+                          value={shareCandidateName}
+                          onChange={(e) => setShareCandidateName(e.target.value)}
+                          placeholder="Enter candidate's full name"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Candidate email{" "}
+                          <span className="text-gray-400 font-normal">
+                            (optional — required to send invite)
+                          </span>
+                        </label>
+                        <Input
+                          value={shareCandidateEmail}
+                          onChange={(e) => setShareCandidateEmail(e.target.value)}
+                          placeholder="candidate@example.com"
+                          type="email"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && shareCandidateName.trim())
+                              handleGenerateShareLink();
+                          }}
+                        />
+                      </div>
+                      <DialogFooter>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setShowShareModal(false);
+                            resetShareModalState();
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          onClick={handleGenerateShareLink}
+                          disabled={
+                            !shareCandidateName.trim() || isGeneratingShareLink
+                          }
+                          className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                        >
+                          {isGeneratingShareLink
+                            ? "Generating..."
+                            : "Generate link"}
+                        </Button>
+                      </DialogFooter>
+                    </>
+                  ) : (
+                    <>
+                      <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                        <p className="text-sm text-green-800 mb-2">
+                          Link generated successfully!
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={generatedShareLink}
+                            readOnly
+                            className="flex-1 bg-white text-sm"
+                          />
+                          <Button
+                            onClick={handleCopyGeneratedShareLink}
+                            size="sm"
+                            variant="outline"
+                            className="flex-shrink-0"
+                          >
+                            {shareLinkCopiedInModal ? (
+                              <>
+                                <Check className="w-4 h-4 mr-2" />
+                                Copied!
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-4 h-4 mr-2" />
+                                Copy
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                      {shareCandidateEmail.trim() && (
+                        <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
+                          <span className="text-sm text-gray-600">
+                            Send invite email to{" "}
+                            <span className="font-medium text-gray-900">
+                              {shareCandidateEmail.trim()}
+                            </span>
+                          </span>
+                          <Button
+                            onClick={handleSendEmailForGeneratedLink}
+                            disabled={
+                              shareEmailSendingForGenerated ||
+                              shareEmailSentForGenerated
+                            }
+                            size="sm"
+                            className="bg-[#1E3A8A] hover:bg-[#152a66] flex-shrink-0 ml-3"
+                          >
+                            {shareEmailSentForGenerated ? (
+                              <>
+                                <Check className="w-4 h-4 mr-2" />
+                                Sent!
+                              </>
+                            ) : shareEmailSendingForGenerated ? (
+                              "Sending..."
+                            ) : (
+                              "Send email"
+                            )}
+                          </Button>
+                        </div>
+                      )}
+                      <p className="text-xs text-gray-500">
+                        Share this link with the candidate. They can access and
+                        complete the assessment.
+                      </p>
+                      <DialogFooter>
+                        <Button
+                          onClick={() => {
+                            setShowShareModal(false);
+                            resetShareModalState();
+                          }}
+                          className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                        >
+                          Done
+                        </Button>
+                      </DialogFooter>
+                    </>
+                  )}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="bulk">
+                <BulkInviteContent
+                  assessmentId={assessmentId}
+                  onSuccess={() => loadSubmissions()}
+                  onDone={() => {
+                    setShowShareModal(false);
+                    resetShareModalState();
+                  }}
+                />
+              </TabsContent>
+            </Tabs>
+          </DialogContent>
+        </Dialog>
+
+        {/* Share assessment link modal — copy link or send invite email (per row) */}
         <Dialog
           open={!!shareModalSubmission}
           onOpenChange={(open) => {
@@ -1584,9 +1950,66 @@ export default function SubmissionsDashboard() {
             )}
 
             {selectedEvaluationSubmission && !selectedEvaluationSubmission?.evaluationReport && (
-              <div className="py-8 text-center text-gray-500 mt-4">
-                <BarChart3 className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                <p>No evaluation data for this submission.</p>
+              <div className="py-8 text-center mt-4">
+                <BarChart3 className="w-12 h-12 mx-auto mb-2 text-gray-400" />
+                <p className="text-gray-500 mb-3">No evaluation data for this submission.</p>
+                <p className="text-xs text-gray-400 mb-4">
+                  Complete proctoring and generate the transcript, then run evaluation.
+                </p>
+                <Button
+                  onClick={async () => {
+                    if (!currentUser || !selectedEvaluationSubmission) return;
+                    setEvaluatingSubmissionId(selectedEvaluationSubmission._id);
+                    try {
+                      const token = await currentUser.getIdToken();
+                      const result = await runSubmissionEvaluation(
+                        selectedEvaluationSubmission._id,
+                        token
+                      );
+                      if (result.success) {
+                        const submissionsResult =
+                          await getSubmissionsForAssessment(
+                            assessmentId,
+                            token
+                          );
+                        if (submissionsResult.success) {
+                          setSubmissions(submissionsResult.data || []);
+                          const updated = submissionsResult.data?.find(
+                            (s) => s._id === selectedEvaluationSubmission._id
+                          );
+                          if (updated) setSelectedEvaluationSubmission(updated);
+                          toast({
+                            title: "Evaluation complete",
+                            description: "Screen recording evaluation has been updated.",
+                          });
+                        }
+                      } else {
+                        const errMsg =
+                          "error" in result
+                            ? result.error
+                            : "Evaluation failed";
+                        toast({
+                          title: "Evaluation failed",
+                          description: errMsg,
+                          variant: "destructive",
+                        });
+                      }
+                    } catch (err) {
+                      toast({
+                        title: "Evaluation failed",
+                        description: err?.message || "An unexpected error occurred.",
+                        variant: "destructive",
+                      });
+                    } finally {
+                      setEvaluatingSubmissionId(null);
+                    }
+                  }}
+                  disabled={evaluatingSubmissionId === selectedEvaluationSubmission?._id}
+                >
+                  {evaluatingSubmissionId === selectedEvaluationSubmission?._id
+                    ? "Running…"
+                    : "Run screen recording evaluation"}
+                </Button>
               </div>
             )}
 

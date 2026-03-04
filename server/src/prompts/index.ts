@@ -676,6 +676,194 @@ Generate a neutral summary (200-400 words) that describes what was discussed in 
 };
 
 // ============================================================================
+// ACTIVITY INTERPRETER PROMPTS
+// ============================================================================
+
+const INTERPRET_CORE_INSTRUCTIONS = `You are an expert observer of software development sessions. You are watching a candidate's screen recording during a coding assessment and your job is to describe WHAT THE CANDIDATE IS DOING — their behavior, decisions, and workflow — not just what is visible on screen.
+
+CRITICAL DISTINCTION:
+- BAD (literal screen description): "Code editor shows a for loop iterating over nums array"
+- GOOD (behavioral observation): "Candidate wrote a brute-force nested loop to solve Two Sum without reading the constraints first"
+
+- BAD: "Terminal output shows Test 1 PASS, Test 2 FAIL"
+- GOOD: "Candidate ran tests and got a failure on test 2; the error suggests an off-by-one bug in the loop boundary"
+
+- BAD: "AI chat panel shows a message from the user"
+- GOOD: "Candidate asked AI to write the entire solution rather than asking a specific question"
+
+INPUT FORMAT:
+You receive Screen Moments — snapshots of the full screen at a point in time. Each moment shows ALL visible regions simultaneously (editor, terminal, AI chat, file tree, browser, etc.). This is what you would see if you glanced at their screen at that instant.
+
+WHAT TO FOCUS ON:
+1. TRANSITIONS between moments — what changed? New code? Different file? Test output appeared? AI response arrived?
+2. WORKFLOW PATTERNS — are they reading → coding → testing (good flow) or asking AI → pasting → submitting (concerning)?
+3. AI USAGE — did they ask a targeted question, or delegate the whole problem? Did they review the response?
+4. DEBUGGING BEHAVIOR — when tests fail, do they read the error, trace the code, or just ask AI to fix it?
+5. INTENT — why are they doing what they're doing? Reading constraints to understand the problem, or skimming to get started fast?
+
+MOMENT INDEXING:
+Each moment in the array has an implicit 0-based index (the first moment is index 0, the second is index 1, etc.). When you produce events, specify which moments each event covers using moment_range: [start_index, end_index] (inclusive). We compute timestamps from these indices in code — do NOT output any timestamp numbers yourself.
+
+DO NOT:
+- Describe UI chrome (toolbar labels, "sharing your screen" banners, menu items)
+- Repeat raw OCR text verbatim — interpret it into behavioral observations
+- Hallucinate actions not supported by the raw text (if you can't tell what changed, say so)
+- Use vague language like "made changes to the code" — be specific about what changed`;
+
+export const PROMPT_DETECT_ACTIVITY_BOUNDARIES = {
+  provider: "openai" as AIProvider,
+  model: "gpt-4o-mini",
+
+  system: `You identify natural activity boundaries in a coding assessment screen recording.
+
+You receive a compact index of Screen Moments — each line shows a timestamp, which regions were visible, and the first ~50 characters of each region's text.
+
+Your job is to group these moments into coherent ACTIVITY PHASES. A phase is a period where the candidate is doing one coherent thing, such as:
+- Reading the problem statement
+- Writing initial code
+- A debugging cycle (running tests, reading errors, fixing code, re-running)
+- An AI interaction (asking a question, reading the response, acting on it)
+- Researching/browsing documentation
+- Optimizing or refactoring working code
+- Idle/paused
+
+RULES:
+1. Every moment must belong to exactly one chunk (no gaps, no overlaps).
+2. Chunks must be in chronological order.
+3. Prefer larger chunks that capture complete activities over many tiny fragments.
+4. Rapid switching between editor and terminal usually means ONE debugging cycle, not separate chunks.
+5. An AI interaction includes the prompt, the response, AND the candidate acting on the response.
+
+Respond with a JSON object: { "chunks": [{ "start_moment": number, "end_moment": number, "label": string }] }`,
+
+  userTemplate: (compactIndex: string, totalMoments: number) =>
+    `Here is a compact index of ${totalMoments} screen moments from a coding assessment. Group them into coherent activity phases.
+
+MOMENTS:
+${compactIndex}
+
+Respond with JSON only: { "chunks": [{ "start_moment": number, "end_moment": number, "label": string }] }
+All moments (0 through ${totalMoments - 1}) must be covered with no gaps.`,
+};
+
+export const PROMPT_INTERPRET_CHUNK = {
+  provider: "openai" as AIProvider,
+  model: "gpt-4o-mini",
+
+  system: `${INTERPRET_CORE_INSTRUCTIONS}
+
+OUTPUT FORMAT:
+Return a JSON object with:
+{
+  "events": [
+    {
+      "moment_range": [number, number],  // [start_index, end_index] inclusive — which moments this event covers
+      "behavioral_summary": string,       // 1-2 sentences: what the candidate DID
+      "intent": string,                   // freeform label for the activity
+      "ai_tool": string | null            // "cursor", "claude", "chatgpt", "copilot", or null
+    }
+  ],
+  "chunk_summary": string  // 2-3 sentence summary of what happened in this chunk
+}
+
+You may merge multiple consecutive moments into a single event if they represent the same continuous activity (e.g., 3 moments of the candidate reading the same problem text = 1 event covering those moment indices).
+Every moment index must be covered by exactly one event — no gaps, no overlaps.`,
+
+  userTemplate: (
+    chunkLabel: string,
+    momentsJson: string,
+    priorSummary: string,
+  ) => {
+    const priorContext = priorSummary
+      ? `\nWHAT HAPPENED BEFORE THIS CHUNK:\n${priorSummary}\n`
+      : "\nThis is the first chunk of the session.\n";
+    return `CHUNK LABEL: "${chunkLabel}"
+${priorContext}
+SCREEN MOMENTS FOR THIS CHUNK (0-indexed within this chunk):
+${momentsJson}
+
+Interpret what the candidate is doing in these moments. Reference moments by their array index in moment_range. Return JSON only.`;
+  },
+};
+
+export const PROMPT_INTERPRET_BATCH_STATEFUL = {
+  provider: "openai" as AIProvider,
+  model: "gpt-4o-mini",
+
+  system: `${INTERPRET_CORE_INSTRUCTIONS}
+
+OUTPUT FORMAT:
+Return a JSON object with:
+{
+  "events": [
+    {
+      "moment_range": [number, number],  // [start_index, end_index] inclusive — which moments this event covers
+      "behavioral_summary": string,       // 1-2 sentences: what the candidate DID
+      "intent": string,                   // freeform label for the activity
+      "ai_tool": string | null            // "cursor", "claude", "chatgpt", "copilot", or null
+    }
+  ],
+  "running_summary": string  // Updated summary of the FULL session so far (everything before + this batch). Keep it concise but complete — this will be passed as context to the next batch. 3-8 sentences.
+}
+
+You may merge multiple consecutive moments into a single event if they represent the same continuous activity.
+Every moment index must be covered by exactly one event — no gaps, no overlaps.`,
+
+  userTemplate: (
+    momentsJson: string,
+    runningSummary: string,
+    batchNumber: number,
+  ) => {
+    const priorContext = runningSummary
+      ? `\nSESSION SO FAR (from previous batches):\n${runningSummary}\n`
+      : "\nThis is the first batch — no prior context.\n";
+    return `BATCH ${batchNumber}
+${priorContext}
+SCREEN MOMENTS FOR THIS BATCH (0-indexed within this batch):
+${momentsJson}
+
+Describe what the candidate is doing in these moments. Reference moments by their array index in moment_range. Update the running summary to include everything from prior batches plus this batch. Return JSON only.`;
+  },
+};
+
+export const PROMPT_LLM_JUDGE = {
+  provider: "openai" as AIProvider,
+  model: "gpt-4o-mini",
+
+  system: `You are a quality evaluator for an AI system that interprets screen recordings of coding assessments. You receive:
+1. Raw input: the original OCR text from screen captures
+2. Enriched output: behavioral descriptions produced by the system
+
+Score the enriched output on three dimensions (1-5 each):
+
+ACCURACY (1-5): Does the behavioral description match what the raw OCR text shows? Are there any hallucinated actions or events that aren't supported by the raw input?
+- 1: Many hallucinated actions, descriptions contradict the raw input
+- 3: Mostly accurate but some unsupported claims
+- 5: Every behavioral description is directly supported by the raw input
+
+SPECIFICITY (1-5): Are the descriptions precise and detailed, or vague and generic?
+- 1: Very vague ("made changes to the code", "used the terminal")
+- 3: Moderately specific ("wrote a function", "ran tests")
+- 5: Highly specific ("fixed the off-by-one bug on line 3 by changing range(len(nums)) to range(i+1, len(nums))")
+
+BEHAVIORAL INSIGHT (1-5): Does the output describe what the candidate is DOING and WHY, or does it just describe what is on screen?
+- 1: Pure screen description ("editor shows a for loop", "terminal has text output")
+- 3: Some behavioral insight ("candidate ran tests") but mostly descriptive
+- 5: Rich behavioral insight ("candidate identified the duplicate-index bug by re-reading the loop, then applied the minimal fix rather than rewriting")
+
+Return a JSON object: { "accuracy": number, "specificity": number, "behavioral_insight": number, "justification": string }`,
+
+  userTemplate: (rawInput: string, enrichedOutput: string) =>
+    `RAW INPUT (original OCR from screen captures):
+${rawInput}
+
+ENRICHED OUTPUT (behavioral descriptions produced by the system):
+${enrichedOutput}
+
+Score the enriched output. Return JSON only: { "accuracy": number, "specificity": number, "behavioral_insight": number, "justification": string }`,
+};
+
+// ============================================================================
 // PROCTORING TRANSCRIPT
 // ============================================================================
 

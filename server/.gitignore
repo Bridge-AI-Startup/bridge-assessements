@@ -30,3 +30,6 @@ Thumbs.db
 dist/
 build/
 
+# Interpreter test outputs
+src/scripts/evals/outputs/*.json
+

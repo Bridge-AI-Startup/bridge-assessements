@@ -24,7 +24,8 @@ export type AIUseCase =
   | "transcript_evaluation" // Evaluate candidate screen recording transcripts
   | "suggest_criteria" // Suggest evaluation criteria from a job description
   | "criterion_grounding" // Ground raw criterion into observable behaviors
-  | "criterion_validation"; // Check if criterion is evaluable from screen recording
+  | "criterion_validation" // Check if criterion is evaluable from screen recording
+  | "activity_interpretation"; // Interpret raw transcript into behavioral observations
 
 /**
  * Get the provider for a specific use case
@@ -79,7 +80,20 @@ export function getModelForProvider(
     return providerModel;
   }
 
-  // Default models per provider
+  // OpenAI per-use-case defaults (env still overrides above)
+  if (provider === "openai") {
+    const openaiUseCaseDefaults: Partial<Record<AIUseCase, string>> = {
+      assessment_generation: "gpt-4o",
+      interview_questions: "gpt-4o",
+    };
+    const useCaseDefault = openaiUseCaseDefaults[useCase];
+    if (useCaseDefault) {
+      return useCaseDefault;
+    }
+    return "gpt-4o-mini";
+  }
+
+  // Default models per provider (anthropic, gemini)
   const defaults: Record<AIProvider, string> = {
     openai: "gpt-4o-mini",
     anthropic: "claude-3-5-sonnet-20241022",
@@ -231,10 +245,13 @@ export async function createChatCompletion(
   model?: string;
   provider: AIProvider;
 }> {
-  // Use provider from options (prompt config) if provided, otherwise use environment variables
-  const provider = options.provider || getProviderForUseCase(useCase);
-  // Use model from options (prompt config) if provided, otherwise use environment variables
-  const model = options.model || getModelForProvider(provider, useCase);
+  // Always use OpenAI; LangChain is the single source of truth (prompt provider is ignored)
+  const provider: AIProvider = "openai";
+  // Only use options.model if it looks like an OpenAI model; otherwise prompt's Anthropic/Gemini model would be sent to OpenAI and fail
+  const model =
+    options.model && options.model.startsWith("gpt-")
+      ? options.model
+      : getModelForProvider(provider, useCase);
 
   console.log(
     `🤖 [LangChain: ${provider}] Use case: ${useCase}, Model: ${model}`

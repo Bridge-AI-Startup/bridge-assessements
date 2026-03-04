@@ -435,9 +435,22 @@ const SubmissionSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Enriched transcript (output of the activity interpreter)
+    enrichedTranscript: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+
     // Evaluation report (result of the full evaluation pipeline)
     evaluationReport: {
       type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+
+    // 'pending' = background evaluation running after submit; 'completed' | 'failed' when done; null/absent = idle
+    evaluationStatus: {
+      type: String,
+      enum: ["pending", "completed", "failed"],
       default: null,
     },
   },

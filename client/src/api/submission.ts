@@ -71,6 +71,8 @@ export type Submission = {
   timeRemaining?: number | null; // Minutes remaining (calculated server-side)
   createdAt: string;
   updatedAt: string;
+  /** 'pending' = evaluation running in background; 'completed' | 'failed' when done */
+  evaluationStatus?: "pending" | "completed" | "failed" | null;
   /** Screen recording evaluation report when assessment has evaluation criteria */
   evaluationReport?: {
     session_summary: string;
