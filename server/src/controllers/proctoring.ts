@@ -449,6 +449,61 @@ export const getDebugFrames: RequestHandler = async (req, res, next) => {
   }
 };
 
+// POST /api/proctoring/sessions/:sessionId/interpret-transcript
+// Runs both activity interpreter strategies (chunked + stateful) on the session's raw transcript.
+export const interpretSessionTranscript: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await ProctoringSessionModel.findById(sessionId);
+    if (!session) throw ProctoringError.SESSION_NOT_FOUND;
+
+    if (
+      session.transcript.status !== "completed" ||
+      !session.transcript.storageKey
+    ) {
+      return res.status(400).json({
+        error:
+          "Transcript not ready. Generate the transcript first.",
+      });
+    }
+
+    const { getFrameStorage } = await import("../services/capture/storage.js");
+    const { jsonlToScreenMoments } = await import(
+      "../services/evaluation/momentGrouper.js"
+    );
+    const { interpretChunked } = await import(
+      "../services/evaluation/interpreterChunked.js"
+    );
+    const { interpretStateful } = await import(
+      "../services/evaluation/interpreterStateful.js"
+    );
+
+    const storage = getFrameStorage();
+    const rawJsonl = await storage.getTranscript(
+      session.transcript.storageKey
+    );
+    const moments = jsonlToScreenMoments(rawJsonl);
+    if (moments.length === 0) {
+      return res.status(400).json({
+        error: "No screen moments in transcript. Record more frames or video.",
+      });
+    }
+
+    const [chunked, stateful] = await Promise.all([
+      interpretChunked(moments),
+      interpretStateful(moments),
+    ]);
+
+    res.json({ chunked, stateful });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // POST /api/proctoring/sessions/test/create  (DEV ONLY)
 export const createTestSession: RequestHandler = async (req, res, next) => {
   try {

@@ -31,6 +31,7 @@ import {
   getTranscriptContent,
   refineTranscript,
   getRefinedTranscriptContent,
+  interpretTranscript,
   recordSidecarEvents,
 } from "@/api/proctoring";
 
@@ -120,6 +121,43 @@ function TranscriptReadableView({ content }) {
   );
 }
 
+function EnrichedTranscriptView({ result, strategyLabel }) {
+  if (!result) return null;
+  const { events, session_narrative, strategy, processing_stats } = result;
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between text-xs text-gray-500">
+        <span className="font-medium text-gray-700">{strategyLabel}</span>
+        <span className="font-mono">
+          {processing_stats.llm_calls} calls · {processing_stats.processing_time_ms}ms
+        </span>
+      </div>
+      <div className="space-y-2 max-h-[400px] overflow-auto">
+        {events.map((e, i) => (
+          <div
+            key={i}
+            className="rounded-lg border border-gray-200 bg-gray-50/50 p-3 text-sm"
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <span className="font-mono text-xs text-gray-500">
+                [{e.ts}s – {e.ts_end}s]
+              </span>
+              <span className="text-xs font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
+                {e.intent}
+              </span>
+            </div>
+            <p className="text-gray-700 leading-relaxed">{e.behavioral_summary}</p>
+          </div>
+        ))}
+      </div>
+      <div className="border-t border-gray-200 pt-3">
+        <p className="text-xs font-medium text-gray-500 mb-1">Session narrative</p>
+        <p className="text-sm text-gray-700 leading-relaxed">{session_narrative}</p>
+      </div>
+    </div>
+  );
+}
+
 function RefinedTranscriptView({ content }) {
   const segments = content
     .split("\n")
@@ -190,6 +228,9 @@ export default function ProctoringTest() {
   const [transcriptView, setTranscriptView] = useState("readable"); // "readable" or "raw"
   const [refineStatus, setRefineStatus] = useState(null);
   const [refinedContent, setRefinedContent] = useState(null);
+  const [interpretStatus, setInterpretStatus] = useState(null); // "loading" | "done" | "failed"
+  const [chunkedResult, setChunkedResult] = useState(null);
+  const [statefulResult, setStatefulResult] = useState(null);
   const [showResharePrompt, setShowResharePrompt] = useState(false);
   const sidecarBufferRef = useRef([]);
 
@@ -385,6 +426,20 @@ export default function ProctoringTest() {
         }
       }
     }, 3000);
+  };
+
+  const handleInterpretTranscript = async () => {
+    setInterpretStatus("loading");
+    setError(null);
+    const result = await interpretTranscript(sessionId);
+    if (!result.success) {
+      setInterpretStatus("failed");
+      setError(result.error || "Activity interpretation failed");
+      return;
+    }
+    setChunkedResult(result.data.chunked);
+    setStatefulResult(result.data.stateful);
+    setInterpretStatus("done");
   };
 
   const handleRefineTranscript = async () => {
@@ -650,13 +705,14 @@ export default function ProctoringTest() {
               )}
             </div>
 
-            {/* Transcript generation */}
+            {/* Raw transcript (VLM output) */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
               <div className="flex items-center gap-2 mb-4">
                 <FileText className="w-5 h-5 text-blue-600" />
                 <h2 className="text-lg font-semibold text-gray-900">
-                  Transcript Generation
+                  Raw Transcript
                 </h2>
+                <span className="text-xs text-gray-400 font-normal">(VLM output)</span>
               </div>
 
               {!transcriptStatus && (
@@ -806,6 +862,73 @@ export default function ProctoringTest() {
               </div>
             )}
 
+            {/* Activity interpreter: raw → processed (both strategies) */}
+            {transcriptStatus === "completed" && (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <Sparkles className="w-5 h-5 text-indigo-600" />
+                  <h2 className="text-lg font-semibold text-gray-900">
+                    Activity Interpreter
+                  </h2>
+                </div>
+                <p className="text-sm text-gray-500 mb-4">
+                  Run both processing strategies (Chunked and Stateful) on the raw
+                  transcript above. Compare behavioral events and session narratives.
+                </p>
+
+                {!interpretStatus && (
+                  <Button
+                    onClick={handleInterpretTranscript}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                  >
+                    <Sparkles className="w-4 h-4 mr-2" />
+                    Run both strategies (Chunked & Stateful)
+                  </Button>
+                )}
+
+                {interpretStatus === "loading" && (
+                  <div className="flex items-center gap-3 text-indigo-600">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span className="text-sm">
+                      Running both strategies... This may take a minute.
+                    </span>
+                  </div>
+                )}
+
+                {interpretStatus === "done" && (chunkedResult || statefulResult) && (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-4">
+                    <div className="rounded-lg border border-gray-200 p-4 bg-blue-50/30">
+                      <h3 className="text-sm font-semibold text-gray-900 mb-3">
+                        Processed (Chunked)
+                      </h3>
+                      <EnrichedTranscriptView
+                        result={chunkedResult}
+                        strategyLabel="LLM-Chunked"
+                      />
+                    </div>
+                    <div className="rounded-lg border border-gray-200 p-4 bg-emerald-50/30">
+                      <h3 className="text-sm font-semibold text-gray-900 mb-3">
+                        Processed (Stateful)
+                      </h3>
+                      <EnrichedTranscriptView
+                        result={statefulResult}
+                        strategyLabel="Stateful-Sequential"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {interpretStatus === "failed" && (
+                  <div className="flex items-center gap-2 text-red-600">
+                    <AlertCircle className="w-4 h-4" />
+                    <span className="text-sm">
+                      Activity interpretation failed. Check server logs.
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Frame debug viewer */}
             <FrameDebugViewer sessionId={sessionId} />
 
@@ -822,6 +945,9 @@ export default function ProctoringTest() {
                   setTranscriptContent(null);
                   setRefineStatus(null);
                   setRefinedContent(null);
+                  setInterpretStatus(null);
+                  setChunkedResult(null);
+                  setStatefulResult(null);
                   setError(null);
                 }}
               >

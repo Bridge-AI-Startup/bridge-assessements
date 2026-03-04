@@ -255,6 +255,47 @@ export async function getRefinedTranscriptContent(
   }
 }
 
+/** Enriched transcript from the activity interpreter (one strategy). */
+export type EnrichedTranscript = {
+  events: Array<{
+    ts: number;
+    ts_end: number;
+    behavioral_summary: string;
+    intent: string;
+    regions_present: string[];
+    ai_tool: string | null;
+    raw_regions?: Array<{ region: string; text_content: string }>;
+  }>;
+  session_narrative: string;
+  strategy: "chunked" | "stateful";
+  processing_stats: {
+    llm_calls: number;
+    total_tokens: number;
+    processing_time_ms: number;
+  };
+};
+
+/**
+ * Run both activity interpreter strategies (chunked + stateful) on the
+ * session's raw transcript. Returns processed transcripts for comparison.
+ */
+export async function interpretTranscript(
+  sessionId: string
+): Promise<
+  APIResult<{ chunked: EnrichedTranscript; stateful: EnrichedTranscript }>
+> {
+  try {
+    const response = await post(
+      `/proctoring/sessions/${sessionId}/interpret-transcript`,
+      {}
+    );
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
 /**
  * Upload a video chunk. Uses raw fetch with FormData.
  */

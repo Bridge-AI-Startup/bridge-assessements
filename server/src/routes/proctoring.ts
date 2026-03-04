@@ -97,6 +97,12 @@ router.post(
   ProctoringController.refineSessionTranscript
 );
 
+router.post(
+  "/sessions/:sessionId/interpret-transcript",
+  ...transcriptAuthMiddleware,
+  ProctoringController.interpretSessionTranscript
+);
+
 router.get(
   "/sessions/:sessionId/transcript/refined",
   ProctoringController.getRefinedTranscript
