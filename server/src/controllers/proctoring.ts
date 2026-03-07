@@ -2,6 +2,8 @@ import { RequestHandler } from "express";
 import { validationResult } from "express-validator";
 import crypto from "crypto";
 import mongoose from "mongoose";
+import path from "path";
+import fs from "fs/promises";
 import validationErrorParser from "../utils/validationErrorParser.js";
 import ProctoringSessionModel from "../models/proctoringSession.js";
 import SubmissionModel from "../models/submission.js";
@@ -333,6 +335,72 @@ export const uploadVideoChunk: RequestHandler = async (req, res, next) => {
   }
 };
 
+// GET /api/proctoring/sessions/:sessionId/download-video
+// Returns merged WebM video for the session (screen 0). Works for in-DB sessions (videoChunks) or storage-only (listKeys).
+export const downloadSessionVideo: RequestHandler = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const { getFrameStorage } = await import("../services/capture/storage.js");
+    const storage = getFrameStorage();
+
+    const session = await ProctoringSessionModel.findById(sessionId);
+
+    let chunks: { storageKey: string }[] = [];
+
+    if (session?.videoChunks?.length) {
+      const byScreen = new Map<number, { storageKey: string; startTime: Date }[]>();
+      for (const ch of session.videoChunks as any[]) {
+        const screenIndex = ch.screenIndex ?? 0;
+        if (!byScreen.has(screenIndex)) byScreen.set(screenIndex, []);
+        byScreen.get(screenIndex)!.push({
+          storageKey: ch.storageKey,
+          startTime: new Date(ch.startTime),
+        });
+      }
+      const screen0 = byScreen.get(0) ?? byScreen.get(Math.min(...byScreen.keys()));
+      if (screen0) {
+        screen0.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+        chunks = screen0;
+      }
+    }
+
+    if (chunks.length === 0) {
+      const prefix = `${sessionId}/video`;
+      const keys = await storage.listKeys(prefix);
+      const webmKeys = keys.filter((k) => k.endsWith(".webm"));
+      if (webmKeys.length === 0) {
+        return res.status(404).json({ error: "No video chunks found for this session" });
+      }
+      const withMeta = webmKeys.map((key) => {
+        const name = key.split("/").pop() || "";
+        const [tsStr, screenStr] = name.replace(".webm", "").split("-");
+        return {
+          storageKey: key,
+          ts: parseInt(tsStr, 10) || 0,
+          screenIndex: parseInt(screenStr, 10) || 0,
+        };
+      });
+      const screen0Keys = withMeta.filter((m) => m.screenIndex === 0);
+      const toUse = screen0Keys.length ? screen0Keys : withMeta;
+      toUse.sort((a, b) => a.ts - b.ts);
+      chunks = toUse.map((m) => ({ storageKey: m.storageKey }));
+    }
+
+    if (chunks.length === 0) {
+      return res.status(404).json({ error: "No video chunks found for this session" });
+    }
+
+    const buffers = await Promise.all(chunks.map((c) => storage.getVideoChunk(c.storageKey)));
+    const merged = Buffer.concat(buffers);
+
+    res.setHeader("Content-Type", "video/webm");
+    res.setHeader("Content-Disposition", `attachment; filename="proctoring-${sessionId}.webm"`);
+    res.send(merged);
+  } catch (error) {
+    next(error);
+  }
+};
+
 // GET /api/proctoring/sessions/:sessionId/debug-frames  (DEV ONLY)
 // Returns extracted frames as base64 thumbnails with region detection bounding boxes.
 export const getDebugFrames: RequestHandler = async (req, res, next) => {
@@ -529,6 +597,95 @@ export const createTestSession: RequestHandler = async (req, res, next) => {
     });
 
     res.status(201).json({ session, token });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const OBJECT_ID_REGEX = /^[a-fA-F0-9]{24}$/;
+
+// GET /api/proctoring/test/list-storage-sessions  (DEV ONLY)
+// Lists session directories in storage/proctoring with frame/video counts and DB transcript status.
+export const listStorageSessions: RequestHandler = async (req, res, next) => {
+  try {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    const baseDir =
+      process.env.PROCTORING_STORAGE_DIR ||
+      path.join(process.cwd(), "storage", "proctoring");
+
+    let entries: string[];
+    try {
+      entries = await fs.readdir(baseDir, { withFileTypes: true })
+        .then((dirents) => dirents.filter((d) => d.isDirectory()).map((d) => d.name));
+    } catch (err) {
+      return res.status(500).json({
+        error: "Failed to read storage directory",
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const sessionIds = entries.filter((name) => OBJECT_ID_REGEX.test(name));
+    const results: Array<{
+      sessionId: string;
+      frameCount: number;
+      videoCount: number;
+      inDb: boolean;
+      transcriptStatus?: string;
+      refinedStatus?: string;
+    }> = [];
+
+    for (const sessionId of sessionIds) {
+      let frameCount = 0;
+      let videoCount = 0;
+      const framesDir = path.join(baseDir, sessionId, "frames");
+      const videoDir = path.join(baseDir, sessionId, "video");
+      try {
+        const frameFiles = await fs.readdir(framesDir).catch(() => []);
+        frameCount = frameFiles.filter((f) => f.endsWith(".png")).length;
+      } catch {
+        // no frames dir
+      }
+      try {
+        const videoFiles = await fs.readdir(videoDir).catch(() => []);
+        videoCount = videoFiles.filter((f) => f.endsWith(".webm") || f.endsWith(".mp4")).length;
+      } catch {
+        // no video dir
+      }
+
+      let inDb = false;
+      let transcriptStatus: string | undefined;
+      let refinedStatus: string | undefined;
+      try {
+        const session = await ProctoringSessionModel.findById(sessionId)
+          .select("transcript")
+          .lean();
+        if (session) {
+          inDb = true;
+          const t = (session as { transcript?: { status?: string; refinedStatus?: string } }).transcript;
+          transcriptStatus = t?.status;
+          refinedStatus = t?.refinedStatus;
+        }
+      } catch {
+        // ignore
+      }
+
+      results.push({
+        sessionId,
+        frameCount,
+        videoCount,
+        inDb,
+        transcriptStatus,
+        refinedStatus,
+      });
+    }
+
+    // Sort by sessionId descending (newer-looking IDs first)
+    results.sort((a, b) => b.sessionId.localeCompare(a.sessionId));
+
+    res.json({ sessions: results });
   } catch (error) {
     next(error);
   }

@@ -5,6 +5,7 @@
  */
 
 import OpenAI from "openai";
+import { logTs } from "./logger.js";
 
 let openai: OpenAI | null = null;
 
@@ -77,7 +78,7 @@ export async function withRetry<T>(
           const delay = baseDelay + jitter;
 
           console.warn(
-            `[retry] ${label}: ${isRateLimit ? "rate limited (429)" : `server error (${status})`}, attempt ${attempt + 1}/${maxRetries}, waiting ${(delay / 1000).toFixed(1)}s...`
+            `[${new Date().toISOString()}] [retry] ${label}: ${isRateLimit ? "rate limited (429)" : `server error (${status})`}, attempt ${attempt + 1}/${maxRetries}, waiting ${(delay / 1000).toFixed(1)}s...`
           );
           await new Promise((resolve) => setTimeout(resolve, delay));
           continue;
@@ -150,8 +151,9 @@ export async function analyzeFrameBatch(
   }
 
   const model = modelOverride || process.env.OPENAI_VISION_MODEL || "gpt-4o";
-  console.log(`[vision] Calling ${model} with ${frames.length} images (${imageMessages.length} content parts)...`);
+  logTs("vision", `Calling ${model} with ${frames.length} images (${imageMessages.length} content parts)...`);
 
+  const callStart = Date.now();
   const response = await withRetry(
     () =>
       client.chat.completions.create({
@@ -164,14 +166,15 @@ export async function analyzeFrameBatch(
       }),
     `vision/${model}`
   );
+  const elapsed = Date.now() - callStart;
 
   const text = response.choices[0]?.message?.content || "";
   const finishReason = response.choices[0]?.finish_reason;
   const usage = response.usage;
 
-  console.log(`[vision] Response: ${text.length} chars, finish_reason=${finishReason}, prompt_tokens=${usage?.prompt_tokens}, completion_tokens=${usage?.completion_tokens}`);
+  logTs("vision", `Response: ${text.length} chars, finish_reason=${finishReason}, prompt_tokens=${usage?.prompt_tokens}, completion_tokens=${usage?.completion_tokens}`, elapsed);
   if (!text) {
-    console.error(`[vision] WARNING: Empty response from ${model}!`);
+    console.error(`[${new Date().toISOString()}] [vision] WARNING: Empty response from ${model}!`);
   }
 
   return {

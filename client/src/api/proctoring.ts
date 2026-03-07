@@ -162,6 +162,31 @@ export async function createTestProctoringSession(): Promise<
   }
 }
 
+export type StorageSessionEntry = {
+  sessionId: string;
+  frameCount: number;
+  videoCount: number;
+  inDb: boolean;
+  transcriptStatus?: string;
+  refinedStatus?: string;
+};
+
+/**
+ * List session directories in storage/proctoring (dev only).
+ * Returns sessions with frame/video counts and DB transcript status.
+ */
+export async function listStorageSessions(): Promise<
+  APIResult<{ sessions: StorageSessionEntry[] }>
+> {
+  try {
+    const response = await get("/proctoring/sessions/test/list-storage-sessions");
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
 /**
  * Trigger AI transcript generation for a completed session.
  */
@@ -192,6 +217,36 @@ export async function getTranscriptContent(
     );
     const text = await response.text();
     return { success: true, data: text };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Download merged WebM video for a session. Triggers a file download in the browser.
+ */
+export async function downloadProctoringVideo(
+  sessionId: string
+): Promise<APIResult<void>> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/proctoring/sessions/${sessionId}/download-video`
+    );
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      return {
+        success: false,
+        error: data.error || `Download failed (${response.status})`,
+      };
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `proctoring-${sessionId}.webm`;
+    a.click();
+    URL.revokeObjectURL(url);
+    return { success: true };
   } catch (error) {
     return handleAPIError(error);
   }

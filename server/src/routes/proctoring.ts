@@ -17,10 +17,14 @@ const videoUpload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
 }).single("chunk");
 
-// Dev-only test endpoint (must be before :sessionId param routes)
+// Dev-only test endpoints (must be before :sessionId param routes)
 router.post(
   "/sessions/test/create",
   ProctoringController.createTestSession
+);
+router.get(
+  "/sessions/test/list-storage-sessions",
+  ProctoringController.listStorageSessions
 );
 
 // Candidate endpoints (token-based, no Firebase auth)
@@ -106,6 +110,11 @@ router.post(
 router.get(
   "/sessions/:sessionId/transcript/refined",
   ProctoringController.getRefinedTranscript
+);
+
+router.get(
+  "/sessions/:sessionId/download-video",
+  ProctoringController.downloadSessionVideo
 );
 
 router.get(

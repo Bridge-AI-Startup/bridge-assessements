@@ -155,6 +155,14 @@ See `server/config.env.example` for the full list. Key variables:
 - `TRANSCRIPT_GENERATION_ENABLED` -- Enable/disable AI transcript generation (default: `true`)
 - `PROCTORING_FRAME_INTERVAL_MS` -- Capture interval in ms (default: `5000`)
 - `PROCTORING_DEDUP_THRESHOLD` -- Pixel diff threshold for dedup (default: `0.03`)
+- `TRANSCRIPT_REGION_BATCH_SIZE` -- Max crops per region before flush (default: `5`)
+- `TRANSCRIPT_LAYOUT_REDETECT_INTERVAL` -- Re-detect layout every N frames (default: `90`)
+- `TRANSCRIPT_LAYOUT_MAX_PIXELS` -- Max dimension for layout image sent to vision (default: `1280`)
+- `TRANSCRIPT_OCR_CACHE_CHANGE_THRESHOLD` -- Thumb-diff threshold for reusing cached OCR (default: `0.6`)
+- `TRANSCRIPT_DEBUG_SAVE_CACHE_THUMBS` -- Save cached region thumbs to disk (default: `false`)
+- `TRANSCRIPT_DEBUG_CACHE_THUMBS_DIR` -- Directory for debug thumbs (default: `{PROCTORING_STORAGE_DIR}/ocr-cache-thumbs`)
+- `TRANSCRIPT_INCREMENTAL_ENABLED` -- Enable sliding-window incremental transcript for active sessions (default: `false`)
+- `TRANSCRIPT_INCREMENTAL_INTERVAL_MS` -- Interval for incremental runs in ms (default: `60000`)
 
 ### Frontend (`client/.env.local`)
 - `VITE_API_URL` -- Override API base URL (optional, auto-detected from mode)
@@ -255,10 +263,11 @@ server/src/
 │   └── index.ts           # Exports
 ├── ai/
 │   └── transcript/
-│       ├── generator.ts   # Orchestrator: batch → vision → stitch → store
+│       ├── generator.ts   # Orchestrator: batch → vision → stitch → store; parallel region flushes; generateTranscriptIncremental
+│       ├── incrementalScheduler.ts # Sliding-window: run incremental transcript for active sessions on interval
 │       ├── batcher.ts     # Split frames into vision API batches
 │       ├── visionClient.ts # OpenAI GPT-4o-mini vision API calls (detail:high)
-│       ├── stitcher.ts    # Merge batch outputs into chronological JSONL
+│       ├── stitcher.ts    # Merge batch outputs into chronological JSONL; parseTranscriptJsonlToSegments for merge
 │       └── manifestInjector.ts  # Inject sidecar events into transcript
 └── scripts/               # Utility/migration scripts
     ├── backfillInterviewQuestions.ts

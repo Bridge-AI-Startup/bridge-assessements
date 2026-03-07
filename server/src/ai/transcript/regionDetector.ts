@@ -12,6 +12,7 @@ import sharp from "sharp";
 import Tesseract from "tesseract.js";
 import { VisionFrame, withRetry } from "./visionClient.js";
 import { PROMPT_DETECT_REGIONS } from "../../prompts/regionPrompts.js";
+import { logTs } from "./logger.js";
 
 // Singleton Tesseract worker for text sampling (shared with ocrEngine)
 let sampleWorker: Tesseract.Worker | null = null;
@@ -78,7 +79,7 @@ async function sampleTextStrips(
   imageWidth: number,
   imageHeight: number
 ): Promise<string> {
-  const NUM_STRIPS = 5; // Sample 5 horizontal strips
+  const NUM_STRIPS = 8; // Sample 5 horizontal strips
   const STRIP_HEIGHT_PCT = 8; // Each strip is 8% of image height
   const strips: string[] = [];
 
@@ -133,15 +134,21 @@ async function sampleTextStrips(
  * use semantic context (e.g. "$ command" = terminal, "Human:" = ai_chat)
  * to correctly classify panels.
  */
+const LAYOUT_MAX_PIXELS = (() => {
+  const raw = process.env.TRANSCRIPT_LAYOUT_MAX_PIXELS;
+  if (raw == null || raw === "") return 1280;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 320 ? n : 1280;
+})();
+
 export async function detectRegions(
   frame: VisionFrame
 ): Promise<DetectedRegion[]> {
   const client = getOpenAIClient();
-  const base64 = frame.buffer.toString("base64");
 
   const model = process.env.OPENAI_REGION_DETECTION_MODEL || "gpt-4o-mini";
 
-  // Get image dimensions for text sampling
+  // Get image dimensions for text sampling (use original buffer)
   let imgWidth = 1920;
   let imgHeight = 1080;
   try {
@@ -155,12 +162,20 @@ export async function detectRegions(
   // Sample text from strips to help identify region types
   const textHints = await sampleTextStrips(frame.buffer, imgWidth, imgHeight);
 
-  console.log(
-    `[regionDetector] Detecting regions with ${model}` +
-      `${textHints ? " (with text hints)" : ""}...`
-  );
+  // Downscale image for layout detection only (fewer tokens, faster; boxes are percentages)
+  let layoutBuffer = frame.buffer;
+  if (imgWidth > LAYOUT_MAX_PIXELS || imgHeight > LAYOUT_MAX_PIXELS) {
+    layoutBuffer = await sharp(frame.buffer)
+      .resize(LAYOUT_MAX_PIXELS, LAYOUT_MAX_PIXELS, { fit: "inside" })
+      .png()
+      .toBuffer();
+  }
+  const base64 = layoutBuffer.toString("base64");
+
+  logTs("regionDetector", `Detecting regions with ${model}${textHints ? " (with text hints)" : ""}...`);
 
   try {
+    const detectStart = Date.now();
     const response = await withRetry(
       () =>
         client.chat.completions.create({
@@ -188,12 +203,11 @@ export async function detectRegions(
         }),
       `regionDetect/${model}`
     );
+    const detectElapsed = Date.now() - detectStart;
 
     const text = response.choices[0]?.message?.content || "";
     const usage = response.usage;
-    console.log(
-      `[regionDetector] Detection response: ${text.length} chars, ${usage?.total_tokens} tokens`
-    );
+    logTs("regionDetector", `Detection response: ${text.length} chars, ${usage?.total_tokens} tokens`, detectElapsed);
 
     // Parse JSON array from response
     const cleaned = text
@@ -214,13 +228,11 @@ export async function detectRegions(
         r.height > 2
     );
 
-    console.log(
-      `[regionDetector] Found ${valid.length} regions: ${valid.map((r) => `${r.regionType}(${r.confidence})`).join(", ")}`
-    );
+    logTs("regionDetector", `Found ${valid.length} regions: ${valid.map((r) => `${r.regionType}(${r.confidence})`).join(", ")}`);
 
     return valid;
   } catch (err) {
-    console.error("[regionDetector] Detection failed:", err);
+    console.error(`[${new Date().toISOString()}] [regionDetector] Detection failed:`, err);
     return [];
   }
 }

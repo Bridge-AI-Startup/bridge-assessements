@@ -6,6 +6,9 @@ import {
   isFFmpegAvailable,
 } from "./videoFrameExtractor.js";
 
+const log = (msg: string, elapsedMs?: number) =>
+  console.log(`[${new Date().toISOString()}] [framePrep] ${msg}${elapsedMs != null ? ` (+${elapsedMs}ms)` : ""}`);
+
 /**
  * Boundary contract consumed by ai/transcript/generator.ts.
  * This is the ONLY interface the AI module knows about.
@@ -42,43 +45,37 @@ export interface PreparedSessionData {
 export async function prepareSessionForTranscript(
   sessionId: string
 ): Promise<PreparedSessionData> {
+  const startTotal = Date.now();
   const session = await ProctoringSessionModel.findById(sessionId);
   if (!session) throw ProctoringError.SESSION_NOT_FOUND;
 
   let preparedFrames: PreparedFrame[] = [];
-
-  // Try video-based extraction first
   const hasVideo =
     session.videoChunks && session.videoChunks.length > 0;
 
   if (hasVideo) {
     const ffmpegOk = await isFFmpegAvailable();
     if (ffmpegOk) {
-      console.log(
-        `[framePrep] Video chunks found (${session.videoChunks.length}), attempting smart extraction...`
-      );
+      log(`Video chunks found (${session.videoChunks.length}), starting smart extraction...`);
       try {
+        const extractStart = Date.now();
         preparedFrames = await extractSmartFrames(sessionId);
-        console.log(
-          `[framePrep] Video extraction produced ${preparedFrames.length} frames`
-        );
+        log(`Video extraction produced ${preparedFrames.length} frames`, Date.now() - extractStart);
       } catch (err) {
-        console.error("[framePrep] Video extraction failed, falling back to screenshots:", err);
+        console.error(`[${new Date().toISOString()}] [framePrep] Video extraction failed, falling back to screenshots:`, err);
         preparedFrames = [];
       }
     } else {
-      console.log(
-        "[framePrep] ffmpeg not available, falling back to screenshots"
-      );
+      log("ffmpeg not available, falling back to screenshots");
     }
   }
 
-  // Fallback to screenshot frames
   if (preparedFrames.length === 0) {
-    console.log("[framePrep] Using screenshot-based frames (fallback)");
+    log("Using screenshot-based frames (fallback)");
+    const screenshotStart = Date.now();
     preparedFrames = await loadScreenshotFrames(session);
+    log(`Loaded ${preparedFrames.length} screenshot frames`, Date.now() - screenshotStart);
 
-    // Update extraction method stat
     if (hasVideo) {
       await ProctoringSessionModel.findByIdAndUpdate(sessionId, {
         "stats.videoStats.extractionMethod": "screenshot_fallback",
@@ -102,6 +99,7 @@ export async function prepareSessionForTranscript(
     label: s.label || null,
   }));
 
+  log(`prepareSessionForTranscript done: ${preparedFrames.length} frames, ${sidecarEvents.length} sidecar events`, Date.now() - startTotal);
   return {
     sessionId,
     frames: preparedFrames,
@@ -109,6 +107,25 @@ export async function prepareSessionForTranscript(
     screens,
     captureStartedAt: session.stats.captureStartedAt || null,
     captureEndedAt: session.stats.captureEndedAt || null,
+  };
+}
+
+/**
+ * Prepare session data for transcript generation, restricted to frames (and sidecar events)
+ * with timestamp >= sinceMs. Used by the sliding-window incremental processor.
+ */
+export async function prepareSessionForTranscriptSince(
+  sessionId: string,
+  sinceMs: number
+): Promise<PreparedSessionData> {
+  const full = await prepareSessionForTranscript(sessionId);
+  const sinceDate = new Date(sinceMs);
+  const frames = full.frames.filter((f) => f.capturedAt >= sinceDate);
+  const sidecarEvents = full.sidecarEvents.filter((e) => e.timestamp >= sinceDate);
+  return {
+    ...full,
+    frames,
+    sidecarEvents,
   };
 }
 
@@ -138,7 +155,7 @@ async function loadScreenshotFrames(session: any): Promise<PreparedFrame[]> {
         height: frame.height || 0,
       });
     } catch (err) {
-      console.warn(`Failed to load frame ${frame.storageKey}, skipping:`, err);
+      console.warn(`[${new Date().toISOString()}] [framePrep] Failed to load frame ${frame.storageKey}, skipping:`, err);
     }
   }
 

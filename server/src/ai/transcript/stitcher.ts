@@ -77,3 +77,29 @@ export function stitchBatchOutputs(batchOutputs: string[]): string {
   // Convert to JSONL
   return allSegments.map((seg) => JSON.stringify(seg)).join("\n");
 }
+
+/**
+ * Parse a full JSONL transcript string into segments (for merging incremental output with existing).
+ */
+export function parseTranscriptJsonlToSegments(jsonl: string): TranscriptSegment[] {
+  const segments: TranscriptSegment[] = [];
+  for (const line of jsonl.split("\n").filter((l) => l.trim())) {
+    try {
+      const parsed = JSON.parse(line.trim());
+      if (parsed.ts && (parsed.text_content != null || parsed.description != null)) {
+        segments.push({
+          ts: parsed.ts,
+          ts_end: parsed.ts_end,
+          screen: parsed.screen ?? 0,
+          region: parsed.region,
+          app: parsed.app,
+          description: parsed.description,
+          text_content: parsed.text_content,
+        });
+      }
+    } catch {
+      // skip invalid lines
+    }
+  }
+  return segments;
+}

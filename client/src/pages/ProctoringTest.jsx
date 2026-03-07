@@ -224,6 +224,7 @@ export default function ProctoringTest() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [transcriptStatus, setTranscriptStatus] = useState(null);
+  const [generatingElapsedSeconds, setGeneratingElapsedSeconds] = useState(0);
   const [transcriptContent, setTranscriptContent] = useState(null);
   const [transcriptView, setTranscriptView] = useState("readable"); // "readable" or "raw"
   const [refineStatus, setRefineStatus] = useState(null);
@@ -266,6 +267,16 @@ export default function ProctoringTest() {
   });
 
   const { shouldKeepFrame, duplicatesSkipped } = useFrameDedup();
+
+  // Elapsed timer while transcript is generating
+  useEffect(() => {
+    if (transcriptStatus !== "generating") {
+      setGeneratingElapsedSeconds(0);
+      return;
+    }
+    const t = setInterval(() => setGeneratingElapsedSeconds((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [transcriptStatus]);
 
   // Wrap consumeFrames with dedup
   const consumeDedupedFrames = useCallback(async () => {
@@ -398,6 +409,7 @@ export default function ProctoringTest() {
 
   const handleGenerateTranscript = async () => {
     setTranscriptStatus("generating");
+    setGeneratingElapsedSeconds(0);
     const result = await generateTranscript(sessionId);
     if (!result.success) {
       setTranscriptStatus("failed");
@@ -732,11 +744,41 @@ export default function ProctoringTest() {
               )}
 
               {transcriptStatus === "generating" && (
-                <div className="flex items-center gap-3 text-blue-600">
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  <span className="text-sm">
-                    Generating transcript... This may take a minute.
-                  </span>
+                <div className="rounded-xl border border-blue-200 bg-blue-50/80 p-4">
+                  <div className="flex items-center gap-3 text-blue-700">
+                    <Loader2 className="w-6 h-6 animate-spin shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium">Generating transcript</p>
+                      <p className="text-sm text-blue-600 mt-0.5">
+                        The server is processing frames with AI vision. This can take several minutes for long sessions.
+                      </p>
+                      {(sessionData?.transcript?.progressTotalFrames != null && sessionData?.transcript?.progressTotalFrames > 0) ? (
+                        <>
+                          <p className="text-sm font-medium text-blue-700 mt-2">
+                            Frame {sessionData.transcript.progressFramesProcessed ?? 0} of {sessionData.transcript.progressTotalFrames}
+                            {sessionData.transcript.progressTotalBatches != null && sessionData.transcript.progressTotalBatches > 0 && (
+                              <span className="text-blue-600 font-normal ml-2">
+                                (batch {Math.min((sessionData.transcript.progressBatchIndex ?? 0) + 1, sessionData.transcript.progressTotalBatches)} of {sessionData.transcript.progressTotalBatches})
+                              </span>
+                            )}
+                          </p>
+                          <div className="mt-2 h-2 rounded-full bg-blue-200 overflow-hidden">
+                            <div
+                              className="h-full bg-blue-600 rounded-full transition-all duration-500"
+                              style={{
+                                width: `${Math.min(100, (100 * (sessionData.transcript.progressFramesProcessed ?? 0)) / sessionData.transcript.progressTotalFrames)}%`,
+                              }}
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <p className="text-xs text-blue-500 mt-2 font-mono">Preparing…</p>
+                      )}
+                      <p className="text-xs text-blue-500 mt-2 font-mono">
+                        Elapsed: {Math.floor(generatingElapsedSeconds / 60)}:{String(generatingElapsedSeconds % 60).padStart(2, "0")}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
 
