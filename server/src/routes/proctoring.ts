@@ -144,8 +144,6 @@ router.get(
 );
 
 router.get(
-  "/sessions/:sessionId/debug-frames",
-  ProctoringController.getDebugFrames
   "/sessions/:sessionId/export-overlays",
   ProctoringController.exportSessionOverlays
 );
