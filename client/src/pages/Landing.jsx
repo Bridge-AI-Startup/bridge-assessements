@@ -565,7 +565,7 @@ export default function Landing() {
             {/* Option 1: YouTube/Vimeo embed */}
             <iframe
               className="absolute inset-0 w-full h-full"
-              src="https://www.youtube.com/embed/VcXoKLQ14Zg?si=nh3IAQUBBI3pwOjm"
+              src="https://www.youtube.com/embed/SodTSHtmAI4"
               title="Bridge Demo Video"
               frameBorder="0"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
