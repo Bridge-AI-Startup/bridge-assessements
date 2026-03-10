@@ -156,14 +156,14 @@ app.use(
   },
 );
 
-// Standard JSON body parser for all other routes
+// Standard JSON body parser for all other routes (5mb to allow e.g. raw transcript paste)
 // Skip body parsing for multipart/form-data so multer can read the stream
 app.use((req, res, next) => {
   const contentType = req.get("Content-Type") || "";
   if (contentType.includes("multipart/form-data")) {
     return next();
   }
-  express.json()(req, res, next);
+  express.json({ limit: "5mb" })(req, res, next);
 });
 app.use((req, res, next) => {
   const contentType = req.get("Content-Type") || "";

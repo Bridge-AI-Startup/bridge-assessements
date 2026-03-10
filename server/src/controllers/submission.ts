@@ -30,6 +30,18 @@ import { getFrameStorage } from "../services/capture/storage.js";
 const TRANSCRIPT_POLL_INTERVAL_MS = 15000;
 const TRANSCRIPT_POLL_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
 
+async function setEvaluationFailed(
+  submissionId: string,
+  message: string
+): Promise<void> {
+  await SubmissionModel.findByIdAndUpdate(submissionId, {
+    $set: {
+      evaluationStatus: "failed",
+      evaluationError: message,
+    },
+  });
+}
+
 /**
  * Background: ensure proctoring session has a transcript (generate if needed), then load it,
  * set on submission, and run screen-recording evaluation. Does not block submit response.
@@ -43,7 +55,13 @@ async function ensureProctoringTranscriptAndEvaluate(
   if (!sub) return;
   const assessment = sub.assessmentId as any;
   const criteria = assessment?.evaluationCriteria;
-  if (!Array.isArray(criteria) || criteria.length === 0) return;
+  if (!Array.isArray(criteria) || criteria.length === 0) {
+    await setEvaluationFailed(
+      submissionId,
+      "Assessment has no evaluation criteria configured."
+    );
+    return;
+  }
 
   const session = await ProctoringSessionModel.findOne({
     submissionId: submissionId as any,
@@ -51,6 +69,10 @@ async function ensureProctoringTranscriptAndEvaluate(
   if (!session) {
     console.warn(
       `[ensureProctoringTranscriptAndEvaluate] No proctoring session for submission ${submissionId}; transcript will not be attached. Was proctoring started (consent granted) for this attempt?`
+    );
+    await setEvaluationFailed(
+      submissionId,
+      "No screen recording for this submission. The candidate must complete the assessment with proctoring enabled."
     );
     return;
   }
@@ -65,7 +87,13 @@ async function ensureProctoringTranscriptAndEvaluate(
       if (!updated) return;
       const s = updated.transcript?.status ?? "not_started";
       if (s === "completed") break;
-      if (s === "failed") return;
+      if (s === "failed") {
+        await setEvaluationFailed(
+          submissionId,
+          "Screen recording transcript generation failed."
+        );
+        return;
+      }
     }
   }
 
@@ -77,12 +105,22 @@ async function ensureProctoringTranscriptAndEvaluate(
         `[ensureProctoringTranscriptAndEvaluate] Transcript generation failed for submission ${submissionId}:`,
         err
       );
+      await setEvaluationFailed(
+        submissionId,
+        "Screen recording transcript could not be generated."
+      );
       return;
     }
   }
 
   const transcript = await getProctoringTranscriptForSubmission(submissionId);
-  if (!transcript || transcript.length === 0) return;
+  if (!transcript || transcript.length === 0) {
+    await setEvaluationFailed(
+      submissionId,
+      "No transcript available from the screen recording."
+    );
+    return;
+  }
 
   const updatedSub = await SubmissionModel.findById(submissionId);
   if (!updatedSub) return;
@@ -121,6 +159,7 @@ async function ensureProctoringTranscriptAndEvaluate(
     if (!subAfter) return;
     (subAfter as any).evaluationReport = report;
     (subAfter as any).evaluationStatus = "completed";
+    (subAfter as any).evaluationError = null;
     await subAfter.save();
   } catch (err) {
     console.error(
@@ -130,6 +169,8 @@ async function ensureProctoringTranscriptAndEvaluate(
     const subAfter = await SubmissionModel.findById(submissionId);
     if (subAfter) {
       (subAfter as any).evaluationStatus = "failed";
+      (subAfter as any).evaluationError =
+        err instanceof Error ? err.message : "Evaluation failed.";
       await subAfter.save();
     }
   }
@@ -532,29 +573,46 @@ export const submitSubmissionByToken: RequestHandler = async (
       "title description timeLimit"
     );
 
-    // Background: generate proctoring transcript if needed, then run screen-recording evaluation
+    // Background: run screen-recording evaluation only when assessment has evaluation criteria
     const submissionIdStr = submission._id.toString();
-    await SubmissionModel.findByIdAndUpdate(submissionIdStr, {
-      $set: { evaluationStatus: "pending" },
-    });
-    ensureProctoringTranscriptAndEvaluate(submissionIdStr)
-      .then(async () => {
-        const sub = await SubmissionModel.findById(submissionIdStr);
-        if (!sub) return;
-        (sub as any).evaluationStatus = (sub as any).evaluationReport
-          ? "completed"
-          : "failed";
-        await sub.save();
-      })
-      .catch((err) => {
-        console.error(
-          `[submitSubmissionByToken] ensureProctoringTranscriptAndEvaluate failed for ${submission._id}:`,
-          err
-        );
-        SubmissionModel.findByIdAndUpdate(submissionIdStr, {
-          $set: { evaluationStatus: "failed" },
-        }).catch(() => {});
+    const hasEvaluationCriteria =
+      Array.isArray(assessment?.evaluationCriteria) &&
+      assessment.evaluationCriteria.length > 0;
+
+    if (hasEvaluationCriteria) {
+      await SubmissionModel.findByIdAndUpdate(submissionIdStr, {
+        $set: { evaluationStatus: "pending", evaluationError: null },
       });
+      ensureProctoringTranscriptAndEvaluate(submissionIdStr)
+        .then(async () => {
+          const sub = await SubmissionModel.findById(submissionIdStr);
+          if (!sub) return;
+          (sub as any).evaluationStatus = (sub as any).evaluationReport
+            ? "completed"
+            : "failed";
+          await sub.save();
+        })
+        .catch((err) => {
+          console.error(
+            `[submitSubmissionByToken] ensureProctoringTranscriptAndEvaluate failed for ${submission._id}:`,
+            err
+          );
+          SubmissionModel.findByIdAndUpdate(submissionIdStr, {
+            $set: {
+              evaluationStatus: "failed",
+              evaluationError:
+                err instanceof Error ? err.message : "Evaluation failed.",
+            },
+          }).catch(() => {});
+        });
+    } else {
+      await SubmissionModel.findByIdAndUpdate(submissionIdStr, {
+        $set: {
+          evaluationStatus: "failed",
+          evaluationError: "Assessment has no evaluation criteria configured.",
+        },
+      });
+    }
 
     // Trigger repository indexing in the background (fire-and-forget)
     // This doesn't block the submission response

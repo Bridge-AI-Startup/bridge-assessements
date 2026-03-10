@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" fill="none">
+  <rect width="1280" height="720" fill="#1f2937"/>
+  <rect x="440" y="300" width="400" height="120" rx="8" fill="#374151" stroke="#4b5563" stroke-width="2"/>
+  <path d="M580 360 L580 330 L620 345 Z" fill="#9ca3af"/>
+  <text x="640" y="420" text-anchor="middle" fill="#6b7280" font-family="system-ui,sans-serif" font-size="14">Screen recording</text>
+</svg>

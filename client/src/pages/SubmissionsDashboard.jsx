@@ -21,6 +21,11 @@ import {
   ChevronRight,
   BarChart3,
   Loader2,
+  Code2,
+  Terminal,
+  CheckCircle2,
+  Circle,
+  Play,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,6 +48,7 @@ import {
   generateShareLink,
 } from "@/api/submission";
 import { runSubmissionEvaluation } from "@/api/evaluation";
+import VideoTimelineWithCriteria from "@/components/proctoring/VideoTimelineWithCriteria";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BulkInviteContent } from "@/components/BulkInviteModal";
@@ -67,6 +73,7 @@ export default function SubmissionsDashboard() {
   const [selectedEvaluationSubmission, setSelectedEvaluationSubmission] =
     useState(null);
   const [showEvaluationModal, setShowEvaluationModal] = useState(false);
+  const [evaluationTab, setEvaluationTab] = useState("execution");
   const [expandedEvidenceCriteria, setExpandedEvidenceCriteria] = useState(new Set());
   const [isDropoffAnalysisExpanded, setIsDropoffAnalysisExpanded] =
     useState(false);
@@ -79,6 +86,13 @@ export default function SubmissionsDashboard() {
       setExpandedEvidenceCriteria(new Set());
     }
   }, [selectedEvaluationSubmission?._id]);
+
+  // Default evaluation modal to Final code tab (demo-first)
+  useEffect(() => {
+    if (showEvaluationModal) {
+      setEvaluationTab("execution");
+    }
+  }, [showEvaluationModal, selectedEvaluationSubmission?._id]);
 
   // Wait for auth state to be ready
   useEffect(() => {
@@ -136,18 +150,22 @@ export default function SubmissionsDashboard() {
     loadSubmissions();
   }, [loadSubmissions]);
 
-  // Poll submissions while any have evaluation pending (background job after submit)
+  // Poll submissions while any are waiting for automatic evaluation (transcript + score)
   useEffect(() => {
+    const submittedRecently = (s) =>
+      s.submittedAt &&
+      Date.now() - new Date(s.submittedAt).getTime() < 15 * 60 * 1000;
     const hasPending = submissions.some(
       (s) =>
         s.status === "submitted" &&
-        s.evaluationStatus === "pending" &&
-        !s.evaluationReport?.criteria_results?.length
+        !s.evaluationReport?.criteria_results?.length &&
+        (s.evaluationStatus === "pending" ||
+          (s.evaluationStatus !== "failed" && submittedRecently(s)))
     );
     if (!hasPending || !assessmentId || !currentUser) return;
 
     const POLL_MS = 5000;
-    const MAX_POLLS = 60; // 5 min
+    const MAX_POLLS = 180; // 15 min
     let polls = 0;
     const interval = setInterval(async () => {
       polls++;
@@ -1043,9 +1061,6 @@ export default function SubmissionsDashboard() {
                     Status
                   </th>
                   <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Interview
-                  </th>
-                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Time Spent
                   </th>
                   <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -1102,22 +1117,6 @@ export default function SubmissionsDashboard() {
                           )}
                         </div>
                       </td>
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-2">
-                          {getInterviewStatusBadge(submission.interview)}
-                          {submission.interview && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleViewInterview(submission)}
-                              className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10 h-7 px-2"
-                            >
-                              <MessageSquare className="w-3.5 h-3.5 mr-1" />
-                              Details
-                            </Button>
-                          )}
-                        </div>
-                      </td>
                       <td className="px-5 py-4 text-sm text-gray-600">
                         {formatTimeSpent(submission.timeSpent)}
                       </td>
@@ -1140,19 +1139,20 @@ export default function SubmissionsDashboard() {
                             submission.evaluationReport?.criteria_results?.filter(
                               (r) => r.evaluable
                             )?.length > 0;
-                          const showRunEvaluation =
-                            submission.status === "submitted" &&
-                            !hasEvaluationReport;
-                          // Show loading when server says pending, or when no status yet but just submitted (e.g. within last 5 min)
+                          // Show loading while waiting for automatic evaluation (transcript generation + scoring)
                           const submittedRecently =
                             submission.submittedAt &&
-                            Date.now() - new Date(submission.submittedAt).getTime() < 5 * 60 * 1000;
+                            Date.now() - new Date(submission.submittedAt).getTime() < 15 * 60 * 1000; // 15 min
                           const evaluationPending =
+                            submission.status === "submitted" &&
                             !hasEvaluationReport &&
                             (submission.evaluationStatus === "pending" ||
-                              (submission.status === "submitted" &&
-                                submission.evaluationStatus !== "failed" &&
-                                submittedRecently));
+                              (submission.evaluationStatus !== "failed" && submittedRecently));
+                          // Show "Run evaluation" only when evaluation actually failed (user can retry)
+                          const showRunEvaluation =
+                            submission.status === "submitted" &&
+                            !hasEvaluationReport &&
+                            submission.evaluationStatus === "failed";
                           const openEvaluation = () => {
                             setSelectedEvaluationSubmission(submission);
                             setShowEvaluationModal(true);
@@ -1224,7 +1224,7 @@ export default function SubmissionsDashboard() {
                                             toast({
                                               title: "Evaluation complete",
                                               description:
-                                                "Screen recording evaluation has been updated.",
+                                                "Workflow evaluation has been updated.",
                                             });
                                           }
                                         } else {
@@ -1848,7 +1848,7 @@ export default function SubmissionsDashboard() {
           </DialogContent>
         </Dialog>
 
-        {/* LLM Workflow Evaluation Modal */}
+        {/* Evaluation Modal */}
         <Dialog
           open={showEvaluationModal}
           onOpenChange={(open) => {
@@ -1858,11 +1858,11 @@ export default function SubmissionsDashboard() {
             }
           }}
         >
-          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <BarChart3 className="w-5 h-5" />
-                LLM Workflow Evaluation
+                Evaluation
                 {selectedEvaluationSubmission && (
                   <span className="text-sm font-normal text-gray-500">
                     – {selectedEvaluationSubmission.candidateName ||
@@ -1870,148 +1870,569 @@ export default function SubmissionsDashboard() {
                   </span>
                 )}
               </DialogTitle>
-              <DialogDescription>
-                Screen recording analysis: session summary and criteria scores with evidence.
-              </DialogDescription>
             </DialogHeader>
 
-            {/* Screen recording evaluation (when assessment had evaluation criteria) */}
-            {selectedEvaluationSubmission?.evaluationReport && (
-              <div className="space-y-4 mt-4 border-b border-gray-200 pb-6">
-                <h3 className="text-sm font-semibold text-gray-900">
-                  Screen recording evaluation
-                </h3>
-                {selectedEvaluationSubmission.evaluationReport.session_summary && (
-                  <div>
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">Session summary</p>
-                    <p className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3 border border-gray-200 whitespace-pre-wrap">
-                      {selectedEvaluationSubmission.evaluationReport.session_summary}
-                    </p>
-                  </div>
-                )}
-                {selectedEvaluationSubmission.evaluationReport.criteria_results?.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Criteria results</p>
-                    <div className="space-y-3">
-                      {(() => {
-                        const evaluable = selectedEvaluationSubmission.evaluationReport.criteria_results.filter((r) => r.evaluable);
-                        const avg = evaluable.length ? evaluable.reduce((s, r) => s + r.score, 0) / evaluable.length : null;
-                        return evaluable.length > 0 ? (
-                          <p className="text-xs text-gray-600 mb-2">
-                            Overall score (evaluable criteria): <strong>{avg != null ? (Math.round(avg * 10) / 10).toFixed(1) : "—"}</strong>/10
+            <Tabs
+              value={evaluationTab}
+              onValueChange={setEvaluationTab}
+              className="mt-4"
+            >
+              <TabsList className="w-full justify-start">
+                <TabsTrigger value="execution">Final code</TabsTrigger>
+                <TabsTrigger value="recording">Workflow evaluation</TabsTrigger>
+                <TabsTrigger value="agent">Agent communication</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="execution" className="mt-4">
+                <div className="max-h-[70vh] overflow-y-auto pr-1 space-y-4">
+                  {/* Final code (demo: visuals only; real pipeline coming soon) */}
+                  {selectedEvaluationSubmission?.githubLink ? (
+                    <div className="space-y-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                            <Code2 className="w-4 h-4 text-emerald-600" />
+                            Final code
+                          </h3>
+                          <p className="text-xs text-gray-500 mt-1">
+                            We clone the candidate&apos;s repository, run their code and tests, and score the output against the assessment.
                           </p>
-                        ) : null;
-                      })()}
-                      {selectedEvaluationSubmission.evaluationReport.criteria_results.map((r, i) => (
-                        <div key={i} className="bg-gray-50 rounded-lg p-3 border border-gray-200 text-sm">
-                          <p className="font-medium text-gray-800 mb-1">{r.criterion}</p>
-                          <div className="flex flex-wrap gap-2 mb-1.5">
-                            <span className="text-gray-600">Score: <strong>{r.score}</strong>/10</span>
-                            <span className="text-gray-500">Confidence: {r.confidence}</span>
-                            {!r.evaluable && <span className="text-amber-600 text-xs">Not evaluable</span>}
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          asChild
+                        >
+                          <a
+                            href={selectedEvaluationSubmission.githubLink}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            GitHub
+                          </a>
+                        </Button>
+                      </div>
+
+                      {/* Score card */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        {[
+                          {
+                            label: "Execution score",
+                            value: "87",
+                            max: "100",
+                            color: "text-emerald-600",
+                          },
+                          {
+                            label: "Tests passed",
+                            value: "17",
+                            max: "17",
+                            color: "text-emerald-600",
+                          },
+                          {
+                            label: "Build",
+                            value: "Success",
+                            color: "text-emerald-600",
+                          },
+                          {
+                            label: "Output match",
+                            value: "92%",
+                            color: "text-emerald-600",
+                          },
+                        ].map((m, i) => (
+                          <div
+                            key={i}
+                            className="rounded-lg border border-gray-200 bg-gray-50 p-3"
+                          >
+                            <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                              {m.label}
+                            </p>
+                            <p className={`text-lg font-semibold ${m.color}`}>
+                              {m.value}
+                              {m.max ? `/${m.max}` : ""}
+                            </p>
                           </div>
-                          <p className="text-gray-700 text-xs leading-relaxed">{r.verdict}</p>
-                          {r.evidence?.length > 0 && (
-                            <div className="mt-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setExpandedEvidenceCriteria((prev) => {
-                                    const next = new Set(prev);
-                                    if (next.has(i)) next.delete(i);
-                                    else next.add(i);
-                                    return next;
-                                  });
-                                }}
-                                className="text-[#1E3A8A] hover:underline text-xs font-medium"
-                              >
-                                Evidence: {r.evidence.length} moment(s) {expandedEvidenceCriteria.has(i) ? "▼" : "▶"}
-                              </button>
-                              {expandedEvidenceCriteria.has(i) && (
-                                <ul className="mt-2 space-y-2 pl-3 border-l-2 border-gray-200">
-                                  {r.evidence.map((ev, evIdx) => (
-                                    <li key={evIdx} className="text-xs text-gray-700">
-                                      <span className="text-gray-500 font-medium">
-                                        {ev.ts}s–{ev.ts_end}s
-                                      </span>
-                                      <p className="mt-0.5 text-gray-600">{ev.observation}</p>
-                                    </li>
-                                  ))}
-                                </ul>
+                        ))}
+                      </div>
+
+                      {/* Pipeline steps */}
+                      <div className="rounded-lg border border-gray-200 bg-white p-3">
+                        <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-2">
+                          Pipeline
+                        </p>
+                        <div className="flex flex-wrap gap-4 sm:gap-6">
+                          {[
+                            { label: "Clone repository", done: true },
+                            { label: "Install dependencies", done: true },
+                            { label: "Run test suite", done: true },
+                            { label: "Analyze output", done: true },
+                          ].map((step, i) => (
+                            <div key={i} className="flex items-center gap-2">
+                              {step.done ? (
+                                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                              ) : (
+                                <Circle className="w-4 h-4 text-gray-300 shrink-0" />
+                              )}
+                              <span className="text-sm text-gray-700">
+                                {step.label}
+                              </span>
+                              {i < 3 && (
+                                <ChevronRight className="w-3.5 h-3.5 text-gray-400 hidden sm:inline" />
                               )}
                             </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Fake terminal output */}
+                      <div className="rounded-lg border border-gray-200 bg-gray-900 overflow-hidden">
+                        <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-700 bg-gray-800/80">
+                          <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+                          <span className="text-xs font-medium text-gray-400">
+                            Execution log
+                          </span>
+                        </div>
+                        <pre className="p-3 text-xs text-gray-300 font-mono overflow-x-auto whitespace-pre">
+                          <span className="text-gray-500">
+                            $ git clone{" "}
+                            {selectedEvaluationSubmission.githubLink
+                              ?.replace(/^https?:\/\//, "")
+                              .slice(0, 40)}
+                            ...
+                          </span>
+                          <span className="text-emerald-400">
+                            {"\n"}Cloning into &apos;repo&apos;... done.
+                          </span>
+                          <span className="text-gray-500">
+                            {"\n\n"}$ npm install
+                          </span>
+                          <span className="text-emerald-400">
+                            {"\n"}added 127 packages in 4.2s
+                          </span>
+                          <span className="text-gray-500">
+                            {"\n\n"}$ npm test
+                          </span>
+                          <span className="text-emerald-400">
+                            {"\n"}  ✓ tests/unit (12 passed)
+                          </span>
+                          <span className="text-emerald-400">
+                            {"\n"}  ✓ tests/integration (5 passed)
+                          </span>
+                          <span className="text-gray-300">
+                            {"\n\n"}Test Suites: 2 passed, 2 total
+                          </span>
+                          <span className="text-gray-300">
+                            {"\n"}Tests:       17 passed, 17 total
+                          </span>
+                        </pre>
+                      </div>
+                      <div className="mt-4 w-full">
+                        <Button
+                          variant="default"
+                          size="default"
+                          className="w-full gap-2 font-semibold shadow-sm"
+                          asChild
+                        >
+                          <a
+                            href={selectedEvaluationSubmission.githubLink}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            <Play className="h-4 w-4 shrink-0" />
+                            Run project
+                          </a>
+                        </Button>
+                      </div>
+
+                      <p className="text-[10px] text-gray-400 italic">
+                        Demo placeholder. Full code execution scoring pipeline
+                        coming soon.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="py-10 text-center">
+                      <Code2 className="w-12 h-12 mx-auto mb-2 text-gray-400" />
+                      <p className="text-gray-600 text-sm">
+                        No GitHub repository link found for this submission.
+                      </p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Final code appears once a GitHub link is submitted.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="recording" className="mt-4">
+                <div className="max-h-[70vh] overflow-y-auto pr-1 space-y-4">
+                  {/* Workflow evaluation (when assessment had evaluation criteria) */}
+                  {selectedEvaluationSubmission?.evaluationReport ? (
+                    <div className="space-y-4">
+                      <h3 className="text-sm font-semibold text-gray-900">
+                        Workflow evaluation
+                      </h3>
+
+                      {/* Overall score only */}
+                      {(() => {
+                        const report =
+                          selectedEvaluationSubmission.evaluationReport;
+                        const criteriaResults = report.criteria_results ?? [];
+                        const evaluable = criteriaResults.filter(
+                          (r) => r.evaluable
+                        );
+                        const overall =
+                          evaluable.length > 0
+                            ? evaluable.reduce((s, r) => s + r.score, 0) /
+                              evaluable.length
+                            : null;
+                        const scoreColor =
+                          overall != null
+                            ? overall >= 7
+                              ? "text-emerald-600"
+                              : overall >= 4
+                                ? "text-amber-600"
+                                : "text-gray-700"
+                            : "text-gray-500";
+                        if (evaluable.length === 0) return null;
+                        return (
+                          <div className="rounded-xl border-2 border-gray-200 bg-white px-4 py-3 shadow-sm">
+                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Overall score
+                            </p>
+                            <p className={`text-2xl font-bold tabular-nums ${scoreColor}`}>
+                              {overall != null
+                                ? (Math.round(overall * 10) / 10).toFixed(1)
+                                : "—"}
+                              /10
+                            </p>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Timeline with criteria highlights from evidence */}
+                      {(() => {
+                        const report =
+                          selectedEvaluationSubmission.evaluationReport;
+                        const criteriaResults = report.criteria_results ?? [];
+                        const highlights = [];
+                        const durationSec = 52 * 60; // 52 minutes
+                        let maxSec = durationSec;
+                        for (const r of criteriaResults) {
+                          if (!Array.isArray(r.evidence)) continue;
+                          for (const ev of r.evidence) {
+                            const ts = Number(ev.ts);
+                            const tsEnd = Number(ev.ts_end ?? ev.ts);
+                            if (!Number.isFinite(ts)) continue;
+                            maxSec = Math.max(maxSec, tsEnd, ts);
+                            highlights.push({
+                              startSec: ts,
+                              endSec:
+                                Number.isFinite(tsEnd) && tsEnd > ts
+                                  ? tsEnd
+                                  : undefined,
+                              label: ev.observation?.slice(0, 80) ?? "Evidence",
+                              category: r.criterion ?? "Evidence",
+                              description: ev.observation ?? null,
+                              score: r.score,
+                            });
+                          }
+                        }
+                        return highlights.length > 0 ? (
+                          <div className="mb-2">
+                            <VideoTimelineWithCriteria
+                              durationSeconds={Math.max(
+                                durationSec,
+                                Math.ceil(maxSec / 60) * 60
+                              )}
+                              highlights={highlights}
+                              videoUrl={null}
+                              placeholderImageUrl="/placeholder-video.png"
+                              className="w-full"
+                            />
+                          </div>
+                        ) : null;
+                      })()}
+
+                      {selectedEvaluationSubmission.evaluationReport
+                        .criteria_results?.length > 0 && (
+                        <div>
+                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">
+                            Criteria results
+                          </p>
+                          <div className="space-y-3">
+                            {selectedEvaluationSubmission.evaluationReport.criteria_results.map(
+                              (r, i) => {
+                                const scoreColor =
+                                  r.evaluable
+                                    ? r.score >= 7
+                                      ? "border-l-emerald-500 bg-emerald-50/50"
+                                      : r.score >= 4
+                                        ? "border-l-amber-500 bg-amber-50/50"
+                                        : "border-l-gray-400 bg-gray-50"
+                                    : "border-l-gray-300 bg-gray-50";
+                                const scoreTextColor = r.evaluable
+                                  ? r.score >= 7
+                                    ? "text-emerald-700"
+                                    : r.score >= 4
+                                      ? "text-amber-700"
+                                      : "text-gray-700"
+                                  : "text-gray-500";
+                                return (
+                                <div
+                                  key={i}
+                                  className={`rounded-lg border border-gray-200 border-l-4 p-4 shadow-sm ${scoreColor}`}
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <p className="font-semibold text-gray-900">
+                                      {r.criterion}
+                                    </p>
+                                    <span className={`text-xl font-bold tabular-nums shrink-0 ${scoreTextColor}`}>
+                                      {r.evaluable ? `${r.score}` : "—"}/10
+                                    </span>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2 mt-1 mb-2">
+                                    <span className="text-xs text-gray-500">
+                                      Confidence: {r.confidence}
+                                    </span>
+                                    {!r.evaluable && (
+                                      <span className="text-amber-600 text-xs">
+                                        Not evaluable
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-sm text-gray-700 leading-relaxed">
+                                    {r.verdict}
+                                  </p>
+                                  {r.evidence?.length > 0 && (
+                                    <div className="mt-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setExpandedEvidenceCriteria(
+                                            (prev) => {
+                                              const next = new Set(prev);
+                                              if (next.has(i)) next.delete(i);
+                                              else next.add(i);
+                                              return next;
+                                            }
+                                          );
+                                        }}
+                                        className="text-[#1E3A8A] hover:underline text-xs font-medium"
+                                      >
+                                        Evidence: {r.evidence.length} moment(s){" "}
+                                        {expandedEvidenceCriteria.has(i)
+                                          ? "▼"
+                                          : "▶"}
+                                      </button>
+                                      {expandedEvidenceCriteria.has(i) && (
+                                        <ul className="mt-2 space-y-2 pl-3 border-l-2 border-gray-200">
+                                          {r.evidence.map((ev, evIdx) => (
+                                            <li
+                                              key={evIdx}
+                                              className="text-xs text-gray-700"
+                                            >
+                                              <span className="text-gray-500 font-medium">
+                                                {ev.ts}s–{ev.ts_end}s
+                                              </span>
+                                              <p className="mt-0.5 text-gray-600">
+                                                {ev.observation}
+                                              </p>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                                );
+                              }
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      <p className="text-xs text-gray-500 pt-1">
+                        <Link
+                          to="/DemoReplay"
+                          className="text-[#1E3A8A] hover:underline"
+                        >
+                          Timeline demo with sample video
+                        </Link>
+                      </p>
+                    </div>
+                  ) : selectedEvaluationSubmission ? (
+                    <div className="py-8 text-center">
+                      <BarChart3 className="w-12 h-12 mx-auto mb-2 text-gray-400" />
+                      <p className="text-gray-500 mb-3">
+                        No workflow evaluation data for this submission.
+                      </p>
+                      {selectedEvaluationSubmission.evaluationError && (
+                        <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4 max-w-md mx-auto">
+                          {selectedEvaluationSubmission.evaluationError}
+                        </p>
+                      )}
+                      {!selectedEvaluationSubmission.evaluationError && (
+                        <p className="text-xs text-gray-400 mb-4">
+                          Evaluation runs automatically after submit when the
+                          assessment has evaluation criteria and the candidate
+                          used proctoring. You can run it manually below if
+                          needed.
+                        </p>
+                      )}
+                      <Button
+                        onClick={async () => {
+                          if (!currentUser || !selectedEvaluationSubmission)
+                            return;
+                          setEvaluatingSubmissionId(
+                            selectedEvaluationSubmission._id
+                          );
+                          try {
+                            const token = await currentUser.getIdToken();
+                            const result = await runSubmissionEvaluation(
+                              selectedEvaluationSubmission._id,
+                              token
+                            );
+                            if (result.success) {
+                              const submissionsResult =
+                                await getSubmissionsForAssessment(
+                                  assessmentId,
+                                  token
+                                );
+                              if (submissionsResult.success) {
+                                setSubmissions(submissionsResult.data || []);
+                                const updated = submissionsResult.data?.find(
+                                  (s) =>
+                                    s._id === selectedEvaluationSubmission._id
+                                );
+                                if (updated)
+                                  setSelectedEvaluationSubmission(updated);
+                                toast({
+                                  title: "Evaluation complete",
+                                  description:
+                                    "Workflow evaluation has been updated.",
+                                });
+                              }
+                            } else {
+                              const errMsg =
+                                "error" in result
+                                  ? result.error
+                                  : "Evaluation failed";
+                              toast({
+                                title: "Evaluation failed",
+                                description: errMsg,
+                                variant: "destructive",
+                              });
+                            }
+                          } catch (err) {
+                            toast({
+                              title: "Evaluation failed",
+                              description:
+                                err?.message || "An unexpected error occurred.",
+                              variant: "destructive",
+                            });
+                          } finally {
+                            setEvaluatingSubmissionId(null);
+                          }
+                        }}
+                        disabled={
+                          evaluatingSubmissionId ===
+                          selectedEvaluationSubmission?._id
+                        }
+                      >
+                        {evaluatingSubmissionId ===
+                        selectedEvaluationSubmission?._id
+                          ? "Running…"
+                          : "Run workflow evaluation"}
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="agent" className="mt-4">
+                <div className="max-h-[70vh] overflow-y-auto pr-1 space-y-4">
+                  {selectedEvaluationSubmission?.interview?.transcript?.turns?.length > 0 ? (
+                    <div className="space-y-4">
+                      <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                        <MessageSquare className="w-4 h-4 text-[#1E3A8A]" />
+                        Agent communication
+                      </h3>
+                      <p className="text-xs text-gray-500">
+                        ElevenLabs voice interview: how the candidate communicated with the AI agent.
+                      </p>
+
+                      {/* Communication summary & score */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 sm:col-span-2">
+                          <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1.5">Summary</p>
+                          <p className="text-sm text-gray-700">
+                            {selectedEvaluationSubmission.interview.summary || "No summary generated yet."}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                          <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">Communication score</p>
+                          <p className="text-lg font-semibold text-emerald-600">
+                            {selectedEvaluationSubmission.interview.analysis?.communicationScore != null
+                              ? `${selectedEvaluationSubmission.interview.analysis.communicationScore}/10`
+                              : selectedEvaluationSubmission.interview.transcript?.turns?.length > 0
+                                ? "8/10"
+                                : "—"}
+                          </p>
+                          {selectedEvaluationSubmission.interview.analysis?.communicationScore == null &&
+                            selectedEvaluationSubmission.interview.transcript?.turns?.length > 0 && (
+                            <p className="text-[10px] text-gray-400 mt-0.5">Demo placeholder</p>
                           )}
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+                      </div>
 
-            {selectedEvaluationSubmission && !selectedEvaluationSubmission?.evaluationReport && (
-              <div className="py-8 text-center mt-4">
-                <BarChart3 className="w-12 h-12 mx-auto mb-2 text-gray-400" />
-                <p className="text-gray-500 mb-3">No evaluation data for this submission.</p>
-                <p className="text-xs text-gray-400 mb-4">
-                  Complete proctoring and generate the transcript, then run evaluation.
-                </p>
-                <Button
-                  onClick={async () => {
-                    if (!currentUser || !selectedEvaluationSubmission) return;
-                    setEvaluatingSubmissionId(selectedEvaluationSubmission._id);
-                    try {
-                      const token = await currentUser.getIdToken();
-                      const result = await runSubmissionEvaluation(
-                        selectedEvaluationSubmission._id,
-                        token
-                      );
-                      if (result.success) {
-                        const submissionsResult =
-                          await getSubmissionsForAssessment(
-                            assessmentId,
-                            token
-                          );
-                        if (submissionsResult.success) {
-                          setSubmissions(submissionsResult.data || []);
-                          const updated = submissionsResult.data?.find(
-                            (s) => s._id === selectedEvaluationSubmission._id
-                          );
-                          if (updated) setSelectedEvaluationSubmission(updated);
-                          toast({
-                            title: "Evaluation complete",
-                            description: "Screen recording evaluation has been updated.",
-                          });
-                        }
-                      } else {
-                        const errMsg =
-                          "error" in result
-                            ? result.error
-                            : "Evaluation failed";
-                        toast({
-                          title: "Evaluation failed",
-                          description: errMsg,
-                          variant: "destructive",
-                        });
-                      }
-                    } catch (err) {
-                      toast({
-                        title: "Evaluation failed",
-                        description: err?.message || "An unexpected error occurred.",
-                        variant: "destructive",
-                      });
-                    } finally {
-                      setEvaluatingSubmissionId(null);
-                    }
-                  }}
-                  disabled={evaluatingSubmissionId === selectedEvaluationSubmission?._id}
-                >
-                  {evaluatingSubmissionId === selectedEvaluationSubmission?._id
-                    ? "Running…"
-                    : "Run screen recording evaluation"}
-                </Button>
-              </div>
-            )}
+                      {/* Transcript */}
+                      <div>
+                        <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+                          Transcript ({selectedEvaluationSubmission.interview.transcript.turns.length} turns)
+                        </p>
+                        <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 space-y-4 max-h-[50vh] overflow-y-auto">
+                          {selectedEvaluationSubmission.interview.transcript.turns.map((turn, index) => (
+                            <div
+                              key={index}
+                              className={`flex gap-3 ${turn.role === "agent" ? "justify-start" : "justify-end"}`}
+                            >
+                              <div
+                                className={`max-w-[85%] rounded-lg p-3 ${
+                                  turn.role === "agent"
+                                    ? "bg-white border border-gray-200"
+                                    : "bg-[#1E3A8A] text-white"
+                                }`}
+                              >
+                                <p className="text-xs font-medium mb-1 opacity-70">
+                                  {turn.role === "agent" ? "Agent" : "Candidate"}
+                                </p>
+                                <p className={turn.role === "agent" ? "text-sm text-gray-700" : "text-sm text-white"}>
+                                  {turn.text}
+                                </p>
+                                {(turn.startMs != null || turn.endMs != null) && (
+                                  <p className="text-xs opacity-60 mt-1">
+                                    {turn.startMs != null && `${(turn.startMs / 1000).toFixed(1)}s`}
+                                    {turn.startMs != null && turn.endMs != null && " – "}
+                                    {turn.endMs != null && `${(turn.endMs / 1000).toFixed(1)}s`}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="py-10 text-center">
+                      <MessageSquare className="w-12 h-12 mx-auto mb-2 text-gray-400" />
+                      <p className="text-gray-600 text-sm">No agent communication for this submission.</p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Voice interview transcript appears here after the candidate completes the ElevenLabs interview.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </TabsContent>
+            </Tabs>
 
           </DialogContent>
         </Dialog>

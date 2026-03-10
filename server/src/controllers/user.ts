@@ -89,9 +89,10 @@ export const loginUser: RequestHandler = async (req, res, next) => {
 
     // Get subscription info and limits
     // Use subscriptionStatus === "active" as the source of truth (not tier field)
-    const subscriptionStatus = user.subscriptionStatus || (user as any).subscription?.subscriptionStatus;
+    const subscriptionStatus =
+      user.subscriptionStatus || (user as any).subscription?.subscriptionStatus;
     const isSubscribed = subscriptionStatus === "active";
-    
+
     let submissionCount = 0;
     let submissionLimit: number | null = null;
     let assessmentCount = 0;
@@ -160,7 +161,9 @@ export const deleteAccount: RequestHandler = async (req, res, next) => {
       throw AuthError.INVALID_AUTH_TOKEN;
     }
 
-    console.log(`🗑️ [deleteAccount] Starting account deletion for user ${userId}`);
+    console.log(
+      `🗑️ [deleteAccount] Starting account deletion for user ${userId}`,
+    );
 
     // Step 1: Cancel Stripe subscription if active
     const subscriptionId =
@@ -172,13 +175,13 @@ export const deleteAccount: RequestHandler = async (req, res, next) => {
         // Cancel immediately (not at period end)
         await stripe.subscriptions.cancel(subscriptionId);
         console.log(
-          `✅ [deleteAccount] Canceled Stripe subscription: ${subscriptionId}`
+          `✅ [deleteAccount] Canceled Stripe subscription: ${subscriptionId}`,
         );
       } catch (stripeError) {
         // Log error but don't fail the deletion - subscription might already be canceled
         console.error(
           `⚠️ [deleteAccount] Failed to cancel Stripe subscription:`,
-          stripeError
+          stripeError,
         );
       }
     }
@@ -186,7 +189,7 @@ export const deleteAccount: RequestHandler = async (req, res, next) => {
     // Step 2: Get all assessments for this user
     const assessments = await AssessmentModel.find({ userId });
     console.log(
-      `📋 [deleteAccount] Found ${assessments.length} assessments to delete`
+      `📋 [deleteAccount] Found ${assessments.length} assessments to delete`,
     );
 
     // Step 3: For each assessment, delete it and all associated data
@@ -199,7 +202,7 @@ export const deleteAccount: RequestHandler = async (req, res, next) => {
       });
 
       console.log(
-        `🗑️ [deleteAccount] Deleting assessment ${assessmentId} with ${submissions.length} submissions`
+        `🗑️ [deleteAccount] Deleting assessment ${assessmentId} with ${submissions.length} submissions`,
       );
 
       // Delete each submission and its associated data
@@ -212,16 +215,16 @@ export const deleteAccount: RequestHandler = async (req, res, next) => {
           try {
             await deleteNamespace(
               repoIndex.pinecone.indexName,
-              repoIndex.pinecone.namespace
+              repoIndex.pinecone.namespace,
             );
             console.log(
-              `✅ [deleteAccount] Deleted Pinecone namespace ${repoIndex.pinecone.namespace} for submission ${submissionId}`
+              `✅ [deleteAccount] Deleted Pinecone namespace ${repoIndex.pinecone.namespace} for submission ${submissionId}`,
             );
           } catch (pineconeError) {
             // Log error but don't fail the deletion - Pinecone cleanup is best effort
             console.error(
               `⚠️ [deleteAccount] Failed to delete Pinecone namespace for submission ${submissionId}:`,
-              pineconeError
+              pineconeError,
             );
           }
         }
@@ -230,7 +233,7 @@ export const deleteAccount: RequestHandler = async (req, res, next) => {
         if (repoIndex) {
           await RepoIndexModel.findByIdAndDelete(repoIndex._id);
           console.log(
-            `✅ [deleteAccount] Deleted RepoIndex record for submission ${submissionId}`
+            `✅ [deleteAccount] Deleted RepoIndex record for submission ${submissionId}`,
           );
         }
 
@@ -252,7 +255,7 @@ export const deleteAccount: RequestHandler = async (req, res, next) => {
       // Log error but don't fail the deletion - Firebase user might already be deleted
       console.error(
         `⚠️ [deleteAccount] Failed to delete Firebase user ${uid}:`,
-        firebaseError.message
+        firebaseError.message,
       );
     }
 

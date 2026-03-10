@@ -7,9 +7,10 @@ import {
   Eye,
   EyeOff,
   Maximize2,
+  Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { getDebugFrames } from "@/api/proctoring";
+import { getDebugFrames, renderOverlay } from "@/api/proctoring";
 
 // Region type → color mapping for bounding box overlays
 const REGION_COLORS = {
@@ -34,6 +35,8 @@ export default function FrameDebugViewer({ sessionId }) {
   const [showBoxes, setShowBoxes] = useState(true);
   const [selectedCrop, setSelectedCrop] = useState(null);
   const [runDetection, setRunDetection] = useState(true);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportError, setExportError] = useState(null);
 
   const loadFrames = async () => {
     setLoading(true);
@@ -53,6 +56,25 @@ export default function FrameDebugViewer({ sessionId }) {
   };
 
   const frame = data?.frames?.[currentFrame];
+
+  const handleExportOverlay = async () => {
+    if (!frame?.regions?.length || frame.width == null || frame.height == null) return;
+    setExportLoading(true);
+    setExportError(null);
+    const result = await renderOverlay(
+      frame.regions.map((r) => ({
+        regionType: r.regionType,
+        x: r.x,
+        y: r.y,
+        width: r.width,
+        height: r.height,
+      })),
+      frame.width,
+      frame.height
+    );
+    setExportLoading(false);
+    if (!result.success) setExportError(result.error || "Export failed");
+  };
 
   // Match transcript segments to current frame by timestamp proximity
   const matchedSegments = useMemo(() => {
@@ -177,6 +199,23 @@ export default function FrameDebugViewer({ sessionId }) {
                 >
                   <ChevronRight className="w-4 h-4" />
                 </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleExportOverlay}
+                  disabled={exportLoading || !frame?.regions?.length}
+                  title="Export this frame's bounding box overlay (no re-detection)"
+                >
+                  {exportLoading ? (
+                    <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                  ) : (
+                    <Download className="w-3 h-3 mr-1" />
+                  )}
+                  Export overlay
+                </Button>
+                {exportError && (
+                  <span className="text-xs text-red-600">{exportError}</span>
+                )}
               </div>
 
               {/* Main frame with bounding box overlay */}

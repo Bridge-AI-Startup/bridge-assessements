@@ -2,6 +2,8 @@
 
 End-to-end flow and where it can fail. Use this to debug when the submission has no `screenRecordingTranscript` or `evaluationReport`.
 
+**See also:** [RAW_TRANSCRIPT_PROCESSING.md](./RAW_TRANSCRIPT_PROCESSING.md) — how the raw transcript (VLM JSONL) is processed into Stage 1 events and enriched transcripts.
+
 ---
 
 ## 1. Pipeline overview

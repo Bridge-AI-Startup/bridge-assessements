@@ -355,6 +355,11 @@ server/src/
 - `GET /sessions/:sessionId` -- Get session details
 - `GET /sessions/:sessionId/transcript` -- Get JSONL transcript
 
+*Companion (in-session voice transcript; candidate token or employer auth for GET):*
+- `POST /sessions/:sessionId/companion/prompt` -- Get system prompt for ElevenLabs companion (body: token)
+- `POST /sessions/:sessionId/companion/messages` -- Record companion transcript messages (body: token, conversationId?, messages[])
+- `GET /sessions/:sessionId/companion/transcript` -- Get persisted companion transcript (query token or auth)
+
 *Employer endpoints (auth required):*
 - `POST /sessions/:sessionId/generate-transcript` -- Trigger AI transcript generation
 - `GET /sessions/by-submission/:submissionId` -- Get session by submission ID
@@ -437,7 +442,8 @@ client/src/
 │   │   ├── ScreenShareSetup.jsx       # Multi-monitor picker UI
 │   │   ├── RecordingIndicator.jsx     # Floating red recording badge
 │   │   ├── StreamStatusPanel.jsx      # Upload stats panel (frames, uploads, dedup)
-│   │   └── ResharePrompt.jsx          # Stream-lost recovery modal
+│   │   ├── ResharePrompt.jsx          # Stream-lost recovery modal
+│   │   └── ProctoringCompanionNotch.jsx # In-session ElevenLabs voice companion (notch dropdown, transcript flush)
 │   └── ui/                             # 60+ Shadcn UI components (auto-generated, rarely edited)
 ├── config/
 │   └── api.js             # API_BASE_URL: VITE_API_URL || localhost:5050 (dev) || Render URL (prod)
@@ -548,6 +554,8 @@ Transcript: `transcript` { status (not_started/generating/completed/failed), sto
 Video: `videoChunks[]` { storageKey, screenIndex, startTime, endTime, sizeBytes }
 
 Stats: `stats` { totalFrames, uniqueFrames, duplicatesSkipped, totalSizeBytes, captureStartedAt, captureEndedAt }
+
+Companion: `companion` { status (not_started/active/completed/failed), conversationId, startedAt, endedAt, error } — in-session ElevenLabs voice companion transcript stored as JSONL chunks under storage prefix `{sessionId}/companion/`.
 
 Indexes: `{ submissionId: 1 }` (unique), `{ token: 1 }`, `{ status: 1 }`
 

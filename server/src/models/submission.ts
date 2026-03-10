@@ -453,6 +453,12 @@ const SubmissionSchema = new mongoose.Schema(
       enum: ["pending", "completed", "failed"],
       default: null,
     },
+
+    // When evaluation did not run or failed: short reason for UI (e.g. "No proctoring session", "Assessment has no evaluation criteria")
+    evaluationError: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true, // Adds createdAt and updatedAt automatically

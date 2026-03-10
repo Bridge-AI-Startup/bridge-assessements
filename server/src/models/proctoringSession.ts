@@ -132,6 +132,17 @@ const ProctoringSessionSchema = new mongoose.Schema(
         },
       },
     },
+    companion: {
+      status: {
+        type: String,
+        enum: ["not_started", "active", "completed", "failed"],
+        default: "not_started",
+      },
+      conversationId: { type: String, default: null },
+      startedAt: { type: Date, default: null },
+      endedAt: { type: Date, default: null },
+      error: { type: String, default: null },
+    },
   },
   { timestamps: true }
 );
