@@ -14,6 +14,8 @@ import CancelSubscription from "./pages/CancelSubscription";
 import Pricing from "./pages/Pricing";
 import Contact from "./pages/Contact";
 import ProctoringTest from "./pages/ProctoringTest";
+import DemoReplay from "./pages/DemoReplay";
+import TranscriptPlayground from "./pages/TranscriptPlayground";
 
 export const PAGES = {
   CreateAssessment: CreateAssessment,
@@ -32,6 +34,8 @@ export const PAGES = {
   Pricing: Pricing,
   Contact: Contact,
   ProctoringTest: ProctoringTest,
+  DemoReplay: DemoReplay,
+  TranscriptPlayground: TranscriptPlayground,
 };
 
 export const pagesConfig = {

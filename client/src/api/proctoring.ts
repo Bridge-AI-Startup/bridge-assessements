@@ -1,6 +1,16 @@
 import { APIResult, post, get, handleAPIError } from "./requests";
 import { API_BASE_URL } from "@/config/api";
 
+/** Trigger browser download of a blob with the given filename */
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export type ProctoringSession = {
   _id: string;
   submissionId: string;
@@ -221,35 +231,62 @@ export async function getDebugFrames(
 }
 
 /**
- * Trigger AI transcript refinement (converts raw OCR to clean descriptions).
+ * Render overlay PNG from regions + dimensions (no detection).
+ * Use when you already have regions from a frame (e.g. from getDebugFrames).
  */
-export async function refineTranscript(
-  sessionId: string
-): Promise<APIResult<{ storageKey: string; segmentCount: number }>> {
+export async function renderOverlay(
+  regions: Array<{ regionType: string; x: number; y: number; width: number; height: number }>,
+  width: number,
+  height: number
+): Promise<APIResult<void>> {
   try {
-    const response = await post(
-      `/proctoring/sessions/${sessionId}/refine-transcript`,
-      {}
-    );
-    const data = await response.json();
-    return { success: true, data };
+    const response = await fetch(`${API_BASE_URL}/proctoring/render-overlay`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ regions, width, height }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let message = text;
+      try {
+        const json = JSON.parse(text);
+        if (json?.error) message = json.error;
+      } catch {
+        // use text as-is
+      }
+      return { success: false, error: message };
+    }
+    const blob = await response.blob();
+    downloadBlob(blob, "bounding-boxes-overlay.png");
+    return { success: true, data: undefined };
   } catch (error) {
     return handleAPIError(error);
   }
 }
 
 /**
- * Get the refined JSONL transcript content for a session.
+ * Export bounding box overlay PNG for a session (dev only).
+ * Runs region detection on the first frame and triggers download of bounding-boxes-overlay.png.
  */
-export async function getRefinedTranscriptContent(
-  sessionId: string
-): Promise<APIResult<string>> {
+export async function exportOverlays(sessionId: string): Promise<APIResult<void>> {
   try {
-    const response = await get(
-      `/proctoring/sessions/${sessionId}/transcript/refined`
+    const response = await fetch(
+      `${API_BASE_URL}/proctoring/sessions/${sessionId}/export-overlays`
     );
-    const text = await response.text();
-    return { success: true, data: text };
+    if (!response.ok) {
+      const text = await response.text();
+      let message = text;
+      try {
+        const json = JSON.parse(text);
+        if (json?.error) message = json.error;
+      } catch {
+        // use text as-is
+      }
+      return { success: false, error: message };
+    }
+    const blob = await response.blob();
+    downloadBlob(blob, "bounding-boxes-overlay.png");
+    return { success: true, data: undefined };
   } catch (error) {
     return handleAPIError(error);
   }
@@ -289,6 +326,85 @@ export async function interpretTranscript(
       `/proctoring/sessions/${sessionId}/interpret-transcript`,
       {}
     );
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Paste raw JSONL transcript and get both strategies (chunked + stateful).
+ * For testing with cofounder-provided raw transcripts.
+ */
+export async function interpretRawTranscript(
+  rawJsonl: string
+): Promise<
+  APIResult<{ chunked: EnrichedTranscript; stateful: EnrichedTranscript }>
+> {
+  try {
+    const response = await post("/proctoring/interpret-raw-transcript", {
+      rawJsonl,
+    });
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Get the system prompt for the in-session ElevenLabs companion (pair-programming check-in).
+ */
+export async function getCompanionPrompt(
+  sessionId: string,
+  token: string
+): Promise<APIResult<{ prompt: string }>> {
+  try {
+    const response = await post(
+      `/proctoring/sessions/${sessionId}/companion/prompt`,
+      { token }
+    );
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Record companion transcript messages (batched). Roles: agent, candidate, user, assistant.
+ */
+export async function recordCompanionMessages(
+  sessionId: string,
+  token: string,
+  conversationId: string | undefined,
+  messages: Array<{ role: string; text: string; timestampMs: number }>
+): Promise<APIResult<{ stored: number }>> {
+  try {
+    const response = await post(
+      `/proctoring/sessions/${sessionId}/companion/messages`,
+      { token, conversationId, messages }
+    );
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Get the persisted companion transcript (employer auth or candidate token in query).
+ */
+export async function getCompanionTranscript(
+  sessionId: string,
+  token?: string
+): Promise<APIResult<{ messages: Array<{ role: string; text: string; timestampMs: number }> }>> {
+  try {
+    const url = token
+      ? `/proctoring/sessions/${sessionId}/companion/transcript?token=${encodeURIComponent(token)}`
+      : `/proctoring/sessions/${sessionId}/companion/transcript`;
+    const response = await get(url);
     const data = await response.json();
     return { success: true, data };
   } catch (error) {

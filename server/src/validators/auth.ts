@@ -55,4 +55,33 @@ const verifyAuthToken = async (
   }
 };
 
-export { verifyAuthToken };
+/**
+ * Optional auth: if Authorization header is present and valid, set req.user.
+ * Never fails; use for routes that allow either auth (employer) or token (candidate).
+ */
+const optionalAuthToken = async (
+  req: RequestWithUserId,
+  res: Response,
+  next: NextFunction
+) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith("Bearer")
+    ? authHeader.split(" ")[1]
+    : null;
+
+  if (!token) {
+    next();
+    return;
+  }
+
+  try {
+    const userInfo: DecodedIdToken = await decodeAuthToken(token);
+    req.body.uid = userInfo.uid;
+    (req as any).user = { uid: userInfo.uid };
+  } catch {
+    // ignore invalid token; caller may still allow via candidate token
+  }
+  next();
+};
+
+export { verifyAuthToken, optionalAuthToken };

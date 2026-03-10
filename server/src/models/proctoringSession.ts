@@ -81,20 +81,6 @@ const ProctoringSessionSchema = new mongoose.Schema(
         completion: { type: Number, default: 0 },
         total: { type: Number, default: 0 },
       },
-      // Refined transcript (AI post-processing of raw OCR)
-      refinedStatus: {
-        type: String,
-        enum: ["not_started", "generating", "completed", "failed"],
-        default: "not_started",
-      },
-      refinedStorageKey: { type: String, default: null },
-      refinedAt: { type: Date, default: null },
-      refinedError: { type: String, default: null },
-      refinedTokenUsage: {
-        prompt: { type: Number, default: 0 },
-        completion: { type: Number, default: 0 },
-        total: { type: Number, default: 0 },
-      },
     },
     videoChunks: [
       {
@@ -122,6 +108,17 @@ const ProctoringSessionSchema = new mongoose.Schema(
           default: null,
         },
       },
+    },
+    companion: {
+      status: {
+        type: String,
+        enum: ["not_started", "active", "completed", "failed"],
+        default: "not_started",
+      },
+      conversationId: { type: String, default: null },
+      startedAt: { type: Date, default: null },
+      endedAt: { type: Date, default: null },
+      error: { type: String, default: null },
     },
   },
   { timestamps: true }

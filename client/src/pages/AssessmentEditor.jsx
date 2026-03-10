@@ -59,7 +59,6 @@ export default function AssessmentEditor() {
   const [highlightedSection, setHighlightedSection] = useState(null);
   const [lastChange, setLastChange] = useState(null);
   const [responseMessage, setResponseMessage] = useState(null);
-  const [aiModel, setAiModel] = useState(null);
   const [isSmartInterviewerEnabled, setIsSmartInterviewerEnabled] =
     useState(true);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -507,7 +506,6 @@ export default function AssessmentEditor() {
 
     setIsLoading(true);
     setResponseMessage(null); // Clear previous response message
-    setAiModel(null); // Clear previous model info
 
     try {
       console.log("💬 [AssessmentEditor] Sending chat message:", message);
@@ -554,11 +552,6 @@ export default function AssessmentEditor() {
       // Set response message to display in chat
       if (aiResponseMessage) {
         setResponseMessage(aiResponseMessage);
-      }
-
-      // Set model info for display
-      if (aiModelName) {
-        setAiModel(aiModelName);
       }
 
       // Update database-backed fields
@@ -1366,7 +1359,6 @@ export default function AssessmentEditor() {
               }
               lastChange={lastChange}
               responseMessage={responseMessage}
-              model={aiModel}
             />
           </motion.div>
         </div>

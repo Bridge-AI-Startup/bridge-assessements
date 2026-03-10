@@ -35,6 +35,7 @@ import useFrameUpload from "@/hooks/useFrameUpload";
 import useFrameDedup from "@/hooks/useFrameDedup";
 import ResharePrompt from "@/components/proctoring/ResharePrompt";
 import StreamStatusPanel from "@/components/proctoring/StreamStatusPanel";
+import ProctoringCompanionNotch from "@/components/proctoring/ProctoringCompanionNotch";
 import { createVideoRecorder } from "@/lib/captureUtils";
 import { uploadVideoChunk } from "@/api/proctoring";
 
@@ -59,6 +60,7 @@ export default function CandidateAssessment() {
   const [showConsent, setShowConsent] = useState(false);
   const [proctoringEnabled, setProctoringEnabled] = useState(false);
   const [proctoringSessionId, setProctoringSessionId] = useState(null);
+  const [proctoringSubmissionId, setProctoringSubmissionId] = useState(null);
   const screenCapture = useScreenCapture();
   const proctoringDeclinedRef = useRef(false);
   const sidecarBufferRef = useRef([]);
@@ -85,6 +87,7 @@ export default function CandidateAssessment() {
 
   // Video recording refs
   const videoRecordersRef = useRef([]);
+  const companionRef = useRef(null);
 
   // Load submission on mount
   useEffect(() => {
@@ -345,7 +348,9 @@ export default function CandidateAssessment() {
       const sessionResult = await createProctoringSession(token);
       if (sessionResult.success) {
         const sid = sessionResult.data._id;
+        const subId = sessionResult.data.submissionId;
         setProctoringSessionId(sid);
+        if (subId) setProctoringSubmissionId(subId);
         await grantConsent(sid, token, 1);
         setProctoringEnabled(true);
       }
@@ -402,8 +407,11 @@ export default function CandidateAssessment() {
 
     setIsSubmitting(true);
     try {
-      // Flush remaining frames and complete proctoring session
+      // End companion (flush transcript) then flush frames and complete proctoring session
       if (proctoringEnabled) {
+        if (companionRef.current?.endAndFlush) {
+          await companionRef.current.endAndFlush();
+        }
         await flushFrames();
         if (proctoringSessionId) {
           await completeProctoringSession(proctoringSessionId, token);
@@ -732,6 +740,16 @@ export default function CandidateAssessment() {
           uploadedCount={uploadedCount}
           failedCount={failedCount}
           duplicatesSkipped={duplicatesSkipped}
+        />
+      )}
+
+      {/* Companion notch (in-session voice transcript) */}
+      {proctoringEnabled && proctoringSessionId && token && (
+        <ProctoringCompanionNotch
+          ref={companionRef}
+          sessionId={proctoringSessionId}
+          token={token}
+          submissionId={proctoringSubmissionId}
         />
       )}
 

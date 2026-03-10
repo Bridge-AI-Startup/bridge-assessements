@@ -100,7 +100,8 @@ client/src/
     ├── ScreenShareSetup.jsx             # Multi-monitor picker
     ├── RecordingIndicator.jsx           # Floating red recording badge
     ├── StreamStatusPanel.jsx            # Upload stats panel
-    └── ResharePrompt.jsx               # Stream-lost recovery modal
+    ├── ResharePrompt.jsx                # Stream-lost recovery modal
+    └── ProctoringCompanionNotch.jsx     # In-session ElevenLabs voice companion (notch dropdown + transcript flush)
 
 Modified (6 files)
 ==================
@@ -134,6 +135,14 @@ CLAUDE.md                                # Documentation updates
 |--------|------|-------------|
 | `GET` | `/api/proctoring/sessions/:sessionId` | Get session details |
 | `GET` | `/api/proctoring/sessions/:sessionId/transcript` | Get JSONL transcript content |
+
+### Companion Endpoints (in-session voice transcript)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/proctoring/sessions/:sessionId/companion/prompt` | Get system prompt for ElevenLabs companion (body: token) |
+| `POST` | `/api/proctoring/sessions/:sessionId/companion/messages` | Record companion messages (body: token, conversationId?, messages[]) |
+| `GET` | `/api/proctoring/sessions/:sessionId/companion/transcript` | Get persisted companion transcript (query token or employer auth) |
 
 ### Employer Endpoints (Firebase auth required)
 
@@ -211,7 +220,17 @@ stats {
   captureStartedAt   Date
   captureEndedAt     Date
 }
+
+companion {
+  status           "not_started" | "active" | "completed" | "failed"
+  conversationId   String (ElevenLabs conversation id)
+  startedAt        Date
+  endedAt          Date
+  error            String
+}
 ```
+
+Companion transcript chunks are stored under `{sessionId}/companion/*.jsonl` in the same storage; the main transcript (VLM screen transcript) stays under `{sessionId}/transcript.jsonl`.
 
 ---
 

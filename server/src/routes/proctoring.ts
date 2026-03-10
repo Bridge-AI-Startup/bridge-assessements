@@ -3,7 +3,7 @@ import multer from "multer";
 
 import * as ProctoringController from "../controllers/proctoring.js";
 import * as ProctoringValidator from "../validators/proctoringValidation.js";
-import { verifyAuthToken } from "../validators/auth.js";
+import { verifyAuthToken, optionalAuthToken } from "../validators/auth.js";
 
 const router = express.Router();
 
@@ -21,6 +21,20 @@ const videoUpload = multer({
 router.post(
   "/sessions/test/create",
   ProctoringController.createTestSession
+);
+
+// Paste raw JSONL transcript → get both interpretation strategies (chunked + stateful)
+router.post(
+  "/interpret-raw-transcript",
+  ProctoringValidator.interpretRawTranscriptValidation,
+  ProctoringController.interpretRawTranscript
+);
+
+// Render overlay PNG from regions + dimensions (no detection; use with already-loaded frame data)
+router.post(
+  "/render-overlay",
+  ProctoringValidator.renderOverlayValidation,
+  ProctoringController.renderOverlay
 );
 
 // Candidate endpoints (token-based, no Firebase auth)
@@ -79,6 +93,24 @@ router.get(
   ProctoringController.getTranscript
 );
 
+// Companion (in-session voice transcript) — candidate token or employer auth
+router.post(
+  "/sessions/:sessionId/companion/prompt",
+  ProctoringValidator.companionPromptValidation,
+  ProctoringController.getCompanionPrompt
+);
+router.post(
+  "/sessions/:sessionId/companion/messages",
+  ProctoringValidator.companionMessagesValidation,
+  ProctoringController.recordCompanionMessages
+);
+router.get(
+  "/sessions/:sessionId/companion/transcript",
+  optionalAuthToken,
+  ProctoringValidator.getCompanionTranscriptValidation,
+  ProctoringController.getCompanionTranscript
+);
+
 // Employer endpoints (auth required)
 
 const transcriptAuthMiddleware =
@@ -92,25 +124,19 @@ router.post(
 );
 
 router.post(
-  "/sessions/:sessionId/refine-transcript",
-  ...transcriptAuthMiddleware,
-  ProctoringController.refineSessionTranscript
-);
-
-router.post(
   "/sessions/:sessionId/interpret-transcript",
   ...transcriptAuthMiddleware,
   ProctoringController.interpretSessionTranscript
 );
 
 router.get(
-  "/sessions/:sessionId/transcript/refined",
-  ProctoringController.getRefinedTranscript
+  "/sessions/:sessionId/debug-frames",
+  ProctoringController.getDebugFrames
 );
 
 router.get(
-  "/sessions/:sessionId/debug-frames",
-  ProctoringController.getDebugFrames
+  "/sessions/:sessionId/export-overlays",
+  ProctoringController.exportSessionOverlays
 );
 
 router.get(
