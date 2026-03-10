@@ -17,10 +17,14 @@ const videoUpload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
 }).single("chunk");
 
-// Dev-only test endpoint (must be before :sessionId param routes)
+// Dev-only test endpoints (must be before :sessionId param routes)
 router.post(
   "/sessions/test/create",
   ProctoringController.createTestSession
+);
+router.get(
+  "/sessions/test/list-storage-sessions",
+  ProctoringController.listStorageSessions
 );
 
 // Paste raw JSONL transcript → get both interpretation strategies (chunked + stateful)
@@ -135,6 +139,13 @@ router.get(
 );
 
 router.get(
+  "/sessions/:sessionId/download-video",
+  ProctoringController.downloadSessionVideo
+);
+
+router.get(
+  "/sessions/:sessionId/debug-frames",
+  ProctoringController.getDebugFrames
   "/sessions/:sessionId/export-overlays",
   ProctoringController.exportSessionOverlays
 );

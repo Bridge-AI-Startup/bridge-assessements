@@ -18,6 +18,7 @@ import llmProxyRoutes from "./routes/llmProxy.js";
 import evaluationRoutes from "./routes/evaluation.js";
 import proctoringRoutes from "./routes/proctoring.js";
 import { errorHandler } from "./errors/handler.js";
+import { startIncrementalScheduler } from "./ai/transcript/incrementalScheduler.js";
 
 const PORT = process.env.PORT || 5050;
 const app = express();
@@ -315,6 +316,7 @@ const startServer = async () => {
       console.log(`🌐 Health check: http://localhost:${PORT}/health`);
       console.log(`📡 API base: http://localhost:${PORT}/api`);
       console.log(`${"=".repeat(60)}\n`);
+      startIncrementalScheduler();
     });
   } catch (error) {
     console.error("\n❌ Failed to start server:", error);

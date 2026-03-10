@@ -37,7 +37,14 @@ TEXT HINT USAGE: The user message may include OCR text samples from horizontal s
 - Text with "$", ">>>", shell prompts, "npm", "git", command output, file paths with "%" → "terminal"
 - Text with "import", "function", "const", "class", code syntax, line numbers → "editor"
 - Text with folder/file names in a tree structure, arrows/chevrons → "file_tree"
-- Text with URLs, "http", web page content → "browser"
+- Text with URLs, "http", web page content, tabs/logos on top → "browser"
+
+LOCATION HINTS: 
+- AI chat is usually on the right side of the screen, going from top to bottom.
+- File tree is usually on the left side of the screen, going from top to bottom.
+- Terminal is usually at the bottom of the screen, going from file tree to ai chat. If one of those don't exist, it reaches the corresponding side of screen
+- Editor is usually in the middle of the screen.
+- Browser is usually the full screen, except when it's a small window. Browser usually shows up alone.
 
 Output ONLY the JSON array, no other text.
 

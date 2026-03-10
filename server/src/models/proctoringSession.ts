@@ -72,15 +72,38 @@ const ProctoringSessionSchema = new mongoose.Schema(
         enum: ["not_started", "generating", "completed", "failed"],
         default: "not_started",
       },
+      /** When starting a new generation we set this; only the run that matches it may write completion/failure (allows "regenerate from scratch" to supersede in-flight run). */
+      generationId: { type: Number, default: null },
       storageKey: { type: String, default: null },
       generatedAt: { type: Date, default: null },
       error: { type: String, default: null },
       frameCount: { type: Number, default: 0 },
+      /** Progress during generation (status === "generating"). Polled by clients. */
+      progressTotalFrames: { type: Number, default: null },
+      progressFramesProcessed: { type: Number, default: null },
+      progressBatchIndex: { type: Number, default: null },
+      progressTotalBatches: { type: Number, default: null },
       tokenUsage: {
         prompt: { type: Number, default: 0 },
         completion: { type: Number, default: 0 },
         total: { type: Number, default: 0 },
       },
+      // Refined transcript (AI post-processing of raw OCR)
+      refinedStatus: {
+        type: String,
+        enum: ["not_started", "generating", "completed", "failed"],
+        default: "not_started",
+      },
+      refinedStorageKey: { type: String, default: null },
+      refinedAt: { type: Date, default: null },
+      refinedError: { type: String, default: null },
+      refinedTokenUsage: {
+        prompt: { type: Number, default: 0 },
+        completion: { type: Number, default: 0 },
+        total: { type: Number, default: 0 },
+      },
+      /** Last time incremental (sliding-window) transcript generation ran for this session. */
+      lastIncrementalAt: { type: Date, default: null },
     },
     videoChunks: [
       {
