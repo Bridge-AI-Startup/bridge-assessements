@@ -57,7 +57,7 @@ export default function Landing() {
       if (animatedPlaceholder.length < currentText.length) {
         timeout = setTimeout(() => {
           setAnimatedPlaceholder(
-            currentText.slice(0, animatedPlaceholder.length + 1)
+            currentText.slice(0, animatedPlaceholder.length + 1),
           );
         }, 50); // Typing speed
       } else {
@@ -146,17 +146,17 @@ export default function Landing() {
       if (manualDescription.trim()) {
         localStorage.setItem(
           "pending_manual_description",
-          manualDescription.trim()
+          manualDescription.trim(),
         );
       }
       localStorage.setItem(
         "pending_manual_timeLimit",
-        manualTimeLimit.toString()
+        manualTimeLimit.toString(),
       );
       if (starterFilesLink.trim()) {
         localStorage.setItem(
           "pending_starter_files_link",
-          starterFilesLink.trim()
+          starterFilesLink.trim(),
         );
       }
     }
@@ -245,7 +245,7 @@ export default function Landing() {
               onClick={() =>
                 window.open(
                   "https://calendly.com/smahadkar-ucsd/30min",
-                  "_blank"
+                  "_blank",
                 )
               }
               className="bg-[#1E3A8A] hover:bg-[#152a66] text-white rounded-full text-sm px-4 py-1.5 h-auto"
@@ -268,14 +268,14 @@ export default function Landing() {
           >
             {/* Heading */}
             <h1 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4 tracking-tight">
-              Describe the role. <br /> Bridge builds the evaluation pipeline.
+              Engineering Has Changed. <br /> Coding Tests Haven't
             </h1>
 
             {/* Subheading */}
             <p className="text-lg text-gray-500 max-w-2xl mx-auto leading-relaxed mb-6">
-              Drop in a job description. Bridge creates a custom take-home,
-              interviews completed submissions, and shows you why candidates
-              dropped out
+              Bridge creates custom assessments and analyzes how candidates
+              research, use AI, and write code in their own environment. Not
+              just whether tests pass
             </p>
           </motion.div>
 
@@ -549,8 +549,7 @@ export default function Landing() {
               See Bridge in Action
             </h2>
             <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-              Watch how Bridge transforms job descriptions into a comprehensive
-              pipeline
+              Watch how Bridge captures real engineering workflow and reasoning
             </p>
           </motion.div>
 
@@ -631,8 +630,9 @@ export default function Landing() {
                     <X className="w-5 h-5 text-gray-400" />
                   </div>
                   <p className="text-gray-700 leading-relaxed">
-                    Static assessments are outdated. Fixed question banks ignore
-                    your stack, and are easy to find online.
+                    Online assessments restrict AI and browser research and only
+                    evaluate whether code passes test cases—not how candidates
+                    actually work.
                   </p>
                 </li>
                 <li className="flex items-start gap-3">
@@ -640,8 +640,9 @@ export default function Landing() {
                     <X className="w-5 h-5 text-gray-400" />
                   </div>
                   <p className="text-gray-700 leading-relaxed">
-                    Take-homes are slow to build, and candidates drop off
-                    without teams ever knowing why.
+                    In the real world, engineering means researching, using AI
+                    tools, debugging, and iterating—none of which traditional
+                    tests capture.
                   </p>
                 </li>
                 <li className="flex items-start gap-3">
@@ -649,8 +650,8 @@ export default function Landing() {
                     <X className="w-5 h-5 text-gray-400" />
                   </div>
                   <p className="text-gray-700 leading-relaxed">
-                    Platforms like HackerRank and LeetCode test algorithm
-                    trivia, not real engineering work.
+                    Founders say pair programming is the only reliable signal,
+                    but it takes hours per candidate and doesn’t scale.
                   </p>
                 </li>
               </ul>
@@ -660,7 +661,7 @@ export default function Landing() {
 
               {/* Summary */}
               <p className="text-gray-600 font-medium text-center">
-                Exhausting. Low-response. Luck-based.
+                Mismatched to real work. Doesn’t scale.
               </p>
             </motion.div>
 
@@ -691,8 +692,9 @@ export default function Landing() {
                     <Check className="w-5 h-5 text-[#1E3A8A]" />
                   </div>
                   <p className="text-gray-700 leading-relaxed">
-                    Bridge replaces fixed question banks with dynamic,
-                    role-specific projects tailored to your stack.
+                    Bridge turns your job description into a custom take-home;
+                    candidates solve it in their own dev environment so you see
+                    real workflow.
                   </p>
                 </li>
                 <li className="flex items-start gap-3">
@@ -700,8 +702,9 @@ export default function Landing() {
                     <Check className="w-5 h-5 text-[#1E3A8A]" />
                   </div>
                   <p className="text-gray-700 leading-relaxed">
-                    Bridge automates take-homes and captures why candidates opt
-                    out.
+                    We capture how they use AI, research, and debug, and a voice
+                    agent asks them to explain their reasoning—so you evaluate
+                    how engineers work, not just final code.
                   </p>
                 </li>
                 <li className="flex items-start gap-3">
@@ -709,8 +712,9 @@ export default function Landing() {
                     <Check className="w-5 h-5 text-[#1E3A8A]" />
                   </div>
                   <p className="text-gray-700 leading-relaxed">
-                    Bridge tests real engineering through projects and AI-led
-                    technical interviews.
+                    The real signal is how candidates work. With LLMs we can
+                    analyze thinking and workflow fairly instead of relying on
+                    deterministic tests—at scale.
                   </p>
                 </li>
               </ul>
@@ -720,7 +724,7 @@ export default function Landing() {
 
               {/* Summary */}
               <p className="text-[#1E3A8A] font-medium text-center">
-                Automatic. High-response. Skill-based.
+                Real workflow. Real reasoning. Scalable.
               </p>
             </motion.div>
           </div>
@@ -737,17 +741,17 @@ export default function Landing() {
             transition={{ duration: 0.5 }}
           >
             <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
-              Ready to Transform Your Hiring Process?
+              Evaluate how engineers work, not just their code.
             </h2>
             <p className="text-blue-200 text-lg mb-8 max-w-2xl mx-auto">
-              Join teams who've replaced outdated assessments with Bridge's
-              AI-powered evaluation pipeline.
+              Join teams using Bridge to see real workflow, AI usage, and
+              reasoning—at scale.
             </p>
             <Button
               onClick={() =>
                 window.open(
                   "https://calendly.com/smahadkar-ucsd/30min",
-                  "_blank"
+                  "_blank",
                 )
               }
               className="bg-[#FFFF00] hover:bg-[#faed00] text-[#1E3A8A] px-8 py-3 h-auto rounded-xl font-semibold shadow-lg"
