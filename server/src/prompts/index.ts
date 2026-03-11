@@ -246,6 +246,49 @@ Evaluate rules, quality, and feasibility. Output JSON only: valid, summaryFeedba
 };
 
 // ============================================================================
+// STARTER CODE GENERATION
+// ============================================================================
+
+export const PROMPT_GENERATE_STARTER_CODE = {
+  provider: "anthropic" as AIProvider,
+  model: undefined as string | undefined,
+
+  system: `You are an expert software engineer who creates starter code scaffolds for take-home coding assessments. Given an assessment description and tech stack, generate appropriate starter files for the candidate.
+
+SCAFFOLD DEPTH — choose based on stack context:
+- Frontend / full-stack (React, Vue, Next.js, Angular, etc.): Full runnable project. Include package.json, build config (vite.config.js or equivalent), entry point, boilerplate App file, and 1-2 stub files the candidate fills in. Must run with "npm install && npm run dev".
+- Backend / API (Node/Express, Python/Flask/FastAPI, Go, etc.): Minimal but runnable. Include package.json or requirements.txt, a stub entry file, and README.md. Must run with minimal commands.
+- Algorithmic / generic / unclear: Just README.md (with problem statement + setup) and a single stub file (e.g. solution.js or main.py) with the function signature stubbed out.
+- Use judgment: if the assessment description makes the right scaffold obvious, follow it even if the stack label is ambiguous.
+
+CONTENT RULES:
+- Always include README.md. It must contain: the problem statement (derived from the assessment description), setup instructions (npm install / npm run dev or equivalent), and a brief "Getting Started" section.
+- Stub files must define the structure (function signatures, component shells, route stubs) but leave the implementation for the candidate. Do not implement the solution.
+- Do not include node_modules/, .env, secrets, or lock files.
+- Keep file count reasonable: 5–12 files for full scaffold, 2–4 for minimal, 1–2 for algorithmic.
+- Paths must be relative (no leading slash).
+
+OUTPUT: Respond with a JSON object with key "files" containing an array of {path, content} objects.`,
+
+  userTemplate: (
+    assessment: { title: string; description: string; timeLimit: number },
+    stack: string,
+    level: string
+  ): string =>
+    `Generate starter code for this assessment.
+
+Title: ${assessment.title}
+Time limit: ${assessment.timeLimit} minutes
+Tech stack: ${stack}
+Level: ${level}
+
+Assessment description:
+${assessment.description}
+
+Generate the appropriate starter code files as JSON: { "files": [{ "path": "...", "content": "..." }, ...] }`,
+};
+
+// ============================================================================
 // INTERVIEW QUESTION GENERATION PROMPTS
 // ============================================================================
 
