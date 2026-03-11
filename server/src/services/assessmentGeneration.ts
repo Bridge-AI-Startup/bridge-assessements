@@ -396,6 +396,7 @@ async function runQualityReviewLLM(
     reviewFeedback: parts.join(" "),
   };
 }
+
 /** Generate starter code files for the assessment. Returns [] on failure (non-fatal). */
 async function generateStarterCode(
   assessment: { title: string; description: string; timeLimit: number },
@@ -425,7 +426,7 @@ async function generateStarterCode(
         }
       );
       console.log(`✅ [generateStarterCode] Generated ${result.files.length} files`);
-      return result.files as Array<{ path: string; content: string }>;
+      return result.files;
     } catch (err) {
       lastError = err;
       console.warn(`⚠️ [generateStarterCode] Attempt ${attempt} failed:`, err);
@@ -446,7 +447,6 @@ interface AssessmentChainState {
   level?: RoleLevel;
   raw?: AssessmentOutput;
   assessment?: { title: string; description: string; timeLimit: number };
-  starterCodeFiles?: Array<{ path: string; content: string }>;  // add this
 }
 
 /** Build and return the LCEL chain: step1 → routing → step2 → normalize. */
