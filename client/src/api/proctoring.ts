@@ -233,6 +233,43 @@ export async function getTranscriptContent(
 }
 
 /**
+ * Trigger refinement of the raw transcript (GPT-4o refiner → transcript_refined.jsonl).
+ * Requires backend POST /proctoring/sessions/:sessionId/refine-transcript.
+ */
+export async function refineTranscript(
+  sessionId: string
+): Promise<APIResult<{ status: string }>> {
+  try {
+    const response = await post(
+      `/proctoring/sessions/${sessionId}/refine-transcript`,
+      {}
+    );
+    const data = await response.json();
+    return { success: true, data: data as { status: string } };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Get the refined JSONL transcript content for a session.
+ * Requires backend GET /proctoring/sessions/:sessionId/transcript/refined (or equivalent).
+ */
+export async function getRefinedTranscriptContent(
+  sessionId: string
+): Promise<APIResult<string>> {
+  try {
+    const response = await get(
+      `/proctoring/sessions/${sessionId}/transcript/refined`
+    );
+    const text = await response.text();
+    return { success: true, data: text };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
  * Download merged WebM video for a session. Triggers a file download in the browser.
  */
 export async function downloadProctoringVideo(
