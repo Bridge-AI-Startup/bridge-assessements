@@ -11,6 +11,7 @@ import {
   PROMPT_EXTRACT_ASSESSMENT_REQUIREMENTS,
   PROMPT_GENERATE_ASSESSMENT_COMPONENTS,
   PROMPT_ASSESSMENT_QUALITY_REVIEW,
+  PROMPT_GENERATE_STARTER_CODE,
   LEVEL_INSTRUCTIONS,
 } from "../prompts/index.js";
 import {
@@ -21,6 +22,7 @@ import {
   requirementsExtractionSchema,
   assessmentOutputSchema,
   assessmentReviewSchema,
+  starterCodeGenerationSchema,
   type RequirementsExtraction,
   type AssessmentOutput,
 } from "./schemas/assessmentGeneration.js";
@@ -394,6 +396,46 @@ async function runQualityReviewLLM(
     reviewFeedback: parts.join(" "),
   };
 }
+/** Generate starter code files for the assessment. Returns [] on failure (non-fatal). */
+async function generateStarterCode(
+  assessment: { title: string; description: string; timeLimit: number },
+  stack: AssessmentStack,
+  level: RoleLevel
+): Promise<Array<{ path: string; content: string }>> {
+  const messages: ChatMessage[] = [
+    { role: "system", content: PROMPT_GENERATE_STARTER_CODE.system },
+    {
+      role: "user",
+      content: PROMPT_GENERATE_STARTER_CODE.userTemplate(assessment, stack, level),
+    },
+  ];
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const { result } = await createChatCompletionWithStructuredOutput(
+        "starter_code_generation",
+        messages,
+        starterCodeGenerationSchema,
+        {
+          temperature: 0.5,
+          maxTokens: 4000,
+          provider: PROMPT_GENERATE_STARTER_CODE.provider as "openai" | "anthropic" | "gemini",
+          model: PROMPT_GENERATE_STARTER_CODE.model,
+        }
+      );
+      console.log(`✅ [generateStarterCode] Generated ${result.files.length} files`);
+      return result.files;
+    } catch (err) {
+      lastError = err;
+      console.warn(`⚠️ [generateStarterCode] Attempt ${attempt} failed:`, err);
+      if (attempt < 2) await delay(RETRY_DELAY_MS);
+    }
+  }
+  console.error("❌ [generateStarterCode] Failed after retries:", lastError);
+  return [];
+}
+
 interface AssessmentChainState {
   jobDescription: string;
   domain: string;
