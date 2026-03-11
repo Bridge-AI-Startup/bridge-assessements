@@ -23,6 +23,7 @@ export async function generateAssessmentComponents(
   description: string;
   timeLimit: number;
   reviewFeedback?: string;
+  starterCodeFiles: Array<{ path: string; content: string }>;
 }> {
   return generateAssessmentComponentsFromChain(jobDescription, options);
 }

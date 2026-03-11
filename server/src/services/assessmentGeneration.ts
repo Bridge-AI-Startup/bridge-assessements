@@ -425,7 +425,7 @@ async function generateStarterCode(
         }
       );
       console.log(`✅ [generateStarterCode] Generated ${result.files.length} files`);
-      return result.files;
+      return result.files as Array<{ path: string; content: string }>;
     } catch (err) {
       lastError = err;
       console.warn(`⚠️ [generateStarterCode] Attempt ${attempt} failed:`, err);
@@ -446,6 +446,7 @@ interface AssessmentChainState {
   level?: RoleLevel;
   raw?: AssessmentOutput;
   assessment?: { title: string; description: string; timeLimit: number };
+  starterCodeFiles?: Array<{ path: string; content: string }>;  // add this
 }
 
 /** Build and return the LCEL chain: step1 → routing → step2 → normalize. */
@@ -490,6 +491,7 @@ async function runAssessmentChain(
 ): Promise<{
   step1: RequirementsExtraction;
   assessment: { title: string; description: string; timeLimit: number; reviewFeedback?: string };
+  starterCodeFiles: Array<{ path: string; content: string }>;
 }> {
   const domain = selectRandomDomain();
   const seed = generateRandomSeed();
@@ -529,13 +531,19 @@ async function runAssessmentChain(
       const retryAssessment = normalizeOutput(step2Retry, jobDescription);
       const retryRule = runQualityReview(retryAssessment, jobDescription);
       if (!retryRule.passed) {
-        return { step1, assessment: { ...retryAssessment, reviewFeedback: retryRule.reviewFeedback } };
+        const scFiles490 = await generateStarterCode(retryAssessment, state.stack!, state.level!);
+        return { step1, assessment: { ...retryAssessment, reviewFeedback: retryRule.reviewFeedback }, starterCodeFiles: scFiles490 };
       }
       const retryLLM = await runQualityReviewLLM(retryAssessment, jobDescription);
-      if (retryLLM.passed) return { step1, assessment: retryAssessment };
-      return { step1, assessment: { ...retryAssessment, reviewFeedback: retryLLM.reviewFeedback } };
+      if (retryLLM.passed) {
+        const scFiles493 = await generateStarterCode(retryAssessment, state.stack!, state.level!);
+        return { step1, assessment: retryAssessment, starterCodeFiles: scFiles493 };
+      }
+      const scFiles494 = await generateStarterCode(retryAssessment, state.stack!, state.level!);
+      return { step1, assessment: { ...retryAssessment, reviewFeedback: retryLLM.reviewFeedback }, starterCodeFiles: scFiles494 };
     } catch {
-      return { step1, assessment: { ...assessment, reviewFeedback: ruleReview.reviewFeedback } };
+      const scFiles496 = await generateStarterCode(assessment, state.stack!, state.level!);
+      return { step1, assessment: { ...assessment, reviewFeedback: ruleReview.reviewFeedback }, starterCodeFiles: scFiles496 };
     }
   }
 
@@ -556,17 +564,24 @@ async function runAssessmentChain(
       const retryAssessment = normalizeOutput(step2Retry, jobDescription);
       const retryRule = runQualityReview(retryAssessment, jobDescription);
       if (!retryRule.passed) {
-        return { step1, assessment: { ...retryAssessment, reviewFeedback: retryRule.reviewFeedback } };
+        const scFiles517 = await generateStarterCode(retryAssessment, state.stack!, state.level!);
+        return { step1, assessment: { ...retryAssessment, reviewFeedback: retryRule.reviewFeedback }, starterCodeFiles: scFiles517 };
       }
       const retryLLM = await runQualityReviewLLM(retryAssessment, jobDescription);
-      if (retryLLM.passed) return { step1, assessment: retryAssessment };
-      return { step1, assessment: { ...retryAssessment, reviewFeedback: retryLLM.reviewFeedback } };
+      if (retryLLM.passed) {
+        const scFiles520 = await generateStarterCode(retryAssessment, state.stack!, state.level!);
+        return { step1, assessment: retryAssessment, starterCodeFiles: scFiles520 };
+      }
+      const scFiles521 = await generateStarterCode(retryAssessment, state.stack!, state.level!);
+      return { step1, assessment: { ...retryAssessment, reviewFeedback: retryLLM.reviewFeedback }, starterCodeFiles: scFiles521 };
     } catch {
-      return { step1, assessment: { ...assessment, reviewFeedback: llmReview.reviewFeedback } };
+      const scFiles523 = await generateStarterCode(assessment, state.stack!, state.level!);
+      return { step1, assessment: { ...assessment, reviewFeedback: llmReview.reviewFeedback }, starterCodeFiles: scFiles523 };
     }
   }
 
-  return { step1, assessment };
+  const starterCodeFiles = await generateStarterCode(assessment, state.stack!, state.level!);
+  return { step1, assessment, starterCodeFiles };
 }
 
 /**
@@ -577,21 +592,20 @@ async function runAssessmentChain(
 export async function generateAssessmentComponents(
   jobDescription: string,
   options?: GenerateAssessmentOptions
-): Promise<{ title: string; description: string; timeLimit: number; reviewFeedback?: string }> {
+): Promise<{ title: string; description: string; timeLimit: number; reviewFeedback?: string; starterCodeFiles: Array<{ path: string; content: string }> }> {
   console.log("🤖 [assessmentGeneration] LCEL chain: extract requirements → generate assessment → review");
   try {
-    const { assessment } = await runAssessmentChain(jobDescription, options);
-    return assessment;
+    const { assessment, starterCodeFiles } = await runAssessmentChain(jobDescription, options);
+    return { ...assessment, starterCodeFiles };
   } catch (error) {
     console.error("❌ [assessmentGeneration] Error:", error);
     console.log("🔄 [assessmentGeneration] Falling back to simple defaults...");
     const firstSentence = jobDescription.split(/[.!?]/)[0].trim();
-    const title =
-      firstSentence.length > 0 && firstSentence.length <= 100
-        ? firstSentence
-        : jobDescription.substring(0, 50).trim() + "...";
+    const title = firstSentence.length > 0 && firstSentence.length <= 100
+      ? firstSentence
+      : jobDescription.substring(0, 50).trim() + "...";
     const description = `Assessment generation could not be completed. Please try again or create the assessment manually. (Error: ${error instanceof Error ? error.message : "unknown"})`;
-    return { title, description, timeLimit: 60 };
+    return { title, description, timeLimit: 60, starterCodeFiles: [] };
   }
 }
 
@@ -606,6 +620,7 @@ export async function generateAssessmentComponentsWithSteps(
 ): Promise<{
   step1: RequirementsExtraction;
   assessment: { title: string; description: string; timeLimit: number; reviewFeedback?: string };
+  starterCodeFiles: Array<{ path: string; content: string }>;
 }> {
   console.log("🤖 [assessmentGeneration] LCEL chain (with steps output): extract requirements → generate assessment → review");
   try {
@@ -626,6 +641,6 @@ export async function generateAssessmentComponentsWithSteps(
       stackConfidence: "low",
       levelConfidence: "low",
     };
-    return { step1, assessment };
+    return { step1, assessment, starterCodeFiles: [] };
   }
 }
