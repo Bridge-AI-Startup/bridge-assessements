@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import { AuthError } from "../errors/auth.js";
-import { decodeAuthToken } from "../util/auth.js";
-import { getUserIdFromFirebaseUid } from "../util/auth.js";
+import { decodeAuthToken } from "../utils/auth.js";
+import { getUserIdFromFirebaseUid } from "../utils/auth.js";
 import SubmissionModel from "../models/submission.js";
 
 type RequestWithUserId = Request & {

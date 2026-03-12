@@ -1,7 +1,7 @@
 import { RequestHandler } from "express";
 import crypto from "crypto";
 import SubmissionModel from "../models/submission.js";
-import { generateInterviewSummary } from "../services/openai.js";
+import { generateInterviewSummary } from "../services/interviewGeneration.js";
 
 /**
  * Verify ElevenLabs webhook signature using HMAC

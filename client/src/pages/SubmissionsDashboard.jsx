@@ -85,49 +85,49 @@ export default function SubmissionsDashboard() {
   }, []);
 
   // Fetch assessment and submissions
-  useEffect(() => {
+  const loadSubmissions = React.useCallback(async () => {
     if (!assessmentId || !currentUser) {
       return;
     }
 
-    const fetchData = async () => {
-      setIsLoading(true);
-      setError(null);
+    setIsLoading(true);
+    setError(null);
 
-      try {
-        // Fetch assessment details
-        const token = await currentUser.getIdToken();
-        const assessmentResult = await getAssessment(assessmentId, token);
+    try {
+      // Fetch assessment details
+      const token = await currentUser.getIdToken();
+      const assessmentResult = await getAssessment(assessmentId, token);
 
-        if (!assessmentResult.success) {
-          setError("Failed to load assessment");
-          setIsLoading(false);
-          return;
-        }
-
-        setAssessment(assessmentResult.data);
-
-        // Fetch submissions
-        const submissionsResult = await getSubmissionsForAssessment(
-          assessmentId,
-          token
-        );
-
-        if (submissionsResult.success) {
-          setSubmissions(submissionsResult.data || []);
-        } else {
-          setError(submissionsResult.error || "Failed to load submissions");
-        }
-      } catch (err) {
-        console.error("Error fetching data:", err);
-        setError(err.message || "An unexpected error occurred");
-      } finally {
+      if (!assessmentResult.success) {
+        setError("Failed to load assessment");
         setIsLoading(false);
+        return;
       }
-    };
 
-    fetchData();
+      setAssessment(assessmentResult.data);
+
+      // Fetch submissions
+      const submissionsResult = await getSubmissionsForAssessment(
+        assessmentId,
+        token
+      );
+
+      if (submissionsResult.success) {
+        setSubmissions(submissionsResult.data || []);
+      } else {
+        setError(submissionsResult.error || "Failed to load submissions");
+      }
+    } catch (err) {
+      console.error("Error fetching data:", err);
+      setError(err.message || "An unexpected error occurred");
+    } finally {
+      setIsLoading(false);
+    }
   }, [assessmentId, currentUser]);
+
+  useEffect(() => {
+    loadSubmissions();
+  }, [loadSubmissions]);
 
   // Calculate stats from real data
   const stats = React.useMemo(() => {
@@ -1905,6 +1905,7 @@ export default function SubmissionsDashboard() {
             )}
           </DialogContent>
         </Dialog>
+
       </div>
     </div>
   );

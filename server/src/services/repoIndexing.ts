@@ -12,9 +12,9 @@ import RepoIndexModel from "../models/repoIndex.js";
 import {
   downloadAndExtractRepoSnapshot,
   cleanupRepoSnapshot,
-} from "../util/repoSnapshot.js";
-import { generateEmbeddings } from "../util/embeddings.js";
-import { upsertVectors } from "../util/pinecone.js";
+} from "../utils/repoSnapshot.js";
+import { generateEmbeddings } from "../utils/embeddings.js";
+import { upsertVectors } from "../utils/pinecone.js";
 import { generateInterviewQuestionsFromRetrieval } from "./interviewGeneration.js";
 
 /**

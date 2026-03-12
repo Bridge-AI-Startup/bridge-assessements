@@ -1,5 +1,8 @@
 import { searchCodeChunks } from "./repoRetrieval.js";
-import { PROMPT_GENERATE_INTERVIEW_QUESTIONS_RETRIEVAL } from "../prompts/index.js";
+import {
+  PROMPT_GENERATE_INTERVIEW_QUESTIONS_RETRIEVAL,
+  PROMPT_GENERATE_INTERVIEW_SUMMARY,
+} from "../prompts/index.js";
 import {
   createChatCompletion,
   initializeLangChainAI,
@@ -338,4 +341,55 @@ function validateAndGroundQuestions(
   }
 
   return validated;
+}
+
+/**
+ * Generate interview summary from transcript
+ */
+export async function generateInterviewSummary(
+  transcript: Array<{ role: "agent" | "candidate"; text: string }>
+): Promise<string> {
+  try {
+    const transcriptText = transcript
+      .map((turn) => {
+        const speaker = turn.role === "agent" ? "Interviewer" : "Candidate";
+        return `${speaker}: ${turn.text}`;
+      })
+      .join("\n\n");
+
+    console.log("🤖 [AI] Generating interview summary...");
+
+    const messages: ChatMessage[] = [
+      {
+        role: "system",
+        content: PROMPT_GENERATE_INTERVIEW_SUMMARY.system,
+      },
+      {
+        role: "user",
+        content: PROMPT_GENERATE_INTERVIEW_SUMMARY.userTemplate(transcriptText),
+      },
+    ];
+
+    const response = await createChatCompletion("interview_summary", messages, {
+      temperature: 0.5,
+      maxTokens: 600,
+      provider: PROMPT_GENERATE_INTERVIEW_SUMMARY.provider,
+      model: PROMPT_GENERATE_INTERVIEW_SUMMARY.model,
+    });
+
+    const summary = response.content.trim();
+    if (!summary) {
+      throw new Error("No content in AI response");
+    }
+
+    console.log("✅ [AI] Generated interview summary");
+    return summary;
+  } catch (error) {
+    console.error("❌ [AI] Error generating interview summary:", error);
+    const totalTurns = transcript.length;
+    const candidateTurns = transcript.filter(
+      (t) => t.role === "candidate"
+    ).length;
+    return `Interview completed with ${totalTurns} total turns. Candidate participated in ${candidateTurns} turns.`;
+  }
 }

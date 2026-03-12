@@ -12,7 +12,7 @@
 
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { generateAssessmentComponents } from "../services/openai.js";
+import { generateAssessmentComponents } from "../services/assessmentGeneration.js";
 import { generateAssessmentComponentsWithSteps } from "../services/assessmentGeneration.js";
 
 async function main() {

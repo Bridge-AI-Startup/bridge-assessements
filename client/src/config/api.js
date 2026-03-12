@@ -12,7 +12,7 @@ const BASE_URL =
   import.meta.env.VITE_API_URL ||
   (import.meta.env.MODE === "development"
     ? "http://localhost:5050"
-    : "https://bridge-assessements.onrender.com");
+    : "https://bridge-assessements-1.onrender.com");
 
 // Export the base URL with /api prefix (as all backend routes are under /api)
 export const API_BASE_URL = `${BASE_URL}/api`;

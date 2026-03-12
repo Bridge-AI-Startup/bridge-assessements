@@ -3,13 +3,13 @@ import { validationResult } from "express-validator";
 
 import { AuthError } from "../errors/auth.js";
 import UserModel from "../models/user.ts";
-import { firebaseAdminAuth } from "../util/firebase.js";
-import validationErrorParser from "../util/validationErrorParser.js";
-import { getUserIdFromFirebaseUid } from "../util/auth.js";
+import { firebaseAdminAuth } from "../utils/firebase.js";
+import validationErrorParser from "../utils/validationErrorParser.js";
+import { getUserIdFromFirebaseUid } from "../utils/auth.js";
 import AssessmentModel from "../models/assessment.js";
 import SubmissionModel from "../models/submission.js";
 import RepoIndexModel from "../models/repoIndex.js";
-import { deleteNamespace } from "../util/pinecone.js";
+import { deleteNamespace } from "../utils/pinecone.js";
 import { stripe } from "../services/stripe.js";
 
 export type CreateRequest = {

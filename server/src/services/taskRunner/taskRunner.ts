@@ -7,7 +7,7 @@ import SubmissionModel from "../../models/submission.js";
 import {
   downloadAndExtractRepoSnapshot,
   cleanupRepoSnapshot,
-} from "../../util/repoSnapshot.js";
+} from "../../utils/repoSnapshot.js";
 
 const execAsync = promisify(exec);
 

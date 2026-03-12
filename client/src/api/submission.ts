@@ -5,6 +5,7 @@ import { API_BASE_URL } from "@/config/api";
 export type GenerateShareLinkRequest = {
   assessmentId: string;
   candidateName: string;
+  candidateEmail?: string;
 };
 
 export type GenerateShareLinkResponse = {
@@ -406,6 +407,125 @@ export async function optOutAssessment(
     return {
       success: false,
       error: result.error || "Failed to opt out",
+    };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+export type BulkGenerateLinksRequest = {
+  assessmentId: string;
+  candidates: Array<{ name: string; email: string }>;
+};
+
+export type BulkGenerateLinksResponse = {
+  submissions: Array<{
+    submissionId: string;
+    token: string;
+    shareLink: string;
+    candidateName: string;
+    candidateEmail: string;
+  }>;
+};
+
+export type SendInvitesRequest = {
+  submissionIds: string[];
+};
+
+export type SendInvitesResponse = {
+  sent: number;
+  failed: number;
+  errors?: string[];
+};
+
+/**
+ * Bulk generate share links for multiple candidates (employer endpoint)
+ */
+export async function bulkGenerateLinks(
+  assessmentId: string,
+  candidates: Array<{ name: string; email: string }>
+): Promise<APIResult<BulkGenerateLinksResponse>> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: "No user is currently signed in" };
+    }
+    const authToken = await user.getIdToken();
+
+    const response = await fetch(
+      `${API_BASE_URL}/submissions/bulk-generate-links`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ assessmentId, candidates }),
+      }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      return {
+        success: false,
+        error:
+          result.error ||
+          `Failed to bulk generate links (${response.status})`,
+      };
+    }
+
+    if (result && Array.isArray(result.submissions)) {
+      return { success: true, data: result as BulkGenerateLinksResponse };
+    }
+
+    return {
+      success: false,
+      error: result.error || "Failed to bulk generate links",
+    };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Send invite emails to candidates by submission IDs (employer endpoint)
+ */
+export async function sendInvites(
+  submissionIds: string[]
+): Promise<APIResult<SendInvitesResponse>> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: "No user is currently signed in" };
+    }
+    const authToken = await user.getIdToken();
+
+    const response = await fetch(`${API_BASE_URL}/submissions/send-invites`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ submissionIds }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      return {
+        success: false,
+        error: result.error || `Failed to send invites (${response.status})`,
+      };
+    }
+
+    if (result && typeof result.sent === "number") {
+      return { success: true, data: result as SendInvitesResponse };
+    }
+
+    return {
+      success: false,
+      error: result.error || "Failed to send invites",
     };
   } catch (error) {
     return handleAPIError(error);

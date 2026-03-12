@@ -2,7 +2,7 @@ import { NextFunction, Request, Response } from "express";
 import { DecodedIdToken } from "firebase-admin/auth";
 
 import { AuthError } from "../errors/auth.ts";
-import { decodeAuthToken } from "../util/auth.ts";
+import { decodeAuthToken } from "../utils/auth.ts";
 
 type RequestBody = {
   uid?: string; // Optional as it is added later
