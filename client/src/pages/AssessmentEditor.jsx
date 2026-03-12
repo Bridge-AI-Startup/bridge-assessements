@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import {
@@ -13,6 +13,8 @@ import {
   Check,
   Link as LinkIcon,
   Pencil,
+  Trash2,
+  FileCode,
 } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -38,6 +40,8 @@ import { auth } from "@/firebase/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 import DocumentBlock from "@/components/assessment/DocumentBlock";
 import AISidebar from "@/components/assessment/AISidebar";
+import CandidatePreviewModal from "@/components/assessment/CandidatePreviewModal";
+import StarterCodeIDE from "@/components/StarterCodeIDE";
 import { BulkInviteContent } from "@/components/BulkInviteModal";
 
 export default function AssessmentEditor() {
@@ -82,6 +86,8 @@ export default function AssessmentEditor() {
   const [isEditingCustomInstructions, setIsEditingCustomInstructions] =
     useState(false);
   const [editedCustomInstructions, setEditedCustomInstructions] = useState("");
+  const [starterCodeFiles, setStarterCodeFiles] = useState([]);
+  const starterCodeSaveTimer = useRef(null);
 
   // Wait for auth state to be ready
   useEffect(() => {
@@ -232,6 +238,13 @@ export default function AssessmentEditor() {
         setStarterFilesGitHubLink(link);
         setEditedStarterFilesLink(link);
       }
+      if (assessmentData.starterCodeFiles !== undefined) {
+        setStarterCodeFiles(
+          Array.isArray(assessmentData.starterCodeFiles)
+            ? assessmentData.starterCodeFiles
+            : []
+        );
+      }
       // Update interviewerCustomInstructions from database
       if (assessmentData.interviewerCustomInstructions !== undefined) {
         const instructions = assessmentData.interviewerCustomInstructions || "";
@@ -375,6 +388,13 @@ export default function AssessmentEditor() {
           if (!isEditingStarterFiles) {
             setEditedStarterFilesLink(link);
           }
+        }
+        if (result.data.starterCodeFiles !== undefined) {
+          setStarterCodeFiles(
+            Array.isArray(result.data.starterCodeFiles)
+              ? result.data.starterCodeFiles
+              : []
+          );
         }
         // Update interviewerCustomInstructions in local state if it changed
         if (result.data.interviewerCustomInstructions !== undefined) {
@@ -1172,6 +1192,33 @@ export default function AssessmentEditor() {
                         </span>
                       )}
                     </div>
+                  )}
+                </div>
+
+                {/* Starter code (inline files) */}
+                <div className="mt-6 pt-4 border-t border-gray-200">
+                  <div className="flex items-center gap-2 mb-3">
+                    <FileCode className="w-4 h-4 text-gray-600" />
+                    <span className="text-sm font-medium text-gray-700">
+                      Starter code files
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Add inline starter code files for candidates to view and download as a ZIP.
+                  </p>
+                  <StarterCodeIDE
+                    files={starterCodeFiles}
+                    readOnly={false}
+                    onChange={(files) => {
+                      setStarterCodeFiles(files);
+                      if (starterCodeSaveTimer.current) clearTimeout(starterCodeSaveTimer.current);
+                      starterCodeSaveTimer.current = setTimeout(() => {
+                        saveAssessment({ starterCodeFiles: files });
+                      }, 600);
+                    }}
+                  />
+                  {starterCodeFiles.length === 0 && (
+                    <p className="text-xs text-gray-400 mt-2">No starter code files yet. Files will be auto-generated when you create an assessment with AI.</p>
                   )}
                 </div>
               </div>

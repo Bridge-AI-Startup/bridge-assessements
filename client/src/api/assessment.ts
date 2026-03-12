@@ -2,6 +2,8 @@ import { APIResult, get, post, patch, del, handleAPIError } from "./requests";
 import { auth } from "@/firebase/firebase";
 import { API_BASE_URL } from "@/config/api";
 
+export type StarterCodeFile = { path: string; content: string };
+
 export type Assessment = {
   _id: string;
   userId: string;
@@ -10,6 +12,7 @@ export type Assessment = {
   timeLimit: number;
   numInterviewQuestions?: number;
   starterFilesGitHubLink?: string;
+  starterCodeFiles?: StarterCodeFile[];
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
   createdAt: string;
@@ -22,6 +25,7 @@ export type AssessmentCreate = {
   timeLimit: number;
   numInterviewQuestions?: number;
   starterFilesGitHubLink?: string;
+  starterCodeFiles?: StarterCodeFile[];
   interviewerCustomInstructions?: string;
 };
 
@@ -31,6 +35,7 @@ export type AssessmentUpdate = {
   timeLimit?: number;
   numInterviewQuestions?: number;
   starterFilesGitHubLink?: string;
+  starterCodeFiles?: StarterCodeFile[];
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
 };
@@ -57,11 +62,15 @@ export async function createAssessment(
       title: string;
       description: string;
       timeLimit: number;
+      starterCodeFiles?: StarterCodeFile[];
     } = {
       title: data.title,
       description: data.description,
       timeLimit: data.timeLimit,
     };
+    if (data.starterCodeFiles !== undefined) {
+      requestBody.starterCodeFiles = data.starterCodeFiles;
+    }
 
     // Make request without assertOk to handle 403 subscription limit errors
     const response = await fetch(`${API_BASE_URL}/assessments`, {
@@ -210,6 +219,7 @@ export async function updateAssessment(
       timeLimit?: number;
       numInterviewQuestions?: number;
       starterFilesGitHubLink?: string;
+      starterCodeFiles?: StarterCodeFile[];
       interviewerCustomInstructions?: string;
       isSmartInterviewerEnabled?: boolean;
     } = {};
@@ -228,6 +238,9 @@ export async function updateAssessment(
     }
     if (data.starterFilesGitHubLink !== undefined) {
       updateBody.starterFilesGitHubLink = data.starterFilesGitHubLink;
+    }
+    if (data.starterCodeFiles !== undefined) {
+      updateBody.starterCodeFiles = data.starterCodeFiles;
     }
     if (data.interviewerCustomInstructions !== undefined) {
       updateBody.interviewerCustomInstructions =
@@ -312,6 +325,7 @@ export async function generateAssessmentData(
     title: string;
     description: string;
     timeLimit: number;
+    starterCodeFiles?: StarterCodeFile[];
   }>
 > {
   try {
