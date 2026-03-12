@@ -162,20 +162,6 @@ export default function StarterCodeIDE({ files, readOnly, onChange }: StarterCod
     setActiveIndex(updated.length - 1);
   };
 
-  const handleLoadTemplate = async () => {
-    if (!onChange) return;
-    try {
-      const res = await fetch("/starter-templates/react-vite.json");
-      if (!res.ok) throw new Error("Failed to load template");
-      const templateFiles = await res.json();
-      onChange(templateFiles);
-      setActiveIndex(0);
-    } catch (err) {
-      console.error(err);
-      alert("Failed to load template");
-    }
-  };
-
   const handleClearAll = () => {
     if (!onChange) return;
     if (!confirm("Clear all starter code files?")) return;
@@ -201,22 +187,13 @@ export default function StarterCodeIDE({ files, readOnly, onChange }: StarterCod
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Starter Code</span>
           {!readOnly && (
-            <div className="flex gap-1.5 ml-2">
-              <button
-                type="button"
-                onClick={handleLoadTemplate}
-                className="text-xs px-2 py-0.5 rounded border border-slate-200 text-slate-600 hover:bg-slate-100"
-              >
-                React + Vite template
-              </button>
-              <button
-                type="button"
-                onClick={handleClearAll}
-                className="text-xs px-2 py-0.5 rounded border border-slate-200 text-red-500 hover:bg-red-50"
-              >
-                Clear all
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={handleClearAll}
+              className="text-xs px-2 py-0.5 rounded border border-slate-200 text-red-500 hover:bg-red-50 ml-2"
+            >
+              Clear all
+            </button>
           )}
         </div>
         <button
