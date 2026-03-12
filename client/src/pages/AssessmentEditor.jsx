@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import {
@@ -82,6 +82,7 @@ export default function AssessmentEditor() {
     useState(false);
   const [editedCustomInstructions, setEditedCustomInstructions] = useState("");
   const [starterCodeFiles, setStarterCodeFiles] = useState([]);
+  const starterCodeSaveTimer = useRef(null);
 
   // Wait for auth state to be ready
   useEffect(() => {
@@ -1200,9 +1201,12 @@ export default function AssessmentEditor() {
                   <StarterCodeIDE
                     files={starterCodeFiles}
                     readOnly={false}
-                    onChange={async (files) => {
+                    onChange={(files) => {
                       setStarterCodeFiles(files);
-                      await saveAssessment({ starterCodeFiles: files });
+                      if (starterCodeSaveTimer.current) clearTimeout(starterCodeSaveTimer.current);
+                      starterCodeSaveTimer.current = setTimeout(() => {
+                        saveAssessment({ starterCodeFiles: files });
+                      }, 600);
                     }}
                   />
                   {starterCodeFiles.length === 0 && (
