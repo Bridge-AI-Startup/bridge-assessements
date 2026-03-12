@@ -68,16 +68,24 @@ const makeOptionalTimeLimitValidator = () =>
     .bail()
     .toInt();
 
+const makeOptionalStarterCodeFilesValidator = () =>
+  body("starterCodeFiles")
+    .optional()
+    .isArray()
+    .withMessage("starterCodeFiles must be an array");
+
 export const createAssessmentValidation = [
   makeTitleValidator(),
   makeDescriptionValidator(),
   makeTimeLimitValidator(),
+  makeOptionalStarterCodeFilesValidator(),
 ];
 
 export const updateAssessmentValidation = [
   makeOptionalTitleValidator(),
   makeOptionalDescriptionValidator(),
   makeOptionalTimeLimitValidator(),
+  makeOptionalStarterCodeFilesValidator(),
 ];
 
 const makeOptionalStackValidator = () =>
