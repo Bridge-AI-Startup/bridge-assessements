@@ -78,7 +78,7 @@ export default function SubmissionsDashboard() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
       if (!user) {
-        window.location.href = "/";
+        window.location.href = createPageUrl("Login");
       }
     });
     return () => unsubscribe();

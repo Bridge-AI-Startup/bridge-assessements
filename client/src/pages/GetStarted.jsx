@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArrowRight, ArrowLeft, Mail, Lock, AlertCircle } from "lucide-react";
+import { ArrowRight, Mail, Lock, AlertCircle } from "lucide-react";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
 import { createUser } from "@/api/user";
@@ -150,19 +150,8 @@ export default function GetStarted() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md relative"
+        className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md"
       >
-        {/* Back Button */}
-        <Button
-          variant="ghost"
-          onClick={() => {
-            window.location.href = "/";
-          }}
-          className="absolute top-4 left-4 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-full p-2"
-        >
-          <ArrowLeft className="w-4 h-4" />
-        </Button>
-
         <div className="text-center mb-8">
           <div className="w-14 h-14 rounded-2xl overflow-hidden flex items-center justify-center mx-auto mb-4">
             <img
@@ -264,6 +253,16 @@ export default function GetStarted() {
             )}
           </Button>
         </form>
+
+        <div className="mt-6 text-center text-sm text-gray-500">
+          Already have an account?{" "}
+          <a
+            href={createPageUrl("Login")}
+            className="text-[#1E3A8A] font-medium hover:underline"
+          >
+            Sign in
+          </a>
+        </div>
       </motion.div>
     </div>
   );

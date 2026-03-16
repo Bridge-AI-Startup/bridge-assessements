@@ -56,7 +56,7 @@ export default function Home() {
 
       if (!user) {
         console.warn("⚠️ [Home] No user found, redirecting to base website");
-        window.location.href = "/";
+        window.location.href = createPageUrl("Login");
         return;
       }
 
@@ -97,11 +97,11 @@ export default function Home() {
     try {
       await signOut(auth);
       // Redirect to base website after logout
-      window.location.href = "/";
+      window.location.href = createPageUrl("Login");
     } catch (error) {
       console.error("Logout error:", error);
       // Still redirect even if logout fails
-      window.location.href = "/";
+      window.location.href = createPageUrl("Login");
     }
   };
 
@@ -128,7 +128,7 @@ export default function Home() {
 
         // Sign out and redirect
         await signOut(auth);
-        window.location.href = "/";
+        window.location.href = createPageUrl("Login");
       } else {
         const errorMsg =
           "error" in result ? result.error : "Failed to delete account";
