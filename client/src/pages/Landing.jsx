@@ -9,6 +9,8 @@ import PresetPills from "@/components/assessment/PresetPills";
 import AuthModal from "@/components/auth/AuthModal";
 import { auth } from "@/firebase/firebase";
 import bridgeLogo from "@/assets/bridge-logo.svg";
+import LandingScreenAnalysis from "@/components/landing/LandingScreenAnalysis";
+import DemoReplaySection from "@/components/landing/DemoReplaySection";
 
 export default function Landing() {
   const [creationMode, setCreationMode] = useState("ai"); // "ai" or "manual"
@@ -57,7 +59,7 @@ export default function Landing() {
       if (animatedPlaceholder.length < currentText.length) {
         timeout = setTimeout(() => {
           setAnimatedPlaceholder(
-            currentText.slice(0, animatedPlaceholder.length + 1)
+            currentText.slice(0, animatedPlaceholder.length + 1),
           );
         }, 50); // Typing speed
       } else {
@@ -146,17 +148,17 @@ export default function Landing() {
       if (manualDescription.trim()) {
         localStorage.setItem(
           "pending_manual_description",
-          manualDescription.trim()
+          manualDescription.trim(),
         );
       }
       localStorage.setItem(
         "pending_manual_timeLimit",
-        manualTimeLimit.toString()
+        manualTimeLimit.toString(),
       );
       if (starterFilesLink.trim()) {
         localStorage.setItem(
           "pending_starter_files_link",
-          starterFilesLink.trim()
+          starterFilesLink.trim(),
         );
       }
     }
@@ -245,7 +247,7 @@ export default function Landing() {
               onClick={() =>
                 window.open(
                   "https://calendly.com/smahadkar-ucsd/30min",
-                  "_blank"
+                  "_blank",
                 )
               }
               className="bg-[#1E3A8A] hover:bg-[#152a66] text-white rounded-full text-sm px-4 py-1.5 h-auto"
@@ -535,6 +537,9 @@ export default function Landing() {
         </div>
       </div>
 
+      {/* Animated timeline + screen analysis */}
+      <LandingScreenAnalysis startWhenInView />
+
       {/* Video Demo Section */}
       <div className="bg-white py-16 md:py-24">
         <div className="max-w-5xl mx-auto px-6">
@@ -587,6 +592,18 @@ export default function Landing() {
             </video>
             */}
           </motion.div>
+        </div>
+      </div>
+
+      {/* Interactive demo: screen recording + criteria timeline */}
+      <div className="bg-gray-50 py-16 md:py-24">
+        <div className="max-w-4xl mx-auto px-6">
+          <DemoReplaySection
+            title="Screen recording with criteria timeline"
+            description="Timeline highlights map to evaluation criteria and integrity events as the session plays."
+            animate={true}
+            interactive={false}
+          />
         </div>
       </div>
 
@@ -747,7 +764,7 @@ export default function Landing() {
               onClick={() =>
                 window.open(
                   "https://calendly.com/smahadkar-ucsd/30min",
-                  "_blank"
+                  "_blank",
                 )
               }
               className="bg-[#FFFF00] hover:bg-[#faed00] text-[#1E3A8A] px-8 py-3 h-auto rounded-xl font-semibold shadow-lg"

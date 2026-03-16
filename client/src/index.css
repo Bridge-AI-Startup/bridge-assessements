@@ -156,3 +156,12 @@ button:focus-visible {
     @apply bg-background text-foreground;
   }
 }
+
+/* Demo overlay: subtle pulse on region detection boxes */
+@keyframes demo-region-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
+}
+.demo-region-glow {
+  animation: demo-region-pulse 2.5s ease-in-out infinite;
+}

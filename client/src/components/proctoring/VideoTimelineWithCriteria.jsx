@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Play, Pause, Maximize2, Tag } from "lucide-react";
+import { Play, Pause, Maximize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import BoundingBoxOverlay from "./BoundingBoxOverlay";
 
@@ -23,6 +23,9 @@ export const HIGHLIGHT_CATEGORY_COLORS = {
  * @param {string} [videoUrl] - Optional video src; if missing, placeholder is shown
  * @param {string} [placeholderImageUrl] - Optional image to show when videoUrl is null (e.g. /placeholder-video.png)
  * @param {Array<{ regionType: string, x: number, y: number, width: number, height: number, confidence?: number }>} [regions] - Optional region bounding boxes (percent) to overlay as transparent boxes
+ * @param {string} [overlayVariant] - "default" | "demo" for BoundingBoxOverlay (demo = icons, glow, stagger)
+ * @param {boolean} [showDetectionScan] - If true, run a one-time "scan line" animation over the video (demo flair)
+ * @param {boolean} [interactive] - If false, auto-plays, no clickable controls or timeline; detail panel follows playhead (landing page)
  * @param {string} [className]
  */
 export default function VideoTimelineWithCriteria({
@@ -31,20 +34,25 @@ export default function VideoTimelineWithCriteria({
   videoUrl = null,
   placeholderImageUrl = null,
   regions = null,
+  overlayVariant = "default",
+  showDetectionScan = false,
+  interactive = true,
   className,
 }) {
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(interactive ? false : true);
   const [currentSec, setCurrentSec] = useState(0);
-  const [selectedHighlight, setSelectedHighlight] = useState(null);
+  const [scanComplete, setScanComplete] = useState(false);
   const videoRef = useRef(null);
   const timelineRef = useRef(null);
 
-  // Simple playhead advance (no real video = just animate time)
+  // Auto-advance playhead (interactive: only when playing, stop at end; non-interactive: always, loop)
   useEffect(() => {
-    if (!isPlaying) return;
+    const shouldAdvance = interactive ? isPlaying : true;
+    if (!shouldAdvance) return;
     const interval = setInterval(() => {
       setCurrentSec((s) => {
         if (s >= durationSeconds) {
+          if (!interactive) return 0; // loop on landing
           setIsPlaying(false);
           return durationSeconds;
         }
@@ -52,7 +60,26 @@ export default function VideoTimelineWithCriteria({
       });
     }, 500);
     return () => clearInterval(interval);
-  }, [isPlaying, durationSeconds]);
+  }, [interactive, isPlaying, durationSeconds]);
+
+  const [manualHighlight, setManualHighlight] = useState(null);
+
+  // Non-interactive: derive highlight from current time; interactive: use manual selection
+  const derivedHighlightIndex =
+    !interactive && highlights.length > 0
+      ? (() => {
+          const inRange = highlights.findIndex(
+            (h) => currentSec >= h.startSec && currentSec <= (h.endSec ?? h.startSec)
+          );
+          if (inRange >= 0) return inRange;
+          let lastPassed = -1;
+          for (let i = 0; i < highlights.length; i++) {
+            if (highlights[i].startSec <= currentSec) lastPassed = i;
+          }
+          return lastPassed >= 0 ? lastPassed : 0;
+        })()
+      : null;
+  const effectiveHighlight = interactive ? manualHighlight : derivedHighlightIndex;
 
   // Sync video if we have one
   useEffect(() => {
@@ -61,10 +88,12 @@ export default function VideoTimelineWithCriteria({
     video.currentTime = currentSec;
   }, [currentSec, videoUrl]);
 
-  const seekTo = (sec) => {
-    setCurrentSec(Math.max(0, Math.min(sec, durationSeconds)));
-    if (videoRef.current) videoRef.current.currentTime = sec;
-  };
+  const seekTo = interactive
+    ? (sec) => {
+        setCurrentSec(Math.max(0, Math.min(sec, durationSeconds)));
+        if (videoRef.current) videoRef.current.currentTime = sec;
+      }
+    : () => {};
 
   const formatTime = (sec) => {
     const m = Math.floor(sec / 60);
@@ -73,9 +102,16 @@ export default function VideoTimelineWithCriteria({
   };
 
   return (
-    <div className={cn("rounded-xl border border-gray-200 bg-gray-50 overflow-hidden", className)}>
+    <div
+      className={cn(
+        "rounded-2xl overflow-hidden shadow-lg",
+        "bg-white/70 dark:bg-gray-900/70 backdrop-blur-xl",
+        "border border-white/20 dark:border-white/10",
+        className
+      )}
+    >
       {/* Video or placeholder */}
-      <div className="relative aspect-video bg-gray-900">
+      <div className="relative aspect-video bg-gray-950 rounded-t-2xl overflow-hidden">
         {videoUrl ? (
           <video
             ref={videoRef}
@@ -101,51 +137,86 @@ export default function VideoTimelineWithCriteria({
         )}
         {/* Transparent bounding box overlay (e.g. region detection demo) */}
         {regions && regions.length > 0 && (
-          <BoundingBoxOverlay regions={regions} className="z-[5]" />
+          <BoundingBoxOverlay
+            regions={regions}
+            variant={overlayVariant}
+            className="z-[5]"
+          />
         )}
-        {/* Playhead overlay line on video */}
-        <div
-          className="absolute top-0 bottom-0 w-0.5 bg-red-500 pointer-events-none z-10"
-          style={{ left: `${(currentSec / durationSeconds) * 100}%` }}
-        />
+        {/* One-time "AI detecting" scan line (demo) — badge only; scan line is on timeline */}
+        {showDetectionScan && !scanComplete && (
+          <motion.div
+            className="absolute top-3 left-3 z-[6] px-2.5 py-1 rounded-md text-xs font-medium text-white backdrop-blur-sm border border-white/20"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{ backgroundColor: "rgba(99, 102, 241, 0.85)" }}
+          >
+            Detecting regions…
+          </motion.div>
+        )}
       </div>
 
       {/* Playback controls */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-white border-t border-gray-200">
-        <button
-          type="button"
-          onClick={() => setIsPlaying((p) => !p)}
-          className="p-2 rounded-lg hover:bg-gray-100 text-gray-700"
-          aria-label={isPlaying ? "Pause" : "Play"}
-        >
-          {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-        </button>
-        <span className="text-xs font-mono text-gray-500 tabular-nums">
-          {formatTime(currentSec)} / {formatTime(durationSeconds)}
+      <div className="flex items-center gap-3 px-4 py-3 bg-white/50 backdrop-blur-sm border-b border-white/30">
+        {interactive ? (
+          <button
+            type="button"
+            onClick={() => setIsPlaying((p) => !p)}
+            className="flex items-center justify-center w-9 h-9 rounded-full bg-gray-900 text-white hover:bg-gray-800 transition-colors shadow-sm"
+            aria-label={isPlaying ? "Pause" : "Play"}
+          >
+            {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+          </button>
+        ) : (
+          <div
+            className="flex items-center justify-center w-9 h-9 rounded-full bg-gray-900/80 text-white shadow-sm pointer-events-none"
+            aria-hidden
+          >
+            <Play className="w-4 h-4 ml-0.5" />
+          </div>
+        )}
+        <span className="text-sm font-medium text-gray-600 tabular-nums">
+          {formatTime(currentSec)}
+          <span className="text-gray-400 font-normal mx-1">/</span>
+          {formatTime(durationSeconds)}
         </span>
         <div className="flex-1" />
-        <button
-          type="button"
-          className="p-2 rounded-lg hover:bg-gray-100 text-gray-500"
-          aria-label="Fullscreen"
-        >
-          <Maximize2 className="w-4 h-4" />
-        </button>
+        {interactive && (
+          <button
+            type="button"
+            className="p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+            aria-label="Fullscreen"
+          >
+            <Maximize2 className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Timeline with highlights */}
-      <div className="px-3 pb-3">
+      <div className="px-4 py-4 bg-white/30 backdrop-blur-sm">
         <div
           ref={timelineRef}
-          className="relative h-14 rounded-lg bg-gray-800 cursor-pointer group"
-          onClick={(e) => {
-            const rect = timelineRef.current?.getBoundingClientRect();
-            if (!rect) return;
-            const x = e.clientX - rect.left;
-            const pct = x / rect.width;
-            seekTo(pct * durationSeconds);
-          }}
+          className={cn(
+            "relative h-12 rounded-xl bg-gray-100 overflow-hidden",
+            interactive && "cursor-pointer"
+          )}
+          onClick={
+            interactive
+              ? (e) => {
+                  const rect = timelineRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  const x = e.clientX - rect.left;
+                  const pct = x / rect.width;
+                  seekTo(pct * durationSeconds);
+                }
+              : undefined
+          }
+          role={interactive ? "button" : undefined}
+          tabIndex={interactive ? 0 : undefined}
         >
+          {/* Inner track (subtle depth) */}
+          <div className="absolute inset-1 rounded-lg bg-gray-200/60" />
           {/* Highlight segments and points */}
           {highlights.map((h, i) => {
             const startPct = (h.startSec / durationSeconds) * 100;
@@ -153,52 +224,99 @@ export default function VideoTimelineWithCriteria({
             const endPct = (endSec / durationSeconds) * 100;
             const isRange = (h.endSec != null && h.endSec > h.startSec);
             const colors = HIGHLIGHT_CATEGORY_COLORS[h.category] ?? HIGHLIGHT_CATEGORY_COLORS.default;
-            const isSelected = selectedHighlight === i;
+            const isSelected = effectiveHighlight === i;
 
             return (
-              <motion.button
+              <motion.div
                 key={i}
-                type="button"
                 initial={false}
                 animate={{
-                  scale: isSelected ? 1.05 : 1,
-                  zIndex: isSelected ? 20 : 10,
+                  scale: isSelected ? 1.02 : 1,
+                  zIndex: isSelected ? 15 : 5,
                 }}
                 className={cn(
-                  "absolute top-1 bottom-1 rounded overflow-hidden border-2 transition-all hover:ring-2 hover:ring-white/50",
-                  colors.border,
-                  isRange ? "min-w-[4px]" : "w-2 -ml-1 rounded-full"
+                  "absolute top-1.5 bottom-1.5 rounded-md overflow-hidden transition-all duration-200",
+                  interactive && "hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-gray-400 cursor-pointer"
                 )}
                 style={{
                   left: `${startPct}%`,
-                  width: isRange ? `${Math.max(2, endPct - startPct)}%` : undefined,
+                  width: isRange ? `${Math.max(3, endPct - startPct)}%` : undefined,
                 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  seekTo(h.startSec);
-                  setSelectedHighlight(selectedHighlight === i ? null : i);
-                }}
+                onClick={
+                  interactive
+                    ? (e) => {
+                        e.stopPropagation();
+                        seekTo(h.startSec);
+                        setManualHighlight(manualHighlight === i ? null : i);
+                      }
+                    : undefined
+                }
+                onKeyDown={
+                  interactive
+                    ? (e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          seekTo(h.startSec);
+                          setManualHighlight(manualHighlight === i ? null : i);
+                        }
+                      }
+                    : undefined
+                }
                 title={h.label}
+                role={interactive ? "button" : undefined}
+                tabIndex={interactive ? 0 : undefined}
               >
-                <span className={cn("block h-full min-w-full", colors.bg, isRange ? "opacity-80" : "opacity-100")} />
-              </motion.button>
+                <span
+                  className={cn(
+                    "block h-full min-w-full rounded-md",
+                    colors.bg,
+                    isRange ? "opacity-70" : "opacity-90",
+                    interactive && (isRange ? "hover:opacity-85" : "hover:opacity-100")
+                  )}
+                />
+              </motion.div>
             );
           })}
 
-          {/* Playhead on timeline */}
+          {/* Scan line (demo): sweeps left-to-right in front of timeline colors, one-time */}
+          {showDetectionScan && !scanComplete && (
+            <motion.div
+              className="absolute top-0 bottom-0 w-6 pointer-events-none z-30 rounded-full"
+              initial={{ left: "0%" }}
+              animate={{ left: "100%" }}
+              transition={{
+                duration: 1.8,
+                ease: [0.32, 0.72, 0, 1],
+                delay: 0.3,
+              }}
+              onAnimationComplete={() => setScanComplete(true)}
+              style={{
+                background: "linear-gradient(to right, transparent, rgba(99, 102, 241, 0.4), transparent)",
+                boxShadow: "0 0 16px rgba(99, 102, 241, 0.25)",
+              }}
+            />
+          )}
+
+          {/* Playhead — clean white line with shadow */}
           <div
-            className="absolute top-0 bottom-0 w-0.5 bg-red-500 pointer-events-none"
+            className="absolute top-0 bottom-0 w-0.5 pointer-events-none z-20 rounded-full bg-white shadow-[0_0_8px_rgba(0,0,0,0.3)]"
             style={{ left: `${(currentSec / durationSeconds) * 100}%` }}
           />
         </div>
 
-        {/* Legend: categories */}
-        <div className="flex flex-wrap gap-3 mt-2 text-[10px] text-gray-500">
+        {/* Legend: category pills */}
+        <div className="flex flex-wrap gap-2 mt-3">
           {[...new Set(highlights.map((h) => h.category).filter(Boolean))].map((cat) => {
             const c = HIGHLIGHT_CATEGORY_COLORS[cat] ?? HIGHLIGHT_CATEGORY_COLORS.default;
             return (
-              <span key={cat} className="flex items-center gap-1">
-                <span className={cn("w-2 h-2 rounded-full", c.dot)} />
+              <span
+                key={cat}
+                className={cn(
+                  "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-gray-600 bg-gray-100",
+                  "border border-gray-200/80"
+                )}
+              >
+                <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", c.dot)} />
                 {cat}
               </span>
             );
@@ -206,32 +324,44 @@ export default function VideoTimelineWithCriteria({
         </div>
       </div>
 
-      {/* Selected highlight detail panel */}
-      {selectedHighlight != null && highlights[selectedHighlight] && (
+      {/* Highlight detail panel (selected in interactive mode, or current segment in auto mode) */}
+      {effectiveHighlight != null && highlights[effectiveHighlight] && (
         <motion.div
-          initial={{ opacity: 0, y: 4 }}
+          key={effectiveHighlight}
+          initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mx-3 mb-3 p-3 rounded-lg border bg-white border-gray-200 shadow-sm"
+          transition={{ duration: 0.2 }}
+          className="mx-4 mb-4 p-4 rounded-xl bg-white/60 backdrop-blur-md border border-white/40"
         >
-          <div className="flex items-center gap-2 mb-1">
-            <Tag className="w-3.5 h-3.5 text-gray-400" />
-            <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">
-              {highlights[selectedHighlight].category ?? "Moment"}
+          <div className="flex items-center gap-2 mb-2">
+            <span
+              className={cn(
+                "w-1 h-8 rounded-full shrink-0",
+                (HIGHLIGHT_CATEGORY_COLORS[highlights[effectiveHighlight].category] ?? HIGHLIGHT_CATEGORY_COLORS.default).bg
+              )}
+            />
+            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+              {highlights[effectiveHighlight].category ?? "Moment"}
             </span>
-            {highlights[selectedHighlight].score != null && (
-              <span className="text-xs text-gray-600">
-                Score: <strong>{highlights[selectedHighlight].score}/10</strong>
+            {highlights[effectiveHighlight].score != null && (
+              <span className="text-xs text-gray-500 ml-auto">
+                <span className="font-medium text-gray-700">{highlights[effectiveHighlight].score}</span>
+                <span className="text-gray-400">/10</span>
               </span>
             )}
           </div>
-          <p className="text-sm font-medium text-gray-900">{highlights[selectedHighlight].label}</p>
-          {highlights[selectedHighlight].description && (
-            <p className="text-xs text-gray-600 mt-1">{highlights[selectedHighlight].description}</p>
+          <p className="text-sm font-semibold text-gray-900 leading-snug">
+            {highlights[effectiveHighlight].label}
+          </p>
+          {highlights[effectiveHighlight].description && (
+            <p className="text-xs text-gray-600 mt-1.5 leading-relaxed">
+              {highlights[effectiveHighlight].description}
+            </p>
           )}
-          <p className="text-[10px] text-gray-400 mt-1 font-mono">
-            {formatTime(highlights[selectedHighlight].startSec)}
-            {highlights[selectedHighlight].endSec != null && highlights[selectedHighlight].endSec > highlights[selectedHighlight].startSec && (
-              <> – {formatTime(highlights[selectedHighlight].endSec)}</>
+          <p className="text-xs text-gray-400 mt-2 font-mono tabular-nums">
+            {formatTime(highlights[effectiveHighlight].startSec)}
+            {highlights[effectiveHighlight].endSec != null && highlights[effectiveHighlight].endSec > highlights[effectiveHighlight].startSec && (
+              <> – {formatTime(highlights[effectiveHighlight].endSec)}</>
             )}
           </p>
         </motion.div>
