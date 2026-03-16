@@ -2,11 +2,12 @@ import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArrowRight, Mail, Lock, AlertCircle } from "lucide-react";
+import { ArrowRight, ArrowLeft, Mail, Lock, AlertCircle } from "lucide-react";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
 import { createUser } from "@/api/user";
 import { createPageUrl } from "@/utils";
+import { MARKETING_ORIGIN } from "@/config/origins";
 import bridgeLogo from "@/assets/bridge-logo.svg";
 
 export default function GetStarted() {
@@ -150,8 +151,15 @@ export default function GetStarted() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md"
+        className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md relative"
       >
+        <a
+          href={MARKETING_ORIGIN}
+          className="absolute top-4 left-4 inline-flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Back to landing
+        </a>
         <div className="text-center mb-8">
           <div className="w-14 h-14 rounded-2xl overflow-hidden flex items-center justify-center mx-auto mb-4">
             <img
