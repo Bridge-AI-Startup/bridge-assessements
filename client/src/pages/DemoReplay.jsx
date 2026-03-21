@@ -59,17 +59,12 @@ export default function DemoReplay() {
         </motion.div>
 
         <VideoTimelineWithCriteria
-          durationSeconds={DEMO_DURATION_SEC}
+          placeholderDurationSec={DEMO_DURATION_SEC}
           highlights={DEMO_HIGHLIGHTS}
           videoUrl={null}
-          placeholderImageUrl="/placeholder-video.png"
           regions={DEMO_REGIONS}
           className="shadow-lg"
         />
-
-        <p className="text-xs text-gray-400 mt-4 text-center">
-          For demo use only. Replace with real session + evaluation report when pipeline is ready.
-        </p>
       </div>
     </div>
   );

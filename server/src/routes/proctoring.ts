@@ -139,6 +139,13 @@ router.get(
 );
 
 router.get(
+  "/sessions/:sessionId/playback-video",
+  verifyAuthToken,
+  ...ProctoringValidator.getPlaybackVideoValidation,
+  ProctoringController.getPlaybackVideo
+);
+
+router.get(
   "/sessions/:sessionId/download-video",
   ProctoringController.downloadSessionVideo
 );

@@ -21,7 +21,7 @@ import { executeAllTasks } from "../services/taskRunner/taskRunner.js";
 import ProctoringSessionModel from "../models/proctoringSession.js";
 import { getProctoringTranscriptForSubmission } from "../services/evaluation/proctoringTranscriptAdapter.js";
 import { evaluateTranscript } from "../services/evaluation/orchestrator.js";
-import { generateTranscript } from "../ai/transcript/generator.js";
+import { generateTranscript, finalizeTranscriptFromIncremental } from "../ai/transcript/generator.js";
 import { jsonlToScreenMoments } from "../services/evaluation/momentGrouper.js";
 import { interpretChunked } from "../services/evaluation/interpreterChunked.js";
 import { interpretStateful } from "../services/evaluation/interpreterStateful.js";
@@ -98,8 +98,17 @@ async function ensureProctoringTranscriptAndEvaluate(
   }
 
   if (status === "not_started" || status === "failed") {
+    const hasIncrementalData =
+      session.transcript?.storageKey && session.transcript?.lastIncrementalAt;
     try {
-      await generateTranscript(session._id.toString());
+      if (hasIncrementalData) {
+        console.log(
+          `[ensureProctoringTranscriptAndEvaluate] Finalizing from incremental for submission ${submissionId}`
+        );
+        await finalizeTranscriptFromIncremental(session._id.toString());
+      } else {
+        await generateTranscript(session._id.toString());
+      }
     } catch (err) {
       console.error(
         `[ensureProctoringTranscriptAndEvaluate] Transcript generation failed for submission ${submissionId}:`,

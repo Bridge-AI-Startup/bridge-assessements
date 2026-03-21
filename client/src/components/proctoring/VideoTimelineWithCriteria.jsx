@@ -17,53 +17,85 @@ export const HIGHLIGHT_CATEGORY_COLORS = {
 /**
  * Video (or placeholder) with a timeline bar below it. Timeline shows highlights
  * that map to criteria or events; clicking a highlight seeks and shows detail.
+ * Duration and current time come only from the HTML5 video element (loadedmetadata / timeupdate).
  *
- * @param {number} durationSeconds - Total timeline length in seconds
  * @param {Array<{ startSec: number, endSec?: number, label: string, category?: string, description?: string, score?: number }>} highlights
  * @param {string} [videoUrl] - Optional video src; if missing, placeholder is shown
- * @param {string} [placeholderImageUrl] - Optional image to show when videoUrl is null (e.g. /placeholder-video.png)
- * @param {Array<{ regionType: string, x: number, y: number, width: number, height: number, confidence?: number }>} [regions] - Optional region bounding boxes (percent) to overlay as transparent boxes
+ * @param {string} [placeholderImageUrl] - Optional image to show when videoUrl is null
+ * @param {number} [placeholderDurationSec] - Duration when no video (placeholder mode); default 1
+ * @param {number} [durationHintSec] - Fallback duration from API when video element does not report valid duration (e.g. re-mux failed)
+ * @param {Array<{ regionType: string, x: number, y: number, width: number, height: number, confidence?: number }>} [regions]
  * @param {string} [className]
  */
 export default function VideoTimelineWithCriteria({
-  durationSeconds = 600,
   highlights = [],
   videoUrl = null,
   placeholderImageUrl = null,
+  placeholderDurationSec = 1,
+  durationHintSec,
   regions = null,
   className,
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentSec, setCurrentSec] = useState(0);
   const [selectedHighlight, setSelectedHighlight] = useState(null);
+  const [videoDurationSec, setVideoDurationSec] = useState(null);
   const videoRef = useRef(null);
   const timelineRef = useRef(null);
 
-  // Simple playhead advance (no real video = just animate time)
+  // Reset duration when video source changes
   useEffect(() => {
-    if (!isPlaying) return;
-    const interval = setInterval(() => {
-      setCurrentSec((s) => {
-        if (s >= durationSeconds) {
-          setIsPlaying(false);
-          return durationSeconds;
-        }
-        return s + 0.5;
-      });
-    }, 500);
-    return () => clearInterval(interval);
-  }, [isPlaying, durationSeconds]);
+    if (!videoUrl) setVideoDurationSec(null);
+  }, [videoUrl]);
 
-  // Sync video if we have one
+  const hasVideoDuration =
+    videoUrl && videoDurationSec != null && Number.isFinite(videoDurationSec) && videoDurationSec > 0;
+  const hasHint = durationHintSec != null && Number.isFinite(durationHintSec) && durationHintSec > 0;
+  const effectiveDuration = hasVideoDuration
+    ? videoDurationSec
+    : (videoUrl && hasHint ? durationHintSec : placeholderDurationSec);
+
+  // Placeholder mode only: animate playhead with interval (no real video)
+  useEffect(() => {
+    if (!videoUrl && isPlaying) {
+      const interval = setInterval(() => {
+        setCurrentSec((s) => {
+          if (s >= effectiveDuration) {
+            setIsPlaying(false);
+            return effectiveDuration;
+          }
+          return s + 0.5;
+        });
+      }, 500);
+      return () => clearInterval(interval);
+    }
+  }, [videoUrl, isPlaying, effectiveDuration]);
+
+  // When user seeks, sync video currentTime (only for real video)
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !videoUrl) return;
-    video.currentTime = currentSec;
+    if (Math.abs(video.currentTime - currentSec) > 0.25) {
+      video.currentTime = currentSec;
+    }
   }, [currentSec, videoUrl]);
 
+  // Drive play/pause on the video element when we have real video
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !videoUrl) return;
+    if (isPlaying) {
+      video.play().catch(() => {});
+    } else {
+      video.pause();
+    }
+  }, [isPlaying, videoUrl]);
+
   const seekTo = (sec) => {
-    setCurrentSec(Math.max(0, Math.min(sec, durationSeconds)));
-    if (videoRef.current) videoRef.current.currentTime = sec;
+    const max = effectiveDuration;
+    const clamped = Math.max(0, Math.min(sec, max));
+    setCurrentSec(clamped);
+    if (videoRef.current) videoRef.current.currentTime = clamped;
   };
 
   const formatTime = (sec) => {
@@ -80,34 +112,32 @@ export default function VideoTimelineWithCriteria({
           <video
             ref={videoRef}
             src={videoUrl}
+            preload="metadata"
             className="w-full h-full object-contain"
+            onLoadedMetadata={(e) => {
+              const d = e.target.duration;
+              if (Number.isFinite(d) && d > 0) setVideoDurationSec(d);
+            }}
+            onDurationChange={(e) => {
+              const d = e.target.duration;
+              if (Number.isFinite(d) && d > 0) setVideoDurationSec(d);
+            }}
             onTimeUpdate={(e) => setCurrentSec(e.target.currentTime)}
             onEnded={() => setIsPlaying(false)}
           />
         ) : placeholderImageUrl ? (
           <img
             src={placeholderImageUrl}
-            alt="Screen recording"
+            alt=""
             className="w-full h-full object-contain"
           />
         ) : (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500">
-            <div className="w-16 h-16 rounded-full border-2 border-dashed border-gray-600 flex items-center justify-center mb-3">
-              <Play className="w-8 h-8 text-gray-500 ml-1" />
-            </div>
-            <span className="text-sm font-medium">Screen recording</span>
-            <span className="text-xs text-gray-600 mt-1">{formatTime(currentSec)} / {formatTime(durationSeconds)}</span>
-          </div>
+          <div className="absolute inset-0 bg-gray-900/50" aria-hidden />
         )}
         {/* Transparent bounding box overlay (e.g. region detection demo) */}
         {regions && regions.length > 0 && (
           <BoundingBoxOverlay regions={regions} className="z-[5]" />
         )}
-        {/* Playhead overlay line on video */}
-        <div
-          className="absolute top-0 bottom-0 w-0.5 bg-red-500 pointer-events-none z-10"
-          style={{ left: `${(currentSec / durationSeconds) * 100}%` }}
-        />
       </div>
 
       {/* Playback controls */}
@@ -121,7 +151,7 @@ export default function VideoTimelineWithCriteria({
           {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
         </button>
         <span className="text-xs font-mono text-gray-500 tabular-nums">
-          {formatTime(currentSec)} / {formatTime(durationSeconds)}
+          {formatTime(currentSec)} / {formatTime(effectiveDuration)}
         </span>
         <div className="flex-1" />
         <button
@@ -143,14 +173,14 @@ export default function VideoTimelineWithCriteria({
             if (!rect) return;
             const x = e.clientX - rect.left;
             const pct = x / rect.width;
-            seekTo(pct * durationSeconds);
+            seekTo(pct * effectiveDuration);
           }}
         >
           {/* Highlight segments and points */}
           {highlights.map((h, i) => {
-            const startPct = (h.startSec / durationSeconds) * 100;
+            const startPct = effectiveDuration > 0 ? (h.startSec / effectiveDuration) * 100 : 0;
             const endSec = h.endSec ?? h.startSec;
-            const endPct = (endSec / durationSeconds) * 100;
+            const endPct = effectiveDuration > 0 ? (endSec / effectiveDuration) * 100 : 0;
             const isRange = (h.endSec != null && h.endSec > h.startSec);
             const colors = HIGHLIGHT_CATEGORY_COLORS[h.category] ?? HIGHLIGHT_CATEGORY_COLORS.default;
             const isSelected = selectedHighlight === i;
@@ -188,7 +218,7 @@ export default function VideoTimelineWithCriteria({
           {/* Playhead on timeline */}
           <div
             className="absolute top-0 bottom-0 w-0.5 bg-red-500 pointer-events-none"
-            style={{ left: `${(currentSec / durationSeconds) * 100}%` }}
+            style={{ left: `${effectiveDuration > 0 ? (currentSec / effectiveDuration) * 100 : 0}%` }}
           />
         </div>
 

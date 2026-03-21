@@ -22,10 +22,47 @@ export type ProctoringSession = {
     uniqueFrames: number;
     duplicatesSkipped: number;
     totalSizeBytes: number;
+    captureStartedAt?: string | null;
+    captureEndedAt?: string | null;
+    videoStats?: {
+      totalChunks?: number;
+      totalVideoSizeBytes?: number;
+      durationSeconds?: number;
+    };
   };
+  transcript?: {
+    status: string;
+    storageKey?: string;
+  };
+  videoChunks?: Array<{
+    storageKey: string;
+    screenIndex: number;
+    startTime: string;
+    endTime?: string | null;
+    sizeBytes?: number;
+  }>;
   createdAt: string;
   updatedAt: string;
 };
+
+/**
+ * Get proctoring session by submission ID (employer auth required).
+ */
+export async function getSessionBySubmission(
+  submissionId: string,
+  authToken: string
+): Promise<APIResult<ProctoringSession>> {
+  try {
+    const response = await get(
+      `/proctoring/sessions/by-submission/${submissionId}`,
+      { Authorization: `Bearer ${authToken}` }
+    );
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
 
 /**
  * Create a proctoring session for a submission token.
@@ -264,6 +301,34 @@ export async function getRefinedTranscriptContent(
     );
     const text = await response.text();
     return { success: true, data: text };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Fetch re-muxed WebM video for in-page playback (correct duration). Returns an object URL;
+ * caller must call URL.revokeObjectURL(objectUrl) when done to avoid leaks.
+ */
+export async function getProctoringVideoPlaybackUrl(
+  sessionId: string,
+  authToken: string
+): Promise<APIResult<string>> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/proctoring/sessions/${sessionId}/playback-video`,
+      { headers: { Authorization: `Bearer ${authToken}` } }
+    );
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      return {
+        success: false,
+        error: data.error || `Video unavailable (${response.status})`,
+      };
+    }
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    return { success: true, data: objectUrl };
   } catch (error) {
     return handleAPIError(error);
   }

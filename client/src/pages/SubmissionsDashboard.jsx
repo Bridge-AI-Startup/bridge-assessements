@@ -26,6 +26,7 @@ import {
   CheckCircle2,
   Circle,
   Play,
+  FileText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,9 +54,58 @@ import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BulkInviteContent } from "@/components/BulkInviteModal";
 import { getAssessment } from "@/api/assessment";
+import { getSessionBySubmission, getTranscriptContent, getProctoringVideoPlaybackUrl, downloadProctoringVideo } from "@/api/proctoring";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
 import { API_BASE_URL } from "@/config/api";
+
+/** Format seconds since session start as m:ss (e.g. 65 -> "1:05"). */
+function formatSecondsSinceStart(s) {
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
+/**
+ * Human-readable view of the stateful/chunked enriched transcript
+ * (session narrative + timeline of behavioral events).
+ */
+function EnrichedTranscriptView({ enriched }) {
+  const narrative = enriched?.session_narrative?.trim();
+  const events = Array.isArray(enriched?.events) ? enriched.events : [];
+  return (
+    <div className="bg-gray-50 rounded-lg border border-gray-200 p-3 max-h-[40vh] overflow-y-auto space-y-4">
+      {narrative ? (
+        <div>
+          <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1">Session summary</p>
+          <p className="text-sm text-gray-800 leading-relaxed">{narrative}</p>
+        </div>
+      ) : null}
+      {events.length > 0 ? (
+        <div>
+          <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">Activity timeline</p>
+          <ul className="space-y-3">
+            {events.map((evt, idx) => (
+              <li key={idx} className="border-l-2 border-blue-200 pl-3 py-0.5">
+                <span className="text-xs text-gray-500 font-medium">
+                  {formatSecondsSinceStart(evt.ts)} – {formatSecondsSinceStart(evt.ts_end)}
+                  {evt.ai_tool ? ` · ${evt.ai_tool}` : ""}
+                </span>
+                <p className="text-sm text-gray-800 mt-0.5">{evt.behavioral_summary}</p>
+                {evt.intent ? (
+                  <p className="text-xs text-gray-500 mt-0.5 italic">{evt.intent}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {!narrative && events.length === 0 ? (
+        <p className="text-sm text-gray-500">No activity summary available.</p>
+      ) : null}
+    </div>
+  );
+}
 
 export default function SubmissionsDashboard() {
   const [searchParams] = useSearchParams();
@@ -78,6 +128,13 @@ export default function SubmissionsDashboard() {
   const [isDropoffAnalysisExpanded, setIsDropoffAnalysisExpanded] =
     useState(false);
   const [evaluatingSubmissionId, setEvaluatingSubmissionId] = useState(null);
+  const [recordingSession, setRecordingSession] = useState(null);
+  const [recordingTranscript, setRecordingTranscript] = useState(null);
+  const [recordingTranscriptLoading, setRecordingTranscriptLoading] = useState(false);
+  const [recordingVideoLoading, setRecordingVideoLoading] = useState(false);
+  const [recordingTranscriptError, setRecordingTranscriptError] = useState(null);
+  const [recordingVideoObjectUrl, setRecordingVideoObjectUrl] = useState(null);
+  const recordingVideoObjectUrlRef = React.useRef(null);
   const { toast } = useToast();
 
   // Reset expanded evidence when opening evaluation for a different submission
@@ -93,6 +150,139 @@ export default function SubmissionsDashboard() {
       setEvaluationTab("execution");
     }
   }, [showEvaluationModal, selectedEvaluationSubmission?._id]);
+
+  // Load proctoring session, screen transcript, and video when Recording tab is active
+  useEffect(() => {
+    if (
+      evaluationTab !== "recording" ||
+      !selectedEvaluationSubmission?._id ||
+      !currentUser
+    ) {
+      if (recordingVideoObjectUrlRef.current) {
+        URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
+        recordingVideoObjectUrlRef.current = null;
+      }
+      setRecordingVideoObjectUrl(null);
+      setRecordingSession(null);
+      setRecordingTranscript(null);
+      setRecordingTranscriptError(null);
+      return;
+    }
+    const submissionId = String(selectedEvaluationSubmission?._id ?? "");
+    if (!submissionId) {
+      setRecordingTranscriptLoading(false);
+      return;
+    }
+    console.log("[proctoring-video] client step 1: submissionId =", submissionId, "type:", typeof submissionId, "selectedEvaluationSubmission._id =", selectedEvaluationSubmission._id);
+    if (recordingVideoObjectUrlRef.current) {
+      URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
+      recordingVideoObjectUrlRef.current = null;
+    }
+    setRecordingVideoObjectUrl(null);
+    setRecordingSession(null);
+    setRecordingTranscript(null);
+    setRecordingTranscriptError(null);
+    setRecordingTranscriptLoading(true);
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await currentUser.getIdToken();
+        console.log("[proctoring-video] client step 2: calling getSessionBySubmission with submissionId =", submissionId);
+        const sessionResult = await getSessionBySubmission(submissionId, token);
+        if (cancelled) return;
+        console.log("[proctoring-video] client step 3: sessionResult.success =", sessionResult.success, "sessionResult.data present =", !!sessionResult.data, "sessionResult.error =", sessionResult.error);
+        if (!sessionResult.success || !sessionResult.data) {
+          setRecordingTranscriptLoading(false);
+          return;
+        }
+        const session = sessionResult.data;
+        const idsMatch = String(session.submissionId) === String(submissionId);
+        console.log("[proctoring-video] client step 4: session._id =", session._id, "type:", typeof session._id, "session.submissionId =", session.submissionId, "type:", typeof session.submissionId, "sessionSubmissionId === submissionId =", idsMatch, "String(session.submissionId) =", String(session.submissionId), "submissionId =", submissionId);
+        if (String(session.submissionId) !== String(submissionId)) {
+          console.log("[proctoring-video] client step 4 FAIL: ids do not match, returning early (no session/video set)");
+          setRecordingTranscriptLoading(false);
+          return;
+        }
+        setRecordingSession(session);
+        if (
+          session.transcript?.status === "completed" &&
+          session.transcript?.storageKey &&
+          !selectedEvaluationSubmission?.enrichedTranscript
+        ) {
+          const transcriptResult = await getTranscriptContent(session._id);
+          if (cancelled) return;
+          if (transcriptResult.success && transcriptResult.data) {
+            const lines = transcriptResult.data
+              .split("\n")
+              .filter((l) => l.trim());
+            const segments = lines
+              .map((line) => {
+                try {
+                  const cleaned = line
+                    .trim()
+                    .replace(/^```(?:json|jsonl)?/, "")
+                    .replace(/^```$/, "")
+                    .trim();
+                  return cleaned ? JSON.parse(cleaned) : null;
+                } catch {
+                  return null;
+                }
+              })
+              .filter(Boolean);
+            setRecordingTranscript(segments);
+          }
+        }
+        if (selectedEvaluationSubmission?.evaluationReport) {
+          const sessionIdForVideo =
+            session._id != null && typeof session._id === "string"
+              ? session._id
+              : session._id && typeof session._id.toString === "function"
+                ? session._id.toString()
+                : String(session._id);
+          setRecordingVideoLoading(true);
+          console.log("[proctoring-video] client step 5: calling getProctoringVideoPlaybackUrl with session._id =", sessionIdForVideo, "type:", typeof sessionIdForVideo);
+          const videoResult = await getProctoringVideoPlaybackUrl(sessionIdForVideo, token);
+          if (cancelled) {
+            if (videoResult.success && videoResult.data) {
+              URL.revokeObjectURL(videoResult.data);
+            }
+            setRecordingVideoLoading(false);
+            return;
+          }
+          console.log("[proctoring-video] client step 6: videoResult.success =", videoResult.success, "videoResult.error =", videoResult.error, "videoResult.data present =", !!videoResult.data);
+          if (videoResult.success && videoResult.data) {
+            recordingVideoObjectUrlRef.current = videoResult.data;
+            setRecordingVideoObjectUrl(videoResult.data);
+          }
+          setRecordingVideoLoading(false);
+        } else {
+          setRecordingVideoLoading(false);
+          console.log("[proctoring-video] client step 5 SKIP: no evaluationReport, not fetching video");
+        }
+      } catch (err) {
+        console.log("[proctoring-video] client CAUGHT ERROR:", err?.message ?? err);
+        if (!cancelled) {
+          setRecordingTranscriptError(err?.message ?? "Failed to load screen transcript");
+        }
+      } finally {
+        if (!cancelled) setRecordingTranscriptLoading(false);
+        setRecordingVideoLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      setRecordingVideoLoading(false);
+      if (recordingVideoObjectUrlRef.current) {
+        URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
+        recordingVideoObjectUrlRef.current = null;
+      }
+      setRecordingVideoObjectUrl(null);
+    };
+  }, [
+    evaluationTab,
+    selectedEvaluationSubmission?._id,
+    currentUser,
+  ]);
 
   // Wait for auth state to be ready
   useEffect(() => {
@@ -2043,10 +2233,6 @@ export default function SubmissionsDashboard() {
                         </Button>
                       </div>
 
-                      <p className="text-[10px] text-gray-400 italic">
-                        Demo placeholder. Full code execution scoring pipeline
-                        coming soon.
-                      </p>
                     </div>
                   ) : (
                     <div className="py-10 text-center">
@@ -2108,21 +2294,30 @@ export default function SubmissionsDashboard() {
                         );
                       })()}
 
-                      {/* Timeline with criteria highlights from evidence */}
+                      {/* Session summary from evaluation report */}
+                      {selectedEvaluationSubmission?.evaluationReport?.session_summary && (
+                        <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+                            Session summary
+                          </p>
+                          <p className="text-sm text-gray-700 leading-relaxed">
+                            {selectedEvaluationSubmission.evaluationReport.session_summary}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Timeline with criteria highlights from evidence; duration comes from the video */}
                       {(() => {
                         const report =
                           selectedEvaluationSubmission.evaluationReport;
                         const criteriaResults = report.criteria_results ?? [];
                         const highlights = [];
-                        const durationSec = 52 * 60; // 52 minutes
-                        let maxSec = durationSec;
                         for (const r of criteriaResults) {
                           if (!Array.isArray(r.evidence)) continue;
                           for (const ev of r.evidence) {
                             const ts = Number(ev.ts);
                             const tsEnd = Number(ev.ts_end ?? ev.ts);
                             if (!Number.isFinite(ts)) continue;
-                            maxSec = Math.max(maxSec, tsEnd, ts);
                             highlights.push({
                               startSec: ts,
                               endSec:
@@ -2136,20 +2331,40 @@ export default function SubmissionsDashboard() {
                             });
                           }
                         }
-                        return highlights.length > 0 ? (
-                          <div className="mb-2">
-                            <VideoTimelineWithCriteria
-                              durationSeconds={Math.max(
-                                durationSec,
-                                Math.ceil(maxSec / 60) * 60
-                              )}
-                              highlights={highlights}
-                              videoUrl={null}
-                              placeholderImageUrl="/placeholder-video.png"
-                              className="w-full"
-                            />
+                        const durationHintSec =
+                          recordingSession?.stats?.videoStats?.durationSeconds > 0
+                            ? recordingSession.stats.videoStats.durationSeconds
+                            : recordingSession?.videoChunks?.length > 0
+                              ? (() => {
+                                  let sum = 0;
+                                  for (const c of recordingSession.videoChunks) {
+                                    const start = c.startTime ? new Date(c.startTime).getTime() : NaN;
+                                    const end = (c.endTime ? new Date(c.endTime) : c.startTime ? new Date(c.startTime) : null)?.getTime();
+                                    if (Number.isFinite(start) && Number.isFinite(end) && end >= start) sum += (end - start) / 1000;
+                                  }
+                                  return sum > 0 ? sum : undefined;
+                                })()
+                              : undefined;
+                        return (
+                          <div className="mb-2 space-y-1">
+                            {recordingVideoLoading ? (
+                              <div className="rounded-xl border border-gray-200 bg-gray-50 overflow-hidden w-full">
+                                <div className="relative aspect-video bg-gray-900 flex flex-col items-center justify-center gap-3">
+                                  <Loader2 className="w-10 h-10 text-white/80 animate-spin" aria-hidden />
+                                  <p className="text-sm text-white/90 font-medium">Loading video…</p>
+                                </div>
+                              </div>
+                            ) : (
+                              <VideoTimelineWithCriteria
+                                key={selectedEvaluationSubmission._id}
+                                highlights={highlights}
+                                videoUrl={recordingVideoObjectUrl ?? null}
+                                durationHintSec={durationHintSec}
+                                className="w-full"
+                              />
+                            )}
                           </div>
-                        ) : null;
+                        );
                       })()}
 
                       {selectedEvaluationSubmission.evaluationReport
@@ -2250,7 +2465,16 @@ export default function SubmissionsDashboard() {
                         </div>
                       )}
 
-                      <p className="text-xs text-gray-500 pt-1">
+                      <p className="text-xs text-gray-500 pt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+                        {recordingVideoObjectUrl && recordingSession ? (
+                          <button
+                            type="button"
+                            onClick={() => downloadProctoringVideo(recordingSession._id)}
+                            className="text-[#1E3A8A] hover:underline"
+                          >
+                            Download recording
+                          </button>
+                        ) : null}
                         <Link
                           to="/DemoReplay"
                           className="text-[#1E3A8A] hover:underline"
@@ -2259,7 +2483,63 @@ export default function SubmissionsDashboard() {
                         </Link>
                       </p>
                     </div>
-                  ) : selectedEvaluationSubmission ? (
+                  ) : null}
+
+                  {/* Screen transcript: human-readable enriched (stateful chunked) when available, else raw OCR */}
+                  {selectedEvaluationSubmission && (
+                    <div className="space-y-3">
+                      <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-[#1E3A8A]" />
+                        Screen transcript
+                      </h3>
+                      {selectedEvaluationSubmission.enrichedTranscript ? (
+                        <EnrichedTranscriptView enriched={selectedEvaluationSubmission.enrichedTranscript} />
+                      ) : recordingTranscriptLoading ? (
+                        <div className="flex items-center gap-2 text-sm text-gray-500 py-4">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Loading…
+                        </div>
+                      ) : recordingTranscriptError ? (
+                        <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                          {recordingTranscriptError}
+                        </p>
+                      ) : !recordingSession ? (
+                        <p className="text-sm text-gray-500">
+                          No proctoring session for this submission.
+                        </p>
+                      ) : recordingSession.transcript?.status !== "completed" ? (
+                        <p className="text-sm text-gray-500">
+                          Screen transcript not available yet.
+                        </p>
+                      ) : Array.isArray(recordingTranscript) && recordingTranscript.length > 0 ? (
+                        <div className="bg-gray-50 rounded-lg border border-gray-200 p-3 max-h-[40vh] overflow-y-auto space-y-2">
+                          <p className="text-xs text-gray-500 mb-2">Raw transcript (human-readable summary not yet generated)</p>
+                          {recordingTranscript.map((seg, idx) => (
+                            <div
+                              key={idx}
+                              className="text-xs border-b border-gray-200 pb-2 last:border-0 last:pb-0"
+                            >
+                              <span className="text-gray-500 font-medium">
+                                {seg.ts && new Date(seg.ts).toLocaleTimeString()}
+                                {seg.app ? ` · ${seg.app}` : ""}
+                                {seg.region ? ` · ${seg.region}` : ""}
+                              </span>
+                              <p className="mt-0.5 text-gray-700 break-words">
+                                {(seg.text_content || seg.description || "").slice(0, 300)}
+                                {(seg.text_content || seg.description || "").length > 300 ? "…" : ""}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-500">
+                          No transcript segments.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {!selectedEvaluationSubmission?.evaluationReport && selectedEvaluationSubmission ? (
                     <div className="py-8 text-center">
                       <BarChart3 className="w-12 h-12 mx-auto mb-2 text-gray-400" />
                       <p className="text-gray-500 mb-3">
@@ -2373,14 +2653,8 @@ export default function SubmissionsDashboard() {
                           <p className="text-lg font-semibold text-emerald-600">
                             {selectedEvaluationSubmission.interview.analysis?.communicationScore != null
                               ? `${selectedEvaluationSubmission.interview.analysis.communicationScore}/10`
-                              : selectedEvaluationSubmission.interview.transcript?.turns?.length > 0
-                                ? "8/10"
-                                : "—"}
+                              : "—"}
                           </p>
-                          {selectedEvaluationSubmission.interview.analysis?.communicationScore == null &&
-                            selectedEvaluationSubmission.interview.transcript?.turns?.length > 0 && (
-                            <p className="text-[10px] text-gray-400 mt-0.5">Demo placeholder</p>
-                          )}
                         </div>
                       </div>
 

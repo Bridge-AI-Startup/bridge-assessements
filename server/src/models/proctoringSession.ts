@@ -124,6 +124,7 @@ const ProctoringSessionSchema = new mongoose.Schema(
       videoStats: {
         totalChunks: { type: Number, default: 0 },
         totalVideoSizeBytes: { type: Number, default: 0 },
+        durationSeconds: { type: Number, default: 0 },
         extractedFrameCount: { type: Number, default: 0 },
         extractionMethod: {
           type: String,

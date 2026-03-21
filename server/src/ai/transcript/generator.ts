@@ -277,6 +277,50 @@ export async function generateTranscriptIncremental(
   };
 }
 
+/**
+ * Finalize transcript when incremental has already been running: run one final incremental
+ * for frames since lastIncrementalAt, then mark transcript.status = "completed".
+ * Call this on submit when session has transcript.storageKey and transcript.lastIncrementalAt
+ * so we avoid a full generateTranscript() re-run.
+ */
+export async function finalizeTranscriptFromIncremental(
+  sessionId: string
+): Promise<void> {
+  if (process.env.TRANSCRIPT_GENERATION_ENABLED === "false") {
+    throw ProctoringError.TRANSCRIPT_GENERATION_DISABLED;
+  }
+
+  const session = await ProctoringSessionModel.findById(sessionId)
+    .select("transcript stats")
+    .lean();
+  if (!session) throw ProctoringError.SESSION_NOT_FOUND;
+
+  const transcript = (session as any).transcript;
+  const stats = (session as any).stats;
+  const storageKey = transcript?.storageKey;
+  const lastAt = transcript?.lastIncrementalAt
+    ? new Date(transcript.lastIncrementalAt).getTime()
+    : null;
+  const captureStartedAt = stats?.captureStartedAt
+    ? new Date(stats.captureStartedAt).getTime()
+    : 0;
+  const sinceMs = lastAt ?? captureStartedAt ?? 0;
+
+  // Run final incremental to catch any frames after last scheduler run
+  const result = await generateTranscriptIncremental(sessionId, { sinceMs });
+  logTs("transcript", `Finalize incremental: ${result.newSegmentCount} new segments, ${result.mergedSegmentCount} total`);
+
+  // Mark transcript as completed so getProctoringTranscriptForSubmission and evaluate can proceed
+  const frameCount =
+    stats?.uniqueFrames ?? stats?.totalFrames ?? result.frameCount ?? 0;
+  await ProctoringSessionModel.findByIdAndUpdate(sessionId, {
+    "transcript.status": "completed",
+    "transcript.generatedAt": new Date(),
+    "transcript.frameCount": frameCount,
+    "transcript.error": null,
+  });
+}
+
 // Prompt-only batch size (env: TRANSCRIPT_BATCH_SIZE, default 2; larger = fewer API calls, more tokens per request)
 const TRANSCRIPT_BATCH_SIZE = (() => {
   const raw = process.env.TRANSCRIPT_BATCH_SIZE;

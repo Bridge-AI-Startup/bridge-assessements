@@ -110,6 +110,12 @@ export const generateTranscriptValidation = [
     .withMessage("sessionId must be a valid MongoDB ObjectId"),
 ];
 
+export const getPlaybackVideoValidation = [
+  param("sessionId")
+    .isMongoId()
+    .withMessage("sessionId must be a valid MongoDB ObjectId"),
+];
+
 export const getSessionBySubmissionValidation = [
   param("submissionId")
     .isMongoId()

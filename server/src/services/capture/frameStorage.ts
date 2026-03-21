@@ -96,11 +96,16 @@ export async function storeVideoChunk(
     sizeBytes: buffer.length,
   };
 
+  const chunkDurationSec = endValid
+    ? (metadata.endTime!.getTime() - metadata.startTime.getTime()) / 1000
+    : 0;
+
   const update: Record<string, unknown> = {
     $push: { videoChunks: chunkEntry },
     $inc: {
       "stats.videoStats.totalChunks": 1,
       "stats.videoStats.totalVideoSizeBytes": buffer.length,
+      "stats.videoStats.durationSeconds": chunkDurationSec,
     },
   };
   if (startValid) {

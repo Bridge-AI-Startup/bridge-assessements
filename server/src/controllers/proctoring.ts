@@ -7,6 +7,7 @@ import fs from "fs/promises";
 import validationErrorParser from "../utils/validationErrorParser.js";
 import ProctoringSessionModel from "../models/proctoringSession.js";
 import SubmissionModel from "../models/submission.js";
+import AssessmentModel from "../models/assessment.js";
 import { ProctoringError } from "../errors/proctoring.js";
 import {
   storeFrame,
@@ -237,6 +238,11 @@ export const generateSessionTranscript: RequestHandler = async (
   }
 };
 
+const DEBUG_VIDEO = true; // set to false to disable [proctoring-video] logs
+const dv = (...args: unknown[]) => {
+  if (DEBUG_VIDEO) console.log("[proctoring-video]", ...args);
+};
+
 // GET /api/proctoring/sessions/by-submission/:submissionId
 export const getSessionBySubmission: RequestHandler = async (
   req,
@@ -248,9 +254,42 @@ export const getSessionBySubmission: RequestHandler = async (
     validationErrorParser(errors);
 
     const { submissionId } = req.params;
-    const session = await ProctoringSessionModel.findOne({ submissionId });
-    if (!session) throw ProctoringError.SESSION_NOT_FOUND;
-    res.json(session);
+    dv("[getSessionBySubmission] step 1: param submissionId =", submissionId, "type:", typeof submissionId, "length:", String(submissionId).length);
+    const submissionIdObj = mongoose.Types.ObjectId.isValid(submissionId)
+      ? new mongoose.Types.ObjectId(submissionId)
+      : null;
+    const session = await ProctoringSessionModel.findOne(
+      submissionIdObj ? { submissionId: submissionIdObj } : { submissionId },
+    );
+    if (!session) {
+      dv("[getSessionBySubmission] step 2: session NOT FOUND for submissionId:", submissionId);
+      throw ProctoringError.SESSION_NOT_FOUND;
+    }
+    dv("[getSessionBySubmission] step 2: session FOUND. session._id =", session._id, "type:", typeof session._id, "session.submissionId =", session.submissionId, "type:", typeof session.submissionId);
+
+    const payload = session.toObject ? session.toObject() : session;
+    const stored =
+      payload.stats?.videoStats?.durationSeconds != null &&
+      payload.stats.videoStats.durationSeconds > 0;
+    if (!stored && payload.videoChunks?.length > 0) {
+      let totalSec = 0;
+      for (const ch of payload.videoChunks as Array<{ startTime?: Date | string; endTime?: Date | null }>) {
+        const start = ch.startTime ? new Date(ch.startTime).getTime() : NaN;
+        const end = (ch.endTime ? new Date(ch.endTime) : ch.startTime ? new Date(ch.startTime) : null)?.getTime();
+        if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
+          totalSec += (end - start) / 1000;
+        }
+      }
+      if (!payload.stats) payload.stats = {} as Record<string, unknown>;
+      if (!payload.stats.videoStats) payload.stats.videoStats = {} as Record<string, unknown>;
+      (payload.stats.videoStats as Record<string, unknown>).durationSeconds = totalSec;
+    }
+
+    payload._id = payload._id?.toString?.() ?? payload._id;
+    payload.submissionId =
+      payload.submissionId?.toString?.() ?? payload.submissionId;
+    dv("[getSessionBySubmission] step 3: returning payload. payload._id =", payload._id, "payload.submissionId =", payload.submissionId);
+    res.json(payload);
   } catch (error) {
     next(error);
   }
@@ -303,8 +342,156 @@ export const uploadVideoChunk: RequestHandler = async (req, res, next) => {
   }
 };
 
+/** Resolve ordered list of video chunk storage keys for a session (screen 0). */
+async function resolveSessionVideoChunkKeys(
+  sessionId: string,
+  session: { videoChunks?: unknown[] } | null,
+  storage: { listKeys: (prefix: string) => Promise<string[]>; getVideoChunk: (key: string) => Promise<Buffer> }
+): Promise<{ storageKey: string }[]> {
+  let chunks: { storageKey: string }[] = [];
+  dv("[resolveSessionVideoChunkKeys] sessionId =", sessionId, "session?.videoChunks?.length =", session?.videoChunks?.length ?? 0);
+
+  if (session?.videoChunks?.length) {
+    dv("[resolveSessionVideoChunkKeys] using DB videoChunks");
+    const byScreen = new Map<number, { storageKey: string; startTime: Date }[]>();
+    for (const ch of session.videoChunks as { storageKey: string; startTime: Date; screenIndex?: number }[]) {
+      const screenIndex = ch.screenIndex ?? 0;
+      if (!byScreen.has(screenIndex)) byScreen.set(screenIndex, []);
+      byScreen.get(screenIndex)!.push({
+        storageKey: ch.storageKey,
+        startTime: new Date(ch.startTime),
+      });
+    }
+    const screen0 = byScreen.get(0) ?? byScreen.get(Math.min(...byScreen.keys()));
+    if (screen0) {
+      screen0.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+      chunks = screen0;
+    }
+    dv("[resolveSessionVideoChunkKeys] from DB: chunk count =", chunks.length, "first 3 keys =", chunks.slice(0, 3).map((c) => c.storageKey));
+  }
+
+  if (chunks.length === 0) {
+    const prefix = `${sessionId}/video`;
+    dv("[resolveSessionVideoChunkKeys] no DB chunks, listing storage prefix =", prefix);
+    const keys = await storage.listKeys(prefix);
+    const webmKeys = keys.filter((k) => k.endsWith(".webm"));
+    dv("[resolveSessionVideoChunkKeys] listKeys returned", keys.length, "keys, webmKeys =", webmKeys.length, "sample =", webmKeys.slice(0, 3));
+    if (webmKeys.length === 0) return [];
+    const withMeta = webmKeys.map((key) => {
+      const name = key.split("/").pop() || "";
+      const [tsStr, screenStr] = name.replace(".webm", "").split("-");
+      return {
+        storageKey: key,
+        ts: parseInt(tsStr, 10) || 0,
+        screenIndex: parseInt(screenStr, 10) || 0,
+      };
+    });
+    const screen0Keys = withMeta.filter((m) => m.screenIndex === 0);
+    const toUse = screen0Keys.length ? screen0Keys : withMeta;
+    toUse.sort((a, b) => a.ts - b.ts);
+    chunks = toUse.map((m) => ({ storageKey: m.storageKey }));
+  }
+
+  return chunks;
+}
+
+/** Load and optionally re-mux session video. Works for in-DB videoChunks or storage-only listKeys (existing and new). */
+async function getSessionVideoBuffer(
+  sessionId: string,
+  session: { videoChunks?: unknown[] } | null,
+  storage: { listKeys: (prefix: string) => Promise<string[]>; getVideoChunk: (key: string) => Promise<Buffer> }
+): Promise<{ buffer: Buffer; remuxed: boolean } | null> {
+  dv("[getSessionVideoBuffer] sessionId =", sessionId);
+  const chunks = await resolveSessionVideoChunkKeys(sessionId, session, storage);
+  if (chunks.length === 0) {
+    dv("[getSessionVideoBuffer] no chunks resolved, returning null");
+    return null;
+  }
+  dv("[getSessionVideoBuffer] loading", chunks.length, "chunks from storage");
+  const buffers: Buffer[] = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const c = chunks[i];
+    try {
+      const buf = await storage.getVideoChunk(c.storageKey);
+      buffers.push(buf);
+      dv("[getSessionVideoBuffer] chunk", i + 1, "/", chunks.length, "key =", c.storageKey, "size =", buf.length);
+    } catch (err) {
+      dv("[getSessionVideoBuffer] FAILED to read chunk", i + 1, "key =", c.storageKey, "error =", (err as Error)?.message ?? err);
+      throw err;
+    }
+  }
+  const merged = Buffer.concat(buffers);
+  dv("[getSessionVideoBuffer] merged size =", merged.length);
+
+  const { remuxWebM } = await import("../services/capture/playbackRemux.js");
+  const remuxed = await remuxWebM(merged);
+  dv("[getSessionVideoBuffer] remuxed =", remuxed != null, "final buffer length =", (remuxed ?? merged).length);
+  return {
+    buffer: remuxed ?? merged,
+    remuxed: remuxed != null,
+  };
+}
+
+// GET /api/proctoring/sessions/:sessionId/playback-video
+// Returns re-muxed WebM for in-page playback (correct duration). Auth required; employer must own the submission.
+export const getPlaybackVideo: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+
+    const { sessionId } = req.params;
+    dv("[getPlaybackVideo] step 1: param sessionId =", sessionId, "type:", typeof sessionId);
+    const uid = (req as any).user?.uid;
+    if (!uid) {
+      dv("[getPlaybackVideo] step 2: no uid, returning 401");
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const session = await ProctoringSessionModel.findById(sessionId);
+    if (!session) {
+      dv("[getPlaybackVideo] step 3: session NOT FOUND for sessionId:", sessionId);
+      throw ProctoringError.SESSION_NOT_FOUND;
+    }
+    dv("[getPlaybackVideo] step 3: session FOUND. session.submissionId =", session.submissionId, "type:", typeof session.submissionId);
+
+    const submission = await SubmissionModel.findById(session.submissionId);
+    if (!submission) {
+      dv("[getPlaybackVideo] step 4: submission NOT FOUND for session.submissionId:", session.submissionId);
+      throw ProctoringError.SESSION_NOT_FOUND;
+    }
+    const assessment = await AssessmentModel.findById(submission.assessmentId);
+    if (!assessment) {
+      dv("[getPlaybackVideo] step 4: assessment NOT FOUND for submission.assessmentId:", submission.assessmentId);
+      return res.status(403).json({ error: "Access denied to this session" });
+    }
+    const userId = await getUserIdFromFirebaseUid(uid);
+    const assessmentOwnerId = assessment.userId?.toString?.() ?? assessment.userId;
+    dv("[getPlaybackVideo] step 4: assessment.userId =", assessment.userId, "current userId =", userId, "match =", assessmentOwnerId === userId?.toString());
+    if (!userId || assessmentOwnerId !== userId.toString()) {
+      dv("[getPlaybackVideo] step 4: access DENIED (userId mismatch), returning 403");
+      return res.status(403).json({ error: "Access denied to this session" });
+    }
+
+    const { getFrameStorage } = await import("../services/capture/storage.js");
+    const storage = getFrameStorage();
+    dv("[getPlaybackVideo] step 5: calling getSessionVideoBuffer");
+    const result = await getSessionVideoBuffer(sessionId, session, storage);
+    if (!result) {
+      dv("[getPlaybackVideo] step 6: getSessionVideoBuffer returned null, returning 404");
+      return res.status(404).json({ error: "No video chunks found for this session" });
+    }
+    dv("[getPlaybackVideo] step 6: sending video buffer length =", result.buffer.length);
+    res.setHeader("Content-Type", "video/webm");
+    res.setHeader("Content-Disposition", "inline");
+    res.send(result.buffer);
+  } catch (error) {
+    dv("[getPlaybackVideo] CAUGHT ERROR:", (error as Error)?.message ?? error);
+    next(error);
+  }
+};
+
 // GET /api/proctoring/sessions/:sessionId/download-video
-// Returns merged WebM video for the session (screen 0). Works for in-DB sessions (videoChunks) or storage-only (listKeys).
+// Returns re-muxed WebM for the session (screen 0) so downloaded file has correct duration. Same pipeline as playback.
 export const downloadSessionVideo: RequestHandler = async (req, res, next) => {
   try {
     const { sessionId } = req.params;
@@ -312,58 +499,15 @@ export const downloadSessionVideo: RequestHandler = async (req, res, next) => {
     const storage = getFrameStorage();
 
     const session = await ProctoringSessionModel.findById(sessionId);
+    const result = await getSessionVideoBuffer(sessionId, session, storage);
 
-    let chunks: { storageKey: string }[] = [];
-
-    if (session?.videoChunks?.length) {
-      const byScreen = new Map<number, { storageKey: string; startTime: Date }[]>();
-      for (const ch of session.videoChunks as any[]) {
-        const screenIndex = ch.screenIndex ?? 0;
-        if (!byScreen.has(screenIndex)) byScreen.set(screenIndex, []);
-        byScreen.get(screenIndex)!.push({
-          storageKey: ch.storageKey,
-          startTime: new Date(ch.startTime),
-        });
-      }
-      const screen0 = byScreen.get(0) ?? byScreen.get(Math.min(...byScreen.keys()));
-      if (screen0) {
-        screen0.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
-        chunks = screen0;
-      }
-    }
-
-    if (chunks.length === 0) {
-      const prefix = `${sessionId}/video`;
-      const keys = await storage.listKeys(prefix);
-      const webmKeys = keys.filter((k) => k.endsWith(".webm"));
-      if (webmKeys.length === 0) {
-        return res.status(404).json({ error: "No video chunks found for this session" });
-      }
-      const withMeta = webmKeys.map((key) => {
-        const name = key.split("/").pop() || "";
-        const [tsStr, screenStr] = name.replace(".webm", "").split("-");
-        return {
-          storageKey: key,
-          ts: parseInt(tsStr, 10) || 0,
-          screenIndex: parseInt(screenStr, 10) || 0,
-        };
-      });
-      const screen0Keys = withMeta.filter((m) => m.screenIndex === 0);
-      const toUse = screen0Keys.length ? screen0Keys : withMeta;
-      toUse.sort((a, b) => a.ts - b.ts);
-      chunks = toUse.map((m) => ({ storageKey: m.storageKey }));
-    }
-
-    if (chunks.length === 0) {
+    if (!result) {
       return res.status(404).json({ error: "No video chunks found for this session" });
     }
 
-    const buffers = await Promise.all(chunks.map((c) => storage.getVideoChunk(c.storageKey)));
-    const merged = Buffer.concat(buffers);
-
     res.setHeader("Content-Type", "video/webm");
     res.setHeader("Content-Disposition", `attachment; filename="proctoring-${sessionId}.webm"`);
-    res.send(merged);
+    res.send(result.buffer);
   } catch (error) {
     next(error);
   }
