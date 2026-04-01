@@ -184,7 +184,7 @@ export const getSubmissionByToken: RequestHandler = async (req, res, next) => {
 
     const submission = await SubmissionModel.findOne({ token }).populate({
       path: "assessmentId",
-      select: "title description timeLimit starterFilesGitHubLink isSmartInterviewerEnabled",
+      select: "title description timeLimit starterFilesGitHubLink starterCodeFiles isSmartInterviewerEnabled",
       populate: {
         path: "userId",
         select: "companyName",

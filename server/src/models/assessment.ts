@@ -47,6 +47,18 @@ const AssessmentSchema = new mongoose.Schema(
       trim: true,
     },
 
+    // Inline starter code files (path + content per file)
+    starterCodeFiles: {
+      type: [
+        {
+          path: { type: String, required: true, trim: true },
+          content: { type: String, default: "" },
+        },
+      ],
+      default: undefined,
+      select: true,
+    },
+
     // Custom instructions for the AI interviewer
     interviewerCustomInstructions: {
       type: String,

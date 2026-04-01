@@ -192,12 +192,14 @@ export default function CreateAssessment() {
           title,
           description: generatedDescription,
           timeLimit,
+          starterCodeFiles,
         } = generateResult.data;
 
         assessmentData = {
           title: title,
           description: generatedDescription,
           timeLimit: timeLimit,
+          ...(starterCodeFiles?.length ? { starterCodeFiles } : {}),
         };
       } else {
         // Manual Creation Mode

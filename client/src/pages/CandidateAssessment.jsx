@@ -22,6 +22,7 @@ import {
 } from "@/api/submission";
 import { createPageUrl } from "@/utils";
 import bridgeLogo from "@/assets/bridge-logo.svg";
+import StarterCodeIDE from "@/components/StarterCodeIDE";
 
 export default function CandidateAssessment() {
   const [searchParams] = useSearchParams();
@@ -650,6 +651,13 @@ export default function CandidateAssessment() {
                     </a>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* Starter code files (inline) */}
+            {assessment.starterCodeFiles?.length > 0 && (
+              <div className="mt-6">
+                <StarterCodeIDE files={assessment.starterCodeFiles} readOnly={true} />
               </div>
             )}
           </motion.div>

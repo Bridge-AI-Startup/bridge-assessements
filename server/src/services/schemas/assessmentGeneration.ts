@@ -52,3 +52,15 @@ export const assessmentReviewSchema = z.object({
 });
 
 export type AssessmentReviewResult = z.infer<typeof assessmentReviewSchema>;
+
+/** Starter code generation output: a list of files. */
+export const starterCodeGenerationSchema = z.object({
+  files: z.array(
+    z.object({
+      path: z.string().describe("Relative file path, e.g. src/App.jsx"),
+      content: z.string().describe("Full file content as a string"),
+    })
+  ),
+});
+
+export type StarterCodeGenerationOutput = z.infer<typeof starterCodeGenerationSchema>;

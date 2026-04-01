@@ -17,6 +17,7 @@ export type AIProvider = "openai" | "anthropic" | "gemini";
  */
 export type AIUseCase =
   | "assessment_generation" // Generate assessment components from job description
+  | "starter_code_generation" // Generate starter code files for an assessment
   | "assessment_chat" // Chat with assessment AI assistant
   | "interview_questions" // Generate interview questions from code
   | "interview_summary" // Generate interview summary from transcript
