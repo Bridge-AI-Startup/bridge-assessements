@@ -5,7 +5,8 @@ import SubmissionsDashboard from "./pages/SubmissionsDashboard";
 import CandidateAssessment from "./pages/CandidateAssessment";
 import CandidateSubmitted from "./pages/CandidateSubmitted";
 import Home from "./pages/Home";
-import Landing from "./pages/Landing";
+import AppIndex from "./pages/AppIndex";
+import Login from "./pages/Login";
 import GetStarted from "./pages/GetStarted";
 import Subscription from "./pages/Subscription";
 import BillingSuccess from "./pages/BillingSuccess";
@@ -26,7 +27,8 @@ export const PAGES = {
   CandidateAssessment: CandidateAssessment,
   CandidateSubmitted: CandidateSubmitted,
   Home: Home,
-  Landing: Landing,
+  AppIndex: AppIndex,
+  Login: Login,
   GetStarted: GetStarted,
   Subscription: Subscription,
   BillingSuccess: BillingSuccess,
@@ -41,6 +43,6 @@ export const PAGES = {
 };
 
 export const pagesConfig = {
-  mainPage: "Landing",
+  mainPage: "AppIndex",
   Pages: PAGES,
 };

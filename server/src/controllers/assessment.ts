@@ -7,6 +7,7 @@ import SubmissionModel from "../models/submission.js";
 import RepoIndexModel from "../models/repoIndex.js";
 import { deleteNamespace } from "../utils/pinecone.js";
 import validationErrorParser from "../utils/validationErrorParser.js";
+import { validateStarterCodeFiles } from "../utils/starterCodeValidation.js";
 import { generateAssessmentComponents } from "../services/assessmentGeneration.js";
 import { processAssessmentChat } from "../services/assessmentChat.js";
 import { groundCriterion } from "../services/evaluation/grounder.js";
@@ -22,6 +23,7 @@ export type GenerateResponse = {
   title: string;
   description: string;
   timeLimit: number;
+  starterCodeFiles: Array<{ path: string; content: string }>;
 };
 
 export type CreateRequest = {
@@ -30,6 +32,7 @@ export type CreateRequest = {
   timeLimit: number;
   numInterviewQuestions?: number;
   starterFilesGitHubLink?: string;
+  starterCodeFiles?: Array<{ path: string; content: string }>;
   interviewerCustomInstructions?: string;
   evaluationCriteria?: string[];
   uid: string; // Added by verifyAuthToken middleware
@@ -41,6 +44,7 @@ export type UpdateRequest = {
   timeLimit?: number;
   numInterviewQuestions?: number;
   starterFilesGitHubLink?: string;
+  starterCodeFiles?: Array<{ path: string; content: string }>;
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
   evaluationCriteria?: string[];
@@ -70,6 +74,7 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
       timeLimit,
       numInterviewQuestions,
       starterFilesGitHubLink,
+      starterCodeFiles,
       interviewerCustomInstructions,
       evaluationCriteria,
       uid,
@@ -106,6 +111,11 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
       }
     }
 
+    const starterValidation = validateStarterCodeFiles(starterCodeFiles);
+    if (!starterValidation.valid) {
+      return res.status(400).json({ error: starterValidation.error });
+    }
+
     const assessmentData: {
       userId: string;
       title: string;
@@ -113,6 +123,7 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
       timeLimit: number;
       numInterviewQuestions?: number;
       starterFilesGitHubLink?: string;
+      starterCodeFiles?: Array<{ path: string; content: string }>;
       interviewerCustomInstructions?: string;
       evaluationCriteria?: string[];
     } = {
@@ -130,6 +141,10 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
     // Only include starterFilesGitHubLink if provided
     if (starterFilesGitHubLink !== undefined) {
       assessmentData.starterFilesGitHubLink = starterFilesGitHubLink;
+    }
+
+    if (starterValidation.normalized && starterValidation.normalized.length > 0) {
+      assessmentData.starterCodeFiles = starterValidation.normalized;
     }
 
     // Only include interviewerCustomInstructions if provided
@@ -232,6 +247,7 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
       timeLimit,
       numInterviewQuestions,
       starterFilesGitHubLink,
+      starterCodeFiles,
       interviewerCustomInstructions,
       isSmartInterviewerEnabled,
       evaluationCriteria,
@@ -267,6 +283,14 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
     }
     if (starterFilesGitHubLink !== undefined) {
       (assessment as any).starterFilesGitHubLink = starterFilesGitHubLink;
+    }
+    if (starterCodeFiles !== undefined) {
+      const starterValidation = validateStarterCodeFiles(starterCodeFiles);
+      if (!starterValidation.valid) {
+        return res.status(400).json({ error: starterValidation.error });
+      }
+      (assessment as any).starterCodeFiles =
+        starterValidation.normalized ?? [];
     }
     if (interviewerCustomInstructions !== undefined) {
       (assessment as any).interviewerCustomInstructions =
@@ -462,6 +486,7 @@ export const generateAssessmentData: RequestHandler = async (
       title,
       description: generatedDescription,
       timeLimit,
+      starterCodeFiles,
     } = await generateAssessmentComponents(description, options);
 
     console.log("🔍 [generateAssessmentData] Generated components:", {
@@ -481,6 +506,7 @@ export const generateAssessmentData: RequestHandler = async (
       title,
       description: generatedDescription || description, // Fallback to input if missing
       timeLimit,
+      starterCodeFiles,
     };
 
     console.log("✅ [generateAssessmentData] Sending response:", {

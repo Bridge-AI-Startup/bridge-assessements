@@ -38,7 +38,7 @@ export default function CreateAssessment() {
         console.warn(
           "⚠️ [CreateAssessment] No user found, redirecting to landing"
         );
-        window.location.href = "/";
+        window.location.href = createPageUrl("Login");
         return;
       }
 
@@ -194,12 +194,14 @@ export default function CreateAssessment() {
           title,
           description: generatedDescription,
           timeLimit,
+          starterCodeFiles,
         } = generateResult.data;
 
         assessmentData = {
           title: title,
           description: generatedDescription,
           timeLimit: timeLimit,
+          ...(starterCodeFiles?.length ? { starterCodeFiles } : {}),
         };
 
         // Generate suggested evaluation criteria from job description

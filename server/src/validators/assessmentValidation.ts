@@ -80,12 +80,18 @@ const makeOptionalEvaluationCriteriaValidator = () =>
     .withMessage(
       "evaluationCriteria must be an array of non-empty strings"
     );
+const makeOptionalStarterCodeFilesValidator = () =>
+  body("starterCodeFiles")
+    .optional()
+    .isArray()
+    .withMessage("starterCodeFiles must be an array");
 
 export const createAssessmentValidation = [
   makeTitleValidator(),
   makeDescriptionValidator(),
   makeTimeLimitValidator(),
   makeOptionalEvaluationCriteriaValidator(),
+  makeOptionalStarterCodeFilesValidator(),
 ];
 
 export const updateAssessmentValidation = [
@@ -93,6 +99,7 @@ export const updateAssessmentValidation = [
   makeOptionalDescriptionValidator(),
   makeOptionalTimeLimitValidator(),
   makeOptionalEvaluationCriteriaValidator(),
+  makeOptionalStarterCodeFilesValidator(),
 ];
 
 const makeOptionalStackValidator = () =>

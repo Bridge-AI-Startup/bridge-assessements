@@ -51,9 +51,11 @@ console.log("🔌 Setting up CORS middleware...");
 
 // Hardened CORS configuration - explicitly validate allowed origins
 const allowedOrigins = [
-  // Production domains (add your actual production domain here)
+  // Production domains
   process.env.FRONTEND_URL,
+  "https://app.bridge-jobs.com", // React app (app subdomain)
   "https://www.bridge-jobs.com",
+  "https://bridge-jobs.com", // Framer marketing (root domain)
   "https://bridge-landing-saazms-projects.vercel.app",
   "https://bridge-landing-7dg0wxh94-saazms-projects.vercel.app",
   // Development

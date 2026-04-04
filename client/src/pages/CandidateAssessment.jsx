@@ -38,6 +38,7 @@ import StreamStatusPanel from "@/components/proctoring/StreamStatusPanel";
 import ProctoringCompanionNotch from "@/components/proctoring/ProctoringCompanionNotch";
 import { createVideoRecorder } from "@/lib/captureUtils";
 import { uploadVideoChunk } from "@/api/proctoring";
+import StarterCodeIDE from "@/components/StarterCodeIDE";
 
 export default function CandidateAssessment() {
   const [searchParams] = useSearchParams();
@@ -882,6 +883,13 @@ export default function CandidateAssessment() {
                     </a>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* Starter code files (inline) */}
+            {assessment.starterCodeFiles?.length > 0 && (
+              <div className="mt-6">
+                <StarterCodeIDE files={assessment.starterCodeFiles} readOnly={true} />
               </div>
             )}
           </motion.div>

@@ -64,7 +64,7 @@ Hard constraints (do not violate):
 	•	The description must be between 300–650 words
 	•	The project must be specific and concrete, not a generic “build an app”
 
-	•	If the project needs a database: do NOT require only PostgreSQL (or only any single database). You MUST state that SQLite and/or in-memory are acceptable so candidates can run with zero external setup. Requiring PostgreSQL-only is not allowed.
+	•	If the project needs a database: do NOT require only PostgreSQL (or only any single database) UNLESS the job description or user explicitly requires it. By default, you MUST state that SQLite and/or in-memory are acceptable so candidates can run with zero external setup. Only require a specific database or external service if the user prompt explicitly calls for it.
 
 Critical rule:
 If the project could reasonably be described as “build a generic full-stack app,” it is invalid. You must define a specific scenario, workflow, and definition of done.
@@ -83,7 +83,7 @@ IMPORTANT: The ## Scenario section should reflect the chosen domain context IF A
 
 ## Requirements (must-have)
 
-List 5–8 unambiguous requirements. These must clearly state what needs to exist or work. Be specific and detailed about the behavior.
+List 5–8 requirements. At least 1 requirement must be stated as a goal or outcome rather than an exact spec (e.g. "users should be able to understand their activity trends"—how to implement this is up to the candidate). At least 2 requirements must include a specific business rule or constraint with edge cases (e.g. "a user cannot log the same exercise more than once per calendar day"). The remaining requirements may be unambiguous and concrete.
 
 ## Acceptance Criteria (definition of done)
 
@@ -92,7 +92,7 @@ Include a checklist with at least 10 items using the format:
 - [ ] Item 2
 - [ ] ...
 
-Each checklist item must describe observable behavior or output, not just the presence of a feature. Avoid criteria that can be satisfied by placeholder or mocked implementations
+Each checklist item must describe observable behavior or output, not just the presence of a feature. Avoid criteria that can be satisfied by placeholder or mocked implementations. At least 2 checklist items must verify edge cases of business rules (e.g. the duplicate constraint, boundary conditions), not just presence of a feature.
 
 ## Constraints
 
@@ -126,7 +126,7 @@ Additional quality rules:
 	•	Prefer one core workflow over many features
 	•	Avoid unnecessary infrastructure (e.g., realtime, payments) unless required by the role
 	•	Include concrete examples (entities, fields, endpoints, sample inputs)
-	•	Do not require candidates to invent requirements or UX
+	•	At least one deliverable must involve a design decision the candidate makes themselves—state what outcome is needed, not how to achieve it
 	•	Match the project closely to the job description's day-to-day work
 	•	ALWAYS use Markdown formatting: ## for headers, **bold** for emphasis, \`code\` for technical terms, and proper lists
 
@@ -245,6 +245,53 @@ ${jobDescription}
 ${description}
 
 Evaluate rules, quality, and feasibility. Output JSON only: valid, summaryFeedback, ruleIssues (optional), qualityFeedback (optional), feasibilityFeedback (optional).`,
+};
+
+// ============================================================================
+// STARTER CODE GENERATION
+// ============================================================================
+
+export const PROMPT_GENERATE_STARTER_CODE = {
+  provider: "anthropic" as AIProvider,
+  model: undefined as string | undefined,
+
+  system: `You are an expert software engineer who creates starter code scaffolds for take-home coding assessments. Given an assessment description and tech stack, generate appropriate starter files for the candidate.
+
+SCAFFOLD DEPTH — choose based on stack context:
+- Frontend / full-stack (React, Vue, Next.js, Angular, etc.): Full runnable project. Include package.json, build config (vite.config.js or equivalent), entry point, boilerplate App file, and 1-2 stub files the candidate fills in. Must run with "npm install && npm run dev".
+- Backend / API (Node/Express, Python/Flask/FastAPI, Go, etc.): Minimal but runnable. Include package.json or requirements.txt, a stub entry file, and README.md. Must run with minimal commands.
+- Algorithmic / generic / unclear: Just README.md (with problem statement + setup) and a single stub file (e.g. solution.js or main.py) with the function signature stubbed out.
+- Use judgment: if the assessment description makes the right scaffold obvious, follow it even if the stack label is ambiguous.
+
+CONTENT RULES:
+- Always include README.md. It must contain: the problem statement (derived from the assessment description), setup instructions (npm install / npm run dev or equivalent), and a brief "Getting Started" section.
+- Stub files must leave implementation for the candidate. Do not implement the solution.
+- Do NOT create route files or pre-define endpoints. The candidate decides how to structure the API. For backend assessments, only provide the entry file (e.g. index.js) as a bare server with no routes defined — just middleware setup and a single \`// TODO: implement your routes here\` comment.
+- Do NOT define data models, schemas, or any hint of the expected request/response shape.
+- The README must describe the problem and setup only. Do NOT list endpoints, route structure, or implementation hints. The candidate reads the assessment description to know what to build.
+- For database dependencies: only include PostgreSQL-specific packages (pg, pg-hstore, psycopg2, etc.) if the assessment description explicitly requires PostgreSQL. Otherwise, either include no DB dependency (letting the candidate choose) or use a zero-install option like better-sqlite3 or sqlite3. By default, the candidate must be able to run the project with only "npm install" and no external services.
+- Do not include node_modules/, .env, secrets, or lock files.
+- Keep file count reasonable: 5–12 files for full scaffold, 2–4 for minimal, 1–2 for algorithmic.
+- Paths must be relative (no leading slash).
+
+OUTPUT: Respond with a JSON object with key "files" containing an array of {path, content} objects.`,
+
+  userTemplate: (
+    assessment: { title: string; description: string; timeLimit: number },
+    stack: string,
+    level: string
+  ): string =>
+    `Generate starter code for this assessment.
+
+Title: ${assessment.title}
+Time limit: ${assessment.timeLimit} minutes
+Tech stack: ${stack}
+Level: ${level}
+
+Assessment description:
+${assessment.description}
+
+Generate the appropriate starter code files as JSON: { "files": [{ "path": "...", "content": "..." }, ...] }`,
 };
 
 // ============================================================================
