@@ -428,6 +428,37 @@ const SubmissionSchema = new mongoose.Schema(
         completedAt: { type: Date, default: null },
       },
     },
+
+    // Screen recording transcript (Stage 1 VLM output: array of TranscriptEvent)
+    screenRecordingTranscript: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+
+    // Enriched transcript (output of the activity interpreter)
+    enrichedTranscript: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+
+    // Evaluation report (result of the full evaluation pipeline)
+    evaluationReport: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+
+    // 'pending' = background evaluation running after submit; 'completed' | 'failed' when done; null/absent = idle
+    evaluationStatus: {
+      type: String,
+      enum: ["pending", "completed", "failed"],
+      default: null,
+    },
+
+    // When evaluation did not run or failed: short reason for UI (e.g. "No proctoring session", "Assessment has no evaluation criteria")
+    evaluationError: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true, // Adds createdAt and updatedAt automatically

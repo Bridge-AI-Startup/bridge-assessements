@@ -10,6 +10,7 @@ import validationErrorParser from "../utils/validationErrorParser.js";
 import { validateStarterCodeFiles } from "../utils/starterCodeValidation.js";
 import { generateAssessmentComponents } from "../services/assessmentGeneration.js";
 import { processAssessmentChat } from "../services/assessmentChat.js";
+import { groundCriterion } from "../services/evaluation/grounder.js";
 
 export type GenerateRequest = {
   description: string;
@@ -33,6 +34,7 @@ export type CreateRequest = {
   starterFilesGitHubLink?: string;
   starterCodeFiles?: Array<{ path: string; content: string }>;
   interviewerCustomInstructions?: string;
+  evaluationCriteria?: string[];
   uid: string; // Added by verifyAuthToken middleware
 };
 
@@ -45,6 +47,7 @@ export type UpdateRequest = {
   starterCodeFiles?: Array<{ path: string; content: string }>;
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
+  evaluationCriteria?: string[];
   uid: string; // Added by verifyAuthToken middleware
 };
 
@@ -73,6 +76,7 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
       starterFilesGitHubLink,
       starterCodeFiles,
       interviewerCustomInstructions,
+      evaluationCriteria,
       uid,
     } = req.body as CreateRequest;
 
@@ -121,6 +125,7 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
       starterFilesGitHubLink?: string;
       starterCodeFiles?: Array<{ path: string; content: string }>;
       interviewerCustomInstructions?: string;
+      evaluationCriteria?: string[];
     } = {
       userId,
       title,
@@ -146,6 +151,17 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
     if (interviewerCustomInstructions !== undefined) {
       assessmentData.interviewerCustomInstructions =
         interviewerCustomInstructions;
+    }
+
+    // Only include evaluationCriteria if provided (array of strings)
+    if (
+      evaluationCriteria !== undefined &&
+      Array.isArray(evaluationCriteria) &&
+      evaluationCriteria.length > 0
+    ) {
+      assessmentData.evaluationCriteria = evaluationCriteria.filter(
+        (c): c is string => typeof c === "string" && c.trim().length > 0
+      );
     }
 
     const newAssessment = await AssessmentModel.create(assessmentData);
@@ -234,6 +250,7 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
       starterCodeFiles,
       interviewerCustomInstructions,
       isSmartInterviewerEnabled,
+      evaluationCriteria,
       uid,
     } = req.body as UpdateRequest;
     const { id } = req.params;
@@ -281,6 +298,32 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
     }
     if (isSmartInterviewerEnabled !== undefined) {
       (assessment as any).isSmartInterviewerEnabled = isSmartInterviewerEnabled;
+    }
+    if (evaluationCriteria !== undefined) {
+      const criteria = Array.isArray(evaluationCriteria)
+        ? evaluationCriteria.filter(
+            (c): c is string => typeof c === "string" && c.trim().length > 0
+          )
+        : [];
+      (assessment as any).evaluationCriteria = criteria;
+
+      // Ground criteria when list is saved so evaluation can skip grounding per submission
+      if (criteria.length > 0) {
+        try {
+          const groundings = await Promise.all(
+            criteria.map((c) => groundCriterion(c))
+          );
+          (assessment as any).evaluationCriteriaGroundings = groundings;
+        } catch (groundErr) {
+          console.error(
+            "[updateAssessment] Failed to ground evaluation criteria:",
+            groundErr
+          );
+          // Leave evaluationCriteriaGroundings undefined so orchestrator falls back to per-submission grounding
+        }
+      } else {
+        (assessment as any).evaluationCriteriaGroundings = undefined;
+      }
     }
 
     await assessment.save();

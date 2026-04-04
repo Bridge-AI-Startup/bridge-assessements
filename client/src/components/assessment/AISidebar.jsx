@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowRight, Sparkles, Undo, RotateCcw, Zap } from "lucide-react";
+import { ArrowRight, Sparkles, Undo, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -22,7 +22,6 @@ export default function AISidebar({
   onRemoveContext,
   lastChange,
   responseMessage,
-  model,
 }) {
   const [message, setMessage] = useState("");
   const [chatHistory, setChatHistory] = useState([]);
@@ -72,12 +71,6 @@ export default function AISidebar({
         <p className="text-sm text-gray-500">
           Tell Bridge how you'd like this assessment to change.
         </p>
-        <div className="flex items-center gap-1.5 mt-2">
-          <Zap className="w-3 h-3 text-green-500" />
-          <span className="text-xs text-gray-400">
-            Model: {model || "Bridge AI"} • Responds in seconds
-          </span>
-        </div>
       </div>
 
       {/* Chat History */}

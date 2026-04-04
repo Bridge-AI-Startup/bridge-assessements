@@ -13,6 +13,7 @@ import {
   Check,
   Link as LinkIcon,
   Pencil,
+  ListChecks,
   Trash2,
   FileCode,
 } from "lucide-react";
@@ -35,6 +36,7 @@ import {
   updateAssessment,
   chatWithAssessment,
 } from "@/api/assessment";
+import { suggestCriteria, validateCriterion } from "@/api/evaluation";
 import { generateShareLink, sendInvites } from "@/api/submission";
 import { auth } from "@/firebase/firebase";
 import { onAuthStateChanged } from "firebase/auth";
@@ -60,7 +62,6 @@ export default function AssessmentEditor() {
   const [highlightedSection, setHighlightedSection] = useState(null);
   const [lastChange, setLastChange] = useState(null);
   const [responseMessage, setResponseMessage] = useState(null);
-  const [aiModel, setAiModel] = useState(null);
   const [isSmartInterviewerEnabled, setIsSmartInterviewerEnabled] =
     useState(true);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -86,6 +87,10 @@ export default function AssessmentEditor() {
   const [isEditingCustomInstructions, setIsEditingCustomInstructions] =
     useState(false);
   const [editedCustomInstructions, setEditedCustomInstructions] = useState("");
+  const [evaluationCriteria, setEvaluationCriteria] = useState([]);
+  const [isSuggestingCriteria, setIsSuggestingCriteria] = useState(false);
+  /** Validation result per criterion text: { [criterion]: { valid: boolean, reason?: string } } */
+  const [criteriaValidation, setCriteriaValidation] = useState({});
   const [starterCodeFiles, setStarterCodeFiles] = useState([]);
   const starterCodeSaveTimer = useRef(null);
 
@@ -203,6 +208,13 @@ export default function AssessmentEditor() {
       // Update numInterviewQuestions from database (only if different to avoid reset loops)
       if (assessmentData.isSmartInterviewerEnabled !== undefined) {
         setIsSmartInterviewerEnabled(assessmentData.isSmartInterviewerEnabled);
+      }
+      if (assessmentData.evaluationCriteria) {
+        setEvaluationCriteria(
+          Array.isArray(assessmentData.evaluationCriteria)
+            ? assessmentData.evaluationCriteria.filter((c) => typeof c === "string")
+            : []
+        );
       }
       if (assessmentData.numInterviewQuestions !== undefined) {
         const dbValue = assessmentData.numInterviewQuestions;
@@ -513,7 +525,6 @@ export default function AssessmentEditor() {
 
     setIsLoading(true);
     setResponseMessage(null); // Clear previous response message
-    setAiModel(null); // Clear previous model info
 
     try {
       console.log("💬 [AssessmentEditor] Sending chat message:", message);
@@ -560,11 +571,6 @@ export default function AssessmentEditor() {
       // Set response message to display in chat
       if (aiResponseMessage) {
         setResponseMessage(aiResponseMessage);
-      }
-
-      // Set model info for display
-      if (aiModelName) {
-        setAiModel(aiModelName);
       }
 
       // Update database-backed fields
@@ -1224,6 +1230,137 @@ export default function AssessmentEditor() {
               </div>
             </DocumentBlock>
 
+            {/* Evaluation criteria (screen recording) */}
+            <DocumentBlock
+              title="Evaluation criteria"
+              icon={ListChecks}
+              isActive={false}
+              isHighlighted={highlightedSection === "evaluationCriteria"}
+              onSelect={() => {}}
+              onAddToContext={() => handleAddToContext("evaluationCriteria")}
+              isInContext={contextSections.includes("evaluationCriteria")}
+            >
+              <div className="space-y-4">
+                <p className="text-xs text-gray-500">
+                  Criteria used to evaluate the candidate's screen recording. Add,
+                  edit, or suggest from the project description.
+                </p>
+                <div className="space-y-2">
+                  {evaluationCriteria.map((criterion, idx) => {
+                    const validation = criteriaValidation[criterion];
+                    const isInvalid =
+                      validation && typeof validation.valid === "boolean" && !validation.valid;
+                    return (
+                      <div key={idx} className="space-y-1">
+                        <div className="flex gap-2 items-center">
+                          <input
+                            type="text"
+                            value={criterion}
+                            onChange={(e) =>
+                              setEvaluationCriteria((prev) => {
+                                const next = [...prev];
+                                next[idx] = e.target.value;
+                                return next;
+                              })
+                            }
+                            placeholder="e.g. Candidate explains their approach clearly"
+                            className={`flex-1 text-sm text-gray-700 bg-white border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20 focus:border-[#1E3A8A] ${
+                              isInvalid ? "border-amber-500" : "border-gray-200"
+                            }`}
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() =>
+                              setEvaluationCriteria((prev) =>
+                                prev.filter((_, i) => i !== idx)
+                              )
+                            }
+                            className="text-gray-500 hover:text-red-600 p-2 h-8 w-8"
+                            aria-label="Remove criterion"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                        {isInvalid && validation?.reason && (
+                          <p className="text-xs text-amber-700 pl-1">
+                            Not evaluable: {validation.reason}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setEvaluationCriteria((prev) => [...prev, ""])
+                    }
+                    className="text-sm"
+                  >
+                    <Plus className="w-4 h-4 mr-1.5" />
+                    Add criterion
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={async () => {
+                      if (!assessmentData?.description) return;
+                      setIsSuggestingCriteria(true);
+                      try {
+                        const res = await suggestCriteria(
+                          assessmentData.description,
+                          await auth.currentUser?.getIdToken()
+                        );
+                        if (res.success && res.data?.suggested_criteria?.length) {
+                          setEvaluationCriteria(res.data.suggested_criteria);
+                        }
+                      } finally {
+                        setIsSuggestingCriteria(false);
+                      }
+                    }}
+                    disabled={!assessmentData?.description || isSuggestingCriteria}
+                    className="text-sm"
+                  >
+                    {isSuggestingCriteria ? "Suggesting…" : "Suggest from description"}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={async () => {
+                      const criteria = evaluationCriteria
+                        .map((c) => (typeof c === "string" ? c.trim() : ""))
+                        .filter(Boolean);
+                      await saveAssessment({ evaluationCriteria: criteria });
+                      setEvaluationCriteria(criteria);
+                      const token = await auth.currentUser?.getIdToken();
+                      const results = await Promise.all(
+                        criteria.map((c) => validateCriterion(c, token))
+                      );
+                      const nextValidation = {};
+                      criteria.forEach((c, i) => {
+                        const r = results[i];
+                        nextValidation[c] =
+                          r?.success && typeof r.data?.valid === "boolean"
+                            ? { valid: r.data.valid, reason: r.data.reason }
+                            : { valid: true };
+                      });
+                      setCriteriaValidation(nextValidation);
+                    }}
+                    disabled={isSaving}
+                    className="text-sm bg-[#1E3A8A] hover:bg-[#152a66]"
+                  >
+                    Save criteria
+                  </Button>
+                </div>
+              </div>
+            </DocumentBlock>
+
             {/* Bottom Sticky Bar */}
             <div className="sticky bottom-0 bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex items-center justify-end mt-6">
               <div className="flex gap-3">
@@ -1268,7 +1405,6 @@ export default function AssessmentEditor() {
               }
               lastChange={lastChange}
               responseMessage={responseMessage}
-              model={aiModel}
             />
           </motion.div>
         </div>

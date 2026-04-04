@@ -8,6 +8,7 @@ import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import PresetPills from "@/components/assessment/PresetPills";
 import { createAssessment, generateAssessmentData } from "@/api/assessment";
+import { suggestCriteria } from "@/api/evaluation";
 import { auth } from "@/firebase/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 
@@ -117,6 +118,7 @@ export default function CreateAssessment() {
     try {
       const token = await currentUser.getIdToken();
 
+      /** @type {{ title: string; description: string; timeLimit: number; evaluationCriteria?: string[]; starterFilesGitHubLink?: string }} */
       let assessmentData;
 
       if (creationMode === "ai") {
@@ -201,6 +203,12 @@ export default function CreateAssessment() {
           timeLimit: timeLimit,
           ...(starterCodeFiles?.length ? { starterCodeFiles } : {}),
         };
+
+        // Generate suggested evaluation criteria from job description
+        const suggestResult = await suggestCriteria(description.trim(), token);
+        if (suggestResult.success && suggestResult.data?.suggested_criteria?.length) {
+          assessmentData.evaluationCriteria = suggestResult.data.suggested_criteria;
+        }
       } else {
         // Manual Creation Mode
         if (!manualTitle.trim()) {

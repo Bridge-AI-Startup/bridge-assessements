@@ -68,6 +68,18 @@ const makeOptionalTimeLimitValidator = () =>
     .bail()
     .toInt();
 
+const makeOptionalEvaluationCriteriaValidator = () =>
+  body("evaluationCriteria")
+    .optional()
+    .isArray()
+    .withMessage("evaluationCriteria must be an array")
+    .bail()
+    .custom((arr) =>
+      (arr || []).every((c) => typeof c === "string" && c.trim().length > 0)
+    )
+    .withMessage(
+      "evaluationCriteria must be an array of non-empty strings"
+    );
 const makeOptionalStarterCodeFilesValidator = () =>
   body("starterCodeFiles")
     .optional()
@@ -78,6 +90,7 @@ export const createAssessmentValidation = [
   makeTitleValidator(),
   makeDescriptionValidator(),
   makeTimeLimitValidator(),
+  makeOptionalEvaluationCriteriaValidator(),
   makeOptionalStarterCodeFilesValidator(),
 ];
 
@@ -85,6 +98,7 @@ export const updateAssessmentValidation = [
   makeOptionalTitleValidator(),
   makeOptionalDescriptionValidator(),
   makeOptionalTimeLimitValidator(),
+  makeOptionalEvaluationCriteriaValidator(),
   makeOptionalStarterCodeFilesValidator(),
 ];
 

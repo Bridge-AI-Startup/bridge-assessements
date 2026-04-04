@@ -517,7 +517,7 @@ async function runAssessmentChain(
   // 1) Rule-based review first (fast)
   const ruleReview = runQualityReview(assessment, jobDescription);
   if (!ruleReview.passed && ruleReview.reviewFeedback) {
-    console.log("⚠️ [assessmentGeneration] Rule-based review failed, retrying Step 2 once with feedback...");
+    console.log("⚠️ [assessmentGeneration] Rule-based review failed, retrying Step 2 once with feedback. Reason:", ruleReview.reviewFeedback);
     try {
       const step2Retry = await runStep2WithFeedback(
         step1,
@@ -550,7 +550,7 @@ async function runAssessmentChain(
   // 2) LLM review: quality + feasibility
   const llmReview = await runQualityReviewLLM(assessment, jobDescription);
   if (!llmReview.passed && llmReview.reviewFeedback) {
-    console.log("⚠️ [assessmentGeneration] LLM quality/feasibility review failed, retrying Step 2 once with feedback...");
+    console.log("⚠️ [assessmentGeneration] LLM quality/feasibility review failed, retrying Step 2 once with feedback. Reason:", llmReview.reviewFeedback);
     try {
       const step2Retry = await runStep2WithFeedback(
         step1,

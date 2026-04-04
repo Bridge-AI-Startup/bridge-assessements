@@ -12,6 +12,10 @@ import Subscription from "./pages/Subscription";
 import BillingSuccess from "./pages/BillingSuccess";
 import BillingCancel from "./pages/BillingCancel";
 import CancelSubscription from "./pages/CancelSubscription";
+import ProctoringTest from "./pages/ProctoringTest";
+import ProctoringStorageTest from "./pages/ProctoringStorageTest";
+import DemoReplay from "./pages/DemoReplay";
+import TranscriptPlayground from "./pages/TranscriptPlayground";
 
 export const PAGES = {
   CreateAssessment: CreateAssessment,
@@ -28,6 +32,10 @@ export const PAGES = {
   BillingSuccess: BillingSuccess,
   BillingCancel: BillingCancel,
   CancelSubscription: CancelSubscription,
+  ProctoringTest: ProctoringTest,
+  ProctoringStorageTest: ProctoringStorageTest,
+  DemoReplay: DemoReplay,
+  TranscriptPlayground: TranscriptPlayground,
 };
 
 export const pagesConfig = {

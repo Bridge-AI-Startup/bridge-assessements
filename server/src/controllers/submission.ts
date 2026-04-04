@@ -16,13 +16,185 @@ import { searchCodeChunks } from "../services/repoRetrieval.js";
 import RepoIndexModel from "../models/repoIndex.js";
 import { deleteNamespace } from "../utils/pinecone.js";
 import { PROMPT_INTERVIEW_AGENT } from "../prompts/index.js";
-import {
-  uploadLLMTrace,
-  parseTraceFile,
-  parseTraceMarkdown,
-} from "../utils/fileUpload.js";
 import { logLLMEvent } from "../services/llmProxy/logger.js";
 import { executeAllTasks } from "../services/taskRunner/taskRunner.js";
+import ProctoringSessionModel from "../models/proctoringSession.js";
+import { getProctoringTranscriptForSubmission } from "../services/evaluation/proctoringTranscriptAdapter.js";
+import { evaluateTranscript } from "../services/evaluation/orchestrator.js";
+import { generateTranscript, finalizeTranscriptFromIncremental } from "../ai/transcript/generator.js";
+import { jsonlToScreenMoments } from "../services/evaluation/momentGrouper.js";
+import { interpretChunked } from "../services/evaluation/interpreterChunked.js";
+import { interpretStateful } from "../services/evaluation/interpreterStateful.js";
+import { getFrameStorage } from "../services/capture/storage.js";
+
+const TRANSCRIPT_POLL_INTERVAL_MS = 15000;
+const TRANSCRIPT_POLL_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
+
+async function setEvaluationFailed(
+  submissionId: string,
+  message: string
+): Promise<void> {
+  await SubmissionModel.findByIdAndUpdate(submissionId, {
+    $set: {
+      evaluationStatus: "failed",
+      evaluationError: message,
+    },
+  });
+}
+
+/**
+ * Background: ensure proctoring session has a transcript (generate if needed), then load it,
+ * set on submission, and run screen-recording evaluation. Does not block submit response.
+ */
+async function ensureProctoringTranscriptAndEvaluate(
+  submissionId: string
+): Promise<void> {
+  const sub = await SubmissionModel.findById(submissionId).populate(
+    "assessmentId"
+  );
+  if (!sub) return;
+  const assessment = sub.assessmentId as any;
+  const criteria = assessment?.evaluationCriteria;
+  if (!Array.isArray(criteria) || criteria.length === 0) {
+    await setEvaluationFailed(
+      submissionId,
+      "Assessment has no evaluation criteria configured."
+    );
+    return;
+  }
+
+  const session = await ProctoringSessionModel.findOne({
+    submissionId: submissionId as any,
+  });
+  if (!session) {
+    console.warn(
+      `[ensureProctoringTranscriptAndEvaluate] No proctoring session for submission ${submissionId}; transcript will not be attached. Was proctoring started (consent granted) for this attempt?`
+    );
+    await setEvaluationFailed(
+      submissionId,
+      "No screen recording for this submission. The candidate must complete the assessment with proctoring enabled."
+    );
+    return;
+  }
+
+  const status = session.transcript?.status ?? "not_started";
+
+  if (status === "generating") {
+    const deadline = Date.now() + TRANSCRIPT_POLL_MAX_WAIT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, TRANSCRIPT_POLL_INTERVAL_MS));
+      const updated = await ProctoringSessionModel.findById(session._id);
+      if (!updated) return;
+      const s = updated.transcript?.status ?? "not_started";
+      if (s === "completed") break;
+      if (s === "failed") {
+        await setEvaluationFailed(
+          submissionId,
+          "Screen recording transcript generation failed."
+        );
+        return;
+      }
+    }
+  }
+
+  if (status === "not_started" || status === "failed") {
+    const hasIncrementalData =
+      session.transcript?.storageKey && session.transcript?.lastIncrementalAt;
+    try {
+      if (hasIncrementalData) {
+        console.log(
+          `[ensureProctoringTranscriptAndEvaluate] Finalizing from incremental for submission ${submissionId}`
+        );
+        await finalizeTranscriptFromIncremental(session._id.toString());
+      } else {
+        await generateTranscript(session._id.toString());
+      }
+    } catch (err) {
+      console.error(
+        `[ensureProctoringTranscriptAndEvaluate] Transcript generation failed for submission ${submissionId}:`,
+        err
+      );
+      await setEvaluationFailed(
+        submissionId,
+        "Screen recording transcript could not be generated."
+      );
+      return;
+    }
+  }
+
+  const transcript = await getProctoringTranscriptForSubmission(submissionId);
+  if (!transcript || transcript.length === 0) {
+    await setEvaluationFailed(
+      submissionId,
+      "No transcript available from the screen recording."
+    );
+    return;
+  }
+
+  const updatedSub = await SubmissionModel.findById(submissionId);
+  if (!updatedSub) return;
+  (updatedSub as any).screenRecordingTranscript = transcript;
+  await updatedSub.save();
+
+  // Activity interpretation: enrich raw transcript with behavioral observations
+  try {
+    const rawJsonl = await loadRawJsonlForSubmission(submissionId);
+    if (rawJsonl) {
+      const moments = jsonlToScreenMoments(rawJsonl);
+      if (moments.length > 0) {
+        const strategy = (process.env.INTERPRETER_STRATEGY || "stateful") as "chunked" | "stateful";
+        const enriched = strategy === "chunked"
+          ? await interpretChunked(moments)
+          : await interpretStateful(moments);
+        const subForEnriched = await SubmissionModel.findById(submissionId);
+        if (subForEnriched) {
+          (subForEnriched as any).enrichedTranscript = enriched;
+          await subForEnriched.save();
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(
+      `[ensureProctoringTranscriptAndEvaluate] Activity interpretation failed for ${submissionId}:`,
+      err
+    );
+  }
+
+  try {
+    const report = await evaluateTranscript(transcript, criteria, {
+      groundings: assessment.evaluationCriteriaGroundings,
+    });
+    const subAfter = await SubmissionModel.findById(submissionId);
+    if (!subAfter) return;
+    (subAfter as any).evaluationReport = report;
+    (subAfter as any).evaluationStatus = "completed";
+    (subAfter as any).evaluationError = null;
+    await subAfter.save();
+  } catch (err) {
+    console.error(
+      `[ensureProctoringTranscriptAndEvaluate] Evaluation failed for submission ${submissionId}:`,
+      err
+    );
+    const subAfter = await SubmissionModel.findById(submissionId);
+    if (subAfter) {
+      (subAfter as any).evaluationStatus = "failed";
+      (subAfter as any).evaluationError =
+        err instanceof Error ? err.message : "Evaluation failed.";
+      await subAfter.save();
+    }
+  }
+}
+
+async function loadRawJsonlForSubmission(submissionId: string): Promise<string | null> {
+  try {
+    const session = await ProctoringSessionModel.findOne({ submissionId: submissionId as any });
+    if (!session?.transcript?.storageKey) return null;
+    const storage = getFrameStorage();
+    return await storage.getTranscript(session.transcript.storageKey);
+  } catch {
+    return null;
+  }
+}
 
 export type StartSubmissionRequest = {
   assessmentId: string;
@@ -410,6 +582,47 @@ export const submitSubmissionByToken: RequestHandler = async (
       "title description timeLimit"
     );
 
+    // Background: run screen-recording evaluation only when assessment has evaluation criteria
+    const submissionIdStr = submission._id.toString();
+    const hasEvaluationCriteria =
+      Array.isArray(assessment?.evaluationCriteria) &&
+      assessment.evaluationCriteria.length > 0;
+
+    if (hasEvaluationCriteria) {
+      await SubmissionModel.findByIdAndUpdate(submissionIdStr, {
+        $set: { evaluationStatus: "pending", evaluationError: null },
+      });
+      ensureProctoringTranscriptAndEvaluate(submissionIdStr)
+        .then(async () => {
+          const sub = await SubmissionModel.findById(submissionIdStr);
+          if (!sub) return;
+          (sub as any).evaluationStatus = (sub as any).evaluationReport
+            ? "completed"
+            : "failed";
+          await sub.save();
+        })
+        .catch((err) => {
+          console.error(
+            `[submitSubmissionByToken] ensureProctoringTranscriptAndEvaluate failed for ${submission._id}:`,
+            err
+          );
+          SubmissionModel.findByIdAndUpdate(submissionIdStr, {
+            $set: {
+              evaluationStatus: "failed",
+              evaluationError:
+                err instanceof Error ? err.message : "Evaluation failed.",
+            },
+          }).catch(() => {});
+        });
+    } else {
+      await SubmissionModel.findByIdAndUpdate(submissionIdStr, {
+        $set: {
+          evaluationStatus: "failed",
+          evaluationError: "Assessment has no evaluation criteria configured.",
+        },
+      });
+    }
+
     // Trigger repository indexing in the background (fire-and-forget)
     // This doesn't block the submission response
     if (
@@ -545,6 +758,15 @@ export const submitSubmission: RequestHandler = async (req, res, next) => {
     const updatedSubmission = await SubmissionModel.findById(id).populate(
       "assessmentId",
       "title description timeLimit"
+    );
+
+    // Background: generate proctoring transcript if needed, then run screen-recording evaluation
+    ensureProctoringTranscriptAndEvaluate(submission._id.toString()).catch(
+      (err) =>
+        console.error(
+          `[submitSubmission] ensureProctoringTranscriptAndEvaluate failed for ${submission._id}:`,
+          err
+        )
     );
 
     // Trigger repository indexing in the background (fire-and-forget)
@@ -1420,294 +1642,6 @@ export const optOutByToken: RequestHandler = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-};
-
-/**
- * Normalize trace JSON into an array of events.
- * Accepts: { events: [] }, root array [], or { messages: [] } / { conversations: [] } / { turns: [] }.
- */
-function normalizeTraceEvents(traceData: unknown): unknown[] | null {
-  if (Array.isArray(traceData)) return traceData;
-  if (!traceData || typeof traceData !== "object") return null;
-  const obj = traceData as Record<string, unknown>;
-  if (Array.isArray(obj.events)) return obj.events;
-  // Nested: { trace: { events: [] } } or { data: { events: [] } }
-  const nested = (obj.trace || obj.data) as Record<string, unknown> | undefined;
-  if (nested && typeof nested === "object" && Array.isArray(nested.events))
-    return nested.events;
-  if (Array.isArray(obj.messages))
-    return obj.messages.map((m: any) => ({
-      type: "llm_call",
-      timestamp: m.timestamp || new Date().toISOString(),
-      model: m.model,
-      provider: m.provider,
-      prompt: m.prompt ?? m.content ?? (m.role === "user" ? m.content : ""),
-      response: m.response ?? m.content ?? (m.role === "assistant" ? m.content : ""),
-      tokens: m.tokens ?? { input: 0, output: 0, total: 0 },
-      latency: m.latency,
-      cost: m.cost,
-      metadata: m.metadata ?? {},
-    }));
-  if (Array.isArray(obj.conversations)) {
-    const events: any[] = [];
-    for (const conv of obj.conversations) {
-      if (Array.isArray(conv.messages))
-        events.push(
-          ...conv.messages.map((m: any) => ({
-            type: "llm_call",
-            timestamp: m.timestamp || conv.timestamp || new Date().toISOString(),
-            model: conv.model || m.model,
-            provider: conv.provider || m.provider,
-            prompt: m.prompt ?? m.content ?? (m.role === "user" ? m.content : ""),
-            response: m.response ?? m.content ?? (m.role === "assistant" ? m.content : ""),
-            tokens: m.tokens ?? conv.tokens ?? { input: 0, output: 0, total: 0 },
-            latency: m.latency ?? conv.latency,
-            cost: m.cost ?? conv.cost,
-            metadata: m.metadata ?? conv.metadata ?? {},
-          }))
-        );
-    }
-    return events.length ? events : null;
-  }
-  if (Array.isArray(obj.turns))
-    return obj.turns.map((t: any) => ({
-      type: "llm_call",
-      timestamp: t.timestamp || new Date().toISOString(),
-      model: t.model,
-      provider: t.provider,
-      prompt: t.prompt ?? t.user_input ?? t.input ?? "",
-      response: t.response ?? t.assistant_output ?? t.output ?? "",
-      tokens: t.tokens ?? { input: 0, output: 0, total: 0 },
-      latency: t.latency,
-      cost: t.cost,
-      metadata: t.metadata ?? {},
-    }));
-  if (Array.isArray(obj.conversation)) return obj.conversation;
-  if (Array.isArray(obj.calls)) return obj.calls;
-  return null;
-}
-
-/**
- * Upload LLM trace file
- * POST /api/submissions/token/:token/upload-trace
- * Public endpoint (candidate access)
- */
-export const uploadLLMTraceByToken: RequestHandler = async (
-  req,
-  res,
-  next
-) => {
-  uploadLLMTrace(req, res, async (err) => {
-    if (err) {
-      const message =
-        err.message && err.message.includes("Unexpected end of form")
-          ? "Upload failed: file may be empty or corrupted. Please choose a valid JSON trace file and try again."
-          : err.message;
-      return res.status(400).json({ error: message });
-    }
-
-    try {
-      const { token } = req.params;
-      const file = req.file;
-
-      if (!file) {
-        return res.status(400).json({ error: "LLM trace file is required" });
-      }
-
-      const submission = await SubmissionModel.findOne({ token });
-      if (!submission) {
-        return res.status(404).json({ error: "Submission not found" });
-      }
-
-      if (submission.status !== "in-progress") {
-        return res.status(400).json({
-          error: "Can only upload trace during active assessment",
-        });
-      }
-
-      const isMarkdown =
-        file.originalname.endsWith(".md") ||
-        file.mimetype === "text/markdown" ||
-        file.mimetype === "text/x-markdown";
-
-      let events: any[];
-      let sessionId: string;
-      let markdownSessionMetadata: { totalTokens?: number; totalCost?: number; totalTimeMs?: number } | undefined;
-
-      if (isMarkdown) {
-        const parsed = parseTraceMarkdown(file);
-        events = parsed.events.map((e) => ({
-          type: "llm_call",
-          prompt: e.prompt,
-          response: e.response,
-          tokens: e.tokens ?? { input: 0, output: 0, total: 0 },
-          latency: e.latency ?? 0,
-          cost: e.cost ?? 0,
-        }));
-        sessionId = `session_${submission._id}_${Date.now()}`;
-        markdownSessionMetadata = parsed.sessionMetadata;
-      } else {
-        const traceData = parseTraceFile(file);
-        const normalized = normalizeTraceEvents(traceData);
-        if (!Array.isArray(normalized)) {
-          const received =
-            traceData && typeof traceData === "object"
-              ? Object.keys(traceData).join(", ") || "(empty object)"
-              : typeof traceData;
-          return res.status(400).json({
-            error: `Invalid trace format: expected an object with "events" array (or a root array). Received keys: ${received}. Add an "events" array with your LLM call entries.`,
-          });
-        }
-        events = normalized;
-        const top = traceData as Record<string, unknown> | null;
-        const nested = top?.trace || top?.data;
-        const rawSessionId =
-          typeof top?.sessionId === "string"
-            ? top.sessionId
-            : nested && typeof nested === "object" && typeof (nested as Record<string, unknown>).sessionId === "string"
-              ? (nested as Record<string, unknown>).sessionId
-              : null;
-        sessionId =
-          typeof rawSessionId === "string" && rawSessionId
-            ? rawSessionId
-            : `session_${submission._id}_${Date.now()}`;
-      }
-
-      // Process and store trace events (normalize prompt/response from any common JSON keys)
-      for (const event of events) {
-        const e = event as any;
-        const promptVal =
-          e.prompt ??
-          e.content ??
-          e.input ??
-          e.user_input ??
-          e.userMessage ??
-          e.user_message ??
-          e.question ??
-          e.humanMessage ??
-          e.human ??
-          e.text ??
-          e.messages?.[0]?.content ??
-          e.data?.prompt ??
-          e.data?.input ??
-          e.data?.content ??
-          e.payload?.prompt ??
-          e.payload?.input ??
-          e.payload?.content ??
-          (Array.isArray(e.messages) && e.messages[0]?.content != null
-            ? (typeof e.messages[0].content === "string"
-                ? e.messages[0].content
-                : JSON.stringify(e.messages[0].content))
-            : undefined);
-        const responseVal =
-          e.response ??
-          e.output ??
-          e.assistant_output ??
-          e.assistantMessage ??
-          e.assistant_message ??
-          e.answer ??
-          e.aiMessage ??
-          e.ai ??
-          e.completion ??
-          (e.role === "assistant" ? e.content : undefined) ??
-          e.messages?.[1]?.content ??
-          (e.response && typeof e.response === "object" && "content" in e.response
-            ? e.response.content
-            : undefined) ??
-          e.data?.response ??
-          e.data?.output ??
-          e.data?.content ??
-          e.payload?.response ??
-          e.payload?.output ??
-          e.payload?.content ??
-          (Array.isArray(e.messages) && e.messages[1]?.content != null
-            ? (typeof e.messages[1].content === "string"
-                ? e.messages[1].content
-                : JSON.stringify(e.messages[1].content))
-            : undefined);
-        await logLLMEvent({
-          submissionId: submission._id.toString(),
-          sessionId,
-          type: e.type || "llm_call",
-          timestamp: e.timestamp ? new Date(e.timestamp) : new Date(),
-          model: e.model,
-          provider: e.provider,
-          prompt:
-            promptVal != null
-              ? typeof promptVal === "string"
-                ? promptVal
-                : JSON.stringify(promptVal)
-              : undefined,
-          response: responseVal,
-          tokens: e.tokens,
-          latency: e.latency,
-          cost: e.cost,
-          metadata: e.metadata,
-        });
-      }
-
-      if (markdownSessionMetadata) {
-        const sub = await SubmissionModel.findById(submission._id);
-        if (sub?.llmWorkflow?.trace) {
-          if (markdownSessionMetadata.totalTokens != null)
-            sub.llmWorkflow.trace.totalTokens = markdownSessionMetadata.totalTokens;
-          if (markdownSessionMetadata.totalCost != null)
-            sub.llmWorkflow.trace.totalCost = markdownSessionMetadata.totalCost;
-          if (markdownSessionMetadata.totalTimeMs != null)
-            sub.llmWorkflow.trace.totalTime = markdownSessionMetadata.totalTimeMs;
-          await sub.save();
-        }
-      }
-
-      // Update evaluation metadata
-      const subForEval = await SubmissionModel.findById(submission._id);
-      if (subForEval) {
-        if (!subForEval.llmWorkflow) {
-          subForEval.llmWorkflow = {
-            trace: {
-              sessionId,
-              events: [],
-              totalTokens: 0,
-              totalCost: 0,
-              totalTime: 0,
-              totalCalls: 0,
-            },
-            taskResults: [],
-            scores: {},
-            evaluation: {
-              harnessVersion: "1.0.0",
-              tasksCompleted: 0,
-              tasksTotal: 0,
-            },
-          };
-        }
-        subForEval.llmWorkflow.evaluation = subForEval.llmWorkflow.evaluation ?? {
-          harnessVersion: "1.0.0",
-          tasksCompleted: 0,
-          tasksTotal: 0,
-        };
-        subForEval.llmWorkflow.evaluation.startedAt =
-          subForEval.llmWorkflow.evaluation.startedAt || new Date();
-        await subForEval.save();
-      }
-
-      res.json({
-        message: "Trace uploaded successfully",
-        eventsProcessed: events.length,
-        sessionId,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Upload failed";
-      const isValidation =
-        message.includes("Markdown trace") ||
-        message.includes("User/Assistant") ||
-        message.includes("Invalid trace") ||
-        message.includes("JSON");
-      res
-        .status(isValidation ? 400 : 500)
-        .json({ error: message });
-    }
-  });
 };
 
 /**

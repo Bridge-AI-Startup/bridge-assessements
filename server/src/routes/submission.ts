@@ -142,12 +142,6 @@ router.post(
 // Public endpoint - Opt out of assessment by token
 router.post("/token/:token/opt-out", SubmissionController.optOutByToken);
 
-// Public endpoint - Upload LLM trace (controller runs multer internally; do not add uploadLLMTrace here or body is consumed twice)
-router.post(
-  "/token/:token/upload-trace",
-  SubmissionController.uploadLLMTraceByToken
-);
-
 // Employer endpoint - Execute tasks
 router.post(
   "/:submissionId/execute-tasks",

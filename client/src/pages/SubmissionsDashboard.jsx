@@ -13,10 +13,20 @@ import {
   MessageSquare,
   Trash2,
   Copy,
+  Check,
+  Send,
+  Share2,
   ChevronDown,
   ChevronUp,
   ChevronRight,
   BarChart3,
+  Loader2,
+  Code2,
+  Terminal,
+  CheckCircle2,
+  Circle,
+  Play,
+  FileText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +35,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -34,12 +45,67 @@ import { createPageUrl } from "@/utils";
 import {
   getSubmissionsForAssessment,
   deleteSubmission,
+  sendInvites,
+  generateShareLink,
 } from "@/api/submission";
+import { runSubmissionEvaluation } from "@/api/evaluation";
+import VideoTimelineWithCriteria from "@/components/proctoring/VideoTimelineWithCriteria";
 import { Progress } from "@/components/ui/progress";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { BulkInviteContent } from "@/components/BulkInviteModal";
 import { getAssessment } from "@/api/assessment";
+import { getSessionBySubmission, getTranscriptContent, getProctoringVideoPlaybackUrl, downloadProctoringVideo } from "@/api/proctoring";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
 import { API_BASE_URL } from "@/config/api";
+
+/** Format seconds since session start as m:ss (e.g. 65 -> "1:05"). */
+function formatSecondsSinceStart(s) {
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
+/**
+ * Human-readable view of the stateful/chunked enriched transcript
+ * (session narrative + timeline of behavioral events).
+ */
+function EnrichedTranscriptView({ enriched }) {
+  const narrative = enriched?.session_narrative?.trim();
+  const events = Array.isArray(enriched?.events) ? enriched.events : [];
+  return (
+    <div className="bg-gray-50 rounded-lg border border-gray-200 p-3 max-h-[40vh] overflow-y-auto space-y-4">
+      {narrative ? (
+        <div>
+          <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1">Session summary</p>
+          <p className="text-sm text-gray-800 leading-relaxed">{narrative}</p>
+        </div>
+      ) : null}
+      {events.length > 0 ? (
+        <div>
+          <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">Activity timeline</p>
+          <ul className="space-y-3">
+            {events.map((evt, idx) => (
+              <li key={idx} className="border-l-2 border-blue-200 pl-3 py-0.5">
+                <span className="text-xs text-gray-500 font-medium">
+                  {formatSecondsSinceStart(evt.ts)} – {formatSecondsSinceStart(evt.ts_end)}
+                  {evt.ai_tool ? ` · ${evt.ai_tool}` : ""}
+                </span>
+                <p className="text-sm text-gray-800 mt-0.5">{evt.behavioral_summary}</p>
+                {evt.intent ? (
+                  <p className="text-xs text-gray-500 mt-0.5 italic">{evt.intent}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {!narrative && events.length === 0 ? (
+        <p className="text-sm text-gray-500">No activity summary available.</p>
+      ) : null}
+    </div>
+  );
+}
 
 export default function SubmissionsDashboard() {
   const [searchParams] = useSearchParams();
@@ -57,21 +123,166 @@ export default function SubmissionsDashboard() {
   const [selectedEvaluationSubmission, setSelectedEvaluationSubmission] =
     useState(null);
   const [showEvaluationModal, setShowEvaluationModal] = useState(false);
-  const [expandedChatIndices, setExpandedChatIndices] = useState(new Set());
-  const [expandedRawJsonIndices, setExpandedRawJsonIndices] = useState(
-    new Set()
-  );
+  const [evaluationTab, setEvaluationTab] = useState("execution");
+  const [expandedEvidenceCriteria, setExpandedEvidenceCriteria] = useState(new Set());
   const [isDropoffAnalysisExpanded, setIsDropoffAnalysisExpanded] =
     useState(false);
+  const [evaluatingSubmissionId, setEvaluatingSubmissionId] = useState(null);
+  const [recordingSession, setRecordingSession] = useState(null);
+  const [recordingTranscript, setRecordingTranscript] = useState(null);
+  const [recordingTranscriptLoading, setRecordingTranscriptLoading] = useState(false);
+  const [recordingVideoLoading, setRecordingVideoLoading] = useState(false);
+  const [recordingTranscriptError, setRecordingTranscriptError] = useState(null);
+  const [recordingVideoObjectUrl, setRecordingVideoObjectUrl] = useState(null);
+  const recordingVideoObjectUrlRef = React.useRef(null);
   const { toast } = useToast();
 
-  // Reset expanded LLM call indices when opening evaluation for a different submission
+  // Reset expanded evidence when opening evaluation for a different submission
   useEffect(() => {
     if (selectedEvaluationSubmission?._id) {
-      setExpandedChatIndices(new Set());
-      setExpandedRawJsonIndices(new Set());
+      setExpandedEvidenceCriteria(new Set());
     }
   }, [selectedEvaluationSubmission?._id]);
+
+  // Default evaluation modal to Final code tab (demo-first)
+  useEffect(() => {
+    if (showEvaluationModal) {
+      setEvaluationTab("execution");
+    }
+  }, [showEvaluationModal, selectedEvaluationSubmission?._id]);
+
+  // Load proctoring session, screen transcript, and video when Recording tab is active
+  useEffect(() => {
+    if (
+      evaluationTab !== "recording" ||
+      !selectedEvaluationSubmission?._id ||
+      !currentUser
+    ) {
+      if (recordingVideoObjectUrlRef.current) {
+        URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
+        recordingVideoObjectUrlRef.current = null;
+      }
+      setRecordingVideoObjectUrl(null);
+      setRecordingSession(null);
+      setRecordingTranscript(null);
+      setRecordingTranscriptError(null);
+      return;
+    }
+    const submissionId = String(selectedEvaluationSubmission?._id ?? "");
+    if (!submissionId) {
+      setRecordingTranscriptLoading(false);
+      return;
+    }
+    console.log("[proctoring-video] client step 1: submissionId =", submissionId, "type:", typeof submissionId, "selectedEvaluationSubmission._id =", selectedEvaluationSubmission._id);
+    if (recordingVideoObjectUrlRef.current) {
+      URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
+      recordingVideoObjectUrlRef.current = null;
+    }
+    setRecordingVideoObjectUrl(null);
+    setRecordingSession(null);
+    setRecordingTranscript(null);
+    setRecordingTranscriptError(null);
+    setRecordingTranscriptLoading(true);
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await currentUser.getIdToken();
+        console.log("[proctoring-video] client step 2: calling getSessionBySubmission with submissionId =", submissionId);
+        const sessionResult = await getSessionBySubmission(submissionId, token);
+        if (cancelled) return;
+        console.log("[proctoring-video] client step 3: sessionResult.success =", sessionResult.success, "sessionResult.data present =", !!sessionResult.data, "sessionResult.error =", sessionResult.error);
+        if (!sessionResult.success || !sessionResult.data) {
+          setRecordingTranscriptLoading(false);
+          return;
+        }
+        const session = sessionResult.data;
+        const idsMatch = String(session.submissionId) === String(submissionId);
+        console.log("[proctoring-video] client step 4: session._id =", session._id, "type:", typeof session._id, "session.submissionId =", session.submissionId, "type:", typeof session.submissionId, "sessionSubmissionId === submissionId =", idsMatch, "String(session.submissionId) =", String(session.submissionId), "submissionId =", submissionId);
+        if (String(session.submissionId) !== String(submissionId)) {
+          console.log("[proctoring-video] client step 4 FAIL: ids do not match, returning early (no session/video set)");
+          setRecordingTranscriptLoading(false);
+          return;
+        }
+        setRecordingSession(session);
+        if (
+          session.transcript?.status === "completed" &&
+          session.transcript?.storageKey &&
+          !selectedEvaluationSubmission?.enrichedTranscript
+        ) {
+          const transcriptResult = await getTranscriptContent(session._id);
+          if (cancelled) return;
+          if (transcriptResult.success && transcriptResult.data) {
+            const lines = transcriptResult.data
+              .split("\n")
+              .filter((l) => l.trim());
+            const segments = lines
+              .map((line) => {
+                try {
+                  const cleaned = line
+                    .trim()
+                    .replace(/^```(?:json|jsonl)?/, "")
+                    .replace(/^```$/, "")
+                    .trim();
+                  return cleaned ? JSON.parse(cleaned) : null;
+                } catch {
+                  return null;
+                }
+              })
+              .filter(Boolean);
+            setRecordingTranscript(segments);
+          }
+        }
+        if (selectedEvaluationSubmission?.evaluationReport) {
+          const sessionIdForVideo =
+            session._id != null && typeof session._id === "string"
+              ? session._id
+              : session._id && typeof session._id.toString === "function"
+                ? session._id.toString()
+                : String(session._id);
+          setRecordingVideoLoading(true);
+          console.log("[proctoring-video] client step 5: calling getProctoringVideoPlaybackUrl with session._id =", sessionIdForVideo, "type:", typeof sessionIdForVideo);
+          const videoResult = await getProctoringVideoPlaybackUrl(sessionIdForVideo, token);
+          if (cancelled) {
+            if (videoResult.success && videoResult.data) {
+              URL.revokeObjectURL(videoResult.data);
+            }
+            setRecordingVideoLoading(false);
+            return;
+          }
+          console.log("[proctoring-video] client step 6: videoResult.success =", videoResult.success, "videoResult.error =", videoResult.error, "videoResult.data present =", !!videoResult.data);
+          if (videoResult.success && videoResult.data) {
+            recordingVideoObjectUrlRef.current = videoResult.data;
+            setRecordingVideoObjectUrl(videoResult.data);
+          }
+          setRecordingVideoLoading(false);
+        } else {
+          setRecordingVideoLoading(false);
+          console.log("[proctoring-video] client step 5 SKIP: no evaluationReport, not fetching video");
+        }
+      } catch (err) {
+        console.log("[proctoring-video] client CAUGHT ERROR:", err?.message ?? err);
+        if (!cancelled) {
+          setRecordingTranscriptError(err?.message ?? "Failed to load screen transcript");
+        }
+      } finally {
+        if (!cancelled) setRecordingTranscriptLoading(false);
+        setRecordingVideoLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      setRecordingVideoLoading(false);
+      if (recordingVideoObjectUrlRef.current) {
+        URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
+        recordingVideoObjectUrlRef.current = null;
+      }
+      setRecordingVideoObjectUrl(null);
+    };
+  }, [
+    evaluationTab,
+    selectedEvaluationSubmission?._id,
+    currentUser,
+  ]);
 
   // Wait for auth state to be ready
   useEffect(() => {
@@ -128,6 +339,35 @@ export default function SubmissionsDashboard() {
   useEffect(() => {
     loadSubmissions();
   }, [loadSubmissions]);
+
+  // Poll submissions while any are waiting for automatic evaluation (transcript + score)
+  useEffect(() => {
+    const submittedRecently = (s) =>
+      s.submittedAt &&
+      Date.now() - new Date(s.submittedAt).getTime() < 15 * 60 * 1000;
+    const hasPending = submissions.some(
+      (s) =>
+        s.status === "submitted" &&
+        !s.evaluationReport?.criteria_results?.length &&
+        (s.evaluationStatus === "pending" ||
+          (s.evaluationStatus !== "failed" && submittedRecently(s)))
+    );
+    if (!hasPending || !assessmentId || !currentUser) return;
+
+    const POLL_MS = 5000;
+    const MAX_POLLS = 180; // 15 min
+    let polls = 0;
+    const interval = setInterval(async () => {
+      polls++;
+      try {
+        const token = await currentUser.getIdToken();
+        const result = await getSubmissionsForAssessment(assessmentId, token);
+        if (result.success) setSubmissions(result.data || []);
+      } catch (_) {}
+      if (polls >= MAX_POLLS) clearInterval(interval);
+    }, POLL_MS);
+    return () => clearInterval(interval);
+  }, [submissions, assessmentId, currentUser]);
 
   // Calculate stats from real data
   const stats = React.useMemo(() => {
@@ -388,6 +628,20 @@ export default function SubmissionsDashboard() {
     return matchesSearch && matchesStatus;
   });
 
+  const getSubmissionScore = (sub) => {
+    const evaluable =
+      sub.evaluationReport?.criteria_results?.filter((r) => r.evaluable) ?? [];
+    if (evaluable.length === 0) return -1;
+    const sum = evaluable.reduce((s, r) => s + r.score, 0);
+    return sum / evaluable.length;
+  };
+
+  const sortedSubmissions = [...filteredSubmissions].sort((a, b) => {
+    const scoreA = getSubmissionScore(a);
+    const scoreB = getSubmissionScore(b);
+    return scoreB - scoreA;
+  });
+
   const formatTimeSpent = (minutes) => {
     if (!minutes) return "—";
     if (minutes < 60) return `${minutes}m`;
@@ -460,99 +714,6 @@ export default function SubmissionsDashboard() {
     });
   };
 
-  // Derive prompt/response text from trace event (supports multiple JSON shapes from API)
-  const getEventPromptText = (event) => {
-    if (!event || typeof event !== "object") return "—";
-    const raw =
-      event.prompt ??
-      event.content ??
-      event.input ??
-      event.user_input ??
-      event.userMessage ??
-      event.user_message ??
-      event.question ??
-      event.humanMessage ??
-      event.text ??
-      event.messages?.[0]?.content ??
-      event.metadata?.prompt ??
-      event.metadata?.input ??
-      event.metadata?.content ??
-      event.data?.prompt ??
-      event.data?.input ??
-      event.payload?.prompt ??
-      event.payload?.input;
-    if (raw != null) {
-      return typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
-    }
-    if (Array.isArray(event.messages)) {
-      const userParts = event.messages
-        .filter((m) => m?.role === "user" && m?.content != null)
-        .map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)));
-      if (userParts.length) return userParts.join("\n\n");
-    }
-    return extractFirstStringValues(event, 1)[0] ?? "—";
-  };
-  const getEventResponseText = (event) => {
-    if (!event || typeof event !== "object") return "—";
-    if (event.response != null) {
-      if (typeof event.response === "string") return event.response;
-      if (
-        event.response &&
-        typeof event.response === "object" &&
-        "content" in event.response
-      )
-        return typeof event.response.content === "string"
-          ? event.response.content
-          : JSON.stringify(event.response.content, null, 2);
-      return JSON.stringify(event.response, null, 2);
-    }
-    const raw =
-      event.output ??
-      event.assistant_output ??
-      event.assistantMessage ??
-      event.assistant_message ??
-      event.answer ??
-      event.aiMessage ??
-      event.completion ??
-      (event.role === "assistant" ? event.content : null) ??
-      event.messages?.[1]?.content ??
-      event.metadata?.response ??
-      event.metadata?.output ??
-      event.metadata?.content ??
-      event.data?.response ??
-      event.data?.output ??
-      event.payload?.response ??
-      event.payload?.output;
-    if (raw != null) {
-      return typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
-    }
-    if (Array.isArray(event.messages)) {
-      const assistantParts = event.messages
-        .filter((m) => m?.role === "assistant" && m?.content != null)
-        .map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)));
-      if (assistantParts.length) return assistantParts.join("\n\n");
-    }
-    return extractFirstStringValues(event, 2)[1] ?? "—";
-  };
-  // Fallback: collect first N string values from object (recursive, skip short/keys) for raw JSON hookup
-  const extractFirstStringValues = (obj, maxCount) => {
-    const out = [];
-    const seen = new Set();
-    const visit = (v) => {
-      if (out.length >= maxCount) return;
-      if (typeof v === "string" && v.length > 10 && !seen.has(v)) {
-        seen.add(v);
-        out.push(v);
-      } else if (Array.isArray(v)) {
-        v.forEach(visit);
-      } else if (v && typeof v === "object" && v.constructor === Object) {
-        Object.values(v).forEach(visit);
-      }
-    };
-    visit(obj);
-    return out;
-  };
-
   const handleViewInterview = (submission) => {
     setSelectedInterview(submission);
     setShowInterviewModal(true);
@@ -560,6 +721,22 @@ export default function SubmissionsDashboard() {
 
   const [submissionToDelete, setSubmissionToDelete] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  const [shareModalSubmission, setShareModalSubmission] = useState(null);
+  const [shareLinkCopied, setShareLinkCopied] = useState(false);
+  const [shareEmailSending, setShareEmailSending] = useState(false);
+  const [shareEmailSent, setShareEmailSent] = useState(false);
+
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareTab, setShareTab] = useState("single");
+  const [shareCandidateName, setShareCandidateName] = useState("");
+  const [shareCandidateEmail, setShareCandidateEmail] = useState("");
+  const [generatedShareLink, setGeneratedShareLink] = useState("");
+  const [generatedShareSubmissionId, setGeneratedShareSubmissionId] = useState("");
+  const [isGeneratingShareLink, setIsGeneratingShareLink] = useState(false);
+  const [shareLinkCopiedInModal, setShareLinkCopiedInModal] = useState(false);
+  const [shareEmailSendingForGenerated, setShareEmailSendingForGenerated] = useState(false);
+  const [shareEmailSentForGenerated, setShareEmailSentForGenerated] = useState(false);
 
   const handleDeleteClick = (submission) => {
     setSubmissionToDelete(submission);
@@ -616,6 +793,157 @@ export default function SubmissionsDashboard() {
         description: "Failed to copy link to clipboard",
         variant: "destructive",
       });
+    }
+  };
+
+  const openShareModal = (submission) => {
+    setShareModalSubmission(submission);
+    setShareLinkCopied(false);
+    setShareEmailSending(false);
+    setShareEmailSent(false);
+  };
+
+  const closeShareModal = () => {
+    setShareModalSubmission(null);
+    setShareLinkCopied(false);
+    setShareEmailSending(false);
+    setShareEmailSent(false);
+  };
+
+  const handleCopyLinkInModal = async () => {
+    if (!shareModalSubmission) return;
+    const link = getCandidateLink(shareModalSubmission);
+    try {
+      await navigator.clipboard.writeText(link);
+      setShareLinkCopied(true);
+      toast({ title: "Link copied", description: "Invite link copied to clipboard." });
+      setTimeout(() => setShareLinkCopied(false), 2000);
+    } catch (error) {
+      toast({
+        title: "Failed to copy",
+        description: "Failed to copy link to clipboard",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSendInviteEmail = async () => {
+    if (!shareModalSubmission?._id || !currentUser) return;
+    setShareEmailSending(true);
+    try {
+      const result = await sendInvites([shareModalSubmission._id]);
+      if (result.success) {
+        setShareEmailSent(true);
+        toast({ title: "Invite sent", description: "Invite email sent to candidate." });
+      } else {
+        toast({
+          title: "Failed to send email",
+          description: result.error || "Could not send invite email.",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Failed to send email",
+        description: error.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setShareEmailSending(false);
+    }
+  };
+
+  const resetShareModalState = () => {
+    setGeneratedShareLink("");
+    setGeneratedShareSubmissionId("");
+    setShareCandidateName("");
+    setShareCandidateEmail("");
+    setShareEmailSentForGenerated(false);
+  };
+
+  const handleGenerateShareLink = async () => {
+    if (!shareCandidateName.trim() || !assessmentId || !currentUser) return;
+    setIsGeneratingShareLink(true);
+    try {
+      const token = await currentUser.getIdToken();
+      const result = await generateShareLink(
+        {
+          assessmentId,
+          candidateName: shareCandidateName.trim(),
+          ...(shareCandidateEmail.trim() && { candidateEmail: shareCandidateEmail.trim() }),
+        },
+        token
+      );
+      if (result.success) {
+        setGeneratedShareLink(result.data.shareLink);
+        setGeneratedShareSubmissionId(result.data.submissionId);
+        loadSubmissions();
+      } else {
+        const errorMsg = "error" in result ? result.error : "Failed to generate link";
+        if (errorMsg.includes("SUBSCRIPTION_LIMIT_REACHED") || errorMsg.includes("limit")) {
+          toast({
+            title: "Limit reached",
+            description: "Free tier allows 3 submissions. Upgrade to invite more candidates.",
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Failed to generate link",
+            description: errorMsg,
+            variant: "destructive",
+          });
+        }
+      }
+    } catch (error) {
+      toast({
+        title: "Failed to generate link",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGeneratingShareLink(false);
+    }
+  };
+
+  const handleCopyGeneratedShareLink = async () => {
+    if (!generatedShareLink) return;
+    try {
+      await navigator.clipboard.writeText(generatedShareLink);
+      setShareLinkCopiedInModal(true);
+      toast({ title: "Link copied", description: "Assessment link copied to clipboard." });
+      setTimeout(() => setShareLinkCopiedInModal(false), 2000);
+    } catch {
+      toast({
+        title: "Failed to copy",
+        description: "Could not copy to clipboard",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSendEmailForGeneratedLink = async () => {
+    if (!generatedShareSubmissionId) return;
+    setShareEmailSendingForGenerated(true);
+    try {
+      const result = await sendInvites([generatedShareSubmissionId]);
+      if (result.success) {
+        setShareEmailSentForGenerated(true);
+        toast({ title: "Invite sent", description: "Invite email sent to candidate." });
+      } else {
+        toast({
+          title: "Failed to send email",
+          description: "error" in result ? result.error : "Please try again.",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Failed to send email",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setShareEmailSendingForGenerated(false);
     }
   };
 
@@ -864,6 +1192,20 @@ export default function SubmissionsDashboard() {
               <option value="expired">Expired</option>
             </select>
           </div>
+          {assessmentId && (
+            <Button
+              type="button"
+              onClick={() => {
+                setShowShareModal(true);
+                setShareTab("single");
+                resetShareModalState();
+              }}
+              className="bg-[#1E3A8A] hover:bg-[#152a66] ml-auto flex items-center gap-2"
+            >
+              <Share2 className="w-4 h-4" />
+              Share assessment
+            </Button>
+          )}
         </motion.div>
 
         {/* Error Message */}
@@ -879,7 +1221,7 @@ export default function SubmissionsDashboard() {
             <div className="w-8 h-8 border-2 border-[#1E3A8A]/30 border-t-[#1E3A8A] rounded-full animate-spin mx-auto mb-4"></div>
             <p className="text-gray-500">Loading submissions...</p>
           </div>
-        ) : filteredSubmissions.length === 0 ? (
+        ) : sortedSubmissions.length === 0 ? (
           <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
             <Users className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-gray-900 mb-2">
@@ -909,9 +1251,6 @@ export default function SubmissionsDashboard() {
                     Status
                   </th>
                   <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Interview
-                  </th>
-                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Time Spent
                   </th>
                   <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -923,7 +1262,7 @@ export default function SubmissionsDashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {filteredSubmissions.map((submission) => {
+                {sortedSubmissions.map((submission) => {
                   const candidateName = submission.candidateName || "Unknown";
                   const candidateEmail = submission.candidateEmail || "";
                   const initials = candidateName
@@ -968,168 +1307,152 @@ export default function SubmissionsDashboard() {
                           )}
                         </div>
                       </td>
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-2">
-                          {getInterviewStatusBadge(submission.interview)}
-                          {submission.interview && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleViewInterview(submission)}
-                              className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10 h-7 px-2"
-                            >
-                              <MessageSquare className="w-3.5 h-3.5 mr-1" />
-                              Details
-                            </Button>
-                          )}
-                        </div>
-                      </td>
                       <td className="px-5 py-4 text-sm text-gray-600">
                         {formatTimeSpent(submission.timeSpent)}
                       </td>
                       <td className="px-5 py-4">
                         {(() => {
-                          const overall =
-                            submission.scores?.overall != null
-                              ? submission.scores.overall
-                              : submission.llmWorkflow?.scores?.overall?.score;
-                          const showCalculate =
+                          const evaluableCriteria =
+                            submission.evaluationReport?.criteria_results?.filter(
+                              (r) => r.evaluable
+                            ) ?? [];
+                          const analysisAvg =
+                            evaluableCriteria.length > 0
+                              ? (
+                                  evaluableCriteria.reduce(
+                                    (s, r) => s + r.score,
+                                    0
+                                  ) / evaluableCriteria.length
+                                ).toFixed(1)
+                              : null;
+                          const hasEvaluationReport =
+                            submission.evaluationReport?.criteria_results?.filter(
+                              (r) => r.evaluable
+                            )?.length > 0;
+                          // Show loading while waiting for automatic evaluation (transcript generation + scoring)
+                          const submittedRecently =
+                            submission.submittedAt &&
+                            Date.now() - new Date(submission.submittedAt).getTime() < 15 * 60 * 1000; // 15 min
+                          const evaluationPending =
                             submission.status === "submitted" &&
-                            submission.scores?.overall == null;
-                          if (overall !== undefined && overall !== null) {
+                            !hasEvaluationReport &&
+                            (submission.evaluationStatus === "pending" ||
+                              (submission.evaluationStatus !== "failed" && submittedRecently));
+                          // Show "Run evaluation" only when evaluation actually failed (user can retry)
+                          const showRunEvaluation =
+                            submission.status === "submitted" &&
+                            !hasEvaluationReport &&
+                            submission.evaluationStatus === "failed";
+                          const openEvaluation = () => {
+                            setSelectedEvaluationSubmission(submission);
+                            setShowEvaluationModal(true);
+                          };
+                          const isEvaluating =
+                            evaluatingSubmissionId === submission._id;
+                          if (analysisAvg != null) {
                             return (
-                              <div
-                                className="flex flex-col gap-0.5"
-                                title={
-                                  [
-                                    submission.scores?.completeness?.score !=
-                                    null
-                                      ? `Completeness: ${submission.scores.completeness.score}%`
-                                      : null,
-                                    submission.llmWorkflow?.scores?.overall
-                                      ?.score != null
-                                      ? `Workflow: ${submission.llmWorkflow.scores.overall.score}/100`
-                                      : null,
-                                  ]
-                                    .filter(Boolean)
-                                    .join(" · ") || undefined
-                                }
-                              >
-                                <div className="flex items-center gap-2">
-                                  <span className="text-lg font-bold">
-                                    {overall}
-                                  </span>
-                                  <span className="text-xs text-gray-500">
-                                    /100
-                                  </span>
-                                </div>
-                                {(submission.scores?.completeness?.score !=
-                                  null ||
-                                  submission.llmWorkflow?.scores?.overall
-                                    ?.score != null) && (
-                                  <span className="text-xs text-gray-500">
-                                    {submission.scores?.completeness?.score !=
-                                      null && (
-                                      <span>
-                                        Completeness:{" "}
-                                        {
-                                          submission.scores.completeness.score
-                                        }
-                                        %
-                                      </span>
-                                    )}
-                                    {submission.scores?.completeness?.score !=
-                                      null &&
-                                      submission.llmWorkflow?.scores?.overall
-                                        ?.score != null && " · "}
-                                    {submission.llmWorkflow?.scores?.overall
-                                      ?.score != null && (
-                                      <span>
-                                        Workflow:{" "}
-                                        {
-                                          submission.llmWorkflow.scores.overall
-                                            .score
-                                        }
-                                        /100
-                                      </span>
-                                    )}
-                                  </span>
-                                )}
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-lg font-bold text-gray-900">
+                                  {analysisAvg}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={openEvaluation}
+                                  className="text-left text-xs text-[#1E3A8A] hover:underline"
+                                  title="View evaluation"
+                                >
+                                  View evaluation
+                                </button>
                               </div>
                             );
                           }
-                          if (showCalculate) {
+                          if (evaluationPending) {
                             return (
-                              <Button
-                                onClick={async () => {
-                                  if (!currentUser) {
-                                    toast({
-                                      title: "Not signed in",
-                                      description: "Please sign in to calculate scores.",
-                                      variant: "destructive",
-                                    });
-                                    return;
-                                  }
-                                  try {
-                                    const token =
-                                      await currentUser.getIdToken();
-                                    const response = await fetch(
-                                      `${API_BASE_URL}/submissions/${submission._id}/calculate-scores`,
-                                      {
-                                        method: "POST",
-                                        headers: {
-                                          Authorization: `Bearer ${token}`,
-                                        },
+                              <div className="flex items-center gap-2 text-sm text-gray-500">
+                                <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+                                <span>Evaluating…</span>
+                              </div>
+                            );
+                          }
+                          if (showRunEvaluation) {
+                            return (
+                              <div className="flex flex-col gap-1">
+                                <Button
+                                    onClick={async () => {
+                                      if (!currentUser) {
+                                        toast({
+                                          title: "Not signed in",
+                                          description: "Please sign in to run evaluation.",
+                                          variant: "destructive",
+                                        });
+                                        return;
                                       }
-                                    );
-                                    if (response.ok) {
-                                      const submissionsResult =
-                                        await getSubmissionsForAssessment(
-                                          assessmentId,
-                                          token
-                                        );
-                                      if (submissionsResult.success) {
-                                        setSubmissions(
-                                          submissionsResult.data || []
+                                      setEvaluatingSubmissionId(submission._id);
+                                      try {
+                                        const token =
+                                          await currentUser.getIdToken();
+                                        const result =
+                                          await runSubmissionEvaluation(
+                                            submission._id,
+                                            token
+                                          );
+                                        if (result.success) {
+                                          const submissionsResult =
+                                            await getSubmissionsForAssessment(
+                                              assessmentId,
+                                              token
+                                            );
+                                          if (submissionsResult.success) {
+                                            setSubmissions(
+                                              submissionsResult.data || []
+                                            );
+                                            setSelectedEvaluationSubmission(
+                                              submissionsResult.data?.find(
+                                                (s) => s._id === submission._id
+                                              ) ?? submission
+                                            );
+                                            toast({
+                                              title: "Evaluation complete",
+                                              description:
+                                                "Workflow evaluation has been updated.",
+                                            });
+                                          }
+                                        } else {
+                                          const errMsg =
+                                            "error" in result
+                                              ? result.error
+                                              : "Evaluation failed";
+                                          toast({
+                                            title: "Evaluation failed",
+                                            description: errMsg,
+                                            variant: "destructive",
+                                          });
+                                        }
+                                      } catch (error) {
+                                        console.error(
+                                          "Error running evaluation:",
+                                          error
                                         );
                                         toast({
-                                          title: "Scores calculated",
+                                          title: "Evaluation failed",
                                           description:
-                                            "Completeness and workflow scores have been updated.",
+                                            error?.message ||
+                                            "An unexpected error occurred.",
+                                          variant: "destructive",
                                         });
+                                      } finally {
+                                        setEvaluatingSubmissionId(null);
                                       }
-                                    } else {
-                                      const data = await response
-                                        .json()
-                                        .catch(() => ({}));
-                                      toast({
-                                        title: "Scoring failed",
-                                        description:
-                                          data.error ||
-                                          data.message ||
-                                          "Repo may not be indexed or workflow data missing.",
-                                        variant: "destructive",
-                                      });
-                                    }
-                                  } catch (error) {
-                                    console.error(
-                                      "Error calculating scores:",
-                                      error
-                                    );
-                                    toast({
-                                      title: "Scoring failed",
-                                      description:
-                                        error.message ||
-                                        "An unexpected error occurred.",
-                                      variant: "destructive",
-                                    });
-                                  }
-                                }}
-                                size="sm"
-                                variant="outline"
-                              >
-                                Calculate scores
-                              </Button>
+                                    }}
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={isEvaluating}
+                                  >
+                                    {isEvaluating
+                                      ? "Running…"
+                                      : "Run evaluation"}
+                                  </Button>
+                              </div>
                             );
                           }
                           return (
@@ -1139,33 +1462,19 @@ export default function SubmissionsDashboard() {
                       </td>
                       <td className="px-5 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
-                          {/* Copy Link */}
+                          {/* Share / Copy link — opens popup to copy or send email */}
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => handleCopyLink(submission)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openShareModal(submission);
+                            }}
                             className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10"
-                            title="Copy candidate assessment link"
+                            title="Share assessment link or send invite email"
                           >
-                            <Copy className="w-4 h-4" />
+                            <Send className="w-4 h-4" />
                           </Button>
-                          {/* LLM Evaluation (when workflow data exists) */}
-                          {(submission.llmWorkflow?.trace?.events?.length > 0 ||
-                            submission.llmWorkflow?.taskResults?.length > 0 ||
-                            submission.llmWorkflow?.scores) && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => {
-                                setSelectedEvaluationSubmission(submission);
-                                setShowEvaluationModal(true);
-                              }}
-                              className="text-[#1E3A8A] hover:bg-[#1E3A8A]/10"
-                              title="View LLM workflow evaluation"
-                            >
-                              <BarChart3 className="w-4 h-4" />
-                            </Button>
-                            )}
                           {/* GitHub Link (if submitted) */}
                           {submission.status === "submitted" &&
                             submission.githubLink && (
@@ -1239,6 +1548,281 @@ export default function SubmissionsDashboard() {
                 {isDeleting ? "Deleting..." : "Delete"}
               </Button>
             </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Share assessment modal — single candidate or bulk import */}
+        <Dialog
+          open={showShareModal}
+          onOpenChange={(open) => {
+            if (!open) {
+              setShowShareModal(false);
+              resetShareModalState();
+            }
+          }}
+        >
+          <DialogContent className="sm:max-w-[580px] max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Share assessment</DialogTitle>
+              <DialogDescription>
+                Generate a link for one candidate or import multiple at once.
+              </DialogDescription>
+            </DialogHeader>
+            <Tabs
+              value={shareTab}
+              onValueChange={(v) => {
+                setShareTab(v);
+                resetShareModalState();
+              }}
+              className="mt-2"
+            >
+              <TabsList className="w-full mb-4">
+                <TabsTrigger value="single" className="flex-1">
+                  Single candidate
+                </TabsTrigger>
+                <TabsTrigger value="bulk" className="flex-1">
+                  Multiple candidates
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="single">
+                <div className="space-y-4 py-2">
+                  {!generatedShareLink ? (
+                    <>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Candidate name *
+                        </label>
+                        <Input
+                          value={shareCandidateName}
+                          onChange={(e) => setShareCandidateName(e.target.value)}
+                          placeholder="Enter candidate's full name"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Candidate email{" "}
+                          <span className="text-gray-400 font-normal">
+                            (optional — required to send invite)
+                          </span>
+                        </label>
+                        <Input
+                          value={shareCandidateEmail}
+                          onChange={(e) => setShareCandidateEmail(e.target.value)}
+                          placeholder="candidate@example.com"
+                          type="email"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && shareCandidateName.trim())
+                              handleGenerateShareLink();
+                          }}
+                        />
+                      </div>
+                      <DialogFooter>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setShowShareModal(false);
+                            resetShareModalState();
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          onClick={handleGenerateShareLink}
+                          disabled={
+                            !shareCandidateName.trim() || isGeneratingShareLink
+                          }
+                          className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                        >
+                          {isGeneratingShareLink
+                            ? "Generating..."
+                            : "Generate link"}
+                        </Button>
+                      </DialogFooter>
+                    </>
+                  ) : (
+                    <>
+                      <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                        <p className="text-sm text-green-800 mb-2">
+                          Link generated successfully!
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={generatedShareLink}
+                            readOnly
+                            className="flex-1 bg-white text-sm"
+                          />
+                          <Button
+                            onClick={handleCopyGeneratedShareLink}
+                            size="sm"
+                            variant="outline"
+                            className="flex-shrink-0"
+                          >
+                            {shareLinkCopiedInModal ? (
+                              <>
+                                <Check className="w-4 h-4 mr-2" />
+                                Copied!
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-4 h-4 mr-2" />
+                                Copy
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                      {shareCandidateEmail.trim() && (
+                        <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
+                          <span className="text-sm text-gray-600">
+                            Send invite email to{" "}
+                            <span className="font-medium text-gray-900">
+                              {shareCandidateEmail.trim()}
+                            </span>
+                          </span>
+                          <Button
+                            onClick={handleSendEmailForGeneratedLink}
+                            disabled={
+                              shareEmailSendingForGenerated ||
+                              shareEmailSentForGenerated
+                            }
+                            size="sm"
+                            className="bg-[#1E3A8A] hover:bg-[#152a66] flex-shrink-0 ml-3"
+                          >
+                            {shareEmailSentForGenerated ? (
+                              <>
+                                <Check className="w-4 h-4 mr-2" />
+                                Sent!
+                              </>
+                            ) : shareEmailSendingForGenerated ? (
+                              "Sending..."
+                            ) : (
+                              "Send email"
+                            )}
+                          </Button>
+                        </div>
+                      )}
+                      <p className="text-xs text-gray-500">
+                        Share this link with the candidate. They can access and
+                        complete the assessment.
+                      </p>
+                      <DialogFooter>
+                        <Button
+                          onClick={() => {
+                            setShowShareModal(false);
+                            resetShareModalState();
+                          }}
+                          className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                        >
+                          Done
+                        </Button>
+                      </DialogFooter>
+                    </>
+                  )}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="bulk">
+                <BulkInviteContent
+                  assessmentId={assessmentId}
+                  onSuccess={() => loadSubmissions()}
+                  onDone={() => {
+                    setShowShareModal(false);
+                    resetShareModalState();
+                  }}
+                />
+              </TabsContent>
+            </Tabs>
+          </DialogContent>
+        </Dialog>
+
+        {/* Share assessment link modal — copy link or send invite email (per row) */}
+        <Dialog
+          open={!!shareModalSubmission}
+          onOpenChange={(open) => {
+            if (!open) closeShareModal();
+          }}
+        >
+          <DialogContent className="sm:max-w-[500px]">
+            <DialogHeader>
+              <DialogTitle>Share assessment link</DialogTitle>
+              <DialogDescription>
+                Copy the link or send an invite email to{" "}
+                {shareModalSubmission?.candidateName || "the candidate"}.
+              </DialogDescription>
+            </DialogHeader>
+            {shareModalSubmission && (
+              <div className="space-y-4 py-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={getCandidateLink(shareModalSubmission)}
+                    readOnly
+                    className="flex-1 bg-gray-50 text-sm font-mono"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCopyLinkInModal}
+                    className="flex-shrink-0"
+                  >
+                    {shareLinkCopied ? (
+                      <>
+                        <Check className="w-4 h-4 mr-2" />
+                        Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-4 h-4 mr-2" />
+                        Copy
+                      </>
+                    )}
+                  </Button>
+                </div>
+                {shareModalSubmission.candidateEmail ? (
+                  <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg gap-3">
+                    <span className="text-sm text-gray-600">
+                      Send invite email to{" "}
+                      <span className="font-medium text-gray-900">
+                        {shareModalSubmission.candidateEmail}
+                      </span>
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleSendInviteEmail}
+                      disabled={shareEmailSending || shareEmailSent}
+                      className="bg-[#1E3A8A] hover:bg-[#152a66] flex-shrink-0"
+                    >
+                      {shareEmailSent ? (
+                        <>
+                          <Check className="w-4 h-4 mr-2" />
+                          Sent
+                        </>
+                      ) : shareEmailSending ? (
+                        "Sending..."
+                      ) : (
+                        "Send email"
+                      )}
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-500">
+                    No email on file for this candidate. Add an email when
+                    generating the link to enable sending invite emails.
+                  </p>
+                )}
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    onClick={closeShareModal}
+                    className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                  >
+                    Done
+                  </Button>
+                </div>
+              </div>
+            )}
           </DialogContent>
         </Dialog>
 
@@ -1454,7 +2038,7 @@ export default function SubmissionsDashboard() {
           </DialogContent>
         </Dialog>
 
-        {/* LLM Workflow Evaluation Modal */}
+        {/* Evaluation Modal */}
         <Dialog
           open={showEvaluationModal}
           onOpenChange={(open) => {
@@ -1464,11 +2048,11 @@ export default function SubmissionsDashboard() {
             }
           }}
         >
-          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <BarChart3 className="w-5 h-5" />
-                LLM Workflow Evaluation
+                Evaluation
                 {selectedEvaluationSubmission && (
                   <span className="text-sm font-normal text-gray-500">
                     – {selectedEvaluationSubmission.candidateName ||
@@ -1476,433 +2060,654 @@ export default function SubmissionsDashboard() {
                   </span>
                 )}
               </DialogTitle>
-              <DialogDescription>
-                Trace, task results, and workflow scores for this submission
-              </DialogDescription>
             </DialogHeader>
 
-            {selectedEvaluationSubmission?.llmWorkflow ? (
-              <div className="space-y-6 mt-4">
-                {/* Evaluation metadata */}
-                {selectedEvaluationSubmission.llmWorkflow.evaluation && (
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-900 mb-2">
-                      Evaluation
-                    </h3>
-                    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-                      <div>
-                        <p className="text-gray-500">Tasks</p>
-                        <p className="font-medium">
-                          {selectedEvaluationSubmission.llmWorkflow.evaluation
-                            .tasksCompleted ?? "—"}
-                          /
-                          {selectedEvaluationSubmission.llmWorkflow.evaluation
-                            .tasksTotal ?? "—"}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">Harness</p>
-                        <p className="font-medium">
-                          {selectedEvaluationSubmission.llmWorkflow.evaluation
-                            .harnessVersion ?? "—"}
-                        </p>
-                      </div>
-                      {selectedEvaluationSubmission.llmWorkflow.evaluation
-                        .startedAt && (
-                        <div>
-                          <p className="text-gray-500">Started</p>
-                          <p className="font-medium">
-                            {formatDate(
-                              selectedEvaluationSubmission.llmWorkflow
-                                .evaluation.startedAt
-                            )}
-                          </p>
-                        </div>
-                      )}
-                      {selectedEvaluationSubmission.llmWorkflow.evaluation
-                        .completedAt && (
-                        <div>
-                          <p className="text-gray-500">Completed</p>
-                          <p className="font-medium">
-                            {formatDate(
-                              selectedEvaluationSubmission.llmWorkflow
-                                .evaluation.completedAt
-                            )}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
+            <Tabs
+              value={evaluationTab}
+              onValueChange={setEvaluationTab}
+              className="mt-4"
+            >
+              <TabsList className="w-full justify-start">
+                <TabsTrigger value="execution">Final code</TabsTrigger>
+                <TabsTrigger value="recording">Workflow evaluation</TabsTrigger>
+                <TabsTrigger value="agent">Agent communication</TabsTrigger>
+              </TabsList>
 
-                {/* Trace summary */}
-                {selectedEvaluationSubmission.llmWorkflow.trace && (
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-900 mb-2">
-                      Trace
-                    </h3>
-                    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
-                      <div>
-                        <p className="text-gray-500">Events</p>
-                        <p className="font-medium">
-                          {selectedEvaluationSubmission.llmWorkflow.trace
-                            .events?.length ?? 0}
-                        </p>
+              <TabsContent value="execution" className="mt-4">
+                <div className="max-h-[70vh] overflow-y-auto pr-1 space-y-4">
+                  {/* Final code (demo: visuals only; real pipeline coming soon) */}
+                  {selectedEvaluationSubmission?.githubLink ? (
+                    <div className="space-y-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                            <Code2 className="w-4 h-4 text-emerald-600" />
+                            Final code
+                          </h3>
+                          <p className="text-xs text-gray-500 mt-1">
+                            We clone the candidate&apos;s repository, run their code and tests, and score the output against the assessment.
+                          </p>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          asChild
+                        >
+                          <a
+                            href={selectedEvaluationSubmission.githubLink}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            GitHub
+                          </a>
+                        </Button>
                       </div>
-                      <div>
-                        <p className="text-gray-500">Total tokens</p>
-                        <p className="font-medium">
-                          {selectedEvaluationSubmission.llmWorkflow.trace
-                            .totalTokens ?? "—"}
-                        </p>
+
+                      {/* Score card */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        {[
+                          {
+                            label: "Execution score",
+                            value: "87",
+                            max: "100",
+                            color: "text-emerald-600",
+                          },
+                          {
+                            label: "Tests passed",
+                            value: "17",
+                            max: "17",
+                            color: "text-emerald-600",
+                          },
+                          {
+                            label: "Build",
+                            value: "Success",
+                            color: "text-emerald-600",
+                          },
+                          {
+                            label: "Output match",
+                            value: "92%",
+                            color: "text-emerald-600",
+                          },
+                        ].map((m, i) => (
+                          <div
+                            key={i}
+                            className="rounded-lg border border-gray-200 bg-gray-50 p-3"
+                          >
+                            <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                              {m.label}
+                            </p>
+                            <p className={`text-lg font-semibold ${m.color}`}>
+                              {m.value}
+                              {m.max ? `/${m.max}` : ""}
+                            </p>
+                          </div>
+                        ))}
                       </div>
-                      <div>
-                        <p className="text-gray-500">Total cost</p>
-                        <p className="font-medium">
-                          {selectedEvaluationSubmission.llmWorkflow.trace
-                            .totalCost != null
-                            ? `$${Number(
-                                selectedEvaluationSubmission.llmWorkflow.trace
-                                  .totalCost
-                              ).toFixed(4)}`
-                            : "—"}
+
+                      {/* Pipeline steps */}
+                      <div className="rounded-lg border border-gray-200 bg-white p-3">
+                        <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-2">
+                          Pipeline
                         </p>
+                        <div className="flex flex-wrap gap-4 sm:gap-6">
+                          {[
+                            { label: "Clone repository", done: true },
+                            { label: "Install dependencies", done: true },
+                            { label: "Run test suite", done: true },
+                            { label: "Analyze output", done: true },
+                          ].map((step, i) => (
+                            <div key={i} className="flex items-center gap-2">
+                              {step.done ? (
+                                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                              ) : (
+                                <Circle className="w-4 h-4 text-gray-300 shrink-0" />
+                              )}
+                              <span className="text-sm text-gray-700">
+                                {step.label}
+                              </span>
+                              {i < 3 && (
+                                <ChevronRight className="w-3.5 h-3.5 text-gray-400 hidden sm:inline" />
+                              )}
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-gray-500">Total time</p>
-                        <p className="font-medium">
-                          {selectedEvaluationSubmission.llmWorkflow.trace
-                            .totalTime != null
-                            ? `${(
-                                selectedEvaluationSubmission.llmWorkflow.trace
-                                  .totalTime / 1000
-                              ).toFixed(1)}s`
-                            : "—"}
-                        </p>
+
+                      {/* Fake terminal output */}
+                      <div className="rounded-lg border border-gray-200 bg-gray-900 overflow-hidden">
+                        <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-700 bg-gray-800/80">
+                          <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+                          <span className="text-xs font-medium text-gray-400">
+                            Execution log
+                          </span>
+                        </div>
+                        <pre className="p-3 text-xs text-gray-300 font-mono overflow-x-auto whitespace-pre">
+                          <span className="text-gray-500">
+                            $ git clone{" "}
+                            {selectedEvaluationSubmission.githubLink
+                              ?.replace(/^https?:\/\//, "")
+                              .slice(0, 40)}
+                            ...
+                          </span>
+                          <span className="text-emerald-400">
+                            {"\n"}Cloning into &apos;repo&apos;... done.
+                          </span>
+                          <span className="text-gray-500">
+                            {"\n\n"}$ npm install
+                          </span>
+                          <span className="text-emerald-400">
+                            {"\n"}added 127 packages in 4.2s
+                          </span>
+                          <span className="text-gray-500">
+                            {"\n\n"}$ npm test
+                          </span>
+                          <span className="text-emerald-400">
+                            {"\n"}  ✓ tests/unit (12 passed)
+                          </span>
+                          <span className="text-emerald-400">
+                            {"\n"}  ✓ tests/integration (5 passed)
+                          </span>
+                          <span className="text-gray-300">
+                            {"\n\n"}Test Suites: 2 passed, 2 total
+                          </span>
+                          <span className="text-gray-300">
+                            {"\n"}Tests:       17 passed, 17 total
+                          </span>
+                        </pre>
                       </div>
-                      <div>
-                        <p className="text-gray-500">LLM calls</p>
-                        <p className="font-medium">
-                          {selectedEvaluationSubmission.llmWorkflow.trace
-                            .totalCalls ?? "—"}
-                        </p>
+                      <div className="mt-4 w-full">
+                        <Button
+                          variant="default"
+                          size="default"
+                          className="w-full gap-2 font-semibold shadow-sm"
+                          asChild
+                        >
+                          <a
+                            href={selectedEvaluationSubmission.githubLink}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            <Play className="h-4 w-4 shrink-0" />
+                            Run project
+                          </a>
+                        </Button>
                       </div>
+
                     </div>
-                    {selectedEvaluationSubmission.llmWorkflow.trace
-                      .sessionId && (
-                      <p className="text-xs text-gray-500 mt-2 font-mono">
-                        Session:{" "}
-                        {
-                          selectedEvaluationSubmission.llmWorkflow.trace
-                            .sessionId
-                        }
+                  ) : (
+                    <div className="py-10 text-center">
+                      <Code2 className="w-12 h-12 mx-auto mb-2 text-gray-400" />
+                      <p className="text-gray-600 text-sm">
+                        No GitHub repository link found for this submission.
                       </p>
-                    )}
+                      <p className="text-xs text-gray-400 mt-1">
+                        Final code appears once a GitHub link is submitted.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </TabsContent>
 
-                    {/* LLM calls / chats - all events with dropdown response */}
-                    {selectedEvaluationSubmission.llmWorkflow.trace.events
-                      ?.length > 0 && (
-                      <div className="mt-4">
-                        <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wider mb-3">
-                          LLM calls ({selectedEvaluationSubmission.llmWorkflow.trace.events.length})
-                        </h4>
-                        <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
-                          {selectedEvaluationSubmission.llmWorkflow.trace.events.map(
-                            (event, idx) => {
-                              const isExpanded = expandedChatIndices.has(idx);
-                              const promptText = getEventPromptText(event);
-                              const responseText =
-                                getEventResponseText(event);
-                              return (
+              <TabsContent value="recording" className="mt-4">
+                <div className="max-h-[70vh] overflow-y-auto pr-1 space-y-4">
+                  {/* Workflow evaluation (when assessment had evaluation criteria) */}
+                  {selectedEvaluationSubmission?.evaluationReport ? (
+                    <div className="space-y-4">
+                      <h3 className="text-sm font-semibold text-gray-900">
+                        Workflow evaluation
+                      </h3>
+
+                      {/* Overall score only */}
+                      {(() => {
+                        const report =
+                          selectedEvaluationSubmission.evaluationReport;
+                        const criteriaResults = report.criteria_results ?? [];
+                        const evaluable = criteriaResults.filter(
+                          (r) => r.evaluable
+                        );
+                        const overall =
+                          evaluable.length > 0
+                            ? evaluable.reduce((s, r) => s + r.score, 0) /
+                              evaluable.length
+                            : null;
+                        const scoreColor =
+                          overall != null
+                            ? overall >= 7
+                              ? "text-emerald-600"
+                              : overall >= 4
+                                ? "text-amber-600"
+                                : "text-gray-700"
+                            : "text-gray-500";
+                        if (evaluable.length === 0) return null;
+                        return (
+                          <div className="rounded-xl border-2 border-gray-200 bg-white px-4 py-3 shadow-sm">
+                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Overall score
+                            </p>
+                            <p className={`text-2xl font-bold tabular-nums ${scoreColor}`}>
+                              {overall != null
+                                ? (Math.round(overall * 10) / 10).toFixed(1)
+                                : "—"}
+                              /10
+                            </p>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Session summary from evaluation report */}
+                      {selectedEvaluationSubmission?.evaluationReport?.session_summary && (
+                        <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+                            Session summary
+                          </p>
+                          <p className="text-sm text-gray-700 leading-relaxed">
+                            {selectedEvaluationSubmission.evaluationReport.session_summary}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Timeline with criteria highlights from evidence; duration comes from the video */}
+                      {(() => {
+                        const report =
+                          selectedEvaluationSubmission.evaluationReport;
+                        const criteriaResults = report.criteria_results ?? [];
+                        const highlights = [];
+                        for (const r of criteriaResults) {
+                          if (!Array.isArray(r.evidence)) continue;
+                          for (const ev of r.evidence) {
+                            const ts = Number(ev.ts);
+                            const tsEnd = Number(ev.ts_end ?? ev.ts);
+                            if (!Number.isFinite(ts)) continue;
+                            highlights.push({
+                              startSec: ts,
+                              endSec:
+                                Number.isFinite(tsEnd) && tsEnd > ts
+                                  ? tsEnd
+                                  : undefined,
+                              label: ev.observation?.slice(0, 80) ?? "Evidence",
+                              category: r.criterion ?? "Evidence",
+                              description: ev.observation ?? null,
+                              score: r.score,
+                            });
+                          }
+                        }
+                        const durationHintSec =
+                          recordingSession?.stats?.videoStats?.durationSeconds > 0
+                            ? recordingSession.stats.videoStats.durationSeconds
+                            : recordingSession?.videoChunks?.length > 0
+                              ? (() => {
+                                  let sum = 0;
+                                  for (const c of recordingSession.videoChunks) {
+                                    const start = c.startTime ? new Date(c.startTime).getTime() : NaN;
+                                    const end = (c.endTime ? new Date(c.endTime) : c.startTime ? new Date(c.startTime) : null)?.getTime();
+                                    if (Number.isFinite(start) && Number.isFinite(end) && end >= start) sum += (end - start) / 1000;
+                                  }
+                                  return sum > 0 ? sum : undefined;
+                                })()
+                              : undefined;
+                        return (
+                          <div className="mb-2 space-y-1">
+                            {recordingVideoLoading ? (
+                              <div className="rounded-xl border border-gray-200 bg-gray-50 overflow-hidden w-full">
+                                <div className="relative aspect-video bg-gray-900 flex flex-col items-center justify-center gap-3">
+                                  <Loader2 className="w-10 h-10 text-white/80 animate-spin" aria-hidden />
+                                  <p className="text-sm text-white/90 font-medium">Loading video…</p>
+                                </div>
+                              </div>
+                            ) : (
+                              <VideoTimelineWithCriteria
+                                key={selectedEvaluationSubmission._id}
+                                highlights={highlights}
+                                videoUrl={recordingVideoObjectUrl ?? null}
+                                durationHintSec={durationHintSec}
+                                className="w-full"
+                              />
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {selectedEvaluationSubmission.evaluationReport
+                        .criteria_results?.length > 0 && (
+                        <div>
+                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">
+                            Criteria results
+                          </p>
+                          <div className="space-y-3">
+                            {selectedEvaluationSubmission.evaluationReport.criteria_results.map(
+                              (r, i) => {
+                                const scoreColor =
+                                  r.evaluable
+                                    ? r.score >= 7
+                                      ? "border-l-emerald-500 bg-emerald-50/50"
+                                      : r.score >= 4
+                                        ? "border-l-amber-500 bg-amber-50/50"
+                                        : "border-l-gray-400 bg-gray-50"
+                                    : "border-l-gray-300 bg-gray-50";
+                                const scoreTextColor = r.evaluable
+                                  ? r.score >= 7
+                                    ? "text-emerald-700"
+                                    : r.score >= 4
+                                      ? "text-amber-700"
+                                      : "text-gray-700"
+                                  : "text-gray-500";
+                                return (
                                 <div
-                                  key={idx}
-                                  className="border border-gray-200 rounded-lg overflow-hidden bg-white text-sm"
+                                  key={i}
+                                  className={`rounded-lg border border-gray-200 border-l-4 p-4 shadow-sm ${scoreColor}`}
                                 >
-                                  <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center gap-2">
-                                    <span className="font-medium text-gray-800">
-                                      Call {idx + 1}
-                                    </span>
-                                    {event.type && (
-                                      <Badge className="bg-gray-200 text-gray-700 text-xs">
-                                        {event.type}
-                                      </Badge>
-                                    )}
-                                    {event.model && (
-                                      <span className="text-gray-500 text-xs">
-                                        {event.model}
-                                      </span>
-                                    )}
-                                    {event.tokens?.total != null && (
-                                      <span className="text-gray-500 text-xs">
-                                        {event.tokens.total} tokens
-                                      </span>
-                                    )}
-                                    {event.latency != null && (
-                                      <span className="text-gray-500 text-xs">
-                                        {event.latency}ms
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="px-3 py-2 border-b border-gray-100">
-                                    <p className="text-xs font-medium text-gray-500 mb-1">
-                                      Prompt
+                                  <div className="flex items-start justify-between gap-3">
+                                    <p className="font-semibold text-gray-900">
+                                      {r.criterion}
                                     </p>
-                                    <div className="text-gray-800 whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
-                                      {promptText.length > 500
-                                        ? promptText.slice(0, 500) + "..."
-                                        : promptText}
-                                      {promptText.length > 500 && (
-                                        <span className="text-gray-400 text-xs">
-                                          {" "}
-                                          ({promptText.length} chars)
-                                        </span>
-                                      )}
-                                    </div>
+                                    <span className={`text-xl font-bold tabular-nums shrink-0 ${scoreTextColor}`}>
+                                      {r.evaluable ? `${r.score}` : "—"}/10
+                                    </span>
                                   </div>
-                                  <div className="px-3 py-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setExpandedChatIndices((prev) => {
-                                          const next = new Set(prev);
-                                          if (next.has(idx)) next.delete(idx);
-                                          else next.add(idx);
-                                          return next;
-                                        });
-                                      }}
-                                      className="flex items-center gap-1 text-[#1E3A8A] hover:underline font-medium text-xs"
-                                    >
-                                      {isExpanded ? (
-                                        <ChevronDown className="w-3.5 h-3.5" />
-                                      ) : (
-                                        <ChevronRight className="w-3.5 h-3.5" />
-                                      )}
-                                      {isExpanded
-                                        ? "Hide response"
-                                        : "Show response"}
-                                    </button>
-                                    {isExpanded && (
-                                      <div className="mt-2 p-2 bg-gray-50 rounded border border-gray-200 text-gray-800 whitespace-pre-wrap break-words max-h-64 overflow-y-auto font-mono text-xs">
-                                        {responseText}
-                                      </div>
+                                  <div className="flex flex-wrap gap-2 mt-1 mb-2">
+                                    <span className="text-xs text-gray-500">
+                                      Confidence: {r.confidence}
+                                    </span>
+                                    {!r.evaluable && (
+                                      <span className="text-amber-600 text-xs">
+                                        Not evaluable
+                                      </span>
                                     )}
-                                    <div className="mt-2 pt-2 border-t border-gray-100">
+                                  </div>
+                                  <p className="text-sm text-gray-700 leading-relaxed">
+                                    {r.verdict}
+                                  </p>
+                                  {r.evidence?.length > 0 && (
+                                    <div className="mt-2">
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setExpandedRawJsonIndices((prev) => {
-                                            const next = new Set(prev);
-                                            if (next.has(idx)) next.delete(idx);
-                                            else next.add(idx);
-                                            return next;
-                                          });
+                                          setExpandedEvidenceCriteria(
+                                            (prev) => {
+                                              const next = new Set(prev);
+                                              if (next.has(i)) next.delete(i);
+                                              else next.add(i);
+                                              return next;
+                                            }
+                                          );
                                         }}
-                                        className="text-gray-500 hover:text-gray-700 text-xs"
+                                        className="text-[#1E3A8A] hover:underline text-xs font-medium"
                                       >
-                                        {expandedRawJsonIndices.has(idx)
-                                          ? "Hide raw JSON"
-                                          : "View raw JSON"}
+                                        Evidence: {r.evidence.length} moment(s){" "}
+                                        {expandedEvidenceCriteria.has(i)
+                                          ? "▼"
+                                          : "▶"}
                                       </button>
-                                      {expandedRawJsonIndices.has(idx) && (
-                                        <pre className="mt-2 p-2 bg-gray-100 rounded border border-gray-200 text-gray-700 whitespace-pre-wrap break-words max-h-48 overflow-y-auto font-mono text-xs">
-                                          {JSON.stringify(event, null, 2)}
-                                        </pre>
+                                      {expandedEvidenceCriteria.has(i) && (
+                                        <ul className="mt-2 space-y-2 pl-3 border-l-2 border-gray-200">
+                                          {r.evidence.map((ev, evIdx) => (
+                                            <li
+                                              key={evIdx}
+                                              className="text-xs text-gray-700"
+                                            >
+                                              <span className="text-gray-500 font-medium">
+                                                {ev.ts}s–{ev.ts_end}s
+                                              </span>
+                                              <p className="mt-0.5 text-gray-600">
+                                                {ev.observation}
+                                              </p>
+                                            </li>
+                                          ))}
+                                        </ul>
                                       )}
                                     </div>
-                                  </div>
+                                  )}
                                 </div>
-                              );
-                            }
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Task results */}
-                {selectedEvaluationSubmission.llmWorkflow.taskResults?.length >
-                  0 && (
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-900 mb-2">
-                      Task results
-                    </h3>
-                    <div className="border border-gray-200 rounded-lg overflow-hidden">
-                      <table className="w-full text-sm">
-                        <thead className="bg-gray-50 border-b border-gray-200">
-                          <tr>
-                            <th className="text-left px-3 py-2 font-medium text-gray-700">
-                              Task
-                            </th>
-                            <th className="text-left px-3 py-2 font-medium text-gray-700">
-                              Status
-                            </th>
-                            <th className="text-left px-3 py-2 font-medium text-gray-700">
-                              Tests
-                            </th>
-                            <th className="text-left px-3 py-2 font-medium text-gray-700">
-                              Time
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100">
-                          {selectedEvaluationSubmission.llmWorkflow.taskResults.map(
-                            (task, idx) => (
-                              <tr key={idx} className="hover:bg-gray-50/50">
-                                <td className="px-3 py-2">
-                                  {task.taskName || task.taskId || "—"}
-                                </td>
-                                <td className="px-3 py-2">
-                                  <Badge
-                                    className={
-                                      task.status === "passed"
-                                        ? "bg-green-100 text-green-700"
-                                        : "bg-red-100 text-red-700"
-                                    }
-                                  >
-                                    {task.status}
-                                  </Badge>
-                                </td>
-                                <td className="px-3 py-2">
-                                  {task.testResults
-                                    ? `${task.testResults.passed ?? 0}/${task.testResults.total ?? 0} passed`
-                                    : "—"}
-                                </td>
-                                <td className="px-3 py-2">
-                                  {task.executionTime != null
-                                    ? `${(task.executionTime / 1000).toFixed(1)}s`
-                                    : "—"}
-                                </td>
-                              </tr>
-                            )
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {/* Workflow scores */}
-                {selectedEvaluationSubmission.llmWorkflow.scores && (
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-900 mb-2">
-                      Workflow scores
-                    </h3>
-                    <div className="space-y-3">
-                      {selectedEvaluationSubmission.llmWorkflow.scores.overall
-                        ?.score != null && (
-                        <div className="flex items-center gap-3 p-3 bg-[#1E3A8A]/5 rounded-lg border border-[#1E3A8A]/20">
-                          <span className="text-lg font-bold text-[#1E3A8A]">
-                            Overall:{" "}
-                            {
-                              selectedEvaluationSubmission.llmWorkflow.scores
-                                .overall.score
-                            }
-                            /100
-                          </span>
-                          {selectedEvaluationSubmission.llmWorkflow.scores
-                            .overall.reasonCodes?.length > 0 && (
-                            <span className="text-xs text-gray-600">
-                              {selectedEvaluationSubmission.llmWorkflow.scores.overall.reasonCodes.join(
-                                ", "
-                              )}
-                            </span>
-                          )}
+                                );
+                              }
+                            )}
+                          </div>
                         </div>
                       )}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {[
-                          {
-                            key: "correctness",
-                            label: "Correctness",
-                            max: 40,
-                            s: selectedEvaluationSubmission.llmWorkflow.scores
-                              .correctness,
-                          },
-                          {
-                            key: "efficiency",
-                            label: "Efficiency",
-                            max: 20,
-                            s: selectedEvaluationSubmission.llmWorkflow.scores
-                              .efficiency,
-                          },
-                          {
-                            key: "promptQuality",
-                            label: "Prompt quality",
-                            max: 15,
-                            s: selectedEvaluationSubmission.llmWorkflow.scores
-                              .promptQuality,
-                          },
-                          {
-                            key: "structure",
-                            label: "Structure",
-                            max: 20,
-                            s: selectedEvaluationSubmission.llmWorkflow.scores
-                              .structure,
-                          },
-                          {
-                            key: "reliability",
-                            label: "Reliability",
-                            max: 5,
-                            s: selectedEvaluationSubmission.llmWorkflow.scores
-                              .reliability,
-                          },
-                        ].map(
-                          ({ key, label, max, s }) =>
-                            s?.score != null && (
+
+                      <p className="text-xs text-gray-500 pt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+                        {recordingVideoObjectUrl && recordingSession ? (
+                          <button
+                            type="button"
+                            onClick={() => downloadProctoringVideo(recordingSession._id)}
+                            className="text-[#1E3A8A] hover:underline"
+                          >
+                            Download recording
+                          </button>
+                        ) : null}
+                        <Link
+                          to="/DemoReplay"
+                          className="text-[#1E3A8A] hover:underline"
+                        >
+                          Timeline demo with sample video
+                        </Link>
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {/* Screen transcript: human-readable enriched (stateful chunked) when available, else raw OCR */}
+                  {selectedEvaluationSubmission && (
+                    <div className="space-y-3">
+                      <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-[#1E3A8A]" />
+                        Screen transcript
+                      </h3>
+                      {selectedEvaluationSubmission.enrichedTranscript ? (
+                        <EnrichedTranscriptView enriched={selectedEvaluationSubmission.enrichedTranscript} />
+                      ) : recordingTranscriptLoading ? (
+                        <div className="flex items-center gap-2 text-sm text-gray-500 py-4">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Loading…
+                        </div>
+                      ) : recordingTranscriptError ? (
+                        <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                          {recordingTranscriptError}
+                        </p>
+                      ) : !recordingSession ? (
+                        <p className="text-sm text-gray-500">
+                          No proctoring session for this submission.
+                        </p>
+                      ) : recordingSession.transcript?.status !== "completed" ? (
+                        <p className="text-sm text-gray-500">
+                          Screen transcript not available yet.
+                        </p>
+                      ) : Array.isArray(recordingTranscript) && recordingTranscript.length > 0 ? (
+                        <div className="bg-gray-50 rounded-lg border border-gray-200 p-3 max-h-[40vh] overflow-y-auto space-y-2">
+                          <p className="text-xs text-gray-500 mb-2">Raw transcript (human-readable summary not yet generated)</p>
+                          {recordingTranscript.map((seg, idx) => (
+                            <div
+                              key={idx}
+                              className="text-xs border-b border-gray-200 pb-2 last:border-0 last:pb-0"
+                            >
+                              <span className="text-gray-500 font-medium">
+                                {seg.ts && new Date(seg.ts).toLocaleTimeString()}
+                                {seg.app ? ` · ${seg.app}` : ""}
+                                {seg.region ? ` · ${seg.region}` : ""}
+                              </span>
+                              <p className="mt-0.5 text-gray-700 break-words">
+                                {(seg.text_content || seg.description || "").slice(0, 300)}
+                                {(seg.text_content || seg.description || "").length > 300 ? "…" : ""}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-500">
+                          No transcript segments.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {!selectedEvaluationSubmission?.evaluationReport && selectedEvaluationSubmission ? (
+                    <div className="py-8 text-center">
+                      <BarChart3 className="w-12 h-12 mx-auto mb-2 text-gray-400" />
+                      <p className="text-gray-500 mb-3">
+                        No workflow evaluation data for this submission.
+                      </p>
+                      {selectedEvaluationSubmission.evaluationError && (
+                        <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4 max-w-md mx-auto">
+                          {selectedEvaluationSubmission.evaluationError}
+                        </p>
+                      )}
+                      {!selectedEvaluationSubmission.evaluationError && (
+                        <p className="text-xs text-gray-400 mb-4">
+                          Evaluation runs automatically after submit when the
+                          assessment has evaluation criteria and the candidate
+                          used proctoring. You can run it manually below if
+                          needed.
+                        </p>
+                      )}
+                      <Button
+                        onClick={async () => {
+                          if (!currentUser || !selectedEvaluationSubmission)
+                            return;
+                          setEvaluatingSubmissionId(
+                            selectedEvaluationSubmission._id
+                          );
+                          try {
+                            const token = await currentUser.getIdToken();
+                            const result = await runSubmissionEvaluation(
+                              selectedEvaluationSubmission._id,
+                              token
+                            );
+                            if (result.success) {
+                              const submissionsResult =
+                                await getSubmissionsForAssessment(
+                                  assessmentId,
+                                  token
+                                );
+                              if (submissionsResult.success) {
+                                setSubmissions(submissionsResult.data || []);
+                                const updated = submissionsResult.data?.find(
+                                  (s) =>
+                                    s._id === selectedEvaluationSubmission._id
+                                );
+                                if (updated)
+                                  setSelectedEvaluationSubmission(updated);
+                                toast({
+                                  title: "Evaluation complete",
+                                  description:
+                                    "Workflow evaluation has been updated.",
+                                });
+                              }
+                            } else {
+                              const errMsg =
+                                "error" in result
+                                  ? result.error
+                                  : "Evaluation failed";
+                              toast({
+                                title: "Evaluation failed",
+                                description: errMsg,
+                                variant: "destructive",
+                              });
+                            }
+                          } catch (err) {
+                            toast({
+                              title: "Evaluation failed",
+                              description:
+                                err?.message || "An unexpected error occurred.",
+                              variant: "destructive",
+                            });
+                          } finally {
+                            setEvaluatingSubmissionId(null);
+                          }
+                        }}
+                        disabled={
+                          evaluatingSubmissionId ===
+                          selectedEvaluationSubmission?._id
+                        }
+                      >
+                        {evaluatingSubmissionId ===
+                        selectedEvaluationSubmission?._id
+                          ? "Running…"
+                          : "Run workflow evaluation"}
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="agent" className="mt-4">
+                <div className="max-h-[70vh] overflow-y-auto pr-1 space-y-4">
+                  {selectedEvaluationSubmission?.interview?.transcript?.turns?.length > 0 ? (
+                    <div className="space-y-4">
+                      <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                        <MessageSquare className="w-4 h-4 text-[#1E3A8A]" />
+                        Agent communication
+                      </h3>
+                      <p className="text-xs text-gray-500">
+                        ElevenLabs voice interview: how the candidate communicated with the AI agent.
+                      </p>
+
+                      {/* Communication summary & score */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 sm:col-span-2">
+                          <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1.5">Summary</p>
+                          <p className="text-sm text-gray-700">
+                            {selectedEvaluationSubmission.interview.summary || "No summary generated yet."}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                          <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">Communication score</p>
+                          <p className="text-lg font-semibold text-emerald-600">
+                            {selectedEvaluationSubmission.interview.analysis?.communicationScore != null
+                              ? `${selectedEvaluationSubmission.interview.analysis.communicationScore}/10`
+                              : "—"}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Transcript */}
+                      <div>
+                        <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+                          Transcript ({selectedEvaluationSubmission.interview.transcript.turns.length} turns)
+                        </p>
+                        <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 space-y-4 max-h-[50vh] overflow-y-auto">
+                          {selectedEvaluationSubmission.interview.transcript.turns.map((turn, index) => (
+                            <div
+                              key={index}
+                              className={`flex gap-3 ${turn.role === "agent" ? "justify-start" : "justify-end"}`}
+                            >
                               <div
-                                key={key}
-                                className="p-3 bg-gray-50 rounded-lg border border-gray-200 text-sm"
+                                className={`max-w-[85%] rounded-lg p-3 ${
+                                  turn.role === "agent"
+                                    ? "bg-white border border-gray-200"
+                                    : "bg-[#1E3A8A] text-white"
+                                }`}
                               >
-                                <div className="flex justify-between items-center">
-                                  <span className="font-medium text-gray-700">
-                                    {label}
-                                  </span>
-                                  <span className="font-semibold">
-                                    {s.score}/{max}
-                                  </span>
-                                </div>
-                                {s.evidence &&
-                                  typeof s.evidence === "object" &&
-                                  Object.keys(s.evidence).length > 0 && (
-                                    <p className="text-xs text-gray-500 mt-1 truncate">
-                                      {Object.entries(s.evidence)
-                                        .filter(
-                                          ([_, v]) =>
-                                            v != null &&
-                                            v !== "" &&
-                                            v !== false
-                                        )
-                                        .map(([k, v]) => `${k}: ${v}`)
-                                        .join(" · ")}
-                                    </p>
-                                  )}
+                                <p className="text-xs font-medium mb-1 opacity-70">
+                                  {turn.role === "agent" ? "Agent" : "Candidate"}
+                                </p>
+                                <p className={turn.role === "agent" ? "text-sm text-gray-700" : "text-sm text-white"}>
+                                  {turn.text}
+                                </p>
+                                {(turn.startMs != null || turn.endMs != null) && (
+                                  <p className="text-xs opacity-60 mt-1">
+                                    {turn.startMs != null && `${(turn.startMs / 1000).toFixed(1)}s`}
+                                    {turn.startMs != null && turn.endMs != null && " – "}
+                                    {turn.endMs != null && `${(turn.endMs / 1000).toFixed(1)}s`}
+                                  </p>
+                                )}
                               </div>
-                            )
-                        )}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
-
-                {!selectedEvaluationSubmission.llmWorkflow.evaluation &&
-                  !selectedEvaluationSubmission.llmWorkflow.trace &&
-                  !(
-                    selectedEvaluationSubmission.llmWorkflow.taskResults?.length >
-                    0
-                  ) &&
-                  !selectedEvaluationSubmission.llmWorkflow.scores && (
-                    <p className="text-sm text-gray-500">
-                      No evaluation data for this submission.
-                    </p>
+                  ) : (
+                    <div className="py-10 text-center">
+                      <MessageSquare className="w-12 h-12 mx-auto mb-2 text-gray-400" />
+                      <p className="text-gray-600 text-sm">No agent communication for this submission.</p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Voice interview transcript appears here after the candidate completes the ElevenLabs interview.
+                      </p>
+                    </div>
                   )}
-              </div>
-            ) : (
-              <div className="py-8 text-center text-gray-500">
-                <BarChart3 className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                <p>No LLM workflow data for this submission.</p>
-              </div>
-            )}
+                </div>
+              </TabsContent>
+            </Tabs>
+
           </DialogContent>
         </Dialog>
 

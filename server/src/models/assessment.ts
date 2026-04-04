@@ -71,6 +71,18 @@ const AssessmentSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+
+    // Evaluation criteria for grading submissions
+    evaluationCriteria: {
+      type: [String],
+      default: [],
+    },
+
+    // Pre-grounded criteria (from grounder), keyed by criterion text for evaluation pipeline
+    evaluationCriteriaGroundings: {
+      type: mongoose.Schema.Types.Mixed,
+      default: undefined,
+    },
   },
   {
     timestamps: true, // Adds createdAt and updatedAt automatically

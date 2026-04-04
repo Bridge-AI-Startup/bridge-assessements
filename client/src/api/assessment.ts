@@ -15,6 +15,7 @@ export type Assessment = {
   starterCodeFiles?: StarterCodeFile[];
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
+  evaluationCriteria?: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -27,6 +28,7 @@ export type AssessmentCreate = {
   starterFilesGitHubLink?: string;
   starterCodeFiles?: StarterCodeFile[];
   interviewerCustomInstructions?: string;
+  evaluationCriteria?: string[];
 };
 
 export type AssessmentUpdate = {
@@ -38,6 +40,7 @@ export type AssessmentUpdate = {
   starterCodeFiles?: StarterCodeFile[];
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
+  evaluationCriteria?: string[];
 };
 
 /**
@@ -62,12 +65,16 @@ export async function createAssessment(
       title: string;
       description: string;
       timeLimit: number;
+      evaluationCriteria?: string[];
       starterCodeFiles?: StarterCodeFile[];
     } = {
       title: data.title,
       description: data.description,
       timeLimit: data.timeLimit,
     };
+    if (data.evaluationCriteria && data.evaluationCriteria.length > 0) {
+      requestBody.evaluationCriteria = data.evaluationCriteria;
+    }
     if (data.starterCodeFiles !== undefined) {
       requestBody.starterCodeFiles = data.starterCodeFiles;
     }
@@ -222,6 +229,7 @@ export async function updateAssessment(
       starterCodeFiles?: StarterCodeFile[];
       interviewerCustomInstructions?: string;
       isSmartInterviewerEnabled?: boolean;
+      evaluationCriteria?: string[];
     } = {};
 
     if (data.title !== undefined) {
@@ -248,6 +256,9 @@ export async function updateAssessment(
     }
     if (data.isSmartInterviewerEnabled !== undefined) {
       updateBody.isSmartInterviewerEnabled = data.isSmartInterviewerEnabled;
+    }
+    if (data.evaluationCriteria !== undefined) {
+      updateBody.evaluationCriteria = data.evaluationCriteria;
     }
 
     const response = await patch(`/assessments/${id}`, updateBody, {
