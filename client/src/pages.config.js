@@ -12,8 +12,6 @@ import Subscription from "./pages/Subscription";
 import BillingSuccess from "./pages/BillingSuccess";
 import BillingCancel from "./pages/BillingCancel";
 import CancelSubscription from "./pages/CancelSubscription";
-import Pricing from "./pages/Pricing";
-import Contact from "./pages/Contact";
 import ProctoringTest from "./pages/ProctoringTest";
 import ProctoringStorageTest from "./pages/ProctoringStorageTest";
 import DemoReplay from "./pages/DemoReplay";
@@ -34,8 +32,6 @@ export const PAGES = {
   BillingSuccess: BillingSuccess,
   BillingCancel: BillingCancel,
   CancelSubscription: CancelSubscription,
-  Pricing: Pricing,
-  Contact: Contact,
   ProctoringTest: ProctoringTest,
   ProctoringStorageTest: ProctoringStorageTest,
   DemoReplay: DemoReplay,
