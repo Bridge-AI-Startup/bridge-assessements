@@ -37,8 +37,9 @@ async function main() {
   }
 
   if (withSteps) {
-    const { step1, assessment } = await generateAssessmentComponentsWithSteps(jobDescription);
-    const out = JSON.stringify({ step1, assessment });
+    const { step1, assessment, behavioralChecks } =
+      await generateAssessmentComponentsWithSteps(jobDescription);
+    const out = JSON.stringify({ step1, assessment, behavioralChecks });
     console.log(out);
     return;
   }

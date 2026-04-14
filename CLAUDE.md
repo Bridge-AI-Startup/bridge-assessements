@@ -289,8 +289,9 @@ server/src/
 - `POST /delete` -- Delete account + all data including Pinecone namespaces (auth required)
 
 **Assessment routes** (`/api/assessments`):
-- `POST /generate` -- AI-generate assessment from job description (auth required)
-- `POST /` -- Create assessment with subscription tier check (auth required)
+- `POST /generate` -- AI-generate assessment from job description; response includes `behavioralChecks` and `starterCodeFiles` (auth required)
+- `POST /generate-behavioral-checks` -- Generate stack-agnostic behavioral checks from `title` + `description` (manual creation path; auth required)
+- `POST /` -- Create assessment with subscription tier check (auth required); optional `behavioralChecks` array
 - `GET /` -- List user's assessments (auth required)
 - `GET /:id` -- Get single assessment (auth required)
 - `PATCH /:id` -- Update assessment (auth required)
@@ -381,6 +382,7 @@ Webhook routes (`/webhooks` and `/api/billing/webhook`) use `express.raw()` befo
 ### AI Prompts (`server/src/prompts/index.ts`)
 - `PROMPT_EXTRACT_ASSESSMENT_REQUIREMENTS` -- Extract requirements, infer stack/level from job description
 - `PROMPT_GENERATE_ASSESSMENT_COMPONENTS` -- Generate assessment title, description, timeLimit (with few-shot examples)
+- `PROMPT_GENERATE_BEHAVIORAL_CHECKS` -- Generate stack-agnostic behavioral checks from title, description, and requirements summary
 - `PROMPT_ASSESSMENT_QUALITY_REVIEW` -- Review and validate generated assessment quality
 - `PROMPT_ASSESSMENT_CHAT` -- System prompt for AI assistant editing assessments
 - `PROMPT_GENERATE_INTERVIEW_QUESTIONS_RETRIEVAL` -- Generate interview questions from RAG code chunks
@@ -483,7 +485,7 @@ client/src/
 6. Auth state checked via `onAuthStateChanged()` in page components; redirects to `/` if not authenticated
 
 ### Data Flow: Assessment Lifecycle
-1. **Employer creates assessment**: Landing page → enters job description → stored in localStorage → CreateAssessment page auto-fills → AI generates assessment (3-step: extract requirements → generate components → quality review) → saves to DB
+1. **Employer creates assessment**: Landing page → enters job description → stored in localStorage → CreateAssessment page auto-fills → AI generates assessment (extract requirements → generate components → quality review → behavioral checks) → saves to DB; manual path calls `generate-behavioral-checks` then create
 2. **Employer edits assessment**: AssessmentEditor page → AI chat sidebar for refinements → configure time limit, interview questions, smart interviewer, starter files, custom instructions
 3. **Employer shares link**: Generates unique token-based URL for candidate (single or bulk via CSV upload with email invitations via Resend)
 4. **Candidate accesses assessment**: Opens token URL → CandidateAssessment page → views read-only details → starts timer (status: pending → in-progress, captures IP/user agent)
@@ -514,7 +516,7 @@ Legacy subscription (nested): `subscription.tier` (free/paid), `subscription.str
 Current subscription (top-level): `stripeCustomerId` (sparse indexed), `stripeSubscriptionId` (sparse indexed), `subscriptionStatus` (active/canceled/past_due/trialing/incomplete/incomplete_expired/unpaid/null), `currentPeriodEnd`, `cancelAtPeriodEnd`, `cancellationReason`, `cancellationDate`
 
 ### Assessment
-Fields: `userId` (ref User, indexed), `title` (max 200), `description`, `timeLimit` (minutes, min 1), `numInterviewQuestions` (1-4, default 2), `starterFilesGitHubLink`, `interviewerCustomInstructions`, `isSmartInterviewerEnabled` (default true)
+Fields: `userId` (ref User, indexed), `title` (max 200), `description`, `timeLimit` (minutes, min 1), `numInterviewQuestions` (1-4, default 2), `starterFilesGitHubLink`, `starterCodeFiles[]` { path, content }, `interviewerCustomInstructions`, `isSmartInterviewerEnabled` (default true), `behavioralChecks[]` (plain-language observable product behaviors; stack-agnostic), `evaluationCriteria[]` (proctoring/transcript rubric), `evaluationCriteriaGroundings` (optional)
 
 ### Submission
 Core: `token` (unique, indexed), `assessmentId` (ref Assessment, indexed), `candidateName`, `candidateEmail`, `status` (pending/in-progress/submitted/expired/opted-out), `startedAt`, `submittedAt`, `timeSpent` (minutes)

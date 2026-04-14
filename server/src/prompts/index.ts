@@ -294,6 +294,43 @@ ${assessment.description}
 Generate the appropriate starter code files as JSON: { "files": [{ "path": "...", "content": "..." }, ...] }`,
 };
 
+/** Stack-agnostic behavioral checks for an assessment (same bar for every candidate). */
+export const PROMPT_GENERATE_BEHAVIORAL_CHECKS = {
+  provider: "anthropic" as AIProvider,
+  model: undefined as string | undefined,
+
+  system: `You write short, plain-language behavioral checks for a take-home coding assessment.
+
+Each check is ONE observable fact about what the product must do or allow, from a user or system perspective. Examples of good checks:
+- "Someone can add a note."
+- "Notes still show up after refreshing the page."
+- "Invalid input shows a clear error message."
+
+Rules:
+- Checks must NOT name specific technologies, frameworks, file paths, or APIs (no "React", "useState", "POST /api/notes", "App.tsx").
+- Checks must NOT require a particular implementation—any reasonable solution that satisfies the assessment could pass.
+- Phrase checks so they can be verified by observing the running app or system behavior.
+- Cover core workflows, persistence where relevant, and error/edge behavior where the assessment implies it.
+- Use varied, concrete wording; avoid duplicating the same idea.
+- Output valid JSON only with key "checks": an array of strings.`,
+
+  userTemplate: (input: {
+    title: string;
+    description: string;
+    requirementsSummary: string;
+  }): string =>
+    `Assessment title:
+${input.title}
+
+Requirements summary (from job / extraction):
+${input.requirementsSummary}
+
+Project instructions for the candidate (full assessment description):
+${input.description}
+
+Generate behavioral checks as JSON: { "checks": ["...", ...] }`,
+};
+
 // ============================================================================
 // INTERVIEW QUESTION GENERATION PROMPTS
 // ============================================================================

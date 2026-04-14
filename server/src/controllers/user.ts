@@ -11,6 +11,7 @@ import SubmissionModel from "../models/submission.js";
 import RepoIndexModel from "../models/repoIndex.js";
 import { deleteNamespace } from "../utils/pinecone.js";
 import { stripe } from "../services/stripe.js";
+import { shouldEnforceFreeTierAssessmentLimit } from "../utils/subscription.js";
 
 export type CreateRequest = {
   companyName: string;
@@ -98,6 +99,8 @@ export const loginUser: RequestHandler = async (req, res, next) => {
     let assessmentCount = 0;
     let assessmentLimit: number | null = null;
 
+    const enforceFreeTierAssessmentCap = shouldEnforceFreeTierAssessmentLimit();
+
     if (!isSubscribed) {
       // Count assessments
       const AssessmentModel = (await import("../models/assessment.js")).default;
@@ -105,7 +108,9 @@ export const loginUser: RequestHandler = async (req, res, next) => {
       assessmentCount = await AssessmentModel.countDocuments({
         userId: user._id,
       });
-      assessmentLimit = 1; // Free tier limit: 1 assessment
+      if (enforceFreeTierAssessmentCap) {
+        assessmentLimit = 1; // Free tier limit: 1 assessment (production only)
+      }
 
       // Count submissions across all user's assessments
       const userAssessments = await AssessmentModel.find({ userId: user._id });
@@ -125,7 +130,8 @@ export const loginUser: RequestHandler = async (req, res, next) => {
       assessmentLimit,
       submissionCount,
       submissionLimit,
-      canCreateAssessment: isSubscribed || assessmentCount < 1,
+      canCreateAssessment:
+        isSubscribed || !enforceFreeTierAssessmentCap || assessmentCount < 1,
       canCreateSubmission: isSubscribed || submissionCount < 3,
     };
 

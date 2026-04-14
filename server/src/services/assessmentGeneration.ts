@@ -12,6 +12,7 @@ import {
   PROMPT_GENERATE_ASSESSMENT_COMPONENTS,
   PROMPT_ASSESSMENT_QUALITY_REVIEW,
   PROMPT_GENERATE_STARTER_CODE,
+  PROMPT_GENERATE_BEHAVIORAL_CHECKS,
   LEVEL_INSTRUCTIONS,
 } from "../prompts/index.js";
 import {
@@ -23,6 +24,7 @@ import {
   assessmentOutputSchema,
   assessmentReviewSchema,
   starterCodeGenerationSchema,
+  behavioralChecksOutputSchema,
   type RequirementsExtraction,
   type AssessmentOutput,
 } from "./schemas/assessmentGeneration.js";
@@ -75,6 +77,49 @@ export function getExamplesForStack(
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Plain-language behavioral checks (stack-agnostic). On failure returns [] so assessment creation can continue.
+ */
+export async function generateBehavioralChecks(input: {
+  title: string;
+  description: string;
+  requirementsSummary: string;
+}): Promise<string[]> {
+  const messages: ChatMessage[] = [
+    { role: "system", content: PROMPT_GENERATE_BEHAVIORAL_CHECKS.system },
+    { role: "user", content: PROMPT_GENERATE_BEHAVIORAL_CHECKS.userTemplate(input) },
+  ];
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_PARSE_RETRIES; attempt++) {
+    try {
+      const { result } = await createChatCompletionWithStructuredOutput(
+        "assessment_generation",
+        messages,
+        behavioralChecksOutputSchema,
+        {
+          temperature: 0.4,
+          maxTokens: 2000,
+          provider: PROMPT_GENERATE_BEHAVIORAL_CHECKS.provider as "openai" | "anthropic" | "gemini",
+          model: PROMPT_GENERATE_BEHAVIORAL_CHECKS.model,
+        }
+      );
+      return result.checks;
+    } catch (err) {
+      lastError = err;
+      if (attempt < MAX_PARSE_RETRIES) {
+        console.warn(
+          `⚠️ [assessmentGeneration] generateBehavioralChecks attempt ${attempt} failed, retrying...`,
+          err
+        );
+        await delay(RETRY_DELAY_MS * attempt);
+      }
+    }
+  }
+  console.warn("⚠️ [assessmentGeneration] generateBehavioralChecks failed after retries:", lastError);
+  return [];
 }
 
 /** Step 1: Extract requirements and infer stack/level from job description. Uses structured output + retries. */
@@ -437,6 +482,26 @@ async function generateStarterCode(
   return [];
 }
 
+async function finalizeAssessmentChain(
+  step1: RequirementsExtraction,
+  assessment: { title: string; description: string; timeLimit: number; reviewFeedback?: string },
+  stack: AssessmentStack,
+  level: RoleLevel
+): Promise<{
+  step1: RequirementsExtraction;
+  assessment: { title: string; description: string; timeLimit: number; reviewFeedback?: string };
+  behavioralChecks: string[];
+  starterCodeFiles: Array<{ path: string; content: string }>;
+}> {
+  const behavioralChecks = await generateBehavioralChecks({
+    title: assessment.title,
+    description: assessment.description,
+    requirementsSummary: step1.summary,
+  });
+  const starterCodeFiles = await generateStarterCode(assessment, stack, level);
+  return { step1, assessment, behavioralChecks, starterCodeFiles };
+}
+
 interface AssessmentChainState {
   jobDescription: string;
   domain: string;
@@ -491,6 +556,7 @@ async function runAssessmentChain(
 ): Promise<{
   step1: RequirementsExtraction;
   assessment: { title: string; description: string; timeLimit: number; reviewFeedback?: string };
+  behavioralChecks: string[];
   starterCodeFiles: Array<{ path: string; content: string }>;
 }> {
   const domain = selectRandomDomain();
@@ -531,19 +597,15 @@ async function runAssessmentChain(
       const retryAssessment = normalizeOutput(step2Retry, jobDescription);
       const retryRule = runQualityReview(retryAssessment, jobDescription);
       if (!retryRule.passed) {
-        const scFiles490 = await generateStarterCode(retryAssessment, state.stack!, state.level!);
-        return { step1, assessment: { ...retryAssessment, reviewFeedback: retryRule.reviewFeedback }, starterCodeFiles: scFiles490 };
+        return finalizeAssessmentChain(step1, { ...retryAssessment, reviewFeedback: retryRule.reviewFeedback }, state.stack!, state.level!);
       }
       const retryLLM = await runQualityReviewLLM(retryAssessment, jobDescription);
       if (retryLLM.passed) {
-        const scFiles493 = await generateStarterCode(retryAssessment, state.stack!, state.level!);
-        return { step1, assessment: retryAssessment, starterCodeFiles: scFiles493 };
+        return finalizeAssessmentChain(step1, retryAssessment, state.stack!, state.level!);
       }
-      const scFiles494 = await generateStarterCode(retryAssessment, state.stack!, state.level!);
-      return { step1, assessment: { ...retryAssessment, reviewFeedback: retryLLM.reviewFeedback }, starterCodeFiles: scFiles494 };
+      return finalizeAssessmentChain(step1, { ...retryAssessment, reviewFeedback: retryLLM.reviewFeedback }, state.stack!, state.level!);
     } catch {
-      const scFiles496 = await generateStarterCode(assessment, state.stack!, state.level!);
-      return { step1, assessment: { ...assessment, reviewFeedback: ruleReview.reviewFeedback }, starterCodeFiles: scFiles496 };
+      return finalizeAssessmentChain(step1, { ...assessment, reviewFeedback: ruleReview.reviewFeedback }, state.stack!, state.level!);
     }
   }
 
@@ -564,24 +626,19 @@ async function runAssessmentChain(
       const retryAssessment = normalizeOutput(step2Retry, jobDescription);
       const retryRule = runQualityReview(retryAssessment, jobDescription);
       if (!retryRule.passed) {
-        const scFiles517 = await generateStarterCode(retryAssessment, state.stack!, state.level!);
-        return { step1, assessment: { ...retryAssessment, reviewFeedback: retryRule.reviewFeedback }, starterCodeFiles: scFiles517 };
+        return finalizeAssessmentChain(step1, { ...retryAssessment, reviewFeedback: retryRule.reviewFeedback }, state.stack!, state.level!);
       }
       const retryLLM = await runQualityReviewLLM(retryAssessment, jobDescription);
       if (retryLLM.passed) {
-        const scFiles520 = await generateStarterCode(retryAssessment, state.stack!, state.level!);
-        return { step1, assessment: retryAssessment, starterCodeFiles: scFiles520 };
+        return finalizeAssessmentChain(step1, retryAssessment, state.stack!, state.level!);
       }
-      const scFiles521 = await generateStarterCode(retryAssessment, state.stack!, state.level!);
-      return { step1, assessment: { ...retryAssessment, reviewFeedback: retryLLM.reviewFeedback }, starterCodeFiles: scFiles521 };
+      return finalizeAssessmentChain(step1, { ...retryAssessment, reviewFeedback: retryLLM.reviewFeedback }, state.stack!, state.level!);
     } catch {
-      const scFiles523 = await generateStarterCode(assessment, state.stack!, state.level!);
-      return { step1, assessment: { ...assessment, reviewFeedback: llmReview.reviewFeedback }, starterCodeFiles: scFiles523 };
+      return finalizeAssessmentChain(step1, { ...assessment, reviewFeedback: llmReview.reviewFeedback }, state.stack!, state.level!);
     }
   }
 
-  const starterCodeFiles = await generateStarterCode(assessment, state.stack!, state.level!);
-  return { step1, assessment, starterCodeFiles };
+  return finalizeAssessmentChain(step1, assessment, state.stack!, state.level!);
 }
 
 /**
@@ -592,11 +649,18 @@ async function runAssessmentChain(
 export async function generateAssessmentComponents(
   jobDescription: string,
   options?: GenerateAssessmentOptions
-): Promise<{ title: string; description: string; timeLimit: number; reviewFeedback?: string; starterCodeFiles: Array<{ path: string; content: string }> }> {
+): Promise<{
+  title: string;
+  description: string;
+  timeLimit: number;
+  reviewFeedback?: string;
+  behavioralChecks: string[];
+  starterCodeFiles: Array<{ path: string; content: string }>;
+}> {
   console.log("🤖 [assessmentGeneration] LCEL chain: extract requirements → generate assessment → review");
   try {
-    const { assessment, starterCodeFiles } = await runAssessmentChain(jobDescription, options);
-    return { ...assessment, starterCodeFiles };
+    const { assessment, behavioralChecks, starterCodeFiles } = await runAssessmentChain(jobDescription, options);
+    return { ...assessment, behavioralChecks, starterCodeFiles };
   } catch (error) {
     console.error("❌ [assessmentGeneration] Error:", error);
     console.log("🔄 [assessmentGeneration] Falling back to simple defaults...");
@@ -605,7 +669,7 @@ export async function generateAssessmentComponents(
       ? firstSentence
       : jobDescription.substring(0, 50).trim() + "...";
     const description = `Assessment generation could not be completed. Please try again or create the assessment manually. (Error: ${error instanceof Error ? error.message : "unknown"})`;
-    return { title, description, timeLimit: 60, starterCodeFiles: [] };
+    return { title, description, timeLimit: 60, behavioralChecks: [], starterCodeFiles: [] };
   }
 }
 
@@ -620,6 +684,7 @@ export async function generateAssessmentComponentsWithSteps(
 ): Promise<{
   step1: RequirementsExtraction;
   assessment: { title: string; description: string; timeLimit: number; reviewFeedback?: string };
+  behavioralChecks: string[];
   starterCodeFiles: Array<{ path: string; content: string }>;
 }> {
   console.log("🤖 [assessmentGeneration] LCEL chain (with steps output): extract requirements → generate assessment → review");
@@ -641,6 +706,6 @@ export async function generateAssessmentComponentsWithSteps(
       stackConfidence: "low",
       levelConfidence: "low",
     };
-    return { step1, assessment, starterCodeFiles: [] };
+    return { step1, assessment, behavioralChecks: [], starterCodeFiles: [] };
   }
 }

@@ -72,6 +72,12 @@ const AssessmentSchema = new mongoose.Schema(
       default: true,
     },
 
+    // Stack-agnostic observable behaviors (product-level bar for all candidates on this assessment)
+    behavioralChecks: {
+      type: [String],
+      default: [],
+    },
+
     // Evaluation criteria for grading submissions
     evaluationCriteria: {
       type: [String],

@@ -80,6 +80,29 @@ const makeOptionalEvaluationCriteriaValidator = () =>
     .withMessage(
       "evaluationCriteria must be an array of non-empty strings"
     );
+
+const BEHAVIORAL_CHECKS_MAX = 18;
+const BEHAVIORAL_CHECK_MAX_LEN = 400;
+
+const makeOptionalBehavioralChecksValidator = () =>
+  body("behavioralChecks")
+    .optional()
+    .isArray()
+    .withMessage("behavioralChecks must be an array")
+    .bail()
+    .custom((arr: unknown) => {
+      if (!Array.isArray(arr)) return false;
+      if (arr.length > BEHAVIORAL_CHECKS_MAX) return false;
+      return arr.every(
+        (c) =>
+          typeof c === "string" &&
+          c.trim().length > 0 &&
+          c.length <= BEHAVIORAL_CHECK_MAX_LEN
+      );
+    })
+    .withMessage(
+      `behavioralChecks must be at most ${BEHAVIORAL_CHECKS_MAX} non-empty strings, each at most ${BEHAVIORAL_CHECK_MAX_LEN} characters`
+    );
 const makeOptionalStarterCodeFilesValidator = () =>
   body("starterCodeFiles")
     .optional()
@@ -90,6 +113,7 @@ export const createAssessmentValidation = [
   makeTitleValidator(),
   makeDescriptionValidator(),
   makeTimeLimitValidator(),
+  makeOptionalBehavioralChecksValidator(),
   makeOptionalEvaluationCriteriaValidator(),
   makeOptionalStarterCodeFilesValidator(),
 ];
@@ -98,6 +122,7 @@ export const updateAssessmentValidation = [
   makeOptionalTitleValidator(),
   makeOptionalDescriptionValidator(),
   makeOptionalTimeLimitValidator(),
+  makeOptionalBehavioralChecksValidator(),
   makeOptionalEvaluationCriteriaValidator(),
   makeOptionalStarterCodeFilesValidator(),
 ];
@@ -126,4 +151,9 @@ export const generateAssessmentValidation = [
   makeDescriptionValidator(),
   makeOptionalStackValidator(),
   makeOptionalLevelValidator(),
+];
+
+export const generateBehavioralChecksValidation = [
+  makeTitleValidator(),
+  makeDescriptionValidator(),
 ];

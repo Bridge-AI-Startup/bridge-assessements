@@ -229,6 +229,8 @@ app.use("/api/assessments", apiLimiter); // Apply general limit
 app.use("/api/assessments", assessmentRoutes);
 console.log("  ✅ /api/assessments routes registered");
 console.log("     - POST /api/assessments");
+console.log("     - POST /api/assessments/generate");
+console.log("     - POST /api/assessments/generate-behavioral-checks");
 console.log("     - GET /api/assessments");
 console.log("     - GET /api/assessments/:id");
 console.log("     - PATCH /api/assessments/:id");
