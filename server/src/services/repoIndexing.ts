@@ -698,9 +698,9 @@ async function generateInterviewQuestionsAfterIndexing(
       return;
     }
 
-    // Check if smart interviewer is enabled
-    const isSmartInterviewerEnabled = (assessment as any).isSmartInterviewerEnabled !== false; // Default to true if not set
-    
+    const isSmartInterviewerEnabled =
+      (assessment as any).isSmartInterviewerEnabled === true;
+
     if (!isSmartInterviewerEnabled) {
       console.log(
         `[repoIndexing] Smart interviewer is disabled for assessment ${assessment._id}, skipping interview question generation`

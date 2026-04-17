@@ -1,5 +1,7 @@
 import { RequestHandler } from "express";
 import { validationResult } from "express-validator";
+import path from "path";
+import util from "util";
 
 import { AuthError } from "../errors/auth.js";
 import AssessmentModel from "../models/assessment.js";
@@ -26,6 +28,9 @@ import { jsonlToScreenMoments } from "../services/evaluation/momentGrouper.js";
 import { interpretChunked } from "../services/evaluation/interpreterChunked.js";
 import { interpretStateful } from "../services/evaluation/interpreterStateful.js";
 import { getFrameStorage } from "../services/capture/storage.js";
+import { gradeSubmissionBehavioral } from "../services/behavioralGrading/index.js";
+import { getGradingEvidenceStorage } from "../services/gradingEvidence/storage.js";
+import { calculateAndSaveScores } from "../services/scoring.js";
 
 const TRANSCRIPT_POLL_INTERVAL_MS = 15000;
 const TRANSCRIPT_POLL_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
@@ -40,6 +45,56 @@ async function setEvaluationFailed(
       evaluationError: message,
     },
   });
+}
+
+async function setBehavioralGradingFailed(
+  submissionId: string,
+  message: string
+): Promise<void> {
+  await SubmissionModel.findByIdAndUpdate(submissionId, {
+    $set: {
+      behavioralGradingStatus: "failed",
+      behavioralGradingError: message,
+    },
+  });
+}
+
+function triggerBehavioralGradingInBackground(
+  submissionId: string,
+  source: "submitSubmissionByToken" | "submitSubmission" | "manual"
+): void {
+  SubmissionModel.findByIdAndUpdate(submissionId, {
+    $set: {
+      behavioralGradingStatus: "pending",
+      behavioralGradingError: null,
+      behavioralGradingReport: null,
+    },
+  })
+    .then(() => gradeSubmissionBehavioral(submissionId))
+    .then((report) =>
+      SubmissionModel.findByIdAndUpdate(submissionId, {
+        $set: {
+          behavioralGradingStatus: "completed",
+          behavioralGradingError: null,
+          behavioralGradingReport: report,
+        },
+      })
+    )
+    .catch((err) => {
+      const message =
+        err instanceof Error ? err.message : String(err ?? "unknown error");
+      console.error(
+        `[${source}] Behavioral grading failed for submission ${submissionId}: ${message}`
+      );
+      console.error(
+        `[${source}] Behavioral grading error detail:`,
+        util.inspect(err, { depth: 8, breakLength: 120 })
+      );
+      setBehavioralGradingFailed(
+        submissionId,
+        message
+      ).catch(() => {});
+    });
 }
 
 /**
@@ -196,12 +251,6 @@ async function loadRawJsonlForSubmission(submissionId: string): Promise<string |
   }
 }
 
-export type StartSubmissionRequest = {
-  assessmentId: string;
-  candidateName?: string;
-  candidateEmail?: string;
-};
-
 export type UpdateSubmissionRequest = {
   githubLink?: string;
   timeSpent?: number;
@@ -280,68 +329,6 @@ export const startAssessment: RequestHandler = async (req, res, next) => {
     response.timeRemaining = timeRemaining;
 
     res.status(200).json(response);
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Start a new submission (public endpoint - no auth required)
- * @deprecated - Use startAssessment with token instead
- */
-export const startSubmission: RequestHandler = async (req, res, next) => {
-  const errors = validationResult(req);
-  try {
-    validationErrorParser(errors);
-    const { assessmentId, candidateName, candidateEmail } =
-      req.body as StartSubmissionRequest;
-
-    // Verify assessment exists
-    const assessment = await AssessmentModel.findById(assessmentId);
-    if (!assessment) {
-      return res.status(404).json({ error: "Assessment not found" });
-    }
-
-    // Create new submission
-    const submissionData: {
-      assessmentId: string;
-      candidateName?: string;
-      candidateEmail?: string;
-      status: string;
-      startedAt: Date;
-      metadata?: {
-        ipAddress?: string;
-        userAgent?: string;
-      };
-    } = {
-      assessmentId,
-      status: "in-progress",
-      startedAt: new Date(),
-    };
-
-    if (candidateName) {
-      submissionData.candidateName = candidateName;
-    }
-    if (candidateEmail) {
-      submissionData.candidateEmail = candidateEmail;
-    }
-
-    // Add metadata if available
-    const ipAddress = req.ip || req.socket.remoteAddress;
-    const userAgent = req.get("user-agent");
-    if (ipAddress || userAgent) {
-      submissionData.metadata = {};
-      if (ipAddress) {
-        submissionData.metadata.ipAddress = ipAddress;
-      }
-      if (userAgent) {
-        submissionData.metadata.userAgent = userAgent;
-      }
-    }
-
-    const newSubmission = await SubmissionModel.create(submissionData);
-
-    res.status(201).json(newSubmission);
   } catch (error) {
     next(error);
   }
@@ -681,6 +668,19 @@ export const submitSubmissionByToken: RequestHandler = async (
         });
     }
 
+    // Trigger behavioral grading after submission (public repos only in v1)
+    if (
+      submission.githubRepo &&
+      submission.githubRepo.owner &&
+      submission.githubRepo.repo &&
+      submission.githubRepo.pinnedCommitSha
+    ) {
+      triggerBehavioralGradingInBackground(
+        submission._id.toString(),
+        "submitSubmissionByToken"
+      );
+    }
+
     res.status(200).json(updatedSubmission);
   } catch (error) {
     next(error);
@@ -786,6 +786,19 @@ export const submitSubmission: RequestHandler = async (req, res, next) => {
       });
     }
 
+    // Trigger behavioral grading after submission (public repos only in v1)
+    if (
+      submission.githubRepo &&
+      submission.githubRepo.owner &&
+      submission.githubRepo.repo &&
+      submission.githubRepo.pinnedCommitSha
+    ) {
+      triggerBehavioralGradingInBackground(
+        submission._id.toString(),
+        "submitSubmission"
+      );
+    }
+
     res.status(200).json(updatedSubmission);
   } catch (error) {
     next(error);
@@ -824,6 +837,25 @@ export const getSubmissionsForAssessment: RequestHandler = async (
         createdAt: -1,
       })
       .lean();
+
+    // Backfill workflow scores when an LLM trace exists but scores were not saved yet
+    const MAX_SCORE_BACKFILL = 8;
+    let scheduled = 0;
+    for (const sub of submissions) {
+      if (scheduled >= MAX_SCORE_BACKFILL) break;
+      if (sub.status !== "submitted" && sub.status !== "expired") continue;
+      const wf = (sub as any).llmWorkflow;
+      if (!wf?.trace?.events?.length) continue;
+      if (wf?.scores?.overall?.score != null) continue;
+
+      scheduled++;
+      calculateAndSaveScores(sub._id.toString()).catch((err) => {
+        console.warn(
+          `[getSubmissionsForAssessment] Workflow score backfill failed for ${sub._id}:`,
+          err
+        );
+      });
+    }
 
     res.status(200).json(submissions);
   } catch (error) {
@@ -964,9 +996,10 @@ export const generateInterviewQuestionsByToken: RequestHandler = async (
       });
     }
 
-    // Check if smart interviewer is enabled
-    const isSmartInterviewerEnabled = (assessment as any).isSmartInterviewerEnabled !== false; // Default to true if not set
-    
+    // Interview pipeline is off unless explicitly enabled on the assessment
+    const isSmartInterviewerEnabled =
+      (assessment as any).isSmartInterviewerEnabled === true;
+
     if (!isSmartInterviewerEnabled) {
       return res.status(403).json({
         error: "Smart AI Interviewer is disabled for this assessment",
@@ -1151,9 +1184,9 @@ export const generateInterviewQuestions: RequestHandler = async (
       });
     }
 
-    // Check if smart interviewer is enabled
-    const isSmartInterviewerEnabled = (assessment as any).isSmartInterviewerEnabled !== false; // Default to true if not set
-    
+    const isSmartInterviewerEnabled =
+      (assessment as any).isSmartInterviewerEnabled === true;
+
     if (!isSmartInterviewerEnabled) {
       return res.status(403).json({
         error: "Smart AI Interviewer is disabled for this assessment",
@@ -1693,6 +1726,11 @@ export const calculateWorkflowScoresHandler: RequestHandler = async (
     submission.llmWorkflow.scores = scores;
     submission.llmWorkflow.scores.calculatedAt = new Date();
     submission.llmWorkflow.scores.calculationVersion = "1.0.0";
+    const subAny = submission as any;
+    subAny.scores = subAny.scores || {};
+    subAny.scores.overall = scores.overall.score;
+    subAny.scores.calculatedAt = new Date();
+    subAny.scores.calculationVersion = "2.0.0";
     await submission.save();
 
     res.json(scores);
@@ -1702,7 +1740,7 @@ export const calculateWorkflowScoresHandler: RequestHandler = async (
 };
 
 /**
- * Calculate full scores (completeness + workflow) for a submission
+ * Calculate workflow scores (5D + overall) when an LLM trace exists
  * POST /api/submissions/:submissionId/calculate-scores
  * Employer only (auth required)
  */
@@ -1739,6 +1777,108 @@ export const calculateScoresHandler: RequestHandler = async (
     const result = await calculateAndSaveScores(submissionId);
 
     res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Trigger behavioral grading (manual re-run)
+ * POST /api/submissions/:submissionId/grade-behavioral
+ * Employer only (auth required)
+ */
+export const gradeBehavioralHandler: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { submissionId } = req.params;
+    const uid = (req as any).user?.uid;
+    if (!uid) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const userId = await getUserIdFromFirebaseUid(uid);
+    const submission = await SubmissionModel.findById(submissionId).populate(
+      "assessmentId"
+    );
+
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    const assessment = submission.assessmentId as any;
+    if (assessment.userId.toString() !== userId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    triggerBehavioralGradingInBackground(submissionId, "manual");
+
+    return res.status(202).json({
+      message: "Behavioral grading queued.",
+      submissionId,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Read a behavioral grading artifact (employer only)
+ * GET /api/submissions/:submissionId/behavioral-artifact?key=<artifactKey>
+ */
+export const getBehavioralArtifactHandler: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { submissionId } = req.params;
+    const key = String(req.query.key || "");
+    const uid = (req as any).user?.uid;
+    if (!uid) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    if (!key) {
+      return res.status(400).json({ error: "Missing artifact key" });
+    }
+    if (!key.startsWith(`submissions/${submissionId}/`)) {
+      return res.status(400).json({ error: "Invalid artifact key scope" });
+    }
+
+    const userId = await getUserIdFromFirebaseUid(uid);
+    const submission = await SubmissionModel.findById(submissionId).populate(
+      "assessmentId"
+    );
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+    const assessment = submission.assessmentId as any;
+    if (assessment.userId.toString() !== userId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const storage = getGradingEvidenceStorage();
+    if (!(await storage.exists(key))) {
+      return res.status(404).json({ error: "Artifact not found" });
+    }
+
+    const ext = path.extname(key).toLowerCase();
+    const contentType =
+      ext === ".png"
+        ? "image/png"
+        : ext === ".jpg" || ext === ".jpeg"
+        ? "image/jpeg"
+        : ext === ".webp"
+        ? "image/webp"
+        : ext === ".json"
+        ? "application/json"
+        : "application/octet-stream";
+
+    const data = await storage.readArtifact(key);
+    res.setHeader("Content-Type", contentType);
+    return res.status(200).send(Buffer.from(data));
   } catch (error) {
     next(error);
   }

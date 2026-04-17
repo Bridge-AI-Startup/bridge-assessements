@@ -87,6 +87,37 @@ export type Submission = {
       evaluable: boolean;
     }>;
   };
+  behavioralGradingStatus?: "pending" | "completed" | "failed" | null;
+  behavioralGradingError?: string | null;
+  behavioralGradingReport?: {
+    sandbox?: { sandboxId?: string; timeoutMs?: number };
+    runbook?: {
+      summary?: string;
+      readmeRequirementPassed?: boolean;
+      readmeRequirementDetail?: {
+        passed: boolean;
+        inferredStepCount: number;
+        hasInstallCommand: boolean;
+        hasTestCommand: boolean;
+        hasStartCommand: boolean;
+        summary: string;
+        notes?: string;
+      };
+      baseUrl?: string;
+      /** cli_stdout | web_server | unclear — README/runbook classification */
+      executionProfile?: string;
+      evidence?: unknown[];
+    };
+    cases?: Array<{
+      checkText: string;
+      verdict: "pass" | "fail" | "inconclusive";
+      evidence?: unknown[];
+      artifacts?: string[];
+    }>;
+    startedAt?: string;
+    completedAt?: string;
+    reportArtifactKey?: string;
+  };
 };
 
 /**
@@ -397,6 +428,82 @@ export async function deleteSubmission(
       success: false,
       error: result.error || "Failed to delete submission",
     };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Trigger behavioral grading for a submission (employer endpoint)
+ */
+export async function runBehavioralGrading(
+  submissionId: string,
+  token?: string
+): Promise<APIResult<{ message: string; submissionId: string }>> {
+  try {
+    let authToken = token;
+    if (!authToken) {
+      const user = auth.currentUser;
+      if (!user) {
+        return { success: false, error: "No user is currently signed in" };
+      }
+      authToken = await user.getIdToken();
+    }
+
+    const response = await post(
+      `/submissions/${submissionId}/grade-behavioral`,
+      {},
+      {
+        Authorization: `Bearer ${authToken}`,
+      }
+    );
+    const result = await response.json();
+    if (!response.ok) {
+      return {
+        success: false,
+        error: result.error || "Failed to queue behavioral grading",
+      };
+    }
+    return { success: true, data: result };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+export async function getBehavioralArtifactBlob(
+  submissionId: string,
+  key: string,
+  token?: string
+): Promise<APIResult<Blob>> {
+  try {
+    let authToken = token;
+    if (!authToken) {
+      const user = auth.currentUser;
+      if (!user) {
+        return { success: false, error: "No user is currently signed in" };
+      }
+      authToken = await user.getIdToken();
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/submissions/${submissionId}/behavioral-artifact?key=${encodeURIComponent(
+        key
+      )}`,
+      {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      }
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      return {
+        success: false,
+        error: text || "Failed to load behavioral artifact",
+      };
+    }
+    const blob = await response.blob();
+    return { success: true, data: blob };
   } catch (error) {
     return handleAPIError(error);
   }

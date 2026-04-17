@@ -37,6 +37,16 @@ This document lists all backend routes and their access requirements.
 
 ---
 
+## Competition Routes (`/api/competitions`)
+
+| Method | Route | Access | Description |
+|--------|-------|--------|-------------|
+| GET | `/api/competitions/:slug` | **Public** | Competition metadata and assessment summary for hackathon dashboard |
+| POST | `/api/competitions/:slug/join` | **Public** | Self-serve registration (creates pending submission); rate limited in production |
+| GET | `/api/competitions/:slug/leaderboard` | **Public** | Leaderboard for submitted entries (if `leaderboardPublic` on competition) |
+
+---
+
 ## Submission Routes (`/api/submissions`)
 
 ### Employer-Only Routes (Auth Token Required)
@@ -73,7 +83,6 @@ This document lists all backend routes and their access requirements.
 | POST | `/api/submissions/token/:token/submit` | **Public (Token in URL)** | Submit assessment by token |
 | POST | `/api/submissions/token/:token/generate-interview` | **Public (Token in URL)** | Generate interview questions by token |
 | POST | `/api/submissions/token/:token/opt-out` | **Public (Token in URL)** | Opt out of assessment by token |
-| POST | `/api/submissions/start` | **Public** | Start a new submission (deprecated) |
 | POST | `/api/submissions/:id/submit` | **Public** | Final submission by ID |
 | PATCH | `/api/submissions/:id` | **Public** | Update a submission (auto-save) |
 | GET | `/api/submissions/:id` | **Public** | Get a submission by ID (for candidate to resume) |

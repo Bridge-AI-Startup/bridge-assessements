@@ -412,7 +412,7 @@ export default function CreateAssessment() {
           {/* Subheading */}
           <p className="text-lg text-gray-500 max-w-2xl mx-auto leading-relaxed">
             {creationMode === "ai"
-              ? "Drop in a job description, Bridge creates the take-home project, generates AI interview questions, and scores submissions for you."
+              ? "Drop in a job description, Bridge creates the take-home project and scores submissions for you."
               : "Create your own assessment by providing the title, description, and time limit."}
           </p>
         </motion.div>

@@ -117,14 +117,6 @@ router.post(
   SubmissionController.searchCode
 );
 
-// Public endpoint - Start a new submission
-// Must come before /:id route
-router.post(
-  "/start",
-  SubmissionValidator.startSubmissionValidation,
-  SubmissionController.startSubmission
-);
-
 // Public endpoint - Final submission by token
 // Must come before /:id route
 router.post(
@@ -156,11 +148,24 @@ router.post(
   SubmissionController.calculateWorkflowScoresHandler
 );
 
-// Employer endpoint - Calculate full scores (completeness + workflow)
+// Employer endpoint - Calculate workflow scores (same as calculate-workflow-scores aggregate path)
 router.post(
   "/:submissionId/calculate-scores",
   [verifyAuthToken],
   SubmissionController.calculateScoresHandler
+);
+
+// Employer endpoint - Trigger behavioral grading (manual re-run)
+router.post(
+  "/:submissionId/grade-behavioral",
+  [verifyAuthToken],
+  SubmissionController.gradeBehavioralHandler
+);
+
+router.get(
+  "/:submissionId/behavioral-artifact",
+  [verifyAuthToken],
+  SubmissionController.getBehavioralArtifactHandler
 );
 
 // Public endpoint - Final submission

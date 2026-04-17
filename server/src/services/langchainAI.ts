@@ -9,6 +9,11 @@ import {
 import { StructuredOutputParser } from "@langchain/core/output_parsers";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { z } from "zod";
+import {
+  extractFirstJsonObject,
+  parseJsonObjectLenient,
+  unwrapObject,
+} from "./evaluation/llmJson.js";
 
 export type AIProvider = "openai" | "anthropic" | "gemini";
 
@@ -303,10 +308,15 @@ export async function createChatCompletion(
         }
       }
 
-      // Try to extract JSON if wrapped in markdown or other text
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        content = jsonMatch[0];
+      // Prefer balanced `{...}` extraction (avoids greedy match spanning multiple objects).
+      const balanced = extractFirstJsonObject(content.trim());
+      if (balanced) {
+        content = balanced;
+      } else {
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          content = jsonMatch[0];
+        }
       }
 
       return {
@@ -369,9 +379,20 @@ export async function createChatCompletionWithStructuredOutput<T extends z.ZodTy
     responseFormat: { type: "json_object" },
   });
 
-  const parsed = await parser.parse(response.content);
+  let parsed: unknown;
+  try {
+    parsed = parseJsonObjectLenient(response.content);
+  } catch (e) {
+    console.error(
+      "[LangChain] Structured output JSON parse failed:",
+      e instanceof Error ? e.message : e
+    );
+    throw e;
+  }
+  const unwrapped = unwrapObject(parsed);
+  const result = schema.parse(unwrapped);
   return {
-    result: parsed as z.infer<T>,
+    result,
     model: response.model,
     provider: response.provider,
   };

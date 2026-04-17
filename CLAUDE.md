@@ -91,6 +91,7 @@ stripe listen --forward-to localhost:5050/api/billing/webhook
   - Code change / diff analysis
   - Completeness scoring
 - **AI Provider SDKs**: OpenAI (`openai`), Anthropic (`@anthropic-ai/sdk`), Google Gemini (`@google/generative-ai`)
+- **E2B SDK** (`e2b`) for isolated cloud sandbox execution during behavioral grading
 - **Pinecone** vector database for code indexing and retrieval
 - **Stripe** for subscription billing (checkout sessions + webhooks)
 - **Resend** for sending candidate invitation emails
@@ -131,6 +132,11 @@ See `server/config.env.example` for the full list. Key variables:
 **Vector DB:**
 - `PINECONE_API_KEY` / `PINECONE_INDEX_NAME` -- Pinecone vector DB
 
+**Behavioral Grading Sandbox:**
+- `E2B_API_KEY` -- API key for E2B sandbox execution
+- `GRADING_STORAGE_DIR` -- Local directory for behavioral grading artifacts/reports (default: `./storage/grading`)
+- `BEHAVIORAL_GRADING_MAX_CONCURRENT` -- Max concurrent behavioral grading jobs (default: `2`)
+
 **Billing:**
 - `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_PRICE_ID` / `APP_URL` -- Stripe billing
 
@@ -166,6 +172,7 @@ See `server/config.env.example` for the full list. Key variables:
 
 ### Frontend (`client/.env.local`)
 - `VITE_API_URL` -- Override API base URL (optional, auto-detected from mode)
+- `VITE_DEFAULT_COMPETITION_SLUG` -- Optional override for the competition slug (overrides [`client/src/config/competition.js`](client/src/config/competition.js) `SINGLE_COMPETITION_SLUG` when set)
 - `VITE_FIREBASE_API_KEY` / `VITE_FIREBASE_AUTH_DOMAIN` / `VITE_FIREBASE_PROJECT_ID`
 - `VITE_ELEVENLABS_AGENT_ID`
 
@@ -183,6 +190,7 @@ server/src/
 ├── models/
 │   ├── user.ts            # User schema (Firebase UID, company, Stripe subscription fields)
 │   ├── assessment.ts      # Assessment schema (title, description, time limit, settings)
+│   ├── competition.ts     # Competition / hackathon: slug, assessmentId, rules, registration window, leaderboard flag
 │   ├── submission.ts      # Submission schema (token, candidate info, GitHub repo, interview, scores, LLM workflow)
 │   ├── repoIndex.ts       # Repository indexing metadata for Pinecone
 │   ├── taskConfig.ts      # Task configuration for workflow evaluation
@@ -191,6 +199,7 @@ server/src/
 │   ├── user.ts            # /api/users/* -- create, whoami, delete
 │   ├── assessment.ts      # /api/assessments/* -- CRUD + generate + chat
 │   ├── submission.ts      # /api/submissions/* -- link generation, token access, submit, interview, scoring
+│   ├── competition.ts     # /api/competitions/* -- public competition metadata, self-serve join, leaderboard
 │   ├── billing.ts         # /api/billing/* -- checkout, status, cancel, reactivate, webhook
 │   ├── agentTools.ts      # /api/agent-tools/* -- ElevenLabs agent context retrieval
 │   ├── webhook.ts         # /webhooks/* -- ElevenLabs post-call webhook
@@ -200,6 +209,7 @@ server/src/
 │   ├── user.ts            # User creation, login (with tier limits), account deletion
 │   ├── assessment.ts      # Assessment CRUD, AI generation, chat
 │   ├── submission.ts      # All submission handlers (share links, submissions, interviews, scoring)
+│   ├── competition.ts     # Public competitions: get by slug, join (creates pending submission), leaderboard
 │   ├── billing.ts         # Stripe checkout, status, cancel, reactivate, webhook handler
 │   ├── webhook.ts         # ElevenLabs post-call transcript processing + summary generation
 │   ├── agentTools.ts      # Code context retrieval for ElevenLabs agent (Pinecone search)
@@ -223,6 +233,16 @@ server/src/
 │   │   └── taskRunner.ts      # Task execution engine (runs tests, captures git diffs)
 │   ├── workflowScoring/
 │   │   └── workflowScorer.ts  # 5-dimensional workflow scoring (correctness/efficiency/promptQuality/structure/reliability)
+│   ├── behavioralGrading/
+│   │   ├── index.ts           # E2B behavioral grading orchestrator + in-process concurrency queue
+│   │   ├── planner.ts         # LLM: README → runbook plan (install/test/start)
+│   │   ├── schema.ts          # Zod schemas for runbook
+│   │   ├── executor.ts        # Executes runbook commands; saves report JSON; readmeFromSandbox
+│   │   ├── judge.ts           # One-shot LLM judge (stdout/source/HTTP seed)
+│   │   ├── agentJudge.ts      # Tool-using judge (run_command/read_file in sandbox, then finish)
+│   │   └── artifacts.ts       # collectJudgeArtifacts + bashLc helpers
+│   ├── gradingEvidence/
+│   │   └── storage.ts         # Artifact storage abstraction for behavioral grading reports/screenshots
 │   ├── capture/
 │   │   ├── storage.ts       # IFrameStorage interface + LocalFrameStorage impl (S3-ready)
 │   │   ├── frameStorage.ts  # Store/retrieve frames and video chunks, update session model
@@ -274,9 +294,12 @@ server/src/
     ├── duplicateSubmissionWithTrace.ts
     ├── generateDummyConversation.ts
     ├── listSubmissions.ts
+    ├── seedCompetition.ts   # Link Mongo Competition slug → assessment (hackathon dashboard)
     ├── replaceSubmissionWithGeneratedMarkdown.ts
     ├── replaceTraceWithMarkdown.ts
     ├── seedDummyInterview.ts
+ ├── behavioral-grading-smoke.ts
+ ├── e2b-smoke.ts
     ├── test-assessment-generation.ts
     └── validateMarkdownTrace.ts
 ```
@@ -298,6 +321,11 @@ server/src/
 - `DELETE /:id` -- Delete assessment + all submissions + Pinecone data (auth required)
 - `POST /:id/chat` -- Chat with AI about assessment (auth required)
 
+**Competition routes** (`/api/competitions`, public):
+- `GET /:slug` -- Competition + assessment summary for hackathon dashboard (metadata, rules, dates)
+- `POST /:slug/join` -- Self-serve registration: creates a **pending** submission (same as employer generate-link) and returns `token` + `shareLink`; does **not** apply employer free-tier submission limits; stricter rate limit in production (30/hour/IP); duplicate email per assessment returns 409
+- `GET /:slug/leaderboard` -- Public leaderboard for submitted candidates (rank by `scores.overall`, then completeness, then workflow overall score); top 50 default, `?limit=` max 100; respects `leaderboardPublic` on the competition document
+
 **Submission routes** (`/api/submissions`):
 
 *Employer endpoints (auth required):*
@@ -313,19 +341,20 @@ server/src/
 - `POST /:submissionId/execute-tasks` -- Execute workflow evaluation tasks
 - `POST /:submissionId/calculate-workflow-scores` -- Calculate 5D workflow scores
 - `POST /:submissionId/calculate-scores` -- Calculate completeness + workflow scores
+- `POST /:submissionId/grade-behavioral` -- Trigger manual behavioral grading re-run (E2B + evidence capture)
+- `GET /:submissionId/behavioral-artifact` -- Retrieve stored behavioral grading artifacts (screenshots/report files)
 
 *Candidate endpoints (no auth, token-based):*
 - `GET /assessments/public/:id` -- Get public assessment details
 - `GET /token/:token` -- Get submission by token
 - `POST /token/:token/start` -- Start assessment (pending → in-progress, captures metadata)
-- `POST /token/:token/submit` -- Submit code (parses GitHub URL, resolves commit, starts indexing)
+- `POST /token/:token/submit` -- Submit code (parses GitHub URL, resolves commit, starts indexing, auto-triggers behavioral grading)
 - `POST /token/:token/generate-interview` -- Generate interview questions
 - `POST /token/:token/opt-out` -- Opt out with reason
 - `POST /token/:token/upload-trace` -- Upload LLM interaction trace file (multer)
-- `POST /start` -- Start new submission (legacy)
 - `PATCH /:id` -- Update submission (auto-save)
 - `GET /:id` -- Get submission by ID
-- `POST /:id/submit` -- Final submission (legacy)
+- `POST /:id/submit` -- Final submission (legacy, also auto-triggers behavioral grading)
 
 *Shared endpoints (auth or token):*
 - `GET /:submissionId/interview-agent-prompt` -- Get interview agent prompt
@@ -375,6 +404,7 @@ server/src/
 - General API: 100 requests / 15 minutes per IP
 - Auth endpoints (`/api/users/whoami`): 5 requests / 15 minutes per IP
 - Webhooks: 50 requests / 15 minutes per IP
+- Competition join (`POST /api/competitions/:slug/join`): 30 requests / 60 minutes per IP
 
 ### Raw Body Parsing
 Webhook routes (`/webhooks` and `/api/billing/webhook`) use `express.raw()` before `express.json()` to preserve the raw body for HMAC/Stripe signature verification. This is configured in `server.ts`.
@@ -412,6 +442,7 @@ client/src/
 │   ├── CandidateAssessment.jsx # Candidate views assessment -- read-only details, start timer, submit GitHub link, opt-out
 │   ├── CandidateSubmission.jsx # Shows mock submission data with code review
 │   ├── CandidateSubmitted.jsx  # Post-submission -- polls for interview questions, ElevenLabs voice interview
+│   ├── HackathonDashboard.jsx  # Challenge join + dashboard/leaderboard only; marketing landing may live on Framer (slug: `?slug=` > env > `config/competition.js`)
 │   ├── SubmissionsDashboard.jsx # Employer views submissions -- stats, filtering, dropoff analysis, interview modal, diff viewer
 │   ├── Subscription.jsx        # Billing plans -- Free tier vs Early Access
 │   ├── Pricing.jsx             # Public pricing page
@@ -423,6 +454,7 @@ client/src/
 │   ├── requests.ts        # Base HTTP client (fetch wrapper: get/post/put/patch/del with error handling)
 │   ├── assessment.ts      # Assessment API: create, list, get, update, delete, generate, chat
 │   ├── submission.ts      # Submission API: generateLink, bulk, invites, start, submit, interview, optOut, uploadTrace
+│   ├── competition.ts     # Public competition API: get by slug, join, leaderboard
 │   ├── billing.ts         # Billing API: checkout, status, cancel, reactivate
 │   ├── user.ts            # User API: verifyUser (whoami), createUser, deleteAccount
 │   └── proctoring.ts      # Proctoring API: createSession, grantConsent, uploadFrame, events, complete, video
@@ -448,7 +480,8 @@ client/src/
 │   │   └── ProctoringCompanionNotch.jsx # In-session ElevenLabs voice companion (notch dropdown, transcript flush)
 │   └── ui/                             # 60+ Shadcn UI components (auto-generated, rarely edited)
 ├── config/
-│   └── api.js             # API_BASE_URL: VITE_API_URL || localhost:5050 (dev) || Render URL (prod)
+│   ├── api.js             # API_BASE_URL: VITE_API_URL || localhost:5050 (dev) || Render URL (prod)
+│   └── competition.js     # SINGLE_COMPETITION_SLUG — default Mongo competition slug for `/HackathonDashboard`
 ├── firebase/
 │   └── firebase.js        # Firebase client init (auth, analytics)
 ├── hooks/
@@ -518,6 +551,9 @@ Current subscription (top-level): `stripeCustomerId` (sparse indexed), `stripeSu
 ### Assessment
 Fields: `userId` (ref User, indexed), `title` (max 200), `description`, `timeLimit` (minutes, min 1), `numInterviewQuestions` (1-4, default 2), `starterFilesGitHubLink`, `starterCodeFiles[]` { path, content }, `interviewerCustomInstructions`, `isSmartInterviewerEnabled` (default true), `behavioralChecks[]` (plain-language observable product behaviors; stack-agnostic), `evaluationCriteria[]` (proctoring/transcript rubric), `evaluationCriteriaGroundings` (optional)
 
+### Competition
+Fields: `slug` (unique, lowercase), `assessmentId` (ref Assessment), optional `title` / `description` / `rulesMarkdown` (dashboard copy; title/description fall back to assessment), `registrationOpen`, `competitionStartsAt`, `competitionEndsAt`, `leaderboardPublic` (default true). **Ops:** create an assessment in the app, then insert or update a `Competition` document with that `assessmentId` and share `/HackathonDashboard?slug=<slug>`.
+
 ### Submission
 Core: `token` (unique, indexed), `assessmentId` (ref Assessment, indexed), `candidateName`, `candidateEmail`, `status` (pending/in-progress/submitted/expired/opted-out), `startedAt`, `submittedAt`, `timeSpent` (minutes)
 
@@ -535,7 +571,9 @@ Metadata: `metadata` { ipAddress, userAgent }
 
 LLM Workflow: `llmWorkflow` { trace { sessionId (sparse indexed), events[] { timestamp, type (llm_call/tool_call/test_run/file_change), model, provider, prompt, response, tokens { input, output, total }, latency, cost, metadata }, totalTokens, totalCost, totalTime, totalCalls }, taskResults[] { taskId, taskName, status (passed/failed/timeout/error), testResults { passed, failed, total, failures[] }, executionTime, output, gitDiff, fileChanges[] }, scores { correctness (0-40) { breakdown: testPassRate/edgeCaseHandling/reliability, evidence }, efficiency (0-20) { breakdown: costPerTask/timeToGreen/turnEfficiency, evidence }, promptQuality (0-15) { breakdown: clarity/decomposition/feedbackUsage, evidence }, structure (0-20) { breakdown: modularity/configurability/observability/resilience, evidence }, reliability (0-5) { breakdown: failureHandling/safety, evidence }, overall { score (0-100), confidence (0-1), reasonCodes[] } }, evaluation { harnessVersion, tasksCompleted, tasksTotal, startedAt, completedAt } }
 
-Indexes: `{ assessmentId: 1, status: 1 }`, `{ candidateEmail: 1 }`, `{ "interview.conversationId": 1 }` (sparse), `{ "llmWorkflow.trace.sessionId": 1 }` (sparse)
+Behavioral grading: `behavioralGradingStatus` (`pending`/`completed`/`failed`), `behavioralGradingError`, `behavioralGradingReport` (runbook summary, per-check verdict/evidence, artifact keys, timings, sandbox metadata)
+
+Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`, `{ "interview.conversationId": 1 }` (sparse), `{ "llmWorkflow.trace.sessionId": 1 }` (sparse)
 
 ### TaskConfig
 Fields: `taskId` (unique, indexed), `taskName`, `description`, `files[]` { path, content (base64), isHidden }, `tests` { command, timeout (default 30000), hiddenTests[] { name, test code } }, `weights` { correctness (40), efficiency (20), promptQuality (15), structure (20), reliability (5) }, `language`, `difficulty` (easy/medium/hard), `estimatedTime`

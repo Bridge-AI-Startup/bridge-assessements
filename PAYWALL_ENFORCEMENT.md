@@ -40,8 +40,10 @@ if (!isSubscribed) {
 }
 ```
 
-#### Submission Creation (`POST /api/submissions/start`)
+#### Submission Creation (`POST /api/submissions/generate-link`)
 **File:** `server/src/controllers/submission.ts`
+
+> **Note:** `POST /api/submissions/start` was removed. Self-serve competition signups use `POST /api/competitions/:slug/join` and intentionally **do not** count toward the employer free-tier submission cap.
 
 ```typescript
 // Check subscription limits

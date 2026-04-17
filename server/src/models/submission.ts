@@ -9,7 +9,6 @@ const SubmissionSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
-      index: true,
       default: () => crypto.randomBytes(32).toString("hex"), // Generate 64-character hex token
     },
 
@@ -243,7 +242,7 @@ const SubmissionSchema = new mongoose.Schema(
       },
     },
 
-    // Scores (completeness, quality, etc.)
+    // Scores (overall = workflow aggregate when LLM trace exists; legacy completeness.* may remain on old docs)
     scores: {
       overall: {
         type: Number,
@@ -272,7 +271,6 @@ const SubmissionSchema = new mongoose.Schema(
           type: String,
           unique: true,
           sparse: true,
-          index: true,
         },
         events: [
           {
@@ -459,6 +457,25 @@ const SubmissionSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+
+    // Behavioral grading report (E2B + behavioral checks)
+    behavioralGradingReport: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+
+    // 'pending' = background behavioral grading running after submit; 'completed' | 'failed' when done; null/absent = idle
+    behavioralGradingStatus: {
+      type: String,
+      enum: ["pending", "completed", "failed"],
+      default: null,
+    },
+
+    // Short error reason for behavioral grading failures
+    behavioralGradingError: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true, // Adds createdAt and updatedAt automatically
@@ -467,15 +484,12 @@ const SubmissionSchema = new mongoose.Schema(
 
 // Index for efficient queries
 SubmissionSchema.index({ assessmentId: 1, status: 1 });
+SubmissionSchema.index({ assessmentId: 1, candidateEmail: 1 });
 SubmissionSchema.index({ candidateEmail: 1 });
-SubmissionSchema.index({ token: 1 }); // Already indexed via unique, but explicit for clarity
 
 // Sparse index on interview.conversationId for faster lookup/debugging
 // Sparse means it only indexes documents where conversationId exists
 SubmissionSchema.index({ "interview.conversationId": 1 }, { sparse: true });
-
-// Index for LLM workflow trace sessionId
-SubmissionSchema.index({ "llmWorkflow.trace.sessionId": 1 }, { sparse: true });
 
 const SubmissionModel = mongoose.model("Submission", SubmissionSchema);
 export default SubmissionModel;
