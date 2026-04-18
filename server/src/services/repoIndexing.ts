@@ -1,7 +1,7 @@
 /**
  * Repository Indexing Service
  *
- * Indexes GitHub repositories into Pinecone using line-based chunking.
+ * Indexes submission code snapshots into Pinecone using line-based chunking.
  * Creates embeddings for code chunks and stores them as vectors.
  */
 
@@ -10,9 +10,9 @@ import { join, extname } from "path";
 import SubmissionModel from "../models/submission.js";
 import RepoIndexModel from "../models/repoIndex.js";
 import {
-  downloadAndExtractRepoSnapshot,
   cleanupRepoSnapshot,
-} from "../utils/repoSnapshot.js";
+  getSubmissionSnapshot,
+} from "./submissionCode/snapshot.js";
 import { generateEmbeddings } from "../utils/embeddings.js";
 import { upsertVectors } from "../utils/pinecone.js";
 import { generateInterviewQuestionsFromRetrieval } from "./interviewGeneration.js";
@@ -311,24 +311,33 @@ export async function indexSubmissionRepo(submissionId: string): Promise<{
     throw new Error("Submission not found");
   }
 
-  if (
-    !submission.githubRepo ||
-    !submission.githubRepo.owner ||
-    !submission.githubRepo.repo ||
-    !submission.githubRepo.pinnedCommitSha
-  ) {
-    throw new Error(
-      "GitHub repository information not found for this submission"
-    );
+  const source = submission.codeSource === "upload" ? "upload" : "github";
+  const owner = submission.githubRepo?.owner || null;
+  const repo = submission.githubRepo?.repo || null;
+  const pinnedCommitSha = submission.githubRepo?.pinnedCommitSha || null;
+  const uploadSha256 = submission.codeUpload?.sha256 || null;
+
+  if (source === "github" && (!owner || !repo || !pinnedCommitSha)) {
+    throw new Error("GitHub repository information not found for submission.");
+  }
+  if (source === "upload" && !uploadSha256) {
+    throw new Error("Uploaded archive information not found for submission.");
   }
 
-  const { owner, repo, pinnedCommitSha } = submission.githubRepo;
-
   // Step 2: Check if RepoIndex already exists
-  let repoIndex = await RepoIndexModel.findOne({
-    submissionId: submission._id,
-    pinnedCommitSha,
-  });
+  let repoIndex = await RepoIndexModel.findOne(
+    source === "github"
+      ? {
+          submissionId: submission._id,
+          source,
+          pinnedCommitSha,
+        }
+      : {
+          submissionId: submission._id,
+          source,
+          uploadSha256,
+        }
+  );
 
   if (repoIndex && repoIndex.status === "ready") {
     return {
@@ -350,9 +359,11 @@ export async function indexSubmissionRepo(submissionId: string): Promise<{
   if (!repoIndex) {
     repoIndex = await RepoIndexModel.create({
       submissionId: submission._id,
+      source,
       owner,
       repo,
       pinnedCommitSha,
+      uploadSha256,
       status: "indexing",
       pinecone: {
         indexName,
@@ -381,26 +392,14 @@ export async function indexSubmissionRepo(submissionId: string): Promise<{
     await repoIndex.save();
   }
 
-  let snapshot: Awaited<
-    ReturnType<typeof downloadAndExtractRepoSnapshot>
-  > | null = null;
+  let snapshot: Awaited<ReturnType<typeof getSubmissionSnapshot>> | null = null;
 
   try {
-    // Step 4: Download and extract repository
+    // Step 4: Download/extract code snapshot from source (GitHub or upload)
+    console.log(`📥 [repoIndexing] Loading ${source} snapshot...`);
+    snapshot = await getSubmissionSnapshot(submission._id.toString());
     console.log(
-      `📥 [repoIndexing] Downloading repo: ${owner}/${repo}@${pinnedCommitSha.substring(
-        0,
-        7
-      )}`
-    );
-    snapshot = await downloadAndExtractRepoSnapshot({
-      owner,
-      repo,
-      pinnedCommitSha,
-      submissionId: submission._id.toString(),
-    });
-    console.log(
-      `✅ [repoIndexing] Repository extracted to: ${snapshot.repoRootPath}`
+      `✅ [repoIndexing] Snapshot extracted to: ${snapshot.repoRootPath}`
     );
 
     // Step 5: Traverse files
@@ -530,9 +529,11 @@ export async function indexSubmissionRepo(submissionId: string): Promise<{
           values: embeddings[j],
           metadata: {
             submissionId: submissionId,
-            owner,
-            repo,
-            pinnedCommitSha,
+            codeSource: source,
+            ...(owner ? { owner } : {}),
+            ...(repo ? { repo } : {}),
+            ...(pinnedCommitSha ? { pinnedCommitSha } : {}),
+            ...(uploadSha256 ? { uploadSha256 } : {}),
             filePath: chunk.filePath,
             language: chunk.language,
             startLine: chunk.startLine,

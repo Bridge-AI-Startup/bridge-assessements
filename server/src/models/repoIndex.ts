@@ -4,7 +4,7 @@ import mongoose from "mongoose";
 /**
  * RepoIndex Model
  *
- * Tracks the indexing state of a GitHub repository for a submission.
+ * Tracks the indexing state of a submission code snapshot for a submission.
  * Serves as the control plane while Pinecone stores the actual vectors.
  */
 const RepoIndexSchema = new mongoose.Schema(
@@ -17,20 +17,40 @@ const RepoIndexSchema = new mongoose.Schema(
       index: true,
     },
 
-    // GitHub repository information
+    // Source discriminator for indexed code snapshot
+    source: {
+      type: String,
+      enum: ["github", "upload"],
+      default: "github",
+      required: true,
+      index: true,
+    },
+
+    // GitHub repository information (when source === "github")
     owner: {
       type: String,
-      required: true,
+      required: false,
+      default: null,
       index: true,
     },
     repo: {
       type: String,
-      required: true,
+      required: false,
+      default: null,
       index: true,
     },
     pinnedCommitSha: {
       type: String,
-      required: true,
+      required: false,
+      default: null,
+      index: true,
+    },
+
+    // Uploaded snapshot identity (when source === "upload")
+    uploadSha256: {
+      type: String,
+      required: false,
+      default: null,
       index: true,
     },
 
@@ -96,8 +116,25 @@ const RepoIndexSchema = new mongoose.Schema(
 );
 
 // Compound index for efficient lookups
-RepoIndexSchema.index({ submissionId: 1, pinnedCommitSha: 1 });
-RepoIndexSchema.index({ owner: 1, repo: 1, pinnedCommitSha: 1 });
+RepoIndexSchema.index(
+  { submissionId: 1, pinnedCommitSha: 1 },
+  { partialFilterExpression: { source: "github", pinnedCommitSha: { $type: "string" } } }
+);
+RepoIndexSchema.index(
+  { owner: 1, repo: 1, pinnedCommitSha: 1 },
+  {
+    partialFilterExpression: {
+      source: "github",
+      owner: { $type: "string" },
+      repo: { $type: "string" },
+      pinnedCommitSha: { $type: "string" },
+    },
+  }
+);
+RepoIndexSchema.index(
+  { submissionId: 1, uploadSha256: 1 },
+  { partialFilterExpression: { source: "upload", uploadSha256: { $type: "string" } } }
+);
 
 const RepoIndexModel = mongoose.model("RepoIndex", RepoIndexSchema);
 export default RepoIndexModel;

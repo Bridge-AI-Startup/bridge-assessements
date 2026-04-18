@@ -29,6 +29,14 @@ export type Submission = {
   candidateName?: string;
   candidateEmail?: string;
   status: "pending" | "in-progress" | "submitted" | "expired" | "opted-out";
+  codeSource?: "github" | "upload";
+  codeUpload?: {
+    storageKey?: string;
+    originalFilename?: string;
+    sizeBytes?: number;
+    sha256?: string;
+    uploadedAt?: string;
+  };
   startedAt?: string;
   submittedAt?: string;
   timeSpent: number;
@@ -254,6 +262,36 @@ export async function submitAssessment(
     return {
       success: false,
       error: result.error || "Failed to submit assessment",
+    };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Upload a local code archive and submit assessment (candidate endpoint)
+ */
+export async function uploadAssessmentArchive(
+  token: string,
+  archive: File
+): Promise<APIResult<Submission>> {
+  try {
+    const formData = new FormData();
+    formData.append("archive", archive);
+
+    const response = await fetch(`${API_BASE_URL}/submissions/token/${token}/upload`, {
+      method: "POST",
+      body: formData,
+    });
+    const result = await response.json();
+
+    if (result && result._id) {
+      return { success: true, data: result as Submission };
+    }
+
+    return {
+      success: false,
+      error: result.error || "Failed to upload and submit assessment",
     };
   } catch (error) {
     return handleAPIError(error);
@@ -501,6 +539,46 @@ export async function getBehavioralArtifactBlob(
         success: false,
         error: text || "Failed to load behavioral artifact",
       };
+    }
+    const blob = await response.blob();
+    return { success: true, data: blob };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+export async function downloadSubmissionCodeArchive(
+  submissionId: string,
+  token?: string
+): Promise<APIResult<Blob>> {
+  try {
+    let authToken = token;
+    if (!authToken) {
+      const user = auth.currentUser;
+      if (!user) {
+        return { success: false, error: "No user is currently signed in" };
+      }
+      authToken = await user.getIdToken();
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/submissions/${submissionId}/code-archive`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      }
+    );
+    if (!response.ok) {
+      let message = `Failed to download archive (${response.status})`;
+      try {
+        const err = await response.json();
+        message = err?.error || message;
+      } catch {
+        // Ignore parse failures for non-JSON responses.
+      }
+      return { success: false, error: message };
     }
     const blob = await response.blob();
     return { success: true, data: blob };

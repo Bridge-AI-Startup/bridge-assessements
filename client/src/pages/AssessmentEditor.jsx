@@ -534,9 +534,9 @@ export default function AssessmentEditor() {
         setGeneratedSubmissionId(result.data.submissionId);
       } else {
         const errorMsg = "error" in result ? result.error : "Failed to generate link";
-        if (errorMsg.includes("SUBSCRIPTION_LIMIT_REACHED") || errorMsg.includes("limit")) {
+        if (errorMsg.includes("SUBSCRIPTION_LIMIT_REACHED")) {
           const shouldUpgrade = window.confirm(
-            "You've reached the free tier limit of 3 candidate submissions.\n\nUpgrade to continue inviting unlimited candidates.\n\nWould you like to view subscription plans?"
+            "You've reached a plan limit.\n\nUpgrade to continue.\n\nWould you like to view subscription plans?"
           );
           if (shouldUpgrade) window.location.href = createPageUrl("Subscription");
         } else {

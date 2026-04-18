@@ -5,9 +5,9 @@ import { join } from "path";
 import TaskConfigModel from "../../models/taskConfig.js";
 import SubmissionModel from "../../models/submission.js";
 import {
-  downloadAndExtractRepoSnapshot,
   cleanupRepoSnapshot,
-} from "../../utils/repoSnapshot.js";
+  getSubmissionSnapshot,
+} from "../submissionCode/snapshot.js";
 
 const execAsync = promisify(exec);
 
@@ -57,18 +57,8 @@ export async function executeTask(
   const startTime = Date.now();
 
   try {
-    // 1. Get candidate's code repository
-    if (!submission.githubRepo?.pinnedCommitSha) {
-      throw new Error("GitHub repository not found");
-    }
-
-    // Download repo snapshot (reuse existing utility)
-    const snapshot = await downloadAndExtractRepoSnapshot({
-      owner: submission.githubRepo.owner,
-      repo: submission.githubRepo.repo,
-      pinnedCommitSha: submission.githubRepo.pinnedCommitSha,
-      submissionId: submission._id.toString(),
-    });
+    // 1. Load candidate code snapshot (GitHub or uploaded archive)
+    const snapshot = await getSubmissionSnapshot(submission._id.toString());
 
     const repoPath = snapshot.repoRootPath;
 

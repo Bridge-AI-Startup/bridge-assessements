@@ -118,7 +118,6 @@ export const loginUser: RequestHandler = async (req, res, next) => {
       submissionCount = await SubmissionModel.countDocuments({
         assessmentId: { $in: assessmentIds },
       });
-      submissionLimit = 3; // Free tier limit: 3 submissions
     }
 
     const userResponse = user.toObject();
@@ -132,7 +131,7 @@ export const loginUser: RequestHandler = async (req, res, next) => {
       submissionLimit,
       canCreateAssessment:
         isSubscribed || !enforceFreeTierAssessmentCap || assessmentCount < 1,
-      canCreateSubmission: isSubscribed || submissionCount < 3,
+      canCreateSubmission: true,
     };
 
     res.status(200).json(userResponse);

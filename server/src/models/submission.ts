@@ -60,6 +60,38 @@ const SubmissionSchema = new mongoose.Schema(
       min: 0,
     },
 
+    // Source of candidate code submission. Legacy records default to GitHub.
+    codeSource: {
+      type: String,
+      enum: ["github", "upload"],
+      default: "github",
+      required: true,
+    },
+
+    // Metadata for uploaded code archives (when codeSource === "upload")
+    codeUpload: {
+      storageKey: {
+        type: String,
+        default: null,
+      },
+      originalFilename: {
+        type: String,
+        default: null,
+      },
+      sizeBytes: {
+        type: Number,
+        default: null,
+      },
+      sha256: {
+        type: String,
+        default: null,
+      },
+      uploadedAt: {
+        type: Date,
+        default: null,
+      },
+    },
+
     // GitHub repository link
     githubLink: {
       type: String,

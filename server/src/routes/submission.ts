@@ -1,4 +1,5 @@
 import express from "express";
+import multer from "multer";
 
 import * as SubmissionController from "../controllers/submission.js";
 import * as TaskRunnerController from "../controllers/taskRunner.js";
@@ -10,6 +11,12 @@ import {
 import * as SubmissionValidator from "../validators/submissionValidation.js";
 
 const router = express.Router();
+const archiveUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: Number(process.env.SUBMISSION_UPLOAD_MAX_BYTES || 100 * 1024 * 1024),
+  },
+}).single("archive");
 
 // Public endpoint - Get assessment details (for candidate to view before starting)
 // Must come before /:id route
@@ -125,6 +132,13 @@ router.post(
   SubmissionController.submitSubmissionByToken
 );
 
+// Public endpoint - Upload local archive and submit by token
+router.post(
+  "/token/:token/upload",
+  archiveUpload,
+  SubmissionController.uploadSubmissionByToken
+);
+
 // Public endpoint - Generate interview questions by token (for candidates)
 router.post(
   "/token/:token/generate-interview",
@@ -166,6 +180,12 @@ router.get(
   "/:submissionId/behavioral-artifact",
   [verifyAuthToken],
   SubmissionController.getBehavioralArtifactHandler
+);
+
+router.get(
+  "/:submissionId/code-archive",
+  [verifyAuthToken],
+  SubmissionController.getSubmissionCodeArchiveHandler
 );
 
 // Public endpoint - Final submission

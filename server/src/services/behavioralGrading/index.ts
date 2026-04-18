@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import SubmissionModel from "../../models/submission.js";
 import { withGradingSandbox } from "../e2b/graderSandbox.js";
 import { collectJudgeArtifacts } from "./artifacts.js";
+import { getSubmissionCodeStorage } from "../submissionCode/storage.js";
 import {
   executeRunbook,
   readmeFromSandbox,
@@ -56,6 +57,12 @@ const MAX_CONCURRENT_GRADES = Number(process.env.BEHAVIORAL_GRADING_MAX_CONCURRE
 let activeGrades = 0;
 const gradeQueue: Array<() => void> = [];
 
+function isUploadBehavioralEnabled(): boolean {
+  const raw = process.env.BEHAVIORAL_GRADING_UPLOAD_ENABLED;
+  if (!raw) return true;
+  return raw === "1" || raw.toLowerCase() === "true";
+}
+
 async function withGradeSlot<T>(fn: () => Promise<T>): Promise<T> {
   if (activeGrades >= MAX_CONCURRENT_GRADES) {
     await new Promise<void>((resolve) => gradeQueue.push(resolve));
@@ -71,8 +78,18 @@ async function withGradeSlot<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 function getRepoSummary(submission: any): string {
+  if (submission.codeSource === "upload") {
+    const upload = submission.codeUpload || {};
+    return [
+      "source=upload",
+      `storageKey=${upload.storageKey ?? ""}`,
+      `filename=${upload.originalFilename ?? ""}`,
+      `sha256=${upload.sha256 ?? ""}`,
+    ].join("\n");
+  }
   const repo = submission.githubRepo || {};
   return [
+    "source=github",
     `owner=${repo.owner ?? ""}`,
     `repo=${repo.repo ?? ""}`,
     `refType=${repo.refType ?? ""}`,
@@ -90,10 +107,49 @@ function getPublicCloneUrl(submission: any): string {
 }
 
 async function cloneAndCheckout(
-  run: (cmd: string, opts?: any) => Promise<{ exitCode: number; stderr: string }>,
-  submission: any
+  run: (
+    cmd: string,
+    opts?: any
+  ) => Promise<{ exitCode: number; stderr: string; stdout?: string }>,
+  submission: any,
+  sandbox?: any
 ): Promise<string> {
   const repoPath = `/tmp/submission-${submission._id.toString()}`;
+  if (submission.codeSource === "upload") {
+    const storageKey = submission.codeUpload?.storageKey;
+    if (!storageKey) {
+      throw new Error("Submission archive metadata is missing.");
+    }
+    const archiveStorage = getSubmissionCodeStorage();
+    const archive = await archiveStorage.readArchive(storageKey);
+    const archivePath = `${repoPath}.zip`;
+    await (sandbox as any).files.write(archivePath, archive);
+
+    const ensureRepoDir = await run(`mkdir -p ${repoPath}`, { timeoutMs: 15000 });
+    if (ensureRepoDir.exitCode !== 0) {
+      throw new Error(
+        `Failed to prepare repo directory: ${ensureRepoDir.stderr || "unknown error"}`
+      );
+    }
+
+    const unzip = await run(`unzip -q ${archivePath} -d ${repoPath}`, {
+      timeoutMs: 180000,
+    });
+    if (unzip.exitCode !== 0) {
+      throw new Error(
+        `Failed to extract uploaded archive: ${unzip.stderr || "unknown error"}`
+      );
+    }
+    const resolveRoot = await run(
+      `bash -lc 'shopt -s nullglob dotglob; entries=(${repoPath}/*); if [ "\${#entries[@]}" -eq 1 ] && [ -d "\${entries[0]}" ]; then printf "%s" "\${entries[0]}"; else printf "%s" "${repoPath}"; fi'`,
+      { timeoutMs: 15000 }
+    );
+    if (resolveRoot.exitCode === 0 && resolveRoot.stdout?.trim()) {
+      return resolveRoot.stdout.trim();
+    }
+    return repoPath;
+  }
+
   const cloneUrl = getPublicCloneUrl(submission);
   const clone = await run(`git clone ${cloneUrl} ${repoPath}`, { timeoutMs: 180000 });
   if (clone.exitCode !== 0) {
@@ -137,6 +193,11 @@ export async function gradeSubmissionBehavioral(
     if (!submission) {
       throw new Error("Submission not found");
     }
+    if (submission.codeSource === "upload" && !isUploadBehavioralEnabled()) {
+      throw new Error(
+        "Behavioral grading for uploaded archives is currently disabled."
+      );
+    }
 
     const assessment: any = submission.assessmentId;
     const behavioralChecks: string[] = Array.isArray(assessment?.behavioralChecks)
@@ -162,7 +223,7 @@ export async function gradeSubmissionBehavioral(
           sandboxTimeoutMs,
         });
 
-        const repoPath = await cloneAndCheckout(ctx.run, submission);
+        const repoPath = await cloneAndCheckout(ctx.run, submission, ctx.sandbox);
         behavioralInfo("clone_done", { repoPath });
 
         const readmeText = await readmeFromSandbox(ctx.sandbox, repoPath);

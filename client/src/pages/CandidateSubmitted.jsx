@@ -4,6 +4,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import {
   CheckCircle,
   Link as LinkIcon,
+  FileCheck,
   Clock,
   Calendar,
   X,
@@ -223,6 +224,21 @@ export default function CandidateSubmitted() {
                     >
                       {submission.githubLink}
                     </a>
+                  </div>
+                </div>
+              </div>
+            )}
+            {submission.codeSource === "upload" && (
+              <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                <div className="flex items-start gap-3">
+                  <FileCheck className="w-5 h-5 text-[#1E3A8A] flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h3 className="font-medium text-gray-900 mb-1">
+                      Project Archive Uploaded
+                    </h3>
+                    <p className="text-sm text-gray-600">
+                      {submission.codeUpload?.originalFilename || "submission.zip"}
+                    </p>
                   </div>
                 </div>
               </div>

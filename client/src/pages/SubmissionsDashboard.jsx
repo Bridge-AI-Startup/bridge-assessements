@@ -26,6 +26,7 @@ import {
   CheckCircle2,
   Circle,
   Play,
+  Download,
   FileText,
   Camera,
   Pencil,
@@ -52,6 +53,7 @@ import {
   generateShareLink,
   runBehavioralGrading,
   getBehavioralArtifactBlob,
+  downloadSubmissionCodeArchive,
 } from "@/api/submission";
 import { runSubmissionEvaluation } from "@/api/evaluation";
 import VideoTimelineWithCriteria from "@/components/proctoring/VideoTimelineWithCriteria";
@@ -402,6 +404,30 @@ export default function SubmissionsDashboard() {
     }
     setRunProjectPreviewUrl(previewUrl);
     setShowRunProjectModal(true);
+  };
+
+  const handleDownloadCodeArchive = async (submission) => {
+    if (!submission?._id) return;
+    const result = await downloadSubmissionCodeArchive(submission._id);
+    if (!result.success) {
+      toast({
+        title: "Download failed",
+        description: result.error || "Could not download code archive.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const url = URL.createObjectURL(result.data);
+    const anchor = document.createElement("a");
+    const baseName =
+      submission.codeUpload?.originalFilename ||
+      `submission-${submission._id}.zip`;
+    anchor.href = url;
+    anchor.download = baseName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
   };
 
   // Reset expanded evidence and behavioral artifact cache when evaluation target changes
@@ -1219,10 +1245,10 @@ export default function SubmissionsDashboard() {
         loadSubmissions();
       } else {
         const errorMsg = "error" in result ? result.error : "Failed to generate link";
-        if (errorMsg.includes("SUBSCRIPTION_LIMIT_REACHED") || errorMsg.includes("limit")) {
+        if (errorMsg.includes("SUBSCRIPTION_LIMIT_REACHED")) {
           toast({
             title: "Limit reached",
-            description: "Free tier allows 3 submissions. Upgrade to invite more candidates.",
+            description: "You've reached a plan limit. Upgrade to continue.",
             variant: "destructive",
           });
         } else {
@@ -1785,6 +1811,17 @@ export default function SubmissionsDashboard() {
                                   </a>
                                 </DropdownMenuItem>
                               )}
+                            {submission.status === "submitted" &&
+                              submission.codeSource === "upload" && (
+                                <DropdownMenuItem
+                                  onClick={() =>
+                                    handleDownloadCodeArchive(submission)
+                                  }
+                                >
+                                  <Download className="mr-2 h-4 w-4" />
+                                  Download submitted archive
+                                </DropdownMenuItem>
+                              )}
                             {submission.status === "submitted" && (
                               <DropdownMenuItem
                                 onClick={() =>
@@ -2285,6 +2322,20 @@ export default function SubmissionsDashboard() {
                             <Eye className="w-4 h-4 mr-2" />
                             Open GitHub
                           </a>
+                        </Button>
+                      )}
+                    {panelSubmission.status === "submitted" &&
+                      panelSubmission.codeSource === "upload" && (
+                        <Button
+                          variant="outline"
+                          className="w-full"
+                          onClick={() => {
+                            handleDownloadCodeArchive(panelSubmission);
+                            setPanelSubmission(null);
+                          }}
+                        >
+                          <Download className="w-4 h-4 mr-2" />
+                          Download archive
                         </Button>
                       )}
                     <Button
@@ -2827,7 +2878,8 @@ export default function SubmissionsDashboard() {
               <TabsContent value="execution" className="mt-4">
                 <div className="max-h-[70vh] overflow-y-auto pr-1 space-y-4">
                   {/* Final code (demo: visuals only; real pipeline coming soon) */}
-                  {selectedEvaluationSubmission?.githubLink ? (
+                  {selectedEvaluationSubmission?.githubLink ||
+                  selectedEvaluationSubmission?.codeSource === "upload" ? (
                     <div className="space-y-4">
                       <div className="flex items-start justify-between gap-3">
                         <div>
@@ -2839,19 +2891,29 @@ export default function SubmissionsDashboard() {
                             We clone the candidate&apos;s repository, run their code and tests, and score the output against the assessment.
                           </p>
                         </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          asChild
-                        >
-                          <a
-                            href={selectedEvaluationSubmission.githubLink}
-                            target="_blank"
-                            rel="noreferrer"
+                        {selectedEvaluationSubmission?.githubLink ? (
+                          <Button variant="outline" size="sm" asChild>
+                            <a
+                              href={selectedEvaluationSubmission.githubLink}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              GitHub
+                            </a>
+                          </Button>
+                        ) : null}
+                        {selectedEvaluationSubmission?.codeSource === "upload" ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              handleDownloadCodeArchive(selectedEvaluationSubmission)
+                            }
                           >
-                            GitHub
-                          </a>
-                        </Button>
+                            <Download className="w-4 h-4 mr-2" />
+                            Download archive
+                          </Button>
+                        ) : null}
                       </div>
 
                       {/* Behavioral grading summary (real pipeline data) */}
@@ -3135,8 +3197,8 @@ export default function SubmissionsDashboard() {
                               "completed" &&
                               !hasWorkflowTrace && (
                                 <p className="text-xs text-gray-500 mt-2 leading-relaxed">
-                                  This submission is GitHub-only. Use
-                                  behavioral grading above for automated checks;
+                                  This submission does not include an LLM trace.
+                                  Use behavioral grading above for automated checks;
                                   workflow scores apply only when the assessment
                                   is taken with the built-in LLM workflow trace.
                                 </p>
@@ -3153,9 +3215,11 @@ export default function SubmissionsDashboard() {
                         <div className="flex flex-wrap gap-4 sm:gap-6">
                           {[
                             {
-                              label: "Repo submitted",
+                              label: "Code submitted",
                               done: Boolean(
-                                selectedEvaluationSubmission?.githubLink
+                                selectedEvaluationSubmission?.githubLink ||
+                                  selectedEvaluationSubmission?.codeSource ===
+                                    "upload"
                               ),
                             },
                             {
@@ -3227,33 +3291,35 @@ export default function SubmissionsDashboard() {
                           })()}
                         </pre>
                       </div>
-                      <div className="mt-4 w-full">
-                        <Button
-                          variant="default"
-                          size="default"
-                          className="w-full gap-2 font-semibold shadow-sm"
-                          onClick={() =>
-                            handleOpenRunProjectModal(
-                              selectedEvaluationSubmission.githubLink
-                            )
-                          }
-                        >
-                          <span className="inline-flex items-center gap-2">
-                            <Play className="h-4 w-4 shrink-0" />
-                            Run project
-                          </span>
-                        </Button>
-                      </div>
+                      {selectedEvaluationSubmission?.githubLink ? (
+                        <div className="mt-4 w-full">
+                          <Button
+                            variant="default"
+                            size="default"
+                            className="w-full gap-2 font-semibold shadow-sm"
+                            onClick={() =>
+                              handleOpenRunProjectModal(
+                                selectedEvaluationSubmission.githubLink
+                              )
+                            }
+                          >
+                            <span className="inline-flex items-center gap-2">
+                              <Play className="h-4 w-4 shrink-0" />
+                              Run project
+                            </span>
+                          </Button>
+                        </div>
+                      ) : null}
 
                     </div>
                   ) : (
                     <div className="py-10 text-center">
                       <Code2 className="w-12 h-12 mx-auto mb-2 text-gray-400" />
                       <p className="text-gray-600 text-sm">
-                        No GitHub repository link found for this submission.
+                        No code archive or repository found for this submission.
                       </p>
                       <p className="text-xs text-gray-400 mt-1">
-                        Final code appears once a GitHub link is submitted.
+                        Final code appears once a submission source is provided.
                       </p>
                     </div>
                   )}

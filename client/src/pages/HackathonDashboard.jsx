@@ -1,16 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import ReactMarkdown from "react-markdown";
-import { motion } from "framer-motion";
-import {
-  Trophy,
-  Clock,
-  UserPlus,
-  RefreshCw,
-  Loader2,
-  LayoutDashboard,
-  ExternalLink,
-} from "lucide-react";
+import { UserPlus, Loader2, ExternalLink, LayoutDashboard, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,7 +25,13 @@ import {
   joinCompetition,
   CompetitionNotFoundError,
 } from "@/api/competition";
-import { SINGLE_COMPETITION_SLUG } from "@/config/competition";
+import {
+  SINGLE_COMPETITION_SLUG,
+  hackathonReleaseAtIso,
+  hackathonReleaseCountdownEnabled,
+  isHackathonJoinBlocked,
+} from "@/config/competition";
+import ReleaseCountdownBanner from "@/components/hackathon/ReleaseCountdownBanner.jsx";
 import bridgeLogo from "@/assets/bridge-logo.svg";
 
 const BRIDGE_MARKETING_URL = "https://bridge-jobs.com/";
@@ -66,17 +62,26 @@ export default function HackathonDashboard() {
   const slug = resolveCompetitionSlug(searchParams);
 
   const [competition, setCompetition] = useState(null);
-  const [leaderboard, setLeaderboard] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [missingCompetitionSlug, setMissingCompetitionSlug] = useState(null);
-  const [lbError, setLbError] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [lbLoading, setLbLoading] = useState(false);
 
   const [candidateName, setCandidateName] = useState("");
   const [candidateEmail, setCandidateEmail] = useState("");
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState(null);
+
+  const [leaderboard, setLeaderboard] = useState(null);
+  const [lbError, setLbError] = useState(null);
+  const [lbLoading, setLbLoading] = useState(false);
+
+  /** Advances once per second while countdown mode is on so registration unlocks at go-live without refresh. */
+  const [releaseClockMs, setReleaseClockMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!hackathonReleaseCountdownEnabled()) return undefined;
+    const id = setInterval(() => setReleaseClockMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const loadCompetition = useCallback(async () => {
     setLoading(true);
@@ -132,6 +137,10 @@ export default function HackathonDashboard() {
     e.preventDefault();
     setJoinError(null);
     if (!slug) return;
+    if (isHackathonJoinBlocked()) {
+      setJoinError("This challenge hasn't started yet.");
+      return;
+    }
     setJoining(true);
     try {
       const res = await joinCompetition(slug, {
@@ -156,6 +165,8 @@ export default function HackathonDashboard() {
       new Date(competition.competitionEndsAt).getTime() >= Date.now()) &&
     (!competition?.competitionStartsAt ||
       new Date(competition.competitionStartsAt).getTime() <= Date.now());
+
+  const notStartedYet = isHackathonJoinBlocked(releaseClockMs);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -193,14 +204,18 @@ export default function HackathonDashboard() {
         </div>
       </header>
 
+      {hackathonReleaseCountdownEnabled() ? (
+        <ReleaseCountdownBanner releaseAtIso={hackathonReleaseAtIso()} />
+      ) : null}
+
       <main className="mx-auto max-w-5xl px-4 py-10 md:py-12">
         <div className="mb-10 text-center md:text-left">
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 md:text-3xl">
             Join the challenge
           </h1>
           <p className="mt-2 max-w-2xl text-slate-600">
-            Sign up and we&apos;ll create your candidate link and open the assessment — same flow as
-            if you received an invite from an employer.
+            Enter your details to get a personal link. Challenge details and instructions appear on
+            the next screen — same as a normal candidate invite, nothing is shown until then.
           </p>
         </div>
 
@@ -244,35 +259,7 @@ export default function HackathonDashboard() {
               </CardHeader>
             </Card>
           ) : competition ? (
-            <>
-              <motion.div
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="space-y-3"
-              >
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
-                  <Trophy className="h-8 w-8 shrink-0 text-amber-500" />
-                  <div>
-                    <h2 className="text-xl font-bold tracking-tight text-slate-900 md:text-2xl">
-                      {competition.title}
-                    </h2>
-                    <p className="mt-2 max-w-3xl text-slate-600">{competition.description}</p>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-4 text-sm text-slate-600">
-                  <span className="inline-flex items-center gap-1.5">
-                    <Clock className="h-4 w-4 text-slate-400" />
-                    Time limit: {competition.assessment?.timeLimit ?? "—"} min
-                  </span>
-                  {competition.competitionStartsAt ? (
-                    <span>Starts: {formatWhen(competition.competitionStartsAt)}</span>
-                  ) : null}
-                  {competition.competitionEndsAt ? (
-                    <span>Ends: {formatWhen(competition.competitionEndsAt)}</span>
-                  ) : null}
-                </div>
-              </motion.div>
-
+            <div className="space-y-10">
               <Card
                 id="join"
                 className="scroll-mt-24 border-[#1e3a8a]/25 bg-white shadow-sm"
@@ -280,7 +267,7 @@ export default function HackathonDashboard() {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2 text-xl">
                     <UserPlus className="h-6 w-6 text-[#1e3a8a]" />
-                    Join the challenge
+                    Register
                   </CardTitle>
                   <CardDescription className="text-base">
                     We create a real candidate submission and send you to the same assessment URL
@@ -289,7 +276,11 @@ export default function HackathonDashboard() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {!registrationAllowed ? (
+                  {notStartedYet ? (
+                    <p className="text-sm font-medium text-amber-900">
+                      This challenge hasn&apos;t started yet.
+                    </p>
+                  ) : !registrationAllowed ? (
                     <p className="text-sm text-amber-800">
                       Registration is not open for this challenge right now.
                     </p>
@@ -301,7 +292,7 @@ export default function HackathonDashboard() {
                           id="name"
                           value={candidateName}
                           onChange={(e) => setCandidateName(e.target.value)}
-                          placeholder="Shown on the leaderboard"
+                          placeholder="Shown on the leaderboard after you submit"
                           required
                           maxLength={200}
                           autoComplete="name"
@@ -343,28 +334,18 @@ export default function HackathonDashboard() {
                 </CardContent>
               </Card>
 
-              {competition.rulesMarkdown ? (
-                <Card className="border-slate-200 bg-white shadow-sm">
-                  <CardHeader>
-                    <CardTitle>Rules</CardTitle>
-                  </CardHeader>
-                  <CardContent className="prose prose-slate max-w-none text-sm">
-                    <ReactMarkdown>{competition.rulesMarkdown}</ReactMarkdown>
-                  </CardContent>
-                </Card>
-              ) : null}
-
               {competition.leaderboardPublic ? (
                 <Card className="border-slate-200 bg-white shadow-sm">
                   <CardHeader className="flex flex-row items-center justify-between space-y-0">
                     <div>
                       <CardTitle className="flex items-center gap-2">
                         <LayoutDashboard className="h-5 w-5 text-slate-600" />
-                        Dashboard
+                        Leaderboard
                       </CardTitle>
                       <CardDescription>
-                        Leaderboard — ranked by overall score (completeness or workflow score as
-                        fallback). Auto-refreshes.
+                        Combined score matches the employer submissions table: average of Screen,
+                        Behavioral, and Trace when each exists. The line under each score lists the
+                        same components as the employer view. Auto-refreshes.
                       </CardDescription>
                     </div>
                     <Button
@@ -402,8 +383,19 @@ export default function HackathonDashboard() {
                             >
                               <TableCell className="font-medium">{row.rank}</TableCell>
                               <TableCell>{row.displayName}</TableCell>
-                              <TableCell className="text-right tabular-nums">
-                                {row.score != null ? row.score : "—"}
+                              <TableCell className="text-right align-top">
+                                <div className="tabular-nums font-medium">
+                                  {row.score != null ? Math.round(row.score) : "—"}
+                                </div>
+                                {row.breakdown?.length ? (
+                                  <p className="mt-1 max-w-[16rem] text-[10px] leading-snug text-muted-foreground ml-auto">
+                                    {row.breakdown.join(" · ")}
+                                  </p>
+                                ) : row.score == null ? (
+                                  <p className="mt-1 text-[10px] text-muted-foreground ml-auto">
+                                    No scoring signals yet
+                                  </p>
+                                ) : null}
                               </TableCell>
                               <TableCell className="text-right text-muted-foreground text-sm hidden sm:table-cell">
                                 {formatWhen(row.submittedAt)}
@@ -420,7 +412,7 @@ export default function HackathonDashboard() {
                   </CardContent>
                 </Card>
               ) : null}
-            </>
+            </div>
           ) : null}
         </div>
       </main>

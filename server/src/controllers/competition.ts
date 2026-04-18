@@ -4,28 +4,10 @@ import CompetitionModel from "../models/competition.js";
 import AssessmentModel from "../models/assessment.js";
 import SubmissionModel from "../models/submission.js";
 import validationErrorParser from "../utils/validationErrorParser.js";
-
-/** Documented ranking: top-level overall, then completeness, then workflow aggregate. */
-export function getLeaderboardScore(sub: {
-  scores?: {
-    overall?: number | null;
-    completeness?: { score?: number | null };
-  } | null;
-  llmWorkflow?: {
-    scores?: { overall?: { score?: number | null } };
-  } | null;
-}): number | null {
-  const top = sub.scores?.overall;
-  if (top != null && !Number.isNaN(Number(top))) return Number(top);
-
-  const comp = sub.scores?.completeness?.score;
-  if (comp != null && !Number.isNaN(Number(comp))) return Number(comp);
-
-  const wf = sub.llmWorkflow?.scores?.overall?.score;
-  if (wf != null && !Number.isNaN(Number(wf))) return Number(wf);
-
-  return null;
-}
+import {
+  getCombinedLeaderboardScore,
+  getCombinedScoreBreakdownParts,
+} from "../utils/leaderboardScore.js";
 
 function assertCompetitionJoinWindow(comp: {
   registrationOpen: boolean;
@@ -132,6 +114,18 @@ export const joinCompetition: RequestHandler = async (req, res, next) => {
       return res.status(404).json({ error: "COMPETITION_NOT_FOUND" });
     }
 
+    // Optional: match frontend pre-launch (VITE_HACKATHON_RELEASE_AT) — set the same ISO in Render config.
+    const joinEarliest = process.env.COMPETITION_JOIN_EARLIEST_AT?.trim();
+    if (joinEarliest) {
+      const t = Date.parse(joinEarliest);
+      if (Number.isFinite(t) && Date.now() < t) {
+        return res.status(403).json({
+          error: "NOT_STARTED",
+          message: "This challenge hasn't started yet.",
+        });
+      }
+    }
+
     const window = assertCompetitionJoinWindow(competition);
     if (!window.ok) {
       return res.status(window.status).json({
@@ -222,12 +216,11 @@ export const getCompetitionLeaderboard: RequestHandler = async (
       });
     }
 
+    // Full documents (no .select) — same shape as employer GET submissions list so scoring matches.
     const submissions = await SubmissionModel.find({
       assessmentId: competition.assessmentId,
       status: "submitted",
-    })
-      .select("candidateName scores llmWorkflow submittedAt")
-      .lean();
+    }).lean();
 
     type Row = {
       displayName: string;
@@ -235,10 +228,13 @@ export const getCompetitionLeaderboard: RequestHandler = async (
       submittedAt: string | null;
       sortKey: number;
       tieAt: number;
+      breakdown: string[];
     };
 
     const rows: Row[] = submissions.map((s) => {
-      const score = getLeaderboardScore(s as any);
+      const sub = s as any;
+      const score = getCombinedLeaderboardScore(sub);
+      const breakdown = getCombinedScoreBreakdownParts(sub);
       const submittedAt = s.submittedAt
         ? new Date(s.submittedAt).toISOString()
         : null;
@@ -250,11 +246,12 @@ export const getCompetitionLeaderboard: RequestHandler = async (
           ? score
           : Number.NEGATIVE_INFINITY;
       return {
-        displayName: (s.candidateName && String(s.candidateName).trim()) || "Participant",
+        displayName: (sub.candidateName && String(sub.candidateName).trim()) || "Participant",
         score,
         submittedAt,
         sortKey,
         tieAt,
+        breakdown,
       };
     });
 
@@ -266,8 +263,9 @@ export const getCompetitionLeaderboard: RequestHandler = async (
     const ranked = rows.slice(0, limit).map((r, i) => ({
       rank: i + 1,
       displayName: r.displayName,
-      score: r.score,
+      score: r.score != null ? Math.round(r.score) : null,
       submittedAt: r.submittedAt,
+      breakdown: r.breakdown,
     }));
 
     res.status(200).json({ slug: competition.slug, entries: ranked });

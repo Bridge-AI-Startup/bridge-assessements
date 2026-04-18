@@ -135,7 +135,13 @@ See `server/config.env.example` for the full list. Key variables:
 **Behavioral Grading Sandbox:**
 - `E2B_API_KEY` -- API key for E2B sandbox execution
 - `GRADING_STORAGE_DIR` -- Local directory for behavioral grading artifacts/reports (default: `./storage/grading`)
+- `SUBMISSION_UPLOAD_STORAGE_DIR` -- Local directory for uploaded submission archives (default: `./storage/submissions`)
+- `SUBMISSION_SOURCE_MODE` -- Allowed candidate submission sources (`both`/`github`/`upload`, default: `both`)
+- `SUBMISSION_UPLOAD_MAX_BYTES` -- Max upload bytes accepted by `/api/submissions/token/:token/upload` (default: `104857600`)
+- `SUBMISSION_UPLOAD_MAX_EXTRACTED_BYTES` -- Max bytes after archive extraction for indexing/execution (default: `314572800`)
+- `SUBMISSION_UPLOAD_MAX_EXTRACTED_FILES` -- Max extracted file count per uploaded archive (default: `20000`)
 - `BEHAVIORAL_GRADING_MAX_CONCURRENT` -- Max concurrent behavioral grading jobs (default: `2`)
+- `BEHAVIORAL_GRADING_UPLOAD_ENABLED` -- Enable behavioral grading for uploaded archives (default: `true`)
 
 **Billing:**
 - `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_PRICE_ID` / `APP_URL` -- Stripe billing
@@ -335,7 +341,7 @@ server/src/
 - `GET /assessments/:id/submissions` -- List submissions for assessment
 - `DELETE /:submissionId` -- Delete submission
 - `POST /:submissionId/generate-interview` -- Generate interview questions (requires indexed repo)
-- `POST /:submissionId/index-repo` -- Index GitHub repo into Pinecone
+- `POST /:submissionId/index-repo` -- Index submitted code snapshot into Pinecone (GitHub or uploaded archive)
 - `GET /:submissionId/repo-index/status` -- Check repo indexing status
 - `POST /:submissionId/search-code` -- Search indexed code (debug)
 - `POST /:submissionId/execute-tasks` -- Execute workflow evaluation tasks
@@ -343,12 +349,14 @@ server/src/
 - `POST /:submissionId/calculate-scores` -- Calculate completeness + workflow scores
 - `POST /:submissionId/grade-behavioral` -- Trigger manual behavioral grading re-run (E2B + evidence capture)
 - `GET /:submissionId/behavioral-artifact` -- Retrieve stored behavioral grading artifacts (screenshots/report files)
+- `GET /:submissionId/code-archive` -- Download uploaded candidate archive (upload-source submissions only)
 
 *Candidate endpoints (no auth, token-based):*
 - `GET /assessments/public/:id` -- Get public assessment details
 - `GET /token/:token` -- Get submission by token
 - `POST /token/:token/start` -- Start assessment (pending → in-progress, captures metadata)
-- `POST /token/:token/submit` -- Submit code (parses GitHub URL, resolves commit, starts indexing, auto-triggers behavioral grading)
+- `POST /token/:token/submit` -- Legacy GitHub URL submit flow (can be disabled via `SUBMISSION_SOURCE_MODE`)
+- `POST /token/:token/upload` -- Submit code by archive upload (`multipart/form-data`, field `archive`), stores upload metadata, starts indexing, auto-triggers behavioral grading
 - `POST /token/:token/generate-interview` -- Generate interview questions
 - `POST /token/:token/opt-out` -- Opt out with reason
 - `POST /token/:token/upload-trace` -- Upload LLM interaction trace file (multer)
@@ -439,7 +447,7 @@ client/src/
 │   ├── GetStarted.jsx     # Registration -- email, password, company name
 │   ├── CreateAssessment.jsx    # Assessment creation -- AI generation or manual, reads localStorage pending data
 │   ├── AssessmentEditor.jsx    # Edit assessment -- title, desc, time, starter files, smart interviewer, share links, bulk invite
-│   ├── CandidateAssessment.jsx # Candidate views assessment -- read-only details, start timer, submit GitHub link, opt-out
+│   ├── CandidateAssessment.jsx # Candidate views assessment -- read-only details, start timer, submit local folder upload (auto-zipped client-side), opt-out
 │   ├── CandidateSubmission.jsx # Shows mock submission data with code review
 │   ├── CandidateSubmitted.jsx  # Post-submission -- polls for interview questions, ElevenLabs voice interview
 │   ├── HackathonDashboard.jsx  # Challenge join + dashboard/leaderboard only; marketing landing may live on Framer (slug: `?slug=` > env > `config/competition.js`)
@@ -522,7 +530,7 @@ client/src/
 2. **Employer edits assessment**: AssessmentEditor page → AI chat sidebar for refinements → configure time limit, interview questions, smart interviewer, starter files, custom instructions
 3. **Employer shares link**: Generates unique token-based URL for candidate (single or bulk via CSV upload with email invitations via Resend)
 4. **Candidate accesses assessment**: Opens token URL → CandidateAssessment page → views read-only details → starts timer (status: pending → in-progress, captures IP/user agent)
-5. **Candidate submits code**: Submits GitHub link → backend parses URL, resolves to pinned commit SHA → status: submitted
+5. **Candidate submits code**: Uploads project folder (client auto-zips) or submits GitHub link → backend stores source metadata (upload archive or pinned commit SHA) → status: submitted
 6. **Code indexing**: Repo is downloaded, chunked (200 lines/chunk, 40 line overlap), embedded via OpenAI, and upserted to Pinecone
 7. **Interview questions generated**: AI uses retrieved code context (RAG, topK=8, max 30KB) to generate targeted questions with file anchors
 8. **AI voice interview**: CandidateSubmitted page → ElevenLabs voice interview → agent calls `/api/agent-tools/get-context` for real-time code context
@@ -556,6 +564,8 @@ Fields: `slug` (unique, lowercase), `assessmentId` (ref Assessment), optional `t
 
 ### Submission
 Core: `token` (unique, indexed), `assessmentId` (ref Assessment, indexed), `candidateName`, `candidateEmail`, `status` (pending/in-progress/submitted/expired/opted-out), `startedAt`, `submittedAt`, `timeSpent` (minutes)
+
+Code source: `codeSource` (`github`/`upload`), `codeUpload` { storageKey, originalFilename, sizeBytes, sha256, uploadedAt }
 
 GitHub: `githubLink`, `githubRepo` { owner, repo, refType (commit/branch), ref, pinnedCommitSha }
 
@@ -600,9 +610,9 @@ Companion: `companion` { status (not_started/active/completed/failed), conversat
 Indexes: `{ submissionId: 1 }` (unique), `{ token: 1 }`, `{ status: 1 }`
 
 ### RepoIndex
-Fields: `submissionId` (ref Submission, indexed), `owner` (indexed), `repo` (indexed), `pinnedCommitSha` (indexed), `status` (queued/indexing/ready/failed), `pinecone` { indexName, namespace }, `stats` { fileCount, chunkCount, totalChars, filesSkipped }, `error` { message, stack, at }
+Fields: `submissionId` (ref Submission, indexed), `source` (`github`/`upload`), `owner` (indexed, github source), `repo` (indexed, github source), `pinnedCommitSha` (indexed, github source), `uploadSha256` (indexed, upload source), `status` (queued/indexing/ready/failed), `pinecone` { indexName, namespace }, `stats` { fileCount, chunkCount, totalChars, filesSkipped }, `error` { message, stack, at }
 
-Indexes: `{ submissionId: 1, pinnedCommitSha: 1 }`, `{ owner: 1, repo: 1, pinnedCommitSha: 1 }`
+Indexes: github partial indexes `{ submissionId: 1, pinnedCommitSha: 1 }`, `{ owner: 1, repo: 1, pinnedCommitSha: 1 }`; upload partial index `{ submissionId: 1, uploadSha256: 1 }`
 
 ## AI Provider Configuration
 
