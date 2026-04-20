@@ -568,7 +568,7 @@ export const getDebugFrames: RequestHandler = async (req, res, next) => {
       // Run region detection on every frame individually
       if (runDetection) {
         try {
-          const regions = await detectRegions({
+          const { regions } = await detectRegions({
             buffer: frame.buffer,
             capturedAt: frame.capturedAt,
             screenIndex: frame.screenIndex,
@@ -693,7 +693,7 @@ export const exportSessionOverlays: RequestHandler = async (
     }
 
     const frame = prepared.frames[0];
-    const regions = await detectRegions({
+    const { regions } = await detectRegions({
       buffer: frame.buffer,
       capturedAt: frame.capturedAt,
       screenIndex: frame.screenIndex,

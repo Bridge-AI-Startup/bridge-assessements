@@ -141,9 +141,13 @@ const LAYOUT_MAX_PIXELS = (() => {
   return Number.isFinite(n) && n >= 320 ? n : 1280;
 })();
 
-export async function detectRegions(
-  frame: VisionFrame
-): Promise<DetectedRegion[]> {
+export type DetectRegionsResult = {
+  regions: DetectedRegion[];
+  promptTokens: number;
+  completionTokens: number;
+};
+
+export async function detectRegions(frame: VisionFrame): Promise<DetectRegionsResult> {
   const client = getOpenAIClient();
 
   const model = process.env.OPENAI_REGION_DETECTION_MODEL || "gpt-4o-mini";
@@ -230,10 +234,14 @@ export async function detectRegions(
 
     logTs("regionDetector", `Found ${valid.length} regions: ${valid.map((r) => `${r.regionType}(${r.confidence})`).join(", ")}`);
 
-    return valid;
+    return {
+      regions: valid,
+      promptTokens: usage?.prompt_tokens ?? 0,
+      completionTokens: usage?.completion_tokens ?? 0,
+    };
   } catch (err) {
     console.error(`[${new Date().toISOString()}] [regionDetector] Detection failed:`, err);
-    return [];
+    return { regions: [], promptTokens: 0, completionTokens: 0 };
   }
 }
 

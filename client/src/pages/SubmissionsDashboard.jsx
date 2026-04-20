@@ -346,13 +346,17 @@ export default function SubmissionsDashboard() {
     const submittedRecently = (s) =>
       s.submittedAt &&
       Date.now() - new Date(s.submittedAt).getTime() < 15 * 60 * 1000;
-    const hasPending = submissions.some(
-      (s) =>
-        s.status === "submitted" &&
-        !s.evaluationReport?.criteria_results?.length &&
-        (s.evaluationStatus === "pending" ||
-          (s.evaluationStatus !== "failed" && submittedRecently(s)))
-    );
+    const hasPending = submissions.some((s) => {
+      if (s.status !== "submitted") return false;
+      if (s.evaluationStatus === "completed") return false;
+      if (s.evaluationStatus === "failed") return false;
+      return (
+        s.evaluationStatus === "pending" ||
+        s.evaluationStatus === "in_progress" ||
+        ((s.evaluationStatus == null || s.evaluationStatus === undefined) &&
+          submittedRecently(s))
+      );
+    });
     if (!hasPending || !assessmentId || !currentUser) return;
 
     const POLL_MS = 5000;
@@ -1334,15 +1338,19 @@ export default function SubmissionsDashboard() {
                           const submittedRecently =
                             submission.submittedAt &&
                             Date.now() - new Date(submission.submittedAt).getTime() < 15 * 60 * 1000; // 15 min
+                          const evaluationComplete =
+                            submission.evaluationStatus === "completed";
                           const evaluationPending =
                             submission.status === "submitted" &&
-                            !hasEvaluationReport &&
+                            !evaluationComplete &&
                             (submission.evaluationStatus === "pending" ||
-                              (submission.evaluationStatus !== "failed" && submittedRecently));
+                              submission.evaluationStatus === "in_progress" ||
+                              (submission.evaluationStatus !== "failed" &&
+                                submittedRecently));
                           // Show "Run evaluation" only when evaluation actually failed (user can retry)
                           const showRunEvaluation =
                             submission.status === "submitted" &&
-                            !hasEvaluationReport &&
+                            !evaluationComplete &&
                             submission.evaluationStatus === "failed";
                           const openEvaluation = () => {
                             setSelectedEvaluationSubmission(submission);

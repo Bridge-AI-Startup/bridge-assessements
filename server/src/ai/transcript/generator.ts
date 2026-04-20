@@ -33,6 +33,19 @@ import sharp from "sharp";
 import fs from "fs/promises";
 import path from "path";
 import { logTs } from "./logger.js";
+import {
+  TRANSCRIPT_CHECKPOINT_VERSION,
+  type TranscriptGenCheckpoint,
+  type RegionCheckpointHandlers,
+  computeTranscriptFingerprint,
+  loadTranscriptCheckpoint,
+  saveTranscriptCheckpoint,
+  clearTranscriptCheckpoint,
+  createRegionCheckpointHandlers,
+  TranscriptCheckpointMismatchError,
+  computeRegionOpInputHash,
+  hashBufferSample,
+} from "./transcriptCheckpoint.js";
 
 export interface TranscriptResult {
   storageKey: string;
@@ -79,6 +92,12 @@ export async function generateTranscript(
   const session = await ProctoringSessionModel.findById(sessionId);
   if (!session) throw ProctoringError.SESSION_NOT_FOUND;
 
+  const priorTranscriptStatus = session.transcript?.status;
+  // Keep disk checkpoint only after a failed run so we can resume vision work.
+  if (priorTranscriptStatus !== "failed") {
+    await clearTranscriptCheckpoint(sessionId);
+  }
+
   // Allow starting even when status is "generating" (regenerate from scratch); we use generationId so only the latest run writes completion.
   const generationId = Date.now();
   await ProctoringSessionModel.findByIdAndUpdate(sessionId, {
@@ -114,17 +133,110 @@ export async function generateTranscript(
     const useRegionDetection = isRegionDetectionEnabled();
     logTs("transcript", `Mode: ${useRegionDetection ? "vision-based region detection" : "prompt-only region awareness"}`);
 
+    const fingerprint = computeTranscriptFingerprint(prepared.frames, {
+      regionDetection: useRegionDetection,
+      batchSize: TRANSCRIPT_BATCH_SIZE,
+      regionBatchSize: REGION_BATCH_SIZE,
+      layoutRedetectInterval: LAYOUT_REDETECT_INTERVAL,
+    });
+
+    const expectedMode = useRegionDetection ? "region" : "prompt_only";
+    let checkpointData = await loadTranscriptCheckpoint(sessionId);
+    if (
+      !checkpointData ||
+      checkpointData.fingerprint !== fingerprint ||
+      checkpointData.mode !== expectedMode
+    ) {
+      await clearTranscriptCheckpoint(sessionId);
+      checkpointData = {
+        version: TRANSCRIPT_CHECKPOINT_VERSION,
+        fingerprint,
+        mode: expectedMode,
+        ...(useRegionDetection
+          ? { region: { ops: [] } }
+          : { promptOnly: { batches: {} } }),
+      };
+    }
+
+    const resumeFromFailed =
+      priorTranscriptStatus === "failed" &&
+      checkpointData.fingerprint === fingerprint &&
+      checkpointData.mode === expectedMode;
+
     let batchOutputs: string[];
     let totalPromptTokens: number;
     let totalCompletionTokens: number;
 
     const processStart = Date.now();
-    if (useRegionDetection) {
+    const runProcessing = async () => {
+      if (useRegionDetection) {
+        const ckpt = createRegionCheckpointHandlers(
+          sessionId,
+          fingerprint,
+          checkpointData,
+          resumeFromFailed
+        );
+        return processWithRegionDetection(
+          sessionId,
+          generationId,
+          prepared.frames,
+          ckpt
+        );
+      }
+      return processWithPromptOnly(prepared.frames, {
+        sessionId,
+        generationId,
+        checkpoint: checkpointData,
+        fingerprint,
+        resumeBatches: resumeFromFailed,
+      });
+    };
+
+    try {
       ({ batchOutputs, totalPromptTokens, totalCompletionTokens } =
-        await processWithRegionDetection(sessionId, generationId, prepared.frames));
-    } else {
-      ({ batchOutputs, totalPromptTokens, totalCompletionTokens } =
-        await processWithPromptOnly(prepared.frames, { sessionId, generationId }));
+        await runProcessing());
+    } catch (err) {
+      if (err instanceof TranscriptCheckpointMismatchError) {
+        logTs(
+          "transcript",
+          `Checkpoint mismatch, clearing and restarting: ${err instanceof Error ? err.message : String(err)}`
+        );
+        await clearTranscriptCheckpoint(sessionId);
+        checkpointData = {
+          version: TRANSCRIPT_CHECKPOINT_VERSION,
+          fingerprint,
+          mode: expectedMode,
+          ...(useRegionDetection
+            ? { region: { ops: [] } }
+            : { promptOnly: { batches: {} } }),
+        };
+        const ckptFresh = createRegionCheckpointHandlers(
+          sessionId,
+          fingerprint,
+          checkpointData,
+          false
+        );
+        if (useRegionDetection) {
+          ({ batchOutputs, totalPromptTokens, totalCompletionTokens } =
+            await processWithRegionDetection(
+              sessionId,
+              generationId,
+              prepared.frames,
+              ckptFresh
+            ));
+        } else {
+          ({ batchOutputs, totalPromptTokens, totalCompletionTokens } =
+            await processWithPromptOnly(prepared.frames, {
+              sessionId,
+              generationId,
+              checkpoint: checkpointData,
+              fingerprint,
+              resumeBatches: false,
+            }));
+        }
+      } else {
+        throw err;
+      }
     }
     logTs("transcript", `Processing complete: ${batchOutputs.length} batch outputs`, Date.now() - processStart);
 
@@ -144,6 +256,7 @@ export async function generateTranscript(
     const storageKey = `${sessionId}/transcript.jsonl`;
     await storage.storeTranscript(storageKey, jsonl);
     logTs("transcript", `Stored at ${storageKey}`, Date.now() - storeStart);
+    await clearTranscriptCheckpoint(sessionId);
 
     const tokenUsage = {
       prompt: totalPromptTokens,
@@ -344,7 +457,13 @@ const TRANSCRIPT_BATCH_CONCURRENCY = (() => {
  */
 async function processWithPromptOnly(
   frames: Array<{ buffer: Buffer; capturedAt: Date; screenIndex: number }>,
-  options?: { sessionId?: string; generationId?: number }
+  options?: {
+    sessionId?: string;
+    generationId?: number;
+    checkpoint?: TranscriptGenCheckpoint;
+    fingerprint?: string;
+    resumeBatches?: boolean;
+  }
 ): Promise<{
   batchOutputs: string[];
   totalPromptTokens: number;
@@ -366,10 +485,56 @@ async function processWithPromptOnly(
     number,
     { text: string; promptTokens: number; completionTokens: number }
   >();
+
+  const ck = options?.checkpoint;
+  const fp = options?.fingerprint;
+  const sessionId = options?.sessionId;
+  if (ck?.promptOnly?.batches && options?.resumeBatches && sessionId && fp) {
+    for (const batch of batches) {
+      const saved = ck.promptOnly.batches[String(batch.batchIndex)];
+      if (saved?.text) {
+        resultsByIndex.set(batch.batchIndex, {
+          text: saved.text,
+          promptTokens: saved.promptTokens,
+          completionTokens: saved.completionTokens,
+        });
+      }
+    }
+    const restored = resultsByIndex.size;
+    if (restored > 0) {
+      logTs("transcript", `Resuming prompt-only: restored ${restored}/${batches.length} batch(es) from checkpoint`);
+    }
+  }
+
   let totalPromptTokens = 0;
   let totalCompletionTokens = 0;
   let completedCount = 0;
   let totalFramesProcessed = 0;
+
+  for (const batch of batches) {
+    const r = resultsByIndex.get(batch.batchIndex);
+    if (r) {
+      totalPromptTokens += r.promptTokens;
+      totalCompletionTokens += r.completionTokens;
+      totalFramesProcessed += batch.frames.length;
+      completedCount++;
+    }
+  }
+
+  async function persistPromptCheckpoint(): Promise<void> {
+    if (!ck || !sessionId || !fp || ck.mode !== "prompt_only") return;
+    if (!ck.promptOnly) ck.promptOnly = { batches: {} };
+    for (const [idx, val] of resultsByIndex) {
+      ck.promptOnly.batches[String(idx)] = {
+        text: val.text,
+        promptTokens: val.promptTokens,
+        completionTokens: val.completionTokens,
+      };
+    }
+    ck.fingerprint = fp;
+    ck.version = TRANSCRIPT_CHECKPOINT_VERSION;
+    await saveTranscriptCheckpoint(sessionId, ck);
+  }
 
   // Concurrency pool: run up to TRANSCRIPT_BATCH_CONCURRENCY batches at a time
   let inFlight = 0;
@@ -390,9 +555,10 @@ async function processWithPromptOnly(
     }
   };
 
-  const runOne = async (
-    batch: (typeof batches)[0]
-  ): Promise<void> => {
+  const runOne = async (batch: (typeof batches)[0]): Promise<void> => {
+    if (resultsByIndex.has(batch.batchIndex)) {
+      return;
+    }
     await waitSlot();
     try {
       const visionFrames: VisionFrame[] = batch.frames.map((f) => ({
@@ -421,12 +587,14 @@ async function processWithPromptOnly(
         });
       }
       logTs("transcript", `Batch ${batch.batchIndex} done: ${result.promptTokens} prompt + ${result.completionTokens} completion tokens`);
+      await persistPromptCheckpoint();
     } finally {
       releaseSlot();
     }
   };
 
-  await Promise.all(batches.map((batch) => runOne(batch)));
+  const pending = batches.filter((b) => !resultsByIndex.has(b.batchIndex));
+  await Promise.all(pending.map((batch) => runOne(batch)));
 
   const batchOutputs = batches
     .map((b) => resultsByIndex.get(b.batchIndex)!.text)
@@ -507,7 +675,8 @@ function deriveAiChatLocation(layout: DetectedRegion[] | null): AiChatLocation {
 async function processWithRegionDetection(
   sessionId: string,
   generationId: number | undefined,
-  frames: Array<{ buffer: Buffer; capturedAt: Date; screenIndex: number; width: number; height: number }>
+  frames: Array<{ buffer: Buffer; capturedAt: Date; screenIndex: number; width: number; height: number }>,
+  ckpt?: RegionCheckpointHandlers
 ): Promise<{
   batchOutputs: string[];
   totalPromptTokens: number;
@@ -679,6 +848,19 @@ async function processWithRegionDetection(
           const reused = reemitCachedJsonl(cached.text, crops, regionType);
           pendingCrops.set(regionType, []);
           logTs("transcript", `Reusing cached OCR for ${regionType} (diff ${(diff * 100).toFixed(1)}% < ${OCR_CACHE_CHANGE_THRESHOLD * 100}%)`);
+          if (ckpt) {
+            const cacheHash = computeRegionOpInputHash([
+              "ocr_cache_reuse",
+              regionType,
+              crops.length,
+              ...crops.map((c) => simpleBufferHash(c.frame.buffer)),
+            ]);
+            await ckpt.tryReplayOrRun("ocr_cache_reuse", cacheHash, async () => ({
+              text: reused,
+              promptTokens: 0,
+              completionTokens: 0,
+            }));
+          }
           return { text: reused, promptTokens: 0, completionTokens: 0 };
         }
       }
@@ -686,12 +868,22 @@ async function processWithRegionDetection(
 
     logTs("transcript", `Flushing ${crops.length} ${regionType} crop(s) via OCR engine (model fallback: ${model})`);
 
-    const result = await ocrRegionBatch(
-      cropData,
+    const ocrHash = computeRegionOpInputHash([
+      "ocr_region_batch",
       regionType,
-      regionPrompt,
-      model
-    );
+      model,
+      ...cropData.flatMap((c) => [
+        c.capturedAt.toISOString(),
+        String(c.screenIndex),
+        simpleBufferHash(c.buffer),
+      ]),
+    ]);
+
+    const result = ckpt
+      ? await ckpt.tryReplayOrRun("ocr_region_batch", ocrHash, () =>
+          ocrRegionBatch(cropData, regionType, regionPrompt, model)
+        )
+      : await ocrRegionBatch(cropData, regionType, regionPrompt, model);
 
     if (useCache) {
       const thumb = await buildThumbForCrop(cropData[0].buffer);
@@ -719,9 +911,9 @@ async function processWithRegionDetection(
     });
     if (toFlush.length === 0) return;
     const sorted = [...toFlush].sort();
-    const results = await Promise.all(sorted.map((rt) => flushRegion(rt)));
-    for (let i = 0; i < sorted.length; i++) {
-      const r = results[i];
+    // Sequential flushes so transcript checkpoints record ops in deterministic order (replay-safe).
+    for (const rt of sorted) {
+      const r = await flushRegion(rt);
       if (r) {
         batchOutputs.push(r.text);
         totalPromptTokens += r.promptTokens;
@@ -763,7 +955,37 @@ async function processWithRegionDetection(
     }
 
     if (!cachedLayout || intervalExceeded || majorChange) {
-      const regions = await detectRegions(visionFrame);
+      let regions: DetectedRegion[];
+      let detPrompt = 0;
+      let detComp = 0;
+      if (ckpt) {
+        const detHash = computeRegionOpInputHash([
+          "detect_regions",
+          frameIndex,
+          visionFrame.screenIndex,
+          visionFrame.capturedAt.toISOString(),
+          hashBufferSample(visionFrame.buffer),
+        ]);
+        const wrapped = await ckpt.tryReplayOrRun("detect_regions", detHash, async () => {
+          const r = await detectRegions(visionFrame);
+          return {
+            text: JSON.stringify({ regions: r.regions }),
+            promptTokens: r.promptTokens,
+            completionTokens: r.completionTokens,
+          };
+        });
+        const parsed = JSON.parse(wrapped.text) as { regions: DetectedRegion[] };
+        regions = parsed.regions;
+        detPrompt = wrapped.promptTokens;
+        detComp = wrapped.completionTokens;
+      } else {
+        const r = await detectRegions(visionFrame);
+        regions = r.regions;
+        detPrompt = r.promptTokens;
+        detComp = r.completionTokens;
+      }
+      totalPromptTokens += detPrompt;
+      totalCompletionTokens += detComp;
       if (regions.length > 0) {
         cachedLayout = regions;
         lastLayoutDetectionFrame = frameIndex;
@@ -829,10 +1051,18 @@ async function processWithRegionDetection(
     if (!regions || regions.length === 0) {
       await flushAllPendingParallel(null);
       logTs("transcript", `Frame ${i + 1}: no layout available, using full-frame fallback`);
-      const result = await analyzeFrameBatch(
-        [visionFrame],
-        PROMPT_TRANSCRIPT_SYSTEM
-      );
+      const fbHash = computeRegionOpInputHash([
+        "analyze_full_frame",
+        i,
+        frame.screenIndex,
+        frame.capturedAt.toISOString(),
+        simpleBufferHash(frame.buffer),
+      ]);
+      const result = ckpt
+        ? await ckpt.tryReplayOrRun("analyze_full_frame", fbHash, () =>
+            analyzeFrameBatch([visionFrame], PROMPT_TRANSCRIPT_SYSTEM)
+          )
+        : await analyzeFrameBatch([visionFrame], PROMPT_TRANSCRIPT_SYSTEM);
       batchOutputs.push(result.text);
       totalPromptTokens += result.promptTokens;
       totalCompletionTokens += result.completionTokens;

@@ -54,6 +54,12 @@ async function ensureProctoringTranscriptAndEvaluate(
     "assessmentId"
   );
   if (!sub) return;
+  if (
+    (sub as any).evaluationStatus === "completed" &&
+    (sub as any).evaluationReport
+  ) {
+    return;
+  }
   const assessment = sub.assessmentId as any;
   const criteria = assessment?.evaluationCriteria;
   if (!Array.isArray(criteria) || criteria.length === 0) {
@@ -138,32 +144,57 @@ async function ensureProctoringTranscriptAndEvaluate(
   await updatedSub.save();
 
   // Activity interpretation: enrich raw transcript with behavioral observations
-  try {
-    const rawJsonl = await loadRawJsonlForSubmission(submissionId);
-    if (rawJsonl) {
-      const moments = jsonlToScreenMoments(rawJsonl);
-      if (moments.length > 0) {
-        const strategy = (process.env.INTERPRETER_STRATEGY || "stateful") as "chunked" | "stateful";
-        const enriched = strategy === "chunked"
-          ? await interpretChunked(moments)
-          : await interpretStateful(moments);
-        const subForEnriched = await SubmissionModel.findById(submissionId);
-        if (subForEnriched) {
-          (subForEnriched as any).enrichedTranscript = enriched;
-          await subForEnriched.save();
+  const enrichedExisting = (updatedSub as any).enrichedTranscript;
+  const hasEnriched = Array.isArray(enrichedExisting)
+    ? enrichedExisting.length > 0
+    : enrichedExisting != null && typeof enrichedExisting === "object";
+  if (!hasEnriched) {
+    try {
+      const rawJsonl = await loadRawJsonlForSubmission(submissionId);
+      if (rawJsonl) {
+        const moments = jsonlToScreenMoments(rawJsonl);
+        if (moments.length > 0) {
+          const strategy = (process.env.INTERPRETER_STRATEGY || "stateful") as "chunked" | "stateful";
+          const enriched = strategy === "chunked"
+            ? await interpretChunked(moments)
+            : await interpretStateful(moments);
+          const subForEnriched = await SubmissionModel.findById(submissionId);
+          if (subForEnriched) {
+            (subForEnriched as any).enrichedTranscript = enriched;
+            await subForEnriched.save();
+          }
         }
       }
+    } catch (err) {
+      console.warn(
+        `[ensureProctoringTranscriptAndEvaluate] Activity interpretation failed for ${submissionId}:`,
+        err
+      );
     }
-  } catch (err) {
-    console.warn(
-      `[ensureProctoringTranscriptAndEvaluate] Activity interpretation failed for ${submissionId}:`,
-      err
-    );
   }
 
   try {
+    const subForEval = await SubmissionModel.findById(submissionId);
+    if (!subForEval) return;
+    const st = (subForEval as any).evaluationStatus;
+    const prevReport = (subForEval as any).evaluationReport;
+    const partialForResume =
+      (st === "failed" || st === "in_progress") && prevReport
+        ? prevReport
+        : undefined;
+
     const report = await evaluateTranscript(transcript, criteria, {
       groundings: assessment.evaluationCriteriaGroundings,
+      partial: partialForResume,
+      onCheckpoint: async (partialReport) => {
+        await SubmissionModel.findByIdAndUpdate(submissionId, {
+          $set: {
+            evaluationReport: partialReport,
+            evaluationStatus: "in_progress",
+            evaluationError: null,
+          },
+        });
+      },
     });
     const subAfter = await SubmissionModel.findById(submissionId);
     if (!subAfter) return;
@@ -176,13 +207,13 @@ async function ensureProctoringTranscriptAndEvaluate(
       `[ensureProctoringTranscriptAndEvaluate] Evaluation failed for submission ${submissionId}:`,
       err
     );
-    const subAfter = await SubmissionModel.findById(submissionId);
-    if (subAfter) {
-      (subAfter as any).evaluationStatus = "failed";
-      (subAfter as any).evaluationError =
-        err instanceof Error ? err.message : "Evaluation failed.";
-      await subAfter.save();
-    }
+    await SubmissionModel.findByIdAndUpdate(submissionId, {
+      $set: {
+        evaluationStatus: "failed",
+        evaluationError:
+          err instanceof Error ? err.message : "Evaluation failed.",
+      },
+    });
   }
 }
 
@@ -593,28 +624,19 @@ export const submitSubmissionByToken: RequestHandler = async (
       await SubmissionModel.findByIdAndUpdate(submissionIdStr, {
         $set: { evaluationStatus: "pending", evaluationError: null },
       });
-      ensureProctoringTranscriptAndEvaluate(submissionIdStr)
-        .then(async () => {
-          const sub = await SubmissionModel.findById(submissionIdStr);
-          if (!sub) return;
-          (sub as any).evaluationStatus = (sub as any).evaluationReport
-            ? "completed"
-            : "failed";
-          await sub.save();
-        })
-        .catch((err) => {
-          console.error(
-            `[submitSubmissionByToken] ensureProctoringTranscriptAndEvaluate failed for ${submission._id}:`,
-            err
-          );
-          SubmissionModel.findByIdAndUpdate(submissionIdStr, {
-            $set: {
-              evaluationStatus: "failed",
-              evaluationError:
-                err instanceof Error ? err.message : "Evaluation failed.",
-            },
-          }).catch(() => {});
-        });
+      ensureProctoringTranscriptAndEvaluate(submissionIdStr).catch((err) => {
+        console.error(
+          `[submitSubmissionByToken] ensureProctoringTranscriptAndEvaluate failed for ${submission._id}:`,
+          err
+        );
+        SubmissionModel.findByIdAndUpdate(submissionIdStr, {
+          $set: {
+            evaluationStatus: "failed",
+            evaluationError:
+              err instanceof Error ? err.message : "Evaluation failed.",
+          },
+        }).catch(() => {});
+      });
     } else {
       await SubmissionModel.findByIdAndUpdate(submissionIdStr, {
         $set: {

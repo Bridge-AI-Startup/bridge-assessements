@@ -72,7 +72,7 @@ So the "video" input to the AI is either **smart-extracted video frames** or **s
    - **Layout:** For each frame (with caching), get bounding boxes for regions (ai_chat, terminal, editor, file_tree, browser) via **detectRegions** (vision). Layout is reused for many frames and re-detected on interval or when the image changes enough.
    - **aiChatLocation:** Inferred from layout: `"sidebar"` if ai_chat exists, `"terminal"` if only terminal, else `"none"`. This decides which region is treated as "the" AI chat for model choice and caching.
    - **Crop:** Each region is cropped and queued per region type in **pendingCrops**.
-   - **Parallel flush:** When any region hits batch size, **all** region types with pending crops are flushed **in parallel** (`Promise.all`). So GPT-4o for ai_chat runs alongside file_tree/terminal/editor (4o-mini or Tesseract), reducing wall-clock time.
+   - **Flush ordering:** When any region hits batch size, **all** region types with pending crops are flushed in **sorted region-type order**, **sequentially** (one region flush after another). This keeps wall-clock time reasonable while making **transcript resume** checkpoints deterministic (same op order on replay).
    - **Per-region OCR:**
      - **ai_chat** (and **terminal** when `aiChatLocation === "terminal"`): Always vision, **GPT-4o**, no cache.
      - **file_tree** and **terminal** (when not the chat): **Aggressive cache** — if a small thumb of the crop is < ~50% different from the last cached thumb, reuse last OCR and re-emit for current timestamps; otherwise run OCR (Tesseract then vision) and cache the result.
@@ -85,6 +85,16 @@ So the "video" input to the AI is either **smart-extracted video frames** or **s
 - All region batch outputs (and re-emitted cached JSONL) are merged by the **stitcher** (parse → sort by `ts` → single JSONL).
 - **injectSidecarEvents** merges in tab_switch, blur, etc. from prepared sidecar events.
 - Result is saved as `{sessionId}/transcript.jsonl` and session is updated: `transcript.status = "completed"`, `transcript.storageKey`, token usage, etc. (only if the run's `generationId` still matches).
+
+### Resume after failure (checkpoint)
+
+If `transcript.status` ends as **`failed`** (crash, rate limit, etc.), the next `generateTranscript` run **keeps** a disk checkpoint under proctoring storage:
+
+- **`{sessionId}/transcript-gen-checkpoint.json`**
+- **Fingerprint:** hash of ordered frame `storageKey`s plus transcript env knobs (`TRANSCRIPT_BATCH_SIZE`, `TRANSCRIPT_REGION_BATCH_SIZE`, `TRANSCRIPT_LAYOUT_REDETECT_INTERVAL`, region-detection on/off). If frames or env change, the checkpoint is discarded and generation starts clean.
+- **Prompt-only:** completed batch outputs are stored by `batchIndex`; incomplete batches are re-run only.
+- **Region detection:** an ordered log of vision steps (`detect_regions`, `ocr_cache_reuse`, `ocr_region_batch`, `analyze_full_frame`) with input hashes; replay returns cached text/tokens when the live run matches the next logged op. A mismatch clears the checkpoint and restarts once.
+- On **success**, the checkpoint file is deleted. Starting a new run while status is **not** `failed` clears any stale checkpoint (including superseding a stuck `generating` run).
 
 ---
 

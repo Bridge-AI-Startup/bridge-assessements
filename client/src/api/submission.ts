@@ -72,7 +72,7 @@ export type Submission = {
   createdAt: string;
   updatedAt: string;
   /** 'pending' = evaluation running in background; 'completed' | 'failed' when done */
-  evaluationStatus?: "pending" | "completed" | "failed" | null;
+  evaluationStatus?: "pending" | "in_progress" | "completed" | "failed" | null;
   /** Reason evaluation did not run or failed (e.g. no proctoring session, no criteria) */
   evaluationError?: string | null;
   /** Screen recording evaluation report when assessment has evaluation criteria */

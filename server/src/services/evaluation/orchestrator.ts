@@ -13,12 +13,50 @@ import type {
 export type EvaluateTranscriptOptions = {
   /** Pre-grounded criteria from assessment (same order as criteria). When present, ground step is skipped. */
   groundings?: GroundedCriterion[];
+  /**
+   * Prior report from a failed or interrupted run. Only prefix results whose
+   * `criterion` matches the current `criteria` list in order are reused.
+   */
+  partial?: EvaluationReport | null;
+  /** Called after each newly finished criterion and after the session summary is ready. */
+  onCheckpoint?: (report: EvaluationReport) => Promise<void>;
 };
 
 /**
+ * Reuse leading criterion results only when criterion strings still match (same index).
+ */
+export function trimCompatiblePartialReport(
+  criteria: string[],
+  partial: EvaluationReport | null | undefined
+): EvaluationReport | undefined {
+  if (!partial?.criteria_results?.length) {
+    if (partial?.session_summary?.trim()) {
+      return {
+        criteria_results: [],
+        session_summary: partial.session_summary,
+      };
+    }
+    return undefined;
+  }
+  const out: CriterionResult[] = [];
+  for (let i = 0; i < partial.criteria_results.length; i++) {
+    if (i >= criteria.length) break;
+    if (partial.criteria_results[i].criterion !== criteria[i]) break;
+    out.push(partial.criteria_results[i]);
+  }
+  if (out.length === 0 && !partial.session_summary?.trim()) {
+    return undefined;
+  }
+  return {
+    criteria_results: out,
+    session_summary: partial.session_summary ?? "",
+  };
+}
+
+/**
  * Run the full evaluation pipeline: validate → ground (or use provided groundings) → retrieve → evaluate
- * per criterion, plus a session summary. All criteria are processed in parallel;
- * session summary runs in parallel with them.
+ * per criterion (sequentially so checkpoints are meaningful), then session summary.
+ * When `partial` is set, matching prefix results are skipped so retries resume after rate limits or errors.
  */
 export async function evaluateTranscript(
   transcript: TranscriptEvent[],
@@ -29,19 +67,57 @@ export async function evaluateTranscript(
   const usePreGrounded =
     Array.isArray(groundings) &&
     groundings.length === criteria.length;
+  const trimmed = trimCompatiblePartialReport(criteria, options?.partial ?? undefined);
+  const onCheckpoint = options?.onCheckpoint;
 
-  const [criteriaResults, session_summary] = await Promise.all([
-    Promise.all(
-      criteria.map((criterion, i) =>
-        evaluateOneCriterion(transcript, criterion, usePreGrounded ? groundings![i] : undefined)
-      )
-    ),
-    generateSessionSummary(transcript),
-  ]);
+  if (
+    trimmed &&
+    trimmed.criteria_results.length === criteria.length &&
+    trimmed.session_summary?.trim()
+  ) {
+    return {
+      criteria_results: trimmed.criteria_results,
+      session_summary: trimmed.session_summary,
+    };
+  }
+
+  let results: CriterionResult[] = trimmed?.criteria_results
+    ? [...trimmed.criteria_results]
+    : [];
+  let session_summary = trimmed?.session_summary?.trim()
+    ? trimmed.session_summary
+    : "";
+
+  for (let i = results.length; i < criteria.length; i++) {
+    const criterion = criteria[i]!;
+    const preGrounded = usePreGrounded ? groundings![i] : undefined;
+    const result = await evaluateOneCriterion(
+      transcript,
+      criterion,
+      preGrounded
+    );
+    results.push(result);
+    if (onCheckpoint) {
+      await onCheckpoint({
+        criteria_results: [...results],
+        session_summary,
+      });
+    }
+  }
+
+  if (!session_summary?.trim()) {
+    session_summary = await generateSessionSummary(transcript);
+    if (onCheckpoint) {
+      await onCheckpoint({
+        criteria_results: results,
+        session_summary,
+      });
+    }
+  }
 
   return {
     session_summary,
-    criteria_results: criteriaResults,
+    criteria_results: results,
   };
 }
 

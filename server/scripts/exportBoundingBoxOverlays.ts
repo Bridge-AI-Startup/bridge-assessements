@@ -84,7 +84,7 @@ async function getRegionsFromImage(
   const width = meta.width ?? 1920;
   const height = meta.height ?? 1080;
   const { detectRegions } = await import("../src/ai/transcript/regionDetector.js");
-  const regions = await detectRegions({
+  const { regions } = await detectRegions({
     buffer: buf,
     capturedAt: new Date(),
     screenIndex: 0,
@@ -108,7 +108,7 @@ async function getRegionsFromSession(
     throw new Error(`Session ${sessionId} has no frames.`);
   }
   const frame = prepared.frames[0];
-  const regions = await detectRegions({
+  const { regions } = await detectRegions({
     buffer: frame.buffer,
     capturedAt: frame.capturedAt,
     screenIndex: frame.screenIndex,

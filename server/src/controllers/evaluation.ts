@@ -99,16 +99,51 @@ export const evaluate: RequestHandler = async (req, res, next) => {
           error: "Assessment has no evaluation criteria configured.",
         });
       }
-      const report = await evaluateTranscript(
-        screenTranscript as TranscriptEvent[],
-        criteriaList,
-        { groundings: assessment.evaluationCriteriaGroundings }
-      );
-      (submission as any).evaluationReport = report;
-      (submission as any).screenRecordingTranscript = screenTranscript;
-      (submission as any).evaluationStatus = "completed";
-      await submission.save();
-      return res.status(200).json({ report });
+      const evalSt = (submission as any).evaluationStatus;
+      const prevReport = (submission as any).evaluationReport;
+      const partialForResume =
+        (evalSt === "failed" || evalSt === "in_progress") && prevReport
+          ? prevReport
+          : undefined;
+
+      try {
+        const report = await evaluateTranscript(
+          screenTranscript as TranscriptEvent[],
+          criteriaList,
+          {
+            groundings: assessment.evaluationCriteriaGroundings,
+            partial: partialForResume,
+            onCheckpoint: async (partialReport) => {
+              await SubmissionModel.findByIdAndUpdate(submissionId, {
+                $set: {
+                  evaluationReport: partialReport,
+                  evaluationStatus: "in_progress",
+                  evaluationError: null,
+                },
+              });
+            },
+          }
+        );
+        await SubmissionModel.findByIdAndUpdate(submissionId, {
+          $set: {
+            evaluationReport: report,
+            screenRecordingTranscript: screenTranscript,
+            evaluationStatus: "completed",
+            evaluationError: null,
+          },
+        });
+        return res.status(200).json({ report });
+      } catch (evalErr) {
+        const msg =
+          evalErr instanceof Error ? evalErr.message : String(evalErr);
+        await SubmissionModel.findByIdAndUpdate(submissionId, {
+          $set: {
+            evaluationStatus: "failed",
+            evaluationError: msg,
+          },
+        });
+        throw evalErr;
+      }
     }
 
     const report = await evaluateTranscript(transcript!, criteria!);

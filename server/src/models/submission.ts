@@ -447,10 +447,11 @@ const SubmissionSchema = new mongoose.Schema(
       default: null,
     },
 
-    // 'pending' = background evaluation running after submit; 'completed' | 'failed' when done; null/absent = idle
+    // 'pending' = background evaluation running after submit; 'in_progress' = partial report saved (resume on retry);
+    // 'completed' | 'failed' when done; null/absent = idle
     evaluationStatus: {
       type: String,
-      enum: ["pending", "completed", "failed"],
+      enum: ["pending", "in_progress", "completed", "failed"],
       default: null,
     },
 
