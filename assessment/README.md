@@ -1,70 +1,82 @@
-# Mini Bridge — core assessment loop
+# Mini Bridge — Core Assessment Loop
 
-A **stripped-down** version of Bridge’s core product (no GitHub, no competitions, no AI, no billing):
+A stripped-down Bridge assessment that focuses on three core behaviors:
 
-1. **Submission lifecycle** — `pending` → `in-progress` → `submitted` via token endpoints; `startedAt` / `submittedAt` / `timeSpent`.
-2. **Token scope** — Candidate token loads **only** that submission and its assessment’s public fields; no cross-assessment data.
-3. **Employer submission list** — Authenticated list for an assessment with `status` and `search` (email/name) filters.
+1. Submission lifecycle (`pending` → `in-progress` → `submitted`).
+2. Token-scoped candidate access.
+3. Employer submission list filtering and ownership scope.
 
-## Challenges (take-home)
-
-See **`challenge.md`** for the full list of intentional bugs and features to implement.
-
----
-
-## What this mirrors (core Bridge, not hackathon)
-
-1. **Submission lifecycle** — Token-based `pending` → `in-progress` → `submitted`, with `startedAt`, `submittedAt`, `timeSpent` (no GitHub submission).
-2. **Token scope** — `GET /submissions/token/:token` returns only that submission plus **public** assessment fields; employer-only data never appears here.
-3. **Employer list** — `GET /submissions/assessments/:assessmentId/submissions` with `?status=` and `?search=` (name/email), scoped to assessments owned by the bearer.
+The challenge brief is in `challenge.md`.
 
 ## Layout
 
-```
+```text
 assessment/
-├── server/     # Express + Mongoose + TypeScript
-└── client/     # Vite + React (employer + candidate flows)
+├── server/              # Express + Mongoose + TypeScript
+├── client/              # Vite + React (employer + candidate flows)
+├── challenge.md         # Candidate task list
+└── CONFIG.md            # Configuration notes
 ```
 
-## Run locally
+## Run (candidate flow)
 
-### MongoDB
+Config is already committed for local runs:
+- `assessment/server/config.env`
+- `assessment/client/.env.local`
 
-Use Atlas (see `server/config.env.example`) or local:
-
-```bash
-mongod --dbpath /path/to/data
-```
-
-### Backend
+Backend:
 
 ```bash
 cd assessment/server
-cp config.env.example config.env
-# edit ATLAS_URI + DB_NAME
 npm install
-npm run seed   # optional: demo user + assessment + sample submissions
+npm run seed   # optional: sample user + submissions
 npm run dev
 ```
 
-Server defaults to `http://localhost:5060`.
-
-### Frontend
+Frontend:
 
 ```bash
 cd assessment/client
-echo 'VITE_API_URL=http://localhost:5060/api' > .env.local
 npm install
 npm run dev
 ```
 
-Open the Vite URL (e.g. `http://localhost:5174`). Paste **Employer API token** from seed output (or from `POST /api/users/bootstrap` response) into the employer screen. Use a **candidate token** from generate-link on the candidate screen.
+Open Vite (usually `http://localhost:5174`) and use the seeded token/UI.
+
+## Runbook-friendly commands (for behavioral grading agents)
+
+Install:
+
+```bash
+cd assessment/server && npm install
+cd assessment/client && npm install
+```
+
+Start API:
+
+```bash
+cd assessment/server && npm run dev
+```
+
+Smoke test (API must already be running). Prefer **`curl`** — nested quotes in `node -e "…"` often break when run via `bash -lc` (E2B/grading), which can surface as `fetch failed` / `bad port`:
+
+```bash
+curl -sf http://127.0.0.1:5060/health
+```
+
+## Database strategy
+
+`mongodb-memory-server` is the only supported DB strategy for this starter.
+
+- No Atlas account required.
+- No local `mongod` required.
+- First run downloads a MongoDB binary and caches it.
 
 ## API overview
 
 | Method | Path | Auth |
 |--------|------|------|
-| POST | `/api/users/bootstrap` | No — dev-only, creates first user + token if none exist |
+| POST | `/api/users/bootstrap` | No (dev-only) |
 | POST | `/api/assessments` | Bearer |
 | GET | `/api/assessments/:id` | Bearer, owner |
 | POST | `/api/submissions/generate-link` | Bearer |
@@ -72,15 +84,4 @@ Open the Vite URL (e.g. `http://localhost:5174`). Paste **Employer API token** f
 | GET | `/api/submissions/assessments/public/:id` | Public |
 | GET | `/api/submissions/token/:token` | Public (token) |
 | POST | `/api/submissions/token/:token/start` | Public (token) |
-| POST | `/api/submissions/token/:token/submit` | Public (token), body `{ submissionNotes? }` |
-
-Authentication: `Authorization: Bearer <apiToken>` for employer routes. Tokens are opaque strings stored on the user document (not Firebase in this mini app).
-
-## Environment
-
-| Variable | Description |
-|----------|-------------|
-| `ATLAS_URI` | MongoDB connection string |
-| `DB_NAME` | Database name |
-| `PORT` | Server port (default `5060`) |
-| `FRONTEND_URL` | CORS origin (e.g. `http://localhost:5174`) |
+| POST | `/api/submissions/token/:token/submit` | Public (token) |

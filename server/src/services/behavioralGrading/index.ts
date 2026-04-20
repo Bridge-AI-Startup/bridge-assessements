@@ -5,6 +5,7 @@ import { collectJudgeArtifacts } from "./artifacts.js";
 import { getSubmissionCodeStorage } from "../submissionCode/storage.js";
 import {
   executeRunbook,
+  probeRepoLayoutForRunbook,
   readmeFromSandbox,
   saveReportJson,
   type ReadmeRequirementDetail,
@@ -227,11 +228,16 @@ export async function gradeSubmissionBehavioral(
         behavioralInfo("clone_done", { repoPath });
 
         const readmeText = await readmeFromSandbox(ctx.sandbox, repoPath);
+        const repoLayoutProbe = await probeRepoLayoutForRunbook(ctx, repoPath);
+        behavioralInfo("repo_layout_probe", {
+          chars: repoLayoutProbe.length,
+        });
         const repoSummary = getRepoSummary(submission);
 
         const runbook = await extractRunbook({
           readmeText,
           repoSummary,
+          repoLayoutProbe,
         });
         behavioralInfo("runbook_llm_ok", {
           steps: runbook.steps.length,
@@ -261,9 +267,21 @@ export async function gradeSubmissionBehavioral(
           effectiveBaseUrl,
           ctx.sandbox
         );
+        const httpEx = judgeArtifacts.httpBodyExcerpt || "";
+        const runtimeHints = {
+          baseUrlAvailable: Boolean(effectiveBaseUrl?.trim()),
+          anyRunbookCommandFailed: runbookResult.evidence.some(
+            (e) => e.type === "command" && !e.success
+          ),
+          httpSeedFetchOk:
+            Boolean(effectiveBaseUrl?.trim()) &&
+            Boolean(httpEx) &&
+            !httpEx.startsWith("Fetch failed"),
+        };
         behavioralInfo("artifacts_collected", {
           entryCommand: judgeArtifacts.entryCommand,
           mainSourcePath: judgeArtifacts.mainSourcePath,
+          runtimeHints,
         });
 
         const cases: BehavioralCaseResult[] = [];
@@ -288,6 +306,7 @@ export async function gradeSubmissionBehavioral(
             executionProfile,
             readmeExcerpt,
             artifacts: judgeArtifacts,
+            runtimeHints,
             repoPath,
             ctx,
             baseUrl: effectiveBaseUrl,

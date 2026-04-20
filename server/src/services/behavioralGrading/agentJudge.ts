@@ -125,17 +125,71 @@ function isSafeShellCommand(cmd: string): boolean {
   return !dangerous.test(cmd);
 }
 
-function resolveSafeReadPath(
+/**
+ * Build absolute paths to try for read_file. Handles:
+ * - LLM repeating the repo root folder name (e.g. `assessment/server/...` when cwd is already `.../assessment`)
+ * - TypeScript: `.js` → `.ts` / `.tsx`, and `server/routes` → `server/src/routes` (same for client)
+ */
+function resolveJudgeReadCandidates(
   repoPath: string,
   relativePath: string
-): string | null {
+): string[] | null {
   const trimmed = relativePath.trim().replace(/^\/+/, "");
-  const normalized = path.posix.normalize(trimmed);
+  let normalized = path.posix.normalize(trimmed);
   if (normalized.includes("..")) return null;
-  const full = path.posix.join(repoPath.replace(/\\/g, "/"), normalized);
-  const repoNorm = repoPath.replace(/\\/g, "/");
-  if (!full.startsWith(repoNorm)) return null;
-  return full;
+
+  const repoNorm = path.posix.normalize(repoPath.replace(/\\/g, "/"));
+  const base = path.posix.basename(repoNorm);
+  const segments = normalized.split("/").filter(Boolean);
+  if (segments.length > 0 && segments[0] === base) {
+    normalized = segments.slice(1).join("/");
+  }
+  if (!normalized || normalized === ".") {
+    return null;
+  }
+
+  const primary = path.posix.join(repoNorm, normalized);
+  if (!primary.startsWith(`${repoNorm}/`)) {
+    return null;
+  }
+
+  const candidates: string[] = [];
+  const add = (p: string) => {
+    if (!candidates.includes(p)) candidates.push(p);
+  };
+
+  add(primary);
+
+  if (primary.includes("/server/routes/") && !primary.includes("/server/src/")) {
+    add(primary.replace("/server/routes/", "/server/src/routes/"));
+  }
+  if (primary.includes("/client/routes/") && !primary.includes("/client/src/")) {
+    add(primary.replace("/client/routes/", "/client/src/routes/"));
+  }
+
+  const snapshot = [...candidates];
+  for (const p of snapshot) {
+    if (p.endsWith(".js")) {
+      add(p.slice(0, -3) + ".ts");
+      add(p.slice(0, -3) + ".tsx");
+      add(p.slice(0, -3) + ".jsx");
+    }
+    if (p.endsWith(".jsx")) {
+      add(p.slice(0, -4) + ".tsx");
+    }
+  }
+
+  // Many Express apps use a single `routes/index.ts` instead of `routes/assessments.ts`, etc.
+  const snapshot3 = [...candidates];
+  for (const p of snapshot3) {
+    const m = p.match(/^(.*\/routes)\/[^/]+\.(ts|tsx|js|jsx)$/i);
+    if (m && !/\/routes\/index\./i.test(p)) {
+      add(`${m[1]}/index.ts`);
+      add(`${m[1]}/index.tsx`);
+    }
+  }
+
+  return candidates;
 }
 
 /** Only allow navigation to the same origin as the grading base URL (sandbox app). */
@@ -300,17 +354,24 @@ ${browserHint}
 
 Rules:
 - You MUST eventually use step=finish before iterations run out.
+- **Runtime vs static (critical):** Read \`--- Grading runtime (automated — use for honesty) ---\` in the first user message.
+  - If the check concerns **HTTP/API behavior** — e.g. response JSON shape, **non-leakage** of ids, **status codes**, **rejecting** bad input, honeypot/bot rejection — and **App base URL available** is **yes** with a **successful** warmup GET: you **must** obtain **runtime** proof before \`finish\` with **pass**: use \`run_command\` to \`curl -s\` the relevant API paths (infer paths from \`read_file\` on routes; include needed headers if the app is behind /api). **Do not** pass such checks from \`read_file\` alone.
+  - If **App base URL available** is **no**, or warmup GET **failed**, or **README runbook had a failed shell step** and the check **requires live HTTP** proof: you may use **inconclusive** (explain) — but if the check is **purely about source** (routes, auth, validators) and you **can** read the repo, still decide pass/fail from code. Do **not** use inconclusive just because relevant **files were not found**; see **Missing code** below.
+  - For **purely static** checks (middleware on a route, file exists, validator chain present): \`read_file\` is enough — but see **Ownership** next; “static” does not mean “router only.”
+- **Ownership / authorization (critical):** If the behavioral check asks that employers **cannot** access **another user’s** assessments/submissions, or that access is **scoped to the owner**, **do not pass** from **route + middleware alone** (e.g. \`verifyEmployerToken\` only proves an authenticated employer). You **must** \`read_file\` the **controller (or service) handler** for that route and confirm the code **binds the resource to the current employer/user** (e.g. lookup by assessment id **and** owner id, or 404 when not owned). If the handler loads by id **without** comparing to the authenticated owner, **fail** — even if middleware is present.
+- **Missing code (critical):** After reasonable probing (repository layout, \`routes/index.ts\`, \`rg\`/grep for symbols from the behavioral check), if **no relevant implementation** exists in the clone (wrong paths resolved, still nothing; or no route/handler/validator to evaluate), finish with **fail** — the submission does not demonstrate the required code. **Do not** choose **inconclusive** only because files were missing or paths were guessed wrong.
 - **Single-check scope (critical):** You grade **only** the one sentence in \`Behavioral check to evaluate\` below. The full assessment description is context; **other behavioral checks** (if listed) are scored in **separate** agent runs. Do **not** fail this check because the submission would fail a **different** check, unless the **current** sentence explicitly requires that behavior. **Do not double-penalize:** e.g. a wrong discount threshold belongs in the check that mentions that threshold—not in a check that only asks whether output **includes** fields such as item, quantity, cost, and discount **lines** (pass those on presence/readability of those fields; ignore whether the discount **amount** matches the spec unless this sentence says so).
 - If a behavioral check needs an edge case (e.g. empty list), propose a concrete command that exercises it (e.g. python -c "import ..." or a here-doc) when possible.
 - For **UI / website** behavioral checks and **baseUrl** is available: use **browser_goto**, **browser_click**, **browser_fill**, **browser_expect**, and **browser_screenshot** as needed; use **read_file** for implementation details.
 - Do not require stdout to contain internal variable names unless the assignment demands it.
 - **When THIS check explicitly** asks about correctness, thresholds, "correctly", or specific discount rules: compare code/stdout/UI to the assessment description and fail if they disagree.
 - **When THIS check is only** about presence, labels, or format (e.g. "output includes …", "displays each …"): pass if those elements appear in the relevant output; do **not** import failures from unrelated requirements (e.g. wrong dollar threshold) unless THIS sentence ties pass/fail to that value.
-- **Citation integrity (critical):** \`citations\` must be verbatim text that already appears in (1) the **seed evidence** in the first user message, OR (2) a \`read_file\` result from a **path inside the candidate repo**, OR (3) **visible text** from **browser_*** snapshots (\`browser_goto\`, \`browser_click\`, \`browser_fill\`, or the excerpt in \`browser_expect\` / screenshot confirmation) when the check is about the **web UI**. **Never** cite strings that appear **only** in \`run_command\` probe output (e.g. inline \`python -c\`) as proof the **candidate's source files** contain that logic.
+- **Citation integrity (critical):** \`citations\` must be verbatim text from (1) **seed evidence**, OR (2) \`read_file\` from the repo, OR (3) **browser_*** visible text for UI checks, OR (4) **curl / HTTP** output from \`run_command\` when the check is about **actual API responses** (status/body/leaks). **Never** cite generic \`run_command\` stdout as proof of **source file** content unless that output is clearly a **file read** (e.g. \`cat\`) from the repo.
 - For "source contains guard X": use **read_file** and **fail** if absent. For "page shows Y": use **browser_*** when baseUrl exists; **browser_expect** gives a deterministic pass/fail for substrings/regex on visible text.
 - **run_command** is for the **declared entry command**, tests (\`pytest\`, \`npm test\`), or read-only inspection (\`rg\`, \`grep\`). Prefer **read_file** over shell-printed fake code for source claims.
-- **Paths:** The **Repository layout** section shows real directories in this clone. README or assessment text may say \`cd test2/backend\` (or similar) when the repo actually has \`backend/\` or \`test2/test2/backend\`. **Do not** \`cd\` to a path unless it appears in that layout (or you listed it with \`run_command\` \`ls\`/\`find\`). Use the correct \`package.json\` path from the layout.
-- If you cannot determine after probing, finish with inconclusive and explain what was missing.
+- **Paths:** The **Repository layout** section shows real directories in this clone. Paths for \`read_file\` are **relative to the repository root** (the folder that contains the layout). **Do not** prefix with the root folder name again (e.g. if layout shows \`server/\` at the top, use \`server/src/routes/…\` not \`assessment/server/…\`). Prefer \`.ts\` / \`src/routes/\` when the repo is TypeScript—check the layout for \`package.json\` and actual file paths.
+- **Routes layout:** APIs may live in one file (e.g. \`server/src/routes/index.ts\`) rather than \`routes/assessments.ts\` or \`routes/submissions.ts\`. If a guessed path is missing, open \`routes/index.ts\` (or \`server.ts\`) or run \`run_command\` \`rg 'listSubmissions|generate-link' server\` before concluding files are missing.
+- **Verdict choice:** **fail** if the requirement is unmet in evidence, or **no locatable code** supports it after probing. **inconclusive** only when **code exists** but the correct pass/fail is **ambiguous**, or **runtime-only** proof is mandatory and the environment **cannot** provide it (e.g. app never reachable) — not for “could not find the file.”
 
 Safety: only standard dev commands; no destructive patterns.`;
 
@@ -426,24 +487,43 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
       }
 
       if (result.step === "read_file") {
-        const abs = resolveSafeReadPath(input.repoPath, result.relativePath);
+        const candidates = resolveJudgeReadCandidates(
+          input.repoPath,
+          result.relativePath
+        );
         let outputPreview = "";
         let success = false;
-        if (!abs) {
-          outputPreview = "[error] Invalid or unsafe path.";
+        const repoNorm = path.posix.normalize(
+          input.repoPath.replace(/\\/g, "/")
+        );
+        if (!candidates?.length) {
+          outputPreview =
+            "[error] Invalid or unsafe path (use paths relative to repo root; do not repeat the root folder name).";
         } else {
-          try {
-            const content = await input.ctx.sandbox.files.read(abs);
-            const text = typeof content === "string" ? content : "";
-            outputPreview = text.slice(0, MAX_FILE_SNIPPET);
-            success = text.length > 0;
-            if (text.length > MAX_FILE_SNIPPET) {
-              outputPreview += "\n… (truncated)";
+          let lastErr = "";
+          for (const abs of candidates) {
+            try {
+              const content = await input.ctx.sandbox.files.read(abs);
+              const text = typeof content === "string" ? content : "";
+              const relShown =
+                abs.startsWith(`${repoNorm}/`) || abs === repoNorm
+                  ? abs.slice(repoNorm.length).replace(/^\//, "") || "."
+                  : abs;
+              outputPreview = `[resolved: ${relShown}]\n${text.slice(0, MAX_FILE_SNIPPET)}`;
+              success = text.length > 0;
+              if (text.length > MAX_FILE_SNIPPET) {
+                outputPreview += "\n… (truncated)";
+              }
+              break;
+            } catch (e) {
+              lastErr = e instanceof Error ? e.message : String(e);
             }
-          } catch (e) {
-            outputPreview = `[error] ${
-              e instanceof Error ? e.message : String(e)
-            }`;
+          }
+          if (!success) {
+            outputPreview = `[error] Tried ${candidates.length} path(s), e.g. ${candidates
+              .slice(0, 4)
+              .map((p) => p.slice(repoNorm.length).replace(/^\//, "") || ".")
+              .join(", ")}. Last: ${lastErr}`;
           }
         }
         trace.push({

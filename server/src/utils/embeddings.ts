@@ -28,15 +28,24 @@ function getOpenAIClient(): OpenAI {
   return openai;
 }
 
+/** OpenAI embedding inputs are capped at 8192 tokens; avoid hard failures on char/token mismatch. */
+const MAX_EMBEDDING_INPUT_CHARS = 24000;
+
 /**
  * Generate embeddings for a batch of texts
  */
 export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
   const client = getOpenAIClient();
 
+  const input = texts.map((t) =>
+    t.length > MAX_EMBEDDING_INPUT_CHARS
+      ? t.slice(0, MAX_EMBEDDING_INPUT_CHARS)
+      : t
+  );
+
   const response = await client.embeddings.create({
     model: "text-embedding-3-small",
-    input: texts,
+    input,
     dimensions: 512, // Match Pinecone index dimension (can be 512 or 1536)
   });
 

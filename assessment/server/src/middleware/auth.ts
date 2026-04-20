@@ -1,5 +1,5 @@
 import type { RequestHandler } from "express";
-import UserModel from "../models/user.js";
+import { findUserByApiToken } from "../repositories/inMemoryStore.js";
 
 export type AuthedRequest = {
   userId: string;
@@ -21,10 +21,10 @@ export const verifyEmployerToken: RequestHandler = async (req, res, next) => {
   if (!apiToken) {
     return res.status(401).json({ error: "UNAUTHORIZED", message: "Empty token." });
   }
-  const user = await UserModel.findOne({ apiToken }).select("_id").lean();
+  const user = findUserByApiToken(apiToken);
   if (!user) {
     return res.status(401).json({ error: "UNAUTHORIZED", message: "Invalid token." });
   }
-  req.employer = { userId: String(user._id), apiToken };
+  req.employer = { userId: user.id, apiToken };
   next();
 };

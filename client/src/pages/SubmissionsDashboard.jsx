@@ -27,6 +27,7 @@ import {
   Circle,
   Play,
   Download,
+  Archive,
   FileText,
   Camera,
   Pencil,
@@ -54,6 +55,7 @@ import {
   runBehavioralGrading,
   getBehavioralArtifactBlob,
   downloadSubmissionCodeArchive,
+  exportAssessmentEvidenceZip,
 } from "@/api/submission";
 import { runSubmissionEvaluation } from "@/api/evaluation";
 import VideoTimelineWithCriteria from "@/components/proctoring/VideoTimelineWithCriteria";
@@ -356,6 +358,7 @@ export default function SubmissionsDashboard() {
   const [submissions, setSubmissions] = useState([]);
   const [assessment, setAssessment] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [exportingEvidence, setExportingEvidence] = useState(false);
   const [error, setError] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   const [selectedInterview, setSelectedInterview] = useState(null);
@@ -428,6 +431,43 @@ export default function SubmissionsDashboard() {
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
+  };
+
+  const handleExportAllEvidence = async () => {
+    if (!assessmentId) return;
+    setExportingEvidence(true);
+    try {
+      const result = await exportAssessmentEvidenceZip(assessmentId);
+      if (!result.success) {
+        toast({
+          title: "Export failed",
+          description: result.error || "Could not export evidence.",
+          variant: "destructive",
+        });
+        return;
+      }
+      const url = URL.createObjectURL(result.data);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `assessment-${assessmentId}-submission-evidence.zip`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      toast({
+        title: "Evidence exported",
+        description:
+          "ZIP includes submission metadata, evaluation and behavioral reports, and grading artifacts.",
+      });
+    } catch (e) {
+      toast({
+        title: "Export failed",
+        description: e?.message || "Could not export evidence.",
+        variant: "destructive",
+      });
+    } finally {
+      setExportingEvidence(false);
+    }
   };
 
   // Reset expanded evidence and behavioral artifact cache when evaluation target changes
@@ -1466,18 +1506,34 @@ export default function SubmissionsDashboard() {
             </select>
           </div>
           {assessmentId && (
-            <Button
-              type="button"
-              onClick={() => {
-                setDashboardTab("invites");
-                setShareTab("single");
-                resetShareModalState();
-              }}
-              className="bg-[#1E3A8A] hover:bg-[#152a66] sm:ml-auto flex items-center gap-2 w-full sm:w-auto justify-center"
-            >
-              <Share2 className="w-4 h-4" />
-              Share assessment
-            </Button>
+            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto sm:ml-auto">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={exportingEvidence || isLoading}
+                onClick={handleExportAllEvidence}
+                className="flex items-center gap-2 w-full sm:w-auto justify-center border-gray-300"
+              >
+                {exportingEvidence ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Archive className="w-4 h-4" />
+                )}
+                Export submission evidence
+              </Button>
+              <Button
+                type="button"
+                onClick={() => {
+                  setDashboardTab("invites");
+                  setShareTab("single");
+                  resetShareModalState();
+                }}
+                className="bg-[#1E3A8A] hover:bg-[#152a66] flex items-center gap-2 w-full sm:w-auto justify-center"
+              >
+                <Share2 className="w-4 h-4" />
+                Share assessment
+              </Button>
+            </div>
           )}
         </motion.div>
         <p className="text-xs text-gray-500 -mt-2 mb-1">

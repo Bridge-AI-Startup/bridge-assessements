@@ -1,57 +1,82 @@
-# Take-home challenges (mini Bridge)
+# Mini Bridge — Full-stack Bugfix + Feature Challenge
 
-Fix the codebase so behavior matches **this document** and the **tests** (when provided). Some issues are **silent** (no stack trace); rely on seeds, API contracts, and tests.
+## Scenario
 
----
+You joined the Bridge team as a full-stack engineer. A simplified internal assessment tool already exists, but several production-like issues slipped in before launch.
 
-## A — Submission lifecycle
+Your goal is to fix the app and complete missing features so the system behaves correctly for both employers and candidates.
 
-| ID | Issue | Expected behavior |
-|----|--------|-------------------|
-| **A1** | Invalid transitions | `POST .../start` must not succeed when status is already `submitted` (or `opted-out` / `expired`). `POST .../submit` must not allow double submit. |
-| **A2** | `timeSpent` | On submit, `timeSpent` must be **whole minutes** between `startedAt` and `submittedAt` (sensible rounding; document your choice). |
-| **A3** | Duplicate email | Same email on the same assessment must always 409 after **normalization** (trim + case-insensitive). |
+## What you will build
 
----
+You will work in a full-stack starter:
 
-## B — Token / public API scope
+- **Backend:** Node.js + Express + TypeScript
+- **Frontend:** React + Vite
+- **Data layer:** in-memory repository (no external DB setup required)
 
-| ID | Issue | Expected behavior |
-|----|--------|-------------------|
-| **B1** | Token response leak | `GET /api/submissions/token/:token` must expose **only** candidate-safe fields. No internal ids that enable cross-assessment access. |
-| **B2** | Public assessment leak | `GET /api/submissions/assessments/public/:id` must return **only** public assessment fields (e.g. title, description, timeLimit). No employer/user ids. |
+The app supports creating assessments, generating candidate links, candidate token-based submissions, and an employer submissions dashboard.
 
----
+## Requirements (must-have)
 
-## C — Employer list & auth
+### A) Submission lifecycle
 
-| ID | Issue | Expected behavior |
-|----|--------|-------------------|
-| **C1** | Status filter | `GET .../submissions?status=submitted` (etc.) must filter server-side. |
-| **C2** | Search | `?search=` must match **both** candidate name and email (case-insensitive substring). |
-| **C3** | Owner scope | Only the **owning employer** may list submissions for an assessment. Guessing another assessment id must **404**. |
+1. `POST /token/:token/start` must reject invalid transitions (already submitted, opted-out, expired).
+2. `POST /token/:token/submit` must prevent double submit.
+3. `timeSpent` must be computed correctly from `startedAt` to `submittedAt` (whole minutes; document the rounding choice).
+4. Duplicate candidate emails for the same assessment must always return 409 after normalization (trim + case-insensitive).
 
----
+### B) Candidate/public API scope
 
-## D — Features (cross-cutting)
+5. `GET /submissions/token/:token` must return only candidate-safe fields.
+6. `GET /submissions/assessments/public/:id` must return only public assessment fields.
 
-| ID | Issue | Expected behavior |
-|----|--------|-------------------|
-| **D1** | `displayName` | Optional display name at invite time; returned on token GET and employer list; shown in UI. |
-| **D2** | Pagination | `?page=` & `?limit=` on employer list with correct offset; stable ordering documented. |
+### C) Employer list + access control
 
----
+7. `GET /submissions/assessments/:assessmentId/submissions` must enforce owner scope (only owning employer can access).
+8. `status` query filter must work.
+9. `search` must match both candidate name and candidate email (case-insensitive substring).
 
-## E — Hardening
+### D) Cross-cutting features
 
-| ID | Issue | Expected behavior |
-|----|--------|-------------------|
-| **E1** | (Optional) | If you add numeric scores later, define tie-break rules. Not required for this mini app. |
-| **E2** | Honeypot | `POST .../generate-link`: if hidden field `website` is non-empty, return **400** (bot). Humans leave it blank. |
+10. `displayName` must be fully wired end-to-end (invite/create, token response, employer list UI).
+11. Pagination (`page`, `limit`) must work with correct offset and documented ordering.
 
----
+### E) Hardening
 
-## Grading notes (for you)
+12. Invite endpoint must enforce honeypot: if hidden field `website` is non-empty, return 400.
 
-- Prefer **automated tests** for A–C; D–E can be partial credit from manual review.
-- Keep **connection string** and API tokens out of the candidate repo you publish if using shared Atlas.
+## Acceptance Criteria (definition of done)
+
+- [ ] Lifecycle endpoints enforce valid transitions and reject invalid states.
+- [ ] `timeSpent` is correct and deterministic.
+- [ ] Duplicate emails are prevented consistently.
+- [ ] Public/token responses do not leak internal linkage or employer-only fields.
+- [ ] Employer submissions list enforces ownership, status filter, and search behavior.
+- [ ] `displayName` appears correctly in API responses and frontend.
+- [ ] Pagination returns the expected page slice.
+- [ ] Honeypot validation blocks bot-like submissions.
+- [ ] Frontend still runs and reflects corrected backend behavior.
+
+## Constraints
+
+- Do not replace the app architecture.
+- Keep the in-memory repository approach (no MongoDB/Atlas required).
+- Focus on correctness and product behavior, not visual redesign.
+
+## Provided / assumptions
+
+- Starter includes intentional bugs and partial implementations.
+- Seeded data is created in-process on server startup.
+- You can run the app locally with `npm install` + `npm run dev` in server/client.
+
+## Deliverables
+
+1. Updated source code with fixes/features.
+2. README notes if you changed behavior assumptions.
+3. Brief explanation of key decisions/tradeoffs.
+
+## Nice-to-haves (optional)
+
+- Add focused automated tests for key corrected behaviors.
+- Improve error messages for edge cases.
+- Add small UI quality-of-life improvements without changing core flow.

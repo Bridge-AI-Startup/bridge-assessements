@@ -22,7 +22,10 @@ import { generateInterviewQuestionsFromRetrieval } from "./interviewGeneration.j
  */
 const CHUNK_LINES = 200; // Lines per chunk
 const CHUNK_OVERLAP = 40; // Lines of overlap between chunks
-const MAX_CHUNK_CHARS = 10000; // Maximum characters per chunk (will split if exceeded)
+// Embeddings API max is 8192 tokens per input; char count != tokens (long lines / dense code).
+const MAX_CHUNK_CHARS = 6000; // Split chunks larger than this before embedding
+/** Hard cap on full embedding string (prefix + content) as a last resort */
+const MAX_EMBEDDING_INPUT_CHARS = 24000;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB per file (increased for complete indexing)
 // Removed MAX_CHUNKS_PER_REPO limit to ensure complete indexing
 
@@ -132,29 +135,39 @@ function splitLargeChunk(
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const lineSize = line.length + 1; // +1 for newline character
+    const segments =
+      line.length > maxChars
+        ? Array.from(
+            { length: Math.ceil(line.length / maxChars) },
+            (_, k) => line.slice(k * maxChars, (k + 1) * maxChars)
+          )
+        : [line];
 
-    // If adding this line would exceed the limit, save current chunk and start new one
-    if (currentSize > 0 && currentSize + lineSize > maxChars) {
-      // Save current chunk (without the current line)
-      const chunkEnd = currentStart + currentLines.length - 1;
-      subChunks.push({
-        start: currentStart,
-        end: chunkEnd,
-        lines: [...currentLines],
-      });
+    for (const segment of segments) {
+      const lineSize = segment.length + 1; // +1 for newline character
 
-      // Start new chunk with overlap from previous chunk
-      const overlapLines = Math.min(OVERLAP_LINES, currentLines.length);
-      currentLines = currentLines.slice(-overlapLines);
-      currentSize =
-        currentLines.join("\n").length + (currentLines.length > 0 ? 1 : 0);
-      // New chunk starts where previous chunk ended minus overlap (so they overlap)
-      currentStart = chunkEnd - overlapLines + 1;
+      // If adding this line would exceed the limit, save current chunk and start new one
+      if (currentSize > 0 && currentSize + lineSize > maxChars) {
+        // Save current chunk (without the current line)
+        const chunkEnd = currentStart + currentLines.length - 1;
+        subChunks.push({
+          start: currentStart,
+          end: chunkEnd,
+          lines: [...currentLines],
+        });
+
+        // Start new chunk with overlap from previous chunk
+        const overlapLines = Math.min(OVERLAP_LINES, currentLines.length);
+        currentLines = currentLines.slice(-overlapLines);
+        currentSize =
+          currentLines.join("\n").length + (currentLines.length > 0 ? 1 : 0);
+        // New chunk starts where previous chunk ended minus overlap (so they overlap)
+        currentStart = chunkEnd - overlapLines + 1;
+      }
+
+      currentLines.push(segment);
+      currentSize += lineSize;
     }
-
-    currentLines.push(line);
-    currentSize += lineSize;
   }
 
   // Add the last chunk if it has content
@@ -507,10 +520,12 @@ export async function indexSubmissionRepo(submissionId: string): Promise<{
       const batch = chunks.slice(i, i + BATCH_SIZE);
 
       // Create embedding text: file path, line range, and content
-      const embeddingTexts = batch.map(
-        (chunk) =>
-          `File: ${chunk.filePath}\nLines: ${chunk.startLine}-${chunk.endLine}\n\n${chunk.content}`
-      );
+      const embeddingTexts = batch.map((chunk) => {
+        const text = `File: ${chunk.filePath}\nLines: ${chunk.startLine}-${chunk.endLine}\n\n${chunk.content}`;
+        return text.length > MAX_EMBEDDING_INPUT_CHARS
+          ? text.slice(0, MAX_EMBEDDING_INPUT_CHARS)
+          : text;
+      });
 
       // Generate embeddings
       const embeddings = await generateEmbeddings(embeddingTexts);

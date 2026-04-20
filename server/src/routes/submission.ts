@@ -1,6 +1,7 @@
 import express from "express";
 import multer from "multer";
 
+import { DEFAULT_SUBMISSION_UPLOAD_MAX_BYTES } from "../config/uploadLimits.js";
 import * as SubmissionController from "../controllers/submission.js";
 import * as TaskRunnerController from "../controllers/taskRunner.js";
 import { verifyAuthToken } from "../validators/auth.js";
@@ -14,7 +15,9 @@ const router = express.Router();
 const archiveUpload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: Number(process.env.SUBMISSION_UPLOAD_MAX_BYTES || 100 * 1024 * 1024),
+    fileSize: Number(
+      process.env.SUBMISSION_UPLOAD_MAX_BYTES || DEFAULT_SUBMISSION_UPLOAD_MAX_BYTES
+    ),
   },
 }).single("archive");
 
@@ -63,6 +66,12 @@ router.get(
   "/assessments/:id/submissions",
   [verifyAuthToken],
   SubmissionController.getSubmissionsForAssessment
+);
+
+router.get(
+  "/assessments/:assessmentId/evidence-export",
+  [verifyAuthToken],
+  SubmissionController.exportAssessmentEvidenceZip
 );
 
 // Employer endpoint - Delete a submission (auth required)

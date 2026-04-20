@@ -1,18 +1,21 @@
 import type { RequestHandler } from "express";
 import { validationResult } from "express-validator";
-import mongoose from "mongoose";
-import AssessmentModel from "../models/assessment.js";
-import SubmissionModel from "../models/submission.js";
+import {
+  createSubmission,
+  findAssessmentById,
+  findAssessmentByIdAndUser,
+  findSubmissionByAssessmentAndEmail,
+  findSubmissionByToken,
+  listSubmissionsByAssessment,
+  touchSubmission,
+  type AssessmentRecord,
+  type SubmissionRecord,
+} from "../repositories/inMemoryStore.js";
 import { generateSubmissionToken } from "../utils/token.js";
 
-function publicAssessmentPayload(a: {
-  _id: unknown;
-  title: string;
-  description?: string;
-  timeLimit: number;
-}) {
+function publicAssessmentPayload(a: AssessmentRecord) {
   return {
-    id: String(a._id),
+    id: a.id,
     title: a.title,
     description: a.description ?? "",
     timeLimit: a.timeLimit,
@@ -23,18 +26,18 @@ function publicAssessmentPayload(a: {
 export const getPublicAssessment: RequestHandler = async (req, res, next) => {
   try {
     const id = req.params.id;
-    if (!mongoose.isValidObjectId(id)) {
+    if (!id?.trim()) {
       return res.status(400).json({ error: "INVALID_ID" });
     }
-    // CHALLENGE B2: should select only public fields; full lean() leaks employer id.
-    const a = await AssessmentModel.findById(id).lean();
+    // CHALLENGE B2: should return only public fields; this leaks owner id.
+    const a = findAssessmentById(id);
     if (!a) {
       return res.status(404).json({ error: "NOT_FOUND", message: "Assessment not found." });
     }
     res.status(200).json({
       assessment: {
         ...publicAssessmentPayload(a),
-        userId: String((a as { userId?: unknown }).userId),
+        userId: a.userId,
       },
     });
   } catch (e) {
@@ -56,16 +59,16 @@ export const generateLink: RequestHandler = async (req, res, next) => {
       candidateEmail: string;
       displayName?: string;
     };
-    const assessment = await AssessmentModel.findOne({ _id: assessmentId, userId });
+    const assessment = findAssessmentByIdAndUser(assessmentId, userId);
     if (!assessment) {
       return res.status(404).json({ error: "NOT_FOUND", message: "Assessment not found." });
     }
     const emailNorm = String(candidateEmail).trim().toLowerCase();
     // CHALLENGE A3: duplicate check must use same normalization as storage (case-insensitive).
-    const existing = await SubmissionModel.findOne({
-      assessmentId: assessment._id,
-      candidateEmail: String(candidateEmail).trim(),
-    }).select("_id");
+    const existing = findSubmissionByAssessmentAndEmail(
+      assessment.id,
+      String(candidateEmail).trim(),
+    );
     if (existing) {
       return res.status(409).json({
         error: "DUPLICATE_EMAIL",
@@ -73,9 +76,9 @@ export const generateLink: RequestHandler = async (req, res, next) => {
       });
     }
     const token = generateSubmissionToken();
-    const sub = await SubmissionModel.create({
+    const sub = createSubmission({
       token,
-      assessmentId: assessment._id,
+      assessmentId: assessment.id,
       candidateName: candidateName.trim(),
       displayName: typeof displayName === "string" ? displayName.trim() : "",
       candidateEmail: emailNorm,
@@ -86,7 +89,7 @@ export const generateLink: RequestHandler = async (req, res, next) => {
     res.status(201).json({
       token: sub.token,
       shareLink,
-      submissionId: String(sub._id),
+      submissionId: sub.id,
       candidateName: sub.candidateName,
     });
   } catch (e) {
@@ -99,11 +102,11 @@ export const listSubmissionsForAssessment: RequestHandler = async (req, res, nex
   try {
     const employerUserId = req.employer!.userId;
     const { assessmentId } = req.params;
-    if (!mongoose.isValidObjectId(assessmentId)) {
+    if (!assessmentId?.trim()) {
       return res.status(400).json({ error: "INVALID_ID" });
     }
     // CHALLENGE C3: must verify assessment belongs to this employer (`employerUserId`).
-    const assessment = await AssessmentModel.findById(assessmentId).select("_id");
+    const assessment = findAssessmentById(assessmentId);
     if (!assessment) {
       return res.status(404).json({ error: "NOT_FOUND", message: "Assessment not found." });
     }
@@ -111,37 +114,33 @@ export const listSubmissionsForAssessment: RequestHandler = async (req, res, nex
 
     const statusQ = typeof req.query.status === "string" ? req.query.status.trim() : "";
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
-    const filter: Record<string, unknown> = { assessmentId: assessment._id };
     const allowed = new Set(["pending", "in-progress", "submitted", "opted-out", "expired"]);
-    // CHALLENGE C1: status query param must filter results.
-    if (false && statusQ && allowed.has(statusQ)) {
-      filter.status = statusQ;
-    }
-    if (search) {
-      // CHALLENGE C2: search should match email and name.
-      filter.candidateName = { $regex: escapeRegex(search), $options: "i" };
-    }
 
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
     // CHALLENGE D2: offset should be (page - 1) * limit.
     const skip = page * limit;
 
-    const rows = await SubmissionModel.find(filter)
-      .sort({ updatedAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .select(
-        "token candidateName displayName candidateEmail status startedAt submittedAt timeSpent submissionNotes createdAt",
-      )
-      .lean();
+    let rows = listSubmissionsByAssessment(assessment.id).sort(
+      (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime(),
+    );
+    // CHALLENGE C1: status query param must filter results.
+    if (false && statusQ && allowed.has(statusQ)) {
+      rows = rows.filter((s) => s.status === statusQ);
+    }
+    if (search) {
+      // CHALLENGE C2: search should match email and name.
+      const needle = search.toLowerCase();
+      rows = rows.filter((s) => s.candidateName.toLowerCase().includes(needle));
+    }
+    rows = rows.slice(skip, skip + limit);
 
     res.status(200).json({
-      assessmentId: String(assessment._id),
+      assessmentId: assessment.id,
       page,
       limit,
       submissions: rows.map((s) => ({
-        id: String(s._id),
+        id: s.id,
         token: s.token,
         candidateName: s.candidateName,
         // CHALLENGE D1: displayName should appear here when set.
@@ -170,13 +169,11 @@ export const getSubmissionByToken: RequestHandler = async (req, res, next) => {
     if (!token) {
       return res.status(400).json({ error: "INVALID_TOKEN" });
     }
-    const sub = await SubmissionModel.findOne({ token }).lean();
+    const sub = findSubmissionByToken(token);
     if (!sub) {
       return res.status(404).json({ error: "NOT_FOUND", message: "Invalid or expired link." });
     }
-    const assessment = await AssessmentModel.findById(sub.assessmentId)
-      .select("title description timeLimit")
-      .lean();
+    const assessment = findAssessmentById(sub.assessmentId);
     if (!assessment) {
       return res.status(404).json({ error: "NOT_FOUND", message: "Assessment missing." });
     }
@@ -209,7 +206,7 @@ export const startAssessment: RequestHandler = async (req, res, next) => {
     if (!token) {
       return res.status(400).json({ error: "INVALID_TOKEN" });
     }
-    const sub = await SubmissionModel.findOne({ token });
+    const sub = findSubmissionByToken(token);
     if (!sub) {
       return res.status(404).json({ error: "NOT_FOUND", message: "Invalid link." });
     }
@@ -228,11 +225,9 @@ export const startAssessment: RequestHandler = async (req, res, next) => {
     } else if (sub.status === "in-progress" && !sub.startedAt) {
       sub.startedAt = now;
     }
-    await sub.save();
+    touchSubmission(sub);
 
-    const assessment = await AssessmentModel.findById(sub.assessmentId)
-      .select("title description timeLimit")
-      .lean();
+    const assessment = findAssessmentById(sub.assessmentId);
     if (!assessment) {
       return res.status(404).json({ error: "NOT_FOUND", message: "Assessment missing." });
     }
@@ -264,7 +259,7 @@ export const submitAssessment: RequestHandler = async (req, res, next) => {
       return res.status(400).json({ error: "INVALID_TOKEN" });
     }
     const { submissionNotes } = (req.body || {}) as { submissionNotes?: string };
-    const sub = await SubmissionModel.findOne({ token });
+    const sub = findSubmissionByToken(token);
     if (!sub) {
       return res.status(404).json({ error: "NOT_FOUND", message: "Invalid link." });
     }
@@ -295,7 +290,7 @@ export const submitAssessment: RequestHandler = async (req, res, next) => {
     if (submissionNotes != null) {
       sub.submissionNotes = String(submissionNotes).trim();
     }
-    await sub.save();
+    touchSubmission(sub);
 
     res.status(200).json({
       submission: {

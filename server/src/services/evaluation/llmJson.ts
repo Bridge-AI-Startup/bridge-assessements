@@ -42,6 +42,21 @@ export function extractFirstJsonObject(text: string): string | null {
 }
 
 /**
+ * LLMs sometimes echo tool-style lines instead of JSON, e.g.
+ * `read_file (server/src/controllers/submission.ts):` — recover a minimal object for Zod.
+ */
+function tryCoerceProseToolCall(trimmed: string): unknown | null {
+  const readFile = trimmed.match(/read_file\s*\(\s*([^)]+)\s*\)/i);
+  if (readFile?.[1]) {
+    const relativePath = readFile[1].trim().replace(/^['"]|['"]$/g, "");
+    if (relativePath.length > 0) {
+      return { step: "read_file", relativePath };
+    }
+  }
+  return null;
+}
+
+/**
  * Parse model JSON: balanced object extraction + jsonrepair (fixes bad strings, trailing commas, etc.).
  */
 export function parseJsonObjectLenient(raw: string): unknown {
@@ -56,6 +71,10 @@ export function parseJsonObjectLenient(raw: string): unknown {
     try {
       return JSON.parse(extracted);
     } catch {
+      const coerced = tryCoerceProseToolCall(trimmed);
+      if (coerced !== null) {
+        return coerced;
+      }
       const snippet =
         extracted.slice(0, 800) + (extracted.length > 800 ? "…" : "");
       throw new Error(

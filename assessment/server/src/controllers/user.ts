@@ -1,5 +1,5 @@
 import type { RequestHandler } from "express";
-import UserModel from "../models/user.js";
+import { createUser, listUsers } from "../repositories/inMemoryStore.js";
 import { generateApiToken } from "../utils/token.js";
 
 /**
@@ -11,11 +11,14 @@ export const bootstrapUser: RequestHandler = async (req, res, next) => {
     if (process.env.NODE_ENV === "production") {
       return res.status(404).json({ error: "NOT_FOUND" });
     }
-    const count = await UserModel.countDocuments();
-    if (count > 0) {
-      return res.status(400).json({
-        error: "ALREADY_BOOTSTRAPPED",
-        message: "A user already exists. Use your existing API token.",
+    const users = listUsers();
+    if (users.length > 0) {
+      const existing = users[0];
+      return res.status(200).json({
+        email: existing.email,
+        companyName: existing.companyName,
+        apiToken: existing.apiToken,
+        hint: "Using existing seeded user. Send Authorization: Bearer <apiToken>.",
       });
     }
     const email =
@@ -25,7 +28,7 @@ export const bootstrapUser: RequestHandler = async (req, res, next) => {
     const companyName =
       typeof req.body?.companyName === "string" ? req.body.companyName.trim() : "Demo Co";
     const apiToken = generateApiToken();
-    const user = await UserModel.create({ email, companyName, apiToken });
+    const user = createUser({ email, companyName, apiToken });
     res.status(201).json({
       email: user.email,
       companyName: user.companyName,

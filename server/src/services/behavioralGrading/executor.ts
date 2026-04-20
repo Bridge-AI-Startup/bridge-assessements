@@ -106,6 +106,128 @@ function snippet(value: string, max = 1600): string {
   return value.length <= max ? value : `${value.slice(0, max)}...`;
 }
 
+async function sandboxDirExists(
+  ctx: GradingSandboxContext,
+  absDir: string
+): Promise<boolean> {
+  const r = await ctx.run(
+    bashLc(`test -d ${JSON.stringify(absDir)} && echo __ok__`),
+    { cwd: "/", timeoutMs: 10_000 }
+  );
+  return r.exitCode === 0 && (r.stdout || "").includes("__ok__");
+}
+
+/**
+ * READMEs often assume an extra parent folder (e.g. they unzip to `my-app/` and run
+ * `cd my-app/server`). Our sandbox `repoPath` is already that app root. When the first
+ * path segment is not a real directory under `repoPath` but the rest of the path is,
+ * strip that redundant wrapper segment (repeat for nested wrappers). Works for any name,
+ * not only `assessment`.
+ */
+async function stripRedundantReadmeWrapperPath(
+  ctx: GradingSandboxContext,
+  repoPath: string,
+  rel: string
+): Promise<string> {
+  const normalizedRepo = path.posix.normalize(repoPath);
+  let t = rel.trim().replace(/^\.\//, "");
+  if (!t || t === ".") return t;
+  t = path.posix.normalize(t);
+  if (t.startsWith("..") || path.posix.isAbsolute(t)) {
+    return rel.trim();
+  }
+
+  let parts = t.split("/").filter(Boolean);
+
+  while (parts.length >= 2) {
+    const first = parts[0];
+    const rest = parts.slice(1).join("/");
+    const firstAbs = path.posix.join(normalizedRepo, first);
+    const restAbs = path.posix.join(normalizedRepo, rest);
+    const firstExists = await sandboxDirExists(ctx, firstAbs);
+    const restExists = await sandboxDirExists(ctx, restAbs);
+    if (!firstExists && restExists) {
+      parts = rest.split("/").filter(Boolean);
+      continue;
+    }
+    break;
+  }
+
+  if (parts.length === 1) {
+    const only = parts[0];
+    const onlyAbs = path.posix.join(normalizedRepo, only);
+    if (!(await sandboxDirExists(ctx, onlyAbs))) {
+      return ".";
+    }
+  }
+
+  return parts.join("/");
+}
+
+async function normalizeReadmeRelativePathCached(
+  ctx: GradingSandboxContext,
+  repoPath: string,
+  rel: string,
+  cache: Map<string, string>
+): Promise<string> {
+  const key = rel.trim().replace(/^\.\//, "");
+  if (cache.has(key)) {
+    return cache.get(key)!;
+  }
+  const v = await stripRedundantReadmeWrapperPath(ctx, repoPath, key);
+  cache.set(key, v);
+  return v;
+}
+
+/**
+ * Normalize the first `cd <rel>` in a command when `rel` uses a redundant wrapper folder.
+ */
+async function normalizeReadmeCommandLeadingCd(
+  ctx: GradingSandboxContext,
+  repoPath: string,
+  cmd: string,
+  cache: Map<string, string>
+): Promise<string> {
+  const m = cmd.match(/^\s*cd\s+([^\s;&|'"]+)/);
+  if (!m) return cmd;
+  const captured = m[1];
+  if (captured.startsWith("/") || captured.startsWith("$")) return cmd;
+
+  const n = await normalizeReadmeRelativePathCached(
+    ctx,
+    repoPath,
+    captured,
+    cache
+  );
+  if (n === captured) return cmd;
+
+  return cmd.replace(/^\s*cd\s+([^\s;&|'"]+)/, () =>
+    n === "." ? "cd ." : `cd ${n}`
+  );
+}
+
+/**
+ * From repo root, `cd ../sibling` escapes the project; README often meant `cd sibling`
+ * when the nested path was wrong.
+ */
+async function fixCdDotDotSiblingFromRepoRoot(
+  ctx: GradingSandboxContext,
+  cmd: string,
+  cwd: string,
+  repoPath: string
+): Promise<string> {
+  const normalizedRepo = path.posix.normalize(repoPath);
+  if (cwd !== normalizedRepo) return cmd;
+  const m = cmd.match(/^\s*cd\s+\.\.\/([^/\s;&|]+)(?=\s|;|&&|$)/);
+  if (!m) return cmd;
+  const sub = m[1];
+  const target = path.posix.join(normalizedRepo, sub);
+  if (await sandboxDirExists(ctx, target)) {
+    return cmd.replace(/^\s*cd\s+\.\.\/([^/\s;&|]+)/, `cd $1`);
+  }
+  return cmd;
+}
+
 function resolveSafeCwd(rawCwd: string | undefined, repoPath: string): string {
   const normalizedRepo = path.posix.normalize(repoPath);
   if (!rawCwd || !rawCwd.trim()) {
@@ -177,24 +299,53 @@ export async function executeRunbook(
   let startCommand: RunbookStep | undefined;
   const inferredCount = runbook.steps.filter((s) => s.origin === "inferred").length;
 
+  const readmePathCache = new Map<string, string>();
+
   for (let si = 0; si < runbook.steps.length; si += 1) {
     const step = runbook.steps[si];
     const startedAt = new Date().toISOString();
     const tStep = Date.now();
+
+    let cwdForStep: string | undefined = step.cwd;
+    const rawCwd = cwdForStep?.trim();
+    if (rawCwd && !rawCwd.startsWith("/")) {
+      const n = await normalizeReadmeRelativePathCached(
+        ctx,
+        repoPath,
+        rawCwd,
+        readmePathCache
+      );
+      cwdForStep = n === "." || n === "" ? undefined : n;
+    }
+
+    let commandForStep = await normalizeReadmeCommandLeadingCd(
+      ctx,
+      repoPath,
+      step.command,
+      readmePathCache
+    );
+
+    let cwd = await resolveRunbookWorkingDirectory(ctx, cwdForStep, repoPath);
+    commandForStep = await fixCdDotDotSiblingFromRepoRoot(
+      ctx,
+      commandForStep,
+      cwd,
+      repoPath
+    );
+
     // Long-running dev servers (npm start, uvicorn, …) must fully detach or E2B's
     // commands.run can wait forever. `&` alone is not always enough for npm/node.
     const inner =
       step.purpose === "start"
-        ? `nohup bash -c ${JSON.stringify(step.command)} >> /tmp/behavioral-app.log 2>&1 </dev/null &`
-        : step.command;
-    const cwd = await resolveRunbookWorkingDirectory(ctx, step.cwd, repoPath);
+        ? `nohup bash -c ${JSON.stringify(commandForStep)} >> /tmp/behavioral-app.log 2>&1 </dev/null &`
+        : commandForStep;
     behavioralInfo("runbook_step_start", {
       stepIndex: si + 1,
       stepTotal: runbook.steps.length,
       purpose: step.purpose,
       origin: step.origin,
       cwd,
-      commandPreview: step.command.slice(0, 200),
+      commandPreview: commandForStep.slice(0, 200),
     });
     const result = await ctx.run(bashLc(inner), {
       cwd,
@@ -215,6 +366,7 @@ export async function executeRunbook(
         purpose: step.purpose,
         origin: step.origin,
         command: step.command,
+        ...(commandForStep !== step.command ? { executedCommand: commandForStep } : {}),
       },
       startedAt,
       finishedAt,
@@ -297,4 +449,35 @@ export async function readmeFromSandbox(
   }
 
   return "";
+}
+
+const REPO_LAYOUT_PROBE_MAX_CHARS = 14_000;
+
+/**
+ * Runs `ls` / `find` in the sandbox so the runbook planner can align cwd and `cd` paths
+ * with the actual tree (no hardcoded folder names).
+ */
+export async function probeRepoLayoutForRunbook(
+  ctx: GradingSandboxContext,
+  repoPath: string
+): Promise<string> {
+  const rp = JSON.stringify(path.posix.normalize(repoPath));
+  const inner = [
+    `cd ${rp}`,
+    `echo "=== pwd ===" && pwd`,
+    `echo "=== ls -la (repo root) ===" && ls -la`,
+    `echo "=== package.json (depth <= 6) ==="`,
+    `find . -maxdepth 6 -type f -name package.json 2>/dev/null | head -100`,
+    `echo "=== other project markers ==="`,
+    `find . -maxdepth 5 -type f \\( -name pyproject.toml -o -name go.mod -o -name Cargo.toml -o -name pom.xml \\) 2>/dev/null | head -60`,
+  ].join(" && ");
+  const r = await ctx.run(bashLc(inner), { cwd: "/", timeoutMs: 45_000 });
+  const out = [r.stdout, r.stderr].filter(Boolean).join("\n").trim();
+  if (!out) {
+    return "(layout probe produced no output)";
+  }
+  if (out.length > REPO_LAYOUT_PROBE_MAX_CHARS) {
+    return `${out.slice(0, REPO_LAYOUT_PROBE_MAX_CHARS)}\n… [truncated]`;
+  }
+  return out;
 }

@@ -3,6 +3,7 @@ import { validationResult } from "express-validator";
 import { createHash, randomUUID } from "crypto";
 import path from "path";
 import util from "util";
+import archiver from "archiver";
 
 import { AuthError } from "../errors/auth.js";
 import AssessmentModel from "../models/assessment.js";
@@ -33,6 +34,7 @@ import { gradeSubmissionBehavioral } from "../services/behavioralGrading/index.j
 import { getGradingEvidenceStorage } from "../services/gradingEvidence/storage.js";
 import { calculateAndSaveScores } from "../services/scoring.js";
 import { getSubmissionCodeStorage } from "../services/submissionCode/storage.js";
+import { collectBehavioralArtifactKeys } from "../utils/behavioralEvidenceKeys.js";
 
 const TRANSCRIPT_POLL_INTERVAL_MS = 15000;
 const TRANSCRIPT_POLL_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
@@ -1066,6 +1068,128 @@ export const getSubmissionsForAssessment: RequestHandler = async (
     }
 
     res.status(200).json(submissions);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * ZIP export of employer-visible submission evidence: per-submission metadata,
+ * evaluation + behavioral JSON reports, and behavioral grading artifacts from disk.
+ * GET /api/submissions/assessments/:assessmentId/evidence-export
+ */
+export const exportAssessmentEvidenceZip: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { uid } = req.body as { uid: string };
+    const { assessmentId } = req.params;
+
+    const userId = await getUserIdFromFirebaseUid(uid);
+
+    const assessment = await AssessmentModel.findOne({
+      _id: assessmentId,
+      userId,
+    });
+
+    if (!assessment) {
+      throw AuthError.INVALID_AUTH_TOKEN;
+    }
+
+    const submissions = await SubmissionModel.find({ assessmentId }).lean();
+
+    const storage = getGradingEvidenceStorage();
+    const filename = `assessment-${assessmentId}-submission-evidence.zip`;
+
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(
+        filename
+      )}`
+    );
+
+    const archive = archiver("zip", { zlib: { level: 6 } });
+
+    archive.on("warning", (err) => {
+      console.warn("[exportAssessmentEvidenceZip]", err);
+    });
+    archive.on("error", (err) => {
+      if (!res.headersSent) {
+        next(err);
+      } else {
+        res.end();
+      }
+    });
+
+    archive.pipe(res);
+
+    const manifest = {
+      assessmentId,
+      assessmentTitle: assessment.title,
+      exportedAt: new Date().toISOString(),
+      submissionCount: submissions.length,
+    };
+    archive.append(JSON.stringify(manifest, null, 2), {
+      name: "export-manifest.json",
+    });
+
+    for (const sub of submissions) {
+      const sid = sub._id.toString();
+      const base = `${sid}/`;
+
+      const meta = {
+        submissionId: sid,
+        candidateName: sub.candidateName,
+        candidateEmail: sub.candidateEmail,
+        status: sub.status,
+        behavioralGradingStatus: sub.behavioralGradingStatus,
+        behavioralGradingError: sub.behavioralGradingError,
+        evaluationStatus: sub.evaluationStatus,
+        evaluationError: sub.evaluationError,
+        submittedAt: sub.submittedAt,
+        createdAt: sub.createdAt,
+      };
+      archive.append(JSON.stringify(meta, null, 2), {
+        name: `${base}submission-meta.json`,
+      });
+
+      const evalReport = (sub as { evaluationReport?: unknown }).evaluationReport;
+      if (evalReport != null) {
+        archive.append(JSON.stringify(evalReport, null, 2), {
+          name: `${base}evaluation-report.json`,
+        });
+      }
+
+      const behReport = (sub as { behavioralGradingReport?: unknown })
+        .behavioralGradingReport;
+      if (behReport != null) {
+        archive.append(JSON.stringify(behReport, null, 2), {
+          name: `${base}behavioral-grading-report.json`,
+        });
+
+        const keys = collectBehavioralArtifactKeys(behReport, sid);
+        let missingIdx = 0;
+        for (const key of keys) {
+          if (await storage.exists(key)) {
+            const buf = await storage.readArtifact(key);
+            const relative = key.slice(`submissions/${sid}/`.length);
+            archive.append(buf, {
+              name: `${base}grading-artifacts/${relative}`,
+            });
+          } else {
+            missingIdx += 1;
+            archive.append(`Artifact not found on server: ${key}\n`, {
+              name: `${base}grading-artifacts/_missing-${missingIdx}.txt`,
+            });
+          }
+        }
+      }
+    }
+
+    await archive.finalize();
   } catch (error) {
     next(error);
   }

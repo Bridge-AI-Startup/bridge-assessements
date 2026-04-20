@@ -588,6 +588,51 @@ export async function downloadSubmissionCodeArchive(
 }
 
 /**
+ * Download a ZIP of all submission evidence for an assessment (employer): metadata,
+ * evaluation + behavioral reports, and behavioral grading artifacts.
+ */
+export async function exportAssessmentEvidenceZip(
+  assessmentId: string,
+  token?: string
+): Promise<APIResult<Blob>> {
+  try {
+    let authToken = token;
+    if (!authToken) {
+      const user = auth.currentUser;
+      if (!user) {
+        return { success: false, error: "No user is currently signed in" };
+      }
+      authToken = await user.getIdToken();
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/submissions/assessments/${assessmentId}/evidence-export`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      }
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      let message = `Export failed (${response.status})`;
+      try {
+        const err = JSON.parse(text) as { error?: string; message?: string };
+        message = err?.error || err?.message || message;
+      } catch {
+        if (text) message = text.slice(0, 200);
+      }
+      return { success: false, error: message };
+    }
+    const blob = await response.blob();
+    return { success: true, data: blob };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
  * Opt out of assessment (candidate endpoint)
  */
 export async function optOutAssessment(

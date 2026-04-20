@@ -1,7 +1,7 @@
 import { body } from "express-validator";
 
 export const generateLinkRules = [
-  body("assessmentId").isMongoId().withMessage("Invalid assessmentId"),
+  body("assessmentId").trim().notEmpty().withMessage("Invalid assessmentId"),
   body("candidateName").trim().notEmpty().isLength({ max: 200 }),
   body("displayName").optional().trim().isLength({ max: 200 }),
   body("candidateEmail").isEmail().normalizeEmail(),
