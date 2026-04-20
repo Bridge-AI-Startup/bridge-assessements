@@ -2,6 +2,7 @@ import AssessmentModel from "../models/assessment.js";
 import TaskConfigModel from "../models/taskConfig.js";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
+import { getCandidateAppBaseUrl } from "../utils/candidateAppUrl.js";
 
 /**
  * Generate assessment package for candidate download
@@ -55,7 +56,7 @@ export async function generateAssessmentPackage(
   const sdkContent = `// LLM Proxy SDK
 // Use this instead of direct OpenAI/Anthropic clients
 
-const API_BASE_URL = "${process.env.APP_URL || "http://localhost:5173"}/api";
+const API_BASE_URL = "${getCandidateAppBaseUrl()}/api";
 
 class LLMClient {
   constructor(sessionId, submissionId) {

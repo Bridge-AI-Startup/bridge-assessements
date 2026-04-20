@@ -58,6 +58,7 @@ import { getSessionBySubmission, getTranscriptContent, getProctoringVideoPlaybac
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
 import { API_BASE_URL } from "@/config/api";
+import { getAppOrigin } from "@/config/origins";
 
 /** Format seconds since session start as m:ss (e.g. 65 -> "1:05"). */
 function formatSecondsSinceStart(s) {
@@ -772,7 +773,7 @@ export default function SubmissionsDashboard() {
   };
 
   const getCandidateLink = (submission) => {
-    const baseUrl = window.location.origin;
+    const baseUrl = getAppOrigin();
     return `${baseUrl}${createPageUrl("CandidateAssessment")}?token=${
       submission.token
     }`;
