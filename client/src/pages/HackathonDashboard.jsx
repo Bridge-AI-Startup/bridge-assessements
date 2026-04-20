@@ -13,10 +13,12 @@ import {
 } from "@/components/ui/card";
 import {
   getCompetition,
+  getHackathonDefaultSlug,
   joinCompetition,
   CompetitionNotFoundError,
 } from "@/api/competition";
 import {
+  CHALLENGE_BRAND_NAME,
   SINGLE_COMPETITION_SLUG,
   hackathonReleaseAtIso,
   hackathonReleaseCountdownEnabled,
@@ -27,18 +29,41 @@ import bridgeLogo from "@/assets/bridge-logo.svg";
 
 const BRIDGE_MARKETING_URL = "https://bridge-jobs.com/";
 
-function resolveCompetitionSlug(searchParams) {
-  const fromQuery = searchParams.get("slug")?.trim().toLowerCase();
+export default function HackathonDashboard() {
+  const [searchParams] = useSearchParams();
+  const fromQuery = searchParams.get("slug")?.trim().toLowerCase() || "";
   const fromEnv =
     typeof import.meta !== "undefined" && import.meta.env?.VITE_DEFAULT_COMPETITION_SLUG
       ? String(import.meta.env.VITE_DEFAULT_COMPETITION_SLUG).trim().toLowerCase()
       : "";
-  return fromQuery || fromEnv || SINGLE_COMPETITION_SLUG;
-}
 
-export default function HackathonDashboard() {
-  const [searchParams] = useSearchParams();
-  const slug = resolveCompetitionSlug(searchParams);
+  const [remoteDefaultSlug, setRemoteDefaultSlug] = useState(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    if (fromQuery || fromEnv) {
+      setRemoteDefaultSlug(null);
+      return undefined;
+    }
+    getHackathonDefaultSlug()
+      .then((s) => {
+        if (!cancelled) setRemoteDefaultSlug(s);
+      })
+      .catch(() => {
+        if (!cancelled) setRemoteDefaultSlug(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fromQuery, fromEnv]);
+
+  const slug =
+    fromQuery ||
+    fromEnv ||
+    (remoteDefaultSlug !== undefined
+      ? remoteDefaultSlug || SINGLE_COMPETITION_SLUG
+      : null);
+
+  const slugPending = !fromQuery && !fromEnv && remoteDefaultSlug === undefined;
 
   const [competition, setCompetition] = useState(null);
   const [loadError, setLoadError] = useState(null);
@@ -59,6 +84,7 @@ export default function HackathonDashboard() {
   }, []);
 
   const loadCompetition = useCallback(async () => {
+    if (!slug) return;
     setLoading(true);
     setLoadError(null);
     setMissingCompetitionSlug(null);
@@ -78,15 +104,16 @@ export default function HackathonDashboard() {
   }, [slug]);
 
   useEffect(() => {
+    if (slugPending || !slug) return;
     loadCompetition();
-  }, [loadCompetition]);
+  }, [loadCompetition, slug, slugPending]);
 
   const handleJoin = async (e) => {
     e.preventDefault();
     setJoinError(null);
     if (!slug) return;
     if (isHackathonJoinBlocked()) {
-      setJoinError("This challenge hasn't started yet.");
+      setJoinError(`${CHALLENGE_BRAND_NAME} hasn't started yet.`);
       return;
     }
     setJoining(true);
@@ -137,7 +164,7 @@ export default function HackathonDashboard() {
             </span>
             <div className="text-left">
               <p className="text-sm font-semibold tracking-tight text-slate-900">Bridge</p>
-              <p className="text-xs text-slate-500">Challenge</p>
+              <p className="text-xs text-slate-500">{CHALLENGE_BRAND_NAME}</p>
             </div>
           </a>
           <a
@@ -159,23 +186,23 @@ export default function HackathonDashboard() {
       <main className="mx-auto max-w-5xl px-4 py-10 md:py-12">
         <div className="mb-10 text-center md:text-left">
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 md:text-3xl">
-            Join the challenge
+            {CHALLENGE_BRAND_NAME}
           </h1>
           <p className="mt-2 max-w-2xl text-slate-600">
-            Enter your details to get a personal link. Challenge details and instructions appear on
+            Enter your details to get a personal link. Instructions and assessment details appear on
             the next screen — same as a normal candidate invite, nothing is shown until then.
           </p>
         </div>
 
         <div className="space-y-10">
-          {loading ? (
+          {loading || slugPending ? (
             <div className="flex justify-center py-16">
               <Loader2 className="h-10 w-10 animate-spin text-slate-400" />
             </div>
           ) : missingCompetitionSlug ? (
             <Card className="border-amber-200 bg-amber-50/80">
               <CardHeader>
-                <CardTitle className="text-amber-950">Challenge not configured yet</CardTitle>
+                <CardTitle className="text-amber-950">{CHALLENGE_BRAND_NAME} isn't configured yet</CardTitle>
                 <CardDescription className="text-base text-amber-950/90">
                   There is no competition in the database for slug{" "}
                   <span className="rounded bg-white/80 px-1.5 py-0.5 font-mono text-sm">
@@ -191,16 +218,18 @@ export default function HackathonDashboard() {
                   npx tsx src/scripts/seedCompetition.ts YOUR_ASSESSMENT_ID {missingCompetitionSlug}
                 </pre>
                 <p className="text-xs text-amber-900/80">
-                  Default slug in{" "}
+                  Fallback slug in{" "}
                   <code className="rounded bg-white/60 px-1">client/src/config/competition.js</code>{" "}
-                  is <code className="rounded bg-white/60 px-1">{SINGLE_COMPETITION_SLUG}</code>.
+                  is <code className="rounded bg-white/60 px-1">{SINGLE_COMPETITION_SLUG}</code>
+                  (used if the server has no default). The designated admin can set the live default from
+                  the Bridge home dashboard.
                 </p>
               </CardContent>
             </Card>
           ) : loadError ? (
             <Card className="border-red-200 bg-red-50/50">
               <CardHeader>
-                <CardTitle className="text-red-800">Could not load challenge</CardTitle>
+                <CardTitle className="text-red-800">Could not load {CHALLENGE_BRAND_NAME}</CardTitle>
                 <CardDescription className="whitespace-pre-wrap text-red-700">
                   {loadError}
                 </CardDescription>
@@ -226,11 +255,11 @@ export default function HackathonDashboard() {
                 <CardContent>
                   {notStartedYet ? (
                     <p className="text-sm font-medium text-amber-900">
-                      This challenge hasn&apos;t started yet.
+                      {CHALLENGE_BRAND_NAME} hasn&apos;t started yet.
                     </p>
                   ) : !registrationAllowed ? (
                     <p className="text-sm text-amber-800">
-                      Registration is not open for this challenge right now.
+                      Registration is not open for {CHALLENGE_BRAND_NAME} right now.
                     </p>
                   ) : (
                     <form onSubmit={handleJoin} className="max-w-md space-y-4">

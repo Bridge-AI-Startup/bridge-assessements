@@ -5,6 +5,8 @@ import { competitionJoinValidation } from "../validators/competitionValidation.j
 
 const router = express.Router();
 
+router.get("/hackathon-default", CompetitionController.getHackathonDefaultSlug);
+
 /** Stricter limit for self-serve join (abuse resistance). Disabled in development. */
 const competitionJoinLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,

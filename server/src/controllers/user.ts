@@ -12,6 +12,7 @@ import RepoIndexModel from "../models/repoIndex.js";
 import { deleteNamespace } from "../utils/pinecone.js";
 import { stripe } from "../services/stripe.js";
 import { shouldEnforceFreeTierAssessmentLimit } from "../utils/subscription.js";
+import { getHackathonAdminEmail } from "../utils/hackathonAdmin.js";
 
 export type CreateRequest = {
   companyName: string;
@@ -121,6 +122,14 @@ export const loginUser: RequestHandler = async (req, res, next) => {
     }
 
     const userResponse = user.toObject();
+    const hackathonAdminEmail = getHackathonAdminEmail();
+    const isHackathonAdmin =
+      (user.email || "").toLowerCase() === hackathonAdminEmail;
+    (userResponse as any).hackathonAdmin = isHackathonAdmin;
+    if (isHackathonAdmin) {
+      (userResponse as any).hackathonDefaultSlug =
+        (user as any).hackathonDefaultSlug ?? null;
+    }
     (userResponse as any).subscriptionInfo = {
       tier: isSubscribed ? "paid" : "free", // For backwards compatibility
       subscriptionStatus: subscriptionStatus || null,
@@ -275,6 +284,52 @@ export const deleteAccount: RequestHandler = async (req, res, next) => {
     });
   } catch (error) {
     console.error("❌ [deleteAccount] Error deleting account:", error);
+    next(error);
+  }
+};
+
+/**
+ * PATCH /api/users/hackathon-default-slug
+ * Body: { slug: string | null } — null or "" clears; slug must match competition slug format.
+ * Only the user whose email matches HACKATHON_ADMIN_EMAIL (default saaz.m@icloud.com).
+ */
+export const setHackathonDefaultSlug: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const { uid } = req.body as { uid?: string };
+    if (!uid) {
+      throw AuthError.INVALID_AUTH_TOKEN;
+    }
+    const user = await UserModel.findOne({ firebaseUid: uid });
+    if (!user) {
+      throw AuthError.INVALID_AUTH_TOKEN;
+    }
+    const adminEmail = getHackathonAdminEmail();
+    if ((user.email || "").toLowerCase() !== adminEmail) {
+      return res.status(403).json({
+        error:
+          "Only the designated hackathon admin can update the default competition slug.",
+      });
+    }
+
+    const raw = (req.body as { slug?: string | null }).slug;
+    const slug =
+      raw === null || raw === undefined || raw === ""
+        ? null
+        : String(raw).trim().toLowerCase();
+
+    if (slug && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+      return res.status(400).json({
+        error: "slug must be lowercase letters, numbers, and hyphens only",
+      });
+    }
+
+    user.hackathonDefaultSlug = slug;
+    await user.save();
+
+    res.status(200).json({ slug: user.hackathonDefaultSlug ?? null });
+  } catch (error) {
     next(error);
   }
 };

@@ -105,6 +105,14 @@ const UserSchema = new mongoose.Schema(
       default: null,
       required: false,
     },
+
+    /** Default /HackathonDashboard slug when URL has no ?slug= (set by hackathon admin user only). */
+    hackathonDefaultSlug: {
+      type: String,
+      default: null,
+      trim: true,
+      lowercase: true,
+    },
   },
   {
     timestamps: true, // Adds createdAt and updatedAt automatically

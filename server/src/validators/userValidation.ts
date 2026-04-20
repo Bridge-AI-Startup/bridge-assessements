@@ -38,3 +38,16 @@ export const createUserValidation = [
   // email and password are not needed - Firebase user is already created by frontend
   // uid is added by verifyAuthToken middleware
 ];
+
+/** PATCH /api/users/hackathon-default-slug — slug string or null to clear */
+export const setHackathonDefaultSlugValidation = [
+  body("slug")
+    .exists()
+    .withMessage("slug is required (use null to clear the default)")
+    .custom((value) => {
+      if (value === null || value === "") return true;
+      if (typeof value !== "string") return false;
+      return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.trim().toLowerCase());
+    })
+    .withMessage("slug must be lowercase letters, numbers, and hyphens only"),
+];

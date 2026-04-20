@@ -1,11 +1,14 @@
 /**
- * Default competition slug when the URL has no ?slug= (Framer landing links here with the same slug).
- * Must match the `slug` on your Competition document in MongoDB.
+ * Fallback competition slug when the URL has no ?slug= and the API returns no default.
+ * Resolution order: ?slug= → VITE_DEFAULT_COMPETITION_SLUG → GET /api/competitions/hackathon-default
+ * (hackathon admin account) → this constant.
  *
- * Current challenge: link to assessment "Basic Python Program for Restaurant Order Processing" (Saaz).
- * Seed: npx tsx src/scripts/seedCompetition.ts <assessmentId> saaz-restaurant-python
+ * Default slug points at the assessment titled "The Challenge" in MongoDB.
  */
-export const SINGLE_COMPETITION_SLUG = "saaz-restaurant-python";
+export const SINGLE_COMPETITION_SLUG = "the-challenge";
+
+/** Public name for this experience (HackathonDashboard + home admin card). */
+export const CHALLENGE_BRAND_NAME = "The Challenge";
 
 /** Pre-launch countdown on /HackathonDashboard — set to `false` when you ship. Env can override. */
 export const HACKATHON_RELEASE_COUNTDOWN_ENABLED = true;

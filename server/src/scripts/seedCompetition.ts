@@ -5,7 +5,7 @@
  *   npx tsx src/scripts/seedCompetition.ts <assessmentMongoId>
  *   npx tsx src/scripts/seedCompetition.ts <assessmentMongoId> my-slug
  *
- * Defaults slug to "saaz-restaurant-python" (must match client/src/config/competition.js
+ * Defaults slug to "the-challenge" (assessment "The Challenge"; match client/src/config/competition.js
  * unless you override with VITE_DEFAULT_COMPETITION_SLUG or ?slug=).
  */
 
@@ -15,7 +15,7 @@ import connectMongoose from "../db/mongooseConnection.js";
 import CompetitionModel from "../models/competition.js";
 import AssessmentModel from "../models/assessment.js";
 
-const DEFAULT_SLUG = "saaz-restaurant-python";
+const DEFAULT_SLUG = "the-challenge";
 
 async function main() {
   const assessmentId = process.argv[2];

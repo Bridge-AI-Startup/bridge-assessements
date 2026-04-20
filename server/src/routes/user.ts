@@ -13,6 +13,12 @@ router.post(
   UserController.createUser
 );
 router.get("/whoami", [verifyAuthToken], UserController.loginUser);
+router.patch(
+  "/hackathon-default-slug",
+  [verifyAuthToken],
+  UserValidator.setHackathonDefaultSlugValidation,
+  UserController.setHackathonDefaultSlug
+);
 router.post("/delete", [verifyAuthToken], UserController.deleteAccount);
 
 export default router;

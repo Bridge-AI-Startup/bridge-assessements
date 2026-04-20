@@ -12,11 +12,14 @@ import {
   BarChart3,
   CreditCard,
   AlertTriangle,
+  Trophy,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import { CHALLENGE_BRAND_NAME } from "@/config/competition";
 import { getAssessments, deleteAssessment } from "@/api/assessment";
 import {
   DropdownMenu,
@@ -37,7 +40,20 @@ import {
 } from "@/components/ui/alert-dialog";
 import { signOut, onAuthStateChanged, deleteUser } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
-import { deleteAccount } from "@/api/user";
+import {
+  deleteAccount,
+  fetchWhoami,
+  patchHackathonDefaultSlug,
+} from "@/api/user";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 export default function Home() {
   const navigate = useNavigate();
@@ -47,6 +63,10 @@ export default function Home() {
   const [error, setError] = useState(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [hackathonSlugDraft, setHackathonSlugDraft] = useState("");
+  const [hackathonSlugSaving, setHackathonSlugSaving] = useState(false);
+  const [hackathonSlugMessage, setHackathonSlugMessage] = useState(null);
+  const [showHackathonCard, setShowHackathonCard] = useState(false);
 
   useEffect(() => {
     // Wait for auth state to be ready
@@ -83,6 +103,18 @@ export default function Home() {
           setError(err.message || "An unexpected error occurred");
         } finally {
           setIsLoading(false);
+        }
+
+        try {
+          const whoami = await fetchWhoami();
+          if (whoami.success && whoami.data?.hackathonAdmin) {
+            setShowHackathonCard(true);
+            setHackathonSlugDraft(whoami.data.hackathonDefaultSlug || "");
+          } else {
+            setShowHackathonCard(false);
+          }
+        } catch {
+          setShowHackathonCard(false);
         }
       };
 
@@ -162,6 +194,36 @@ export default function Home() {
     } catch (err) {
       console.error("Error deleting assessment:", err);
       alert("Failed to delete assessment");
+    }
+  };
+
+  const handleSaveHackathonSlug = async () => {
+    setHackathonSlugMessage(null);
+    setHackathonSlugSaving(true);
+    try {
+      const trimmed = hackathonSlugDraft.trim();
+      const result = await patchHackathonDefaultSlug(
+        trimmed === "" ? null : trimmed
+      );
+      if (result.success) {
+        setHackathonSlugMessage({
+          type: "ok",
+          text: `Saved. ${CHALLENGE_BRAND_NAME} ( /HackathonDashboard ) will use this slug when no ?slug= is present.`,
+        });
+        setHackathonSlugDraft(result.data.slug || "");
+      } else {
+        setHackathonSlugMessage({
+          type: "err",
+          text: "error" in result ? result.error : "Could not save",
+        });
+      }
+    } catch (err) {
+      setHackathonSlugMessage({
+        type: "err",
+        text: err?.message || "Could not save",
+      });
+    } finally {
+      setHackathonSlugSaving(false);
     }
   };
 
@@ -287,6 +349,79 @@ export default function Home() {
           <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
             {error}
           </div>
+        )}
+
+        {showHackathonCard && (
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-8"
+          >
+            <Card className="border-indigo-200 bg-white shadow-sm">
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-lg text-[#1E3A8A]">
+                  <Trophy className="h-5 w-5" />
+                  {CHALLENGE_BRAND_NAME} — default competition
+                </CardTitle>
+                <CardDescription>
+                  Sets which competition powers{" "}
+                  <Link
+                    to={createPageUrl("HackathonDashboard")}
+                    className="font-medium text-[#1E3A8A] underline-offset-2 hover:underline"
+                  >
+                    {CHALLENGE_BRAND_NAME}
+                  </Link>{" "}
+                  when the URL has no{" "}
+                  <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">?slug=</code>. You
+                  still need a Competition row in MongoDB for this slug (see{" "}
+                  <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
+                    seedCompetition.ts
+                  </code>
+                  ).
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                  <div className="flex-1 space-y-2">
+                    <Label htmlFor="hackathon-slug">Competition slug</Label>
+                    <Input
+                      id="hackathon-slug"
+                      placeholder="e.g. the-challenge"
+                      value={hackathonSlugDraft}
+                      onChange={(e) => setHackathonSlugDraft(e.target.value)}
+                      className="font-mono text-sm"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    className="bg-[#1E3A8A] hover:bg-[#152a66] text-white sm:shrink-0"
+                    onClick={handleSaveHackathonSlug}
+                    disabled={hackathonSlugSaving}
+                  >
+                    {hackathonSlugSaving ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Saving
+                      </>
+                    ) : (
+                      "Save"
+                    )}
+                  </Button>
+                </div>
+                {hackathonSlugMessage && (
+                  <p
+                    className={`text-sm ${
+                      hackathonSlugMessage.type === "ok"
+                        ? "text-emerald-700"
+                        : "text-red-600"
+                    }`}
+                  >
+                    {hackathonSlugMessage.text}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </motion.div>
         )}
 
         {/* Assessments Grid */}

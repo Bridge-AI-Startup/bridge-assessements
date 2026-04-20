@@ -60,6 +60,18 @@ function parseCompetitionError(res: Response, text: string, slug: string): Error
   return new Error(text || res.statusText);
 }
 
+/**
+ * Public default slug for /HackathonDashboard when the URL has no ?slug=.
+ * Backed by the hackathon admin user's saved slug, then server HACKATHON_DEFAULT_SLUG, then client fallback.
+ */
+export async function getHackathonDefaultSlug(): Promise<string | null> {
+  const res = await fetch(`${API_BASE_URL}/competitions/hackathon-default`);
+  if (!res.ok) return null;
+  const data = (await res.json()) as { slug?: string | null };
+  if (data.slug == null || data.slug === "") return null;
+  return String(data.slug).trim().toLowerCase();
+}
+
 export async function getCompetition(slug: string): Promise<CompetitionPublic> {
   const res = await fetch(
     `${API_BASE_URL}/competitions/${encodeURIComponent(slug)}`,

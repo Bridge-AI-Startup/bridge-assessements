@@ -9,6 +9,14 @@ export type User = {
   privileged?: boolean;
 };
 
+/** Response from GET /api/users/whoami (subset used by the client). */
+export type WhoamiUser = User & {
+  _id?: string;
+  hackathonAdmin?: boolean;
+  hackathonDefaultSlug?: string | null;
+  subscriptionInfo?: Record<string, unknown>;
+};
+
 export type UserCreate = {
   _id: string;
   name: string;
@@ -16,6 +24,44 @@ export type UserCreate = {
   companyLogoUrl: string;
   email: string;
 };
+
+export async function fetchWhoami(): Promise<APIResult<WhoamiUser>> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: "Not signed in" };
+    }
+    const token = await user.getIdToken();
+    const response = await get("/users/whoami", {
+      Authorization: `Bearer ${token}`,
+    });
+    const data = (await response.json()) as WhoamiUser;
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+export async function patchHackathonDefaultSlug(
+  slug: string | null,
+): Promise<APIResult<{ slug: string | null }>> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: "Not signed in" };
+    }
+    const token = await user.getIdToken();
+    const response = await patch(
+      "/users/hackathon-default-slug",
+      { slug },
+      { Authorization: `Bearer ${token}` },
+    );
+    const data = (await response.json()) as { slug: string | null };
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
 
 export async function verifyUser(token: string): Promise<APIResult<User>> {
   try {

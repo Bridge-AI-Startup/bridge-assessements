@@ -3,12 +3,40 @@ import { validationResult } from "express-validator";
 import CompetitionModel from "../models/competition.js";
 import AssessmentModel from "../models/assessment.js";
 import SubmissionModel from "../models/submission.js";
+import UserModel from "../models/user.js";
 import validationErrorParser from "../utils/validationErrorParser.js";
+import { getHackathonAdminEmail } from "../utils/hackathonAdmin.js";
 import {
   getCombinedLeaderboardScore,
   getCombinedScoreBreakdownParts,
 } from "../utils/leaderboardScore.js";
 import { getShareLinkBaseUrl } from "../utils/shareLink.js";
+
+/**
+ * GET /api/competitions/hackathon-default
+ * Public: resolved default slug for /HackathonDashboard (no ?slug=).
+ * Order: hackathon admin user's stored slug → HACKATHON_DEFAULT_SLUG env → client fallback constant.
+ */
+export const getHackathonDefaultSlug: RequestHandler = async (_req, res, next) => {
+  try {
+    const adminEmail = getHackathonAdminEmail();
+    const admin = await UserModel.findOne({
+      email: adminEmail,
+    })
+      .select("hackathonDefaultSlug")
+      .lean();
+    const fromDb =
+      typeof admin?.hackathonDefaultSlug === "string"
+        ? admin.hackathonDefaultSlug.trim().toLowerCase()
+        : "";
+    const fromEnv =
+      process.env.HACKATHON_DEFAULT_SLUG?.trim().toLowerCase() || "";
+    const slug = (fromDb || fromEnv || null) as string | null;
+    res.status(200).json({ slug });
+  } catch (error) {
+    next(error);
+  }
+};
 
 function assertCompetitionJoinWindow(comp: {
   registrationOpen: boolean;

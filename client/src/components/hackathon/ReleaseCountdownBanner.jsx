@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Clock } from "lucide-react";
+import { CHALLENGE_BRAND_NAME } from "@/config/competition";
 
 function parseTargetMs(iso) {
   const t = Date.parse(iso);
@@ -56,9 +57,11 @@ export default function ReleaseCountdownBanner({ releaseAtIso }) {
         <span className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-800">
           <Clock className="h-4 w-4 shrink-0 text-[#1e3a8a]" />
           {live ? (
-            <span>Challenge is live — registration is open.</span>
+            <span>
+              {CHALLENGE_BRAND_NAME} is live — registration is open.
+            </span>
           ) : (
-            <span>Challenge opens in</span>
+            <span>{CHALLENGE_BRAND_NAME} opens in</span>
           )}
         </span>
         {!live ? (
