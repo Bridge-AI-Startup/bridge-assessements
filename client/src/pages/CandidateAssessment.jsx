@@ -34,8 +34,6 @@ import useScreenshotCapture from "@/hooks/useScreenshotCapture";
 import useFrameUpload from "@/hooks/useFrameUpload";
 import useFrameDedup from "@/hooks/useFrameDedup";
 import ResharePrompt from "@/components/proctoring/ResharePrompt";
-import StreamStatusPanel from "@/components/proctoring/StreamStatusPanel";
-import ProctoringCompanionNotch from "@/components/proctoring/ProctoringCompanionNotch";
 import { createVideoRecorder } from "@/lib/captureUtils";
 import { uploadVideoChunk } from "@/api/proctoring";
 import StarterCodeIDE from "@/components/StarterCodeIDE";
@@ -67,13 +65,12 @@ export default function CandidateAssessment() {
   const sidecarBufferRef = useRef([]);
 
   // Screenshot capture (only when proctoring is active)
-  const { consumeFrames, frameCount } = useScreenshotCapture(
-    screenCapture.streams,
-    { enabled: proctoringEnabled && screenCapture.isSharing }
-  );
+  const { consumeFrames } = useScreenshotCapture(screenCapture.streams, {
+    enabled: proctoringEnabled && screenCapture.isSharing,
+  });
 
   // Frame upload pipeline
-  const { uploadedCount, failedCount, flush: flushFrames } = useFrameUpload({
+  const { flush: flushFrames } = useFrameUpload({
     sessionId: proctoringSessionId,
     token,
     consumeFrames,
@@ -81,14 +78,13 @@ export default function CandidateAssessment() {
   });
 
   // Frame dedup
-  const { shouldKeepFrame, duplicatesSkipped } = useFrameDedup();
+  const { shouldKeepFrame } = useFrameDedup();
 
   // Stream lost state for reshare prompt
   const [showResharePrompt, setShowResharePrompt] = useState(false);
 
   // Video recording refs
   const videoRecordersRef = useRef([]);
-  const companionRef = useRef(null);
 
   // Load submission on mount
   useEffect(() => {
@@ -407,11 +403,7 @@ export default function CandidateAssessment() {
 
     setIsSubmitting(true);
     try {
-      // End companion (flush transcript) then flush frames and complete proctoring session
       if (proctoringEnabled) {
-        if (companionRef.current?.endAndFlush) {
-          await companionRef.current.endAndFlush();
-        }
         await flushFrames();
         if (proctoringSessionId) {
           await completeProctoringSession(proctoringSessionId, token);
@@ -731,26 +723,6 @@ export default function CandidateAssessment() {
       {/* Recording Indicator */}
       {proctoringEnabled && screenCapture.isSharing && (
         <RecordingIndicator streamCount={screenCapture.streams.length} />
-      )}
-
-      {/* Stream Status Panel */}
-      {proctoringEnabled && (
-        <StreamStatusPanel
-          frameCount={frameCount}
-          uploadedCount={uploadedCount}
-          failedCount={failedCount}
-          duplicatesSkipped={duplicatesSkipped}
-        />
-      )}
-
-      {/* Companion notch (in-session voice transcript) */}
-      {proctoringEnabled && proctoringSessionId && token && (
-        <ProctoringCompanionNotch
-          ref={companionRef}
-          sessionId={proctoringSessionId}
-          token={token}
-          submissionId={proctoringSubmissionId}
-        />
       )}
 
       {/* Reshare Prompt */}

@@ -3,7 +3,7 @@ import multer from "multer";
 
 import * as ProctoringController from "../controllers/proctoring.js";
 import * as ProctoringValidator from "../validators/proctoringValidation.js";
-import { verifyAuthToken, optionalAuthToken } from "../validators/auth.js";
+import { verifyAuthToken } from "../validators/auth.js";
 
 const router = express.Router();
 
@@ -95,30 +95,6 @@ router.get(
 router.get(
   "/sessions/:sessionId/transcript",
   ProctoringController.getTranscript
-);
-
-// Companion (in-session voice transcript) — candidate token or employer auth
-router.post(
-  "/sessions/:sessionId/companion/prompt",
-  ProctoringValidator.companionPromptValidation,
-  ProctoringController.getCompanionPrompt
-);
-router.post(
-  "/sessions/:sessionId/companion/messages",
-  ProctoringValidator.companionMessagesValidation,
-  ProctoringController.recordCompanionMessages
-);
-router.post(
-  "/sessions/:sessionId/companion/voice",
-  videoUpload,
-  ProctoringValidator.companionVoiceChunkValidation,
-  ProctoringController.uploadCompanionVoiceChunk
-);
-router.get(
-  "/sessions/:sessionId/companion/transcript",
-  optionalAuthToken,
-  ProctoringValidator.getCompanionTranscriptValidation,
-  ProctoringController.getCompanionTranscript
 );
 
 // Employer endpoints (auth required)

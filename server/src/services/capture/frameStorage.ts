@@ -1,5 +1,3 @@
-import { randomBytes } from "node:crypto";
-
 import ProctoringSessionModel from "../../models/proctoringSession.js";
 import { getFrameStorage } from "./storage.js";
 import { ProctoringError } from "../../errors/proctoring.js";
@@ -119,38 +117,6 @@ export async function storeVideoChunk(
   }
 
   await ProctoringSessionModel.findByIdAndUpdate(sessionId, update);
-
-  return { storageKey };
-}
-
-/**
- * Store a companion local voice (mic-only) chunk after ElevenLabs session ends.
- */
-export async function storeCompanionVoiceChunk(
-  sessionId: string,
-  buffer: Buffer
-): Promise<{ storageKey: string }> {
-  const storage = getFrameStorage();
-  const ts = Date.now();
-  const storageKey = `${sessionId}/companion/voice/${ts}-${randomBytes(4).toString("hex")}.webm`;
-
-  try {
-    await storage.storeVideoChunk(storageKey, buffer);
-  } catch (err) {
-    console.error("Companion voice storage error:", err);
-    throw ProctoringError.STORAGE_ERROR;
-  }
-
-  await ProctoringSessionModel.findByIdAndUpdate(sessionId, {
-    $push: {
-      "companion.voiceChunks": {
-        storageKey,
-        sizeBytes: buffer.length,
-        uploadedAt: new Date(),
-      },
-    },
-    $set: { "companion.status": "active" },
-  });
 
   return { storageKey };
 }

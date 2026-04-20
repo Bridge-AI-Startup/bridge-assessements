@@ -81,7 +81,12 @@ import {
 } from "@/components/ui/collapsible";
 import { BulkInviteContent } from "@/components/BulkInviteModal";
 import { getAssessment } from "@/api/assessment";
-import { getSessionBySubmission, getTranscriptContent, getProctoringVideoPlaybackUrl, downloadProctoringVideo } from "@/api/proctoring";
+import {
+  getSessionBySubmission,
+  getTranscriptContent,
+  getProctoringVideoPlaybackUrl,
+  downloadProctoringVideo,
+} from "@/api/proctoring";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
 
@@ -587,8 +592,14 @@ export default function SubmissionsDashboard() {
                 ? session._id.toString()
                 : String(session._id);
           setRecordingVideoLoading(true);
-          console.log("[proctoring-video] client step 5: calling getProctoringVideoPlaybackUrl with session._id =", sessionIdForVideo, "type:", typeof sessionIdForVideo);
-          const videoResult = await getProctoringVideoPlaybackUrl(sessionIdForVideo, token);
+          console.log(
+            "[proctoring-video] client step 5: calling getProctoringVideoPlaybackUrl with session._id =",
+            sessionIdForVideo
+          );
+          const videoResult = await getProctoringVideoPlaybackUrl(
+            sessionIdForVideo,
+            token
+          );
           if (cancelled) {
             if (videoResult.success && videoResult.data) {
               URL.revokeObjectURL(videoResult.data);
@@ -596,7 +607,12 @@ export default function SubmissionsDashboard() {
             setRecordingVideoLoading(false);
             return;
           }
-          console.log("[proctoring-video] client step 6: videoResult.success =", videoResult.success, "videoResult.error =", videoResult.error, "videoResult.data present =", !!videoResult.data);
+          console.log(
+            "[proctoring-video] client step 6: videoResult.success =",
+            videoResult.success,
+            videoResult.error,
+            !!videoResult.data
+          );
           if (videoResult.success && videoResult.data) {
             recordingVideoObjectUrlRef.current = videoResult.data;
             setRecordingVideoObjectUrl(videoResult.data);
@@ -604,7 +620,9 @@ export default function SubmissionsDashboard() {
           setRecordingVideoLoading(false);
         } else {
           setRecordingVideoLoading(false);
-          console.log("[proctoring-video] client step 5 SKIP: no evaluationReport, not fetching video");
+          console.log(
+            "[proctoring-video] client step 5 SKIP: no evaluationReport, not fetching video"
+          );
         }
       } catch (err) {
         console.log("[proctoring-video] client CAUGHT ERROR:", err?.message ?? err);
@@ -3440,7 +3458,7 @@ export default function SubmissionsDashboard() {
                         </div>
                       )}
 
-                      {/* Timeline with criteria highlights from evidence; duration comes from the video */}
+                      {/* Timeline with criteria highlights; duration from video */}
                       {(() => {
                         const report =
                           selectedEvaluationSubmission.evaluationReport;
@@ -3500,6 +3518,18 @@ export default function SubmissionsDashboard() {
                           </div>
                         );
                       })()}
+
+                      <p className="text-xs text-gray-500 pt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+                        {recordingVideoObjectUrl && recordingSession ? (
+                          <button
+                            type="button"
+                            onClick={() => downloadProctoringVideo(recordingSession._id)}
+                            className="text-[#1E3A8A] hover:underline"
+                          >
+                            Download recording
+                          </button>
+                        ) : null}
+                      </p>
 
                       {selectedEvaluationSubmission.evaluationReport
                         .criteria_results?.length > 0 && (
@@ -3600,15 +3630,6 @@ export default function SubmissionsDashboard() {
                       )}
 
                       <p className="text-xs text-gray-500 pt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
-                        {recordingVideoObjectUrl && recordingSession ? (
-                          <button
-                            type="button"
-                            onClick={() => downloadProctoringVideo(recordingSession._id)}
-                            className="text-[#1E3A8A] hover:underline"
-                          >
-                            Download recording
-                          </button>
-                        ) : null}
                         <Link
                           to="/DemoReplay"
                           className="text-[#1E3A8A] hover:underline"
