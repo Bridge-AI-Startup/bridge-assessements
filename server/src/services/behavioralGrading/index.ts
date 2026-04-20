@@ -58,6 +58,13 @@ const MAX_CONCURRENT_GRADES = Number(process.env.BEHAVIORAL_GRADING_MAX_CONCURRE
 let activeGrades = 0;
 const gradeQueue: Array<() => void> = [];
 
+/** When unset or false, E2B behavioral grading is disabled (auto-submit and manual re-run). Set BEHAVIORAL_GRADING_ENABLED=true to enable. */
+export function isBehavioralGradingEnabled(): boolean {
+  const raw = process.env.BEHAVIORAL_GRADING_ENABLED;
+  if (!raw) return false;
+  return raw === "1" || raw.toLowerCase() === "true";
+}
+
 function isUploadBehavioralEnabled(): boolean {
   const raw = process.env.BEHAVIORAL_GRADING_UPLOAD_ENABLED;
   if (!raw) return true;
@@ -190,6 +197,11 @@ export async function gradeSubmissionBehavioral(
 ): Promise<BehavioralGradingReport> {
   return withGradeSlot(async () => {
     const t0 = Date.now();
+    if (!isBehavioralGradingEnabled()) {
+      throw new Error(
+        "Behavioral grading (E2B) is disabled. Set BEHAVIORAL_GRADING_ENABLED=true to enable."
+      );
+    }
     const submission = await SubmissionModel.findById(submissionId).populate("assessmentId");
     if (!submission) {
       throw new Error("Submission not found");

@@ -9,6 +9,7 @@ import { AuthError } from "../errors/auth.js";
 import AssessmentModel from "../models/assessment.js";
 import SubmissionModel from "../models/submission.js";
 import validationErrorParser from "../utils/validationErrorParser.js";
+import { getShareLinkBaseUrl } from "../utils/shareLink.js";
 import { parseGithubRepoUrl, resolvePinnedCommit } from "../utils/github.js";
 import {
   downloadAndExtractRepoSnapshot,
@@ -30,7 +31,10 @@ import { jsonlToScreenMoments } from "../services/evaluation/momentGrouper.js";
 import { interpretChunked } from "../services/evaluation/interpreterChunked.js";
 import { interpretStateful } from "../services/evaluation/interpreterStateful.js";
 import { getFrameStorage } from "../services/capture/storage.js";
-import { gradeSubmissionBehavioral } from "../services/behavioralGrading/index.js";
+import {
+  gradeSubmissionBehavioral,
+  isBehavioralGradingEnabled,
+} from "../services/behavioralGrading/index.js";
 import { getGradingEvidenceStorage } from "../services/gradingEvidence/storage.js";
 import { calculateAndSaveScores } from "../services/scoring.js";
 import { getSubmissionCodeStorage } from "../services/submissionCode/storage.js";
@@ -85,6 +89,9 @@ function triggerBehavioralGradingInBackground(
   submissionId: string,
   source: "submitSubmissionByToken" | "submitSubmission" | "manual"
 ): void {
+  if (!isBehavioralGradingEnabled()) {
+    return;
+  }
   SubmissionModel.findByIdAndUpdate(submissionId, {
     $set: {
       behavioralGradingStatus: "pending",
@@ -1920,9 +1927,8 @@ export const generateShareLink: RequestHandler = async (req, res, next) => {
       // startedAt will be null until candidate starts
     });
 
-    // Generate shareable link
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
-    const shareLink = `${frontendUrl}/CandidateAssessment?token=${submission.token}`;
+    // Generate shareable link (production → https://app.bridge-jobs.com unless SHARE_LINK_BASE_URL)
+    const shareLink = `${getShareLinkBaseUrl()}/CandidateAssessment?token=${submission.token}`;
 
     res.status(201).json({
       token: submission.token,
@@ -2110,6 +2116,13 @@ export const gradeBehavioralHandler: RequestHandler = async (
       return res.status(403).json({ error: "Access denied" });
     }
 
+    if (!isBehavioralGradingEnabled()) {
+      return res.status(503).json({
+        error:
+          "Behavioral grading (E2B) is currently disabled. Set BEHAVIORAL_GRADING_ENABLED=true on the server to enable.",
+      });
+    }
+
     triggerBehavioralGradingInBackground(submissionId, "manual");
 
     return res.status(202).json({
@@ -2281,8 +2294,7 @@ export const bulkGenerateLinks: RequestHandler = async (req, res, next) => {
       throw AuthError.INVALID_AUTH_TOKEN; // Don't reveal whether assessment exists
     }
 
-    const appUrl =
-      process.env.APP_URL || process.env.FRONTEND_URL || "http://localhost:5173";
+    const appUrl = getShareLinkBaseUrl();
 
     const results: Array<{
       submissionId: string;
@@ -2357,8 +2369,7 @@ export const sendInvites: RequestHandler = async (req, res, next) => {
     // Resolve MongoDB user ID from Firebase UID
     const userId = await getUserIdFromFirebaseUid(uid);
 
-    const appUrl =
-      process.env.APP_URL || process.env.FRONTEND_URL || "http://localhost:5173";
+    const appUrl = getShareLinkBaseUrl();
 
     const { sendCandidateInvite } = await import("../services/email.js");
 

@@ -820,6 +820,19 @@ Do NOT give solutions, hints, or code. If they ask for help, say once that you'r
 
 Demo: When the candidate mentions creating a user schema (or working on a user schema), respond with exactly: "What variables are you thinking of making for the user schema?"`;
 
+/** When true (COMPANION_VOICE_LISTEN_ONLY), agent speaks only the first message then stays silent — for testing / voice capture. */
+const COMPANION_PROMPT_LISTEN_ONLY = `You are in VOICE CAPTURE MODE for a coding assessment.
+
+You have already delivered your ONLY spoken message (the opening line). For the entire rest of this session you MUST:
+- NEVER speak again. Do not generate speech, audio, or verbal responses of any kind.
+- Do not respond when the candidate talks. No acknowledgments, no questions, no filler ("okay", "mm-hmm", "got it"), no clarifications.
+- Do not use tools or any action that would produce spoken output.
+- The session exists only to record the candidate's voice while they work; you are not having a conversation.
+
+If the platform requires a model turn, produce no audible output and no substantive reply.`;
+
+const COMPANION_FIRST_MESSAGE_LISTEN_ONLY = `You're about to start this coding assessment. We'll record your voice so you can explain your thinking out loud as you work—I won't say anything else after this, so just talk whenever it helps you think. Ready when you are.`;
+
 // POST /api/proctoring/sessions/:sessionId/companion/prompt
 export const getCompanionPrompt: RequestHandler = async (req, res, next) => {
   const errors = validationResult(req);
@@ -838,18 +851,32 @@ export const getCompanionPrompt: RequestHandler = async (req, res, next) => {
     const submission = await SubmissionModel.findById(
       session.submissionId,
     ).populate("assessmentId");
-    let prompt = COMPANION_PROMPT_BASE;
+
+    const listenOnly =
+      process.env.COMPANION_VOICE_LISTEN_ONLY === "true" ||
+      process.env.COMPANION_VOICE_LISTEN_ONLY === "1";
+
+    let prompt = listenOnly ? COMPANION_PROMPT_LISTEN_ONLY : COMPANION_PROMPT_BASE;
     if (
       submission?.assessmentId &&
       typeof submission.assessmentId === "object"
     ) {
       const assessment = submission.assessmentId as { title?: string };
       if (assessment.title) {
-        prompt = `${COMPANION_PROMPT_BASE}\n\nContext: The assessment is titled "${assessment.title}". You may reference it only to keep questions relevant; do not give any hints about the task.`;
+        prompt = listenOnly
+          ? `${COMPANION_PROMPT_LISTEN_ONLY}\n\nContext: The assessment is titled "${assessment.title}". Do not reference it out loud; you must remain silent after the opening message.`
+          : `${COMPANION_PROMPT_BASE}\n\nContext: The assessment is titled "${assessment.title}". You may reference it only to keep questions relevant; do not give any hints about the task.`;
       }
     }
 
-    res.json({ prompt });
+    if (listenOnly) {
+      res.json({
+        prompt,
+        firstMessage: COMPANION_FIRST_MESSAGE_LISTEN_ONLY,
+      });
+    } else {
+      res.json({ prompt });
+    }
   } catch (error) {
     next(error);
   }

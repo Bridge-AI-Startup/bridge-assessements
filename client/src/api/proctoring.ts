@@ -516,7 +516,7 @@ export async function interpretRawTranscript(
 export async function getCompanionPrompt(
   sessionId: string,
   token: string
-): Promise<APIResult<{ prompt: string }>> {
+): Promise<APIResult<{ prompt: string; firstMessage?: string }>> {
   try {
     const response = await post(
       `/proctoring/sessions/${sessionId}/companion/prompt`,

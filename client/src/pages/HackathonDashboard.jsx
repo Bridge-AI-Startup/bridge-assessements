@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { UserPlus, Loader2, ExternalLink, LayoutDashboard, RefreshCw } from "lucide-react";
+import { UserPlus, Loader2, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,16 +12,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
   getCompetition,
-  getCompetitionLeaderboard,
   joinCompetition,
   CompetitionNotFoundError,
 } from "@/api/competition";
@@ -45,18 +36,6 @@ function resolveCompetitionSlug(searchParams) {
   return fromQuery || fromEnv || SINGLE_COMPETITION_SLUG;
 }
 
-function formatWhen(iso) {
-  if (!iso) return "—";
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
-  } catch {
-    return "—";
-  }
-}
-
 export default function HackathonDashboard() {
   const [searchParams] = useSearchParams();
   const slug = resolveCompetitionSlug(searchParams);
@@ -70,10 +49,6 @@ export default function HackathonDashboard() {
   const [candidateEmail, setCandidateEmail] = useState("");
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState(null);
-
-  const [leaderboard, setLeaderboard] = useState(null);
-  const [lbError, setLbError] = useState(null);
-  const [lbLoading, setLbLoading] = useState(false);
 
   /** Advances once per second while countdown mode is on so registration unlocks at go-live without refresh. */
   const [releaseClockMs, setReleaseClockMs] = useState(() => Date.now());
@@ -102,36 +77,9 @@ export default function HackathonDashboard() {
     }
   }, [slug]);
 
-  const loadLeaderboard = useCallback(async () => {
-    if (!slug || !competition?.leaderboardPublic) return;
-    setLbLoading(true);
-    setLbError(null);
-    try {
-      const data = await getCompetitionLeaderboard(slug, 50);
-      setLeaderboard(data);
-    } catch (e) {
-      setLbError(e?.message || "Failed to load leaderboard");
-      setLeaderboard(null);
-    } finally {
-      setLbLoading(false);
-    }
-  }, [slug, competition?.leaderboardPublic]);
-
   useEffect(() => {
     loadCompetition();
   }, [loadCompetition]);
-
-  useEffect(() => {
-    if (competition?.leaderboardPublic) {
-      loadLeaderboard();
-    }
-  }, [competition?.leaderboardPublic, loadLeaderboard]);
-
-  useEffect(() => {
-    if (!slug || !competition?.leaderboardPublic) return;
-    const id = setInterval(() => loadLeaderboard(), 45000);
-    return () => clearInterval(id);
-  }, [slug, competition?.leaderboardPublic, loadLeaderboard]);
 
   const handleJoin = async (e) => {
     e.preventDefault();
@@ -292,7 +240,7 @@ export default function HackathonDashboard() {
                           id="name"
                           value={candidateName}
                           onChange={(e) => setCandidateName(e.target.value)}
-                          placeholder="Shown on the leaderboard after you submit"
+                          placeholder="Your name for this submission"
                           required
                           maxLength={200}
                           autoComplete="name"
@@ -333,85 +281,6 @@ export default function HackathonDashboard() {
                   )}
                 </CardContent>
               </Card>
-
-              {competition.leaderboardPublic ? (
-                <Card className="border-slate-200 bg-white shadow-sm">
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0">
-                    <div>
-                      <CardTitle className="flex items-center gap-2">
-                        <LayoutDashboard className="h-5 w-5 text-slate-600" />
-                        Leaderboard
-                      </CardTitle>
-                      <CardDescription>
-                        Combined score matches the employer submissions table: average of Screen,
-                        Behavioral, and Trace when each exists. The line under each score lists the
-                        same components as the employer view. Auto-refreshes.
-                      </CardDescription>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => loadLeaderboard()}
-                      disabled={lbLoading}
-                    >
-                      <RefreshCw
-                        className={`mr-2 h-4 w-4 ${lbLoading ? "animate-spin" : ""}`}
-                      />
-                      Refresh
-                    </Button>
-                  </CardHeader>
-                  <CardContent>
-                    {lbError ? (
-                      <p className="text-sm text-red-600">{lbError}</p>
-                    ) : leaderboard?.entries?.length ? (
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="w-16">#</TableHead>
-                            <TableHead>Name</TableHead>
-                            <TableHead className="text-right">Score</TableHead>
-                            <TableHead className="text-right hidden sm:table-cell">
-                              Submitted
-                            </TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {leaderboard.entries.map((row) => (
-                            <TableRow
-                              key={`${row.rank}-${row.displayName}-${row.submittedAt ?? ""}`}
-                            >
-                              <TableCell className="font-medium">{row.rank}</TableCell>
-                              <TableCell>{row.displayName}</TableCell>
-                              <TableCell className="text-right align-top">
-                                <div className="tabular-nums font-medium">
-                                  {row.score != null ? Math.round(row.score) : "—"}
-                                </div>
-                                {row.breakdown?.length ? (
-                                  <p className="mt-1 max-w-[16rem] text-[10px] leading-snug text-muted-foreground ml-auto">
-                                    {row.breakdown.join(" · ")}
-                                  </p>
-                                ) : row.score == null ? (
-                                  <p className="mt-1 text-[10px] text-muted-foreground ml-auto">
-                                    No scoring signals yet
-                                  </p>
-                                ) : null}
-                              </TableCell>
-                              <TableCell className="text-right text-muted-foreground text-sm hidden sm:table-cell">
-                                {formatWhen(row.submittedAt)}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    ) : (
-                      <p className="text-sm text-slate-600">
-                        No submissions yet — be the first to complete the assessment.
-                      </p>
-                    )}
-                  </CardContent>
-                </Card>
-              ) : null}
             </div>
           ) : null}
         </div>

@@ -12,8 +12,9 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { getCompanionPrompt, recordCompanionMessages } from "@/api/proctoring";
 import { cn } from "@/lib/utils";
 
+/** Default intro when server does not send `firstMessage` (interactive companion). */
 const COMPANION_FIRST_MESSAGE =
-  "You're about to start a coding problem as part of this assessment. I'm here as a quick check-in so you can talk through what you're doing as you code—it helps capture your thinking. I'll ask short questions every so often; just explain what you're working on when I ask. No pressure, and I won't give hints or answers. Ready when you are.";
+  "You're about to start a coding problem as part of this assessment. I'm here as a quick check-in so you can talk through what you're doing as you code—it helps capture your thinking. Just explain what you're working on as you go. No pressure, and I won't give hints or answers. Ready when you are.";
 
 const FLUSH_INTERVAL_MS = 10000;
 
@@ -66,6 +67,8 @@ const ProctoringCompanionNotch = forwardRef(function ProctoringCompanionNotch(
   ref,
 ) {
   const [prompt, setPrompt] = useState(null);
+  /** Server override (e.g. listen-only testing mode from COMPANION_VOICE_LISTEN_ONLY). */
+  const [firstMessageOverride, setFirstMessageOverride] = useState(null);
   const [error, setError] = useState(null);
   const [transcript, setTranscript] = useState([]);
   const [expanded, setExpanded] = useState(false);
@@ -84,10 +87,10 @@ const ProctoringCompanionNotch = forwardRef(function ProctoringCompanionNotch(
     return {
       agent: {
         prompt: { prompt },
-        firstMessage: COMPANION_FIRST_MESSAGE,
+        firstMessage: firstMessageOverride ?? COMPANION_FIRST_MESSAGE,
       },
     };
-  }, [prompt]);
+  }, [prompt, firstMessageOverride]);
 
   const flushBuffer = async () => {
     const buf = messageBufferRef.current;
@@ -157,6 +160,7 @@ const ProctoringCompanionNotch = forwardRef(function ProctoringCompanionNotch(
         const result = await getCompanionPrompt(sessionId, token);
         if (cancelled || !result.success) return;
         setPrompt(result.data.prompt);
+        setFirstMessageOverride(result.data.firstMessage ?? null);
       } catch (e) {
         if (!cancelled)
           setError(e?.message || "Failed to load companion prompt");

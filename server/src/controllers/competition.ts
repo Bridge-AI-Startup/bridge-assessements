@@ -8,6 +8,7 @@ import {
   getCombinedLeaderboardScore,
   getCombinedScoreBreakdownParts,
 } from "../utils/leaderboardScore.js";
+import { getShareLinkBaseUrl } from "../utils/shareLink.js";
 
 function assertCompetitionJoinWindow(comp: {
   registrationOpen: boolean;
@@ -171,8 +172,7 @@ export const joinCompetition: RequestHandler = async (req, res, next) => {
     });
 
     // Identical to employer POST /submissions/generate-link: canonical candidate URL for email / copy-link.
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
-    const shareLink = `${frontendUrl}/CandidateAssessment?token=${submission.token}`;
+    const shareLink = `${getShareLinkBaseUrl()}/CandidateAssessment?token=${submission.token}`;
 
     res.status(201).json({
       token: submission.token,
