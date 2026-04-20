@@ -1,6 +1,8 @@
 import fs from "fs/promises";
 import path from "path";
 
+import { S3FrameStorage } from "./s3FrameStorage.js";
+
 /**
  * Interface for frame/transcript storage.
  * Keys follow S3-like paths: {sessionId}/frames/{ts}-{screenIndex}.png
@@ -97,9 +99,33 @@ export class LocalFrameStorage implements IFrameStorage {
 // Singleton instance
 let storageInstance: IFrameStorage | null = null;
 
+function shouldUseS3ProctoringStorage(): boolean {
+  const backend = process.env.PROCTORING_STORAGE_BACKEND?.trim().toLowerCase();
+  if (backend === "s3") return true;
+  if (
+    process.env.PROCTORING_S3_BUCKET?.trim() ||
+    process.env.AWS_S3_BUCKET?.trim()
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Proctoring blob storage (frames, transcripts, video chunks).
+ * Set `PROCTORING_STORAGE_BACKEND=s3` and `PROCTORING_S3_BUCKET` + `AWS_REGION` (+ credentials) for S3;
+ * otherwise uses local filesystem under `PROCTORING_STORAGE_DIR`.
+ */
 export function getFrameStorage(): IFrameStorage {
   if (!storageInstance) {
-    storageInstance = new LocalFrameStorage();
+    if (shouldUseS3ProctoringStorage()) {
+      storageInstance = new S3FrameStorage();
+      console.log(
+        `[${new Date().toISOString()}] Proctoring storage: S3 bucket=${process.env.PROCTORING_S3_BUCKET || process.env.AWS_S3_BUCKET}`
+      );
+    } else {
+      storageInstance = new LocalFrameStorage();
+    }
   }
   return storageInstance;
 }

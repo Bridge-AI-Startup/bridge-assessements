@@ -163,7 +163,12 @@ See `server/config.env.example` for the full list. Key variables:
 - `TASK_MAX_CONCURRENT` -- Max concurrent tasks (default: 5)
 
 **Proctoring / Screen Capture:**
-- `PROCTORING_STORAGE_DIR` -- Local storage path for frames/transcripts (default: `./storage/proctoring`)
+- `PROCTORING_STORAGE_DIR` -- Local filesystem root when not using S3 (default: `./storage/proctoring`)
+- `PROCTORING_STORAGE_BACKEND` -- `local` (default) or `s3`. If `PROCTORING_S3_BUCKET` or `AWS_S3_BUCKET` is set, S3 is used even when this is unset.
+- `PROCTORING_S3_BUCKET` / `AWS_S3_BUCKET` -- S3 bucket for frames, video chunks, transcripts (same key layout as local)
+- `AWS_REGION` / `AWS_DEFAULT_REGION` -- Required for S3
+- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` -- IAM user credentials on hosts like Render (or use default credential chain)
+- One-time migration: `npx tsx src/scripts/migrateProctoringLocalToS3.ts` (see `server/docs/VIDEO_PROCTORING_SYSTEM.md`)
 - `TRANSCRIPT_GENERATION_ENABLED` -- Enable/disable AI transcript generation (default: `true`)
 - `PROCTORING_FRAME_INTERVAL_MS` -- Capture interval in ms (default: `5000`)
 - `PROCTORING_DEDUP_THRESHOLD` -- Pixel diff threshold for dedup (default: `0.03`)
@@ -250,7 +255,8 @@ server/src/
 │   ├── gradingEvidence/
 │   │   └── storage.ts         # Artifact storage abstraction for behavioral grading reports/screenshots
 │   ├── capture/
-│   │   ├── storage.ts       # IFrameStorage interface + LocalFrameStorage impl (S3-ready)
+│   │   ├── storage.ts       # IFrameStorage + getFrameStorage() (local vs S3)
+│   │   ├── s3FrameStorage.ts # S3FrameStorage (PROCTORING_STORAGE_BACKEND=s3 or bucket set)
 │   │   ├── frameStorage.ts  # Store/retrieve frames and video chunks, update session model
 │   │   ├── serverDedup.ts   # SHA-256 hash-based server-side frame deduplication
 │   │   └── framePrep.ts     # PreparedSessionData builder (boundary contract for AI module)

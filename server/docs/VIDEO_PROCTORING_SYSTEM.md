@@ -33,7 +33,13 @@ Two capture paths:
 
 **Sidecar events** (tab_switch, blur, focus, copy, paste, etc.) go to `POST .../events` and are stored in `session.sidecarEvents[]`.
 
-**Storage** is behind **IFrameStorage** (e.g. **LocalFrameStorage** under `PROCTORING_STORAGE_DIR`). Keys look like `{sessionId}/frames/...`, `{sessionId}/video/...`, `{sessionId}/transcript.jsonl`, `{sessionId}/transcript_refined.jsonl`.
+**Storage** is behind **IFrameStorage**: **LocalFrameStorage** (default, under `PROCTORING_STORAGE_DIR`) or **S3FrameStorage** when `PROCTORING_STORAGE_BACKEND=s3` or `PROCTORING_S3_BUCKET` is set. Keys are identical in both modes: `{sessionId}/frames/...`, `{sessionId}/video/...`, `{sessionId}/transcript.jsonl`, `{sessionId}/transcript_refined.jsonl`, `{sessionId}/transcript-gen-checkpoint.json`.
+
+### S3 (production)
+
+- **Env (API server):** `PROCTORING_STORAGE_BACKEND=s3`, `PROCTORING_S3_BUCKET`, `AWS_REGION`, and `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (IAM user for the host, e.g. Render), unless you rely on another credential source in the default chain.
+- **AWS:** Create a private bucket (block public access), default encryption (SSE-S3 is fine). IAM policy on that user: `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject`, `s3:ListBucket` on `arn:aws:s3:::BUCKET` and `arn:aws:s3:::BUCKET/*`. No S3 CORS is required if only the Node server calls S3.
+- **Cutover:** New uploads go to S3 after you flip env. Existing data on disk must be copied first if you need old sessions: run `npx tsx src/scripts/migrateProctoringLocalToS3.ts` (see `--help`) or `aws s3 sync ./storage/proctoring s3://BUCKET/` preserving relative paths as keys.
 
 ---
 
