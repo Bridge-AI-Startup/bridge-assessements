@@ -6,7 +6,6 @@ import {
   Plus,
   Share2,
   Clock,
-  BrainCircuit,
   Timer,
   BarChart3,
   Copy,
@@ -16,10 +15,10 @@ import {
   ListChecks,
   Trash2,
   FileCode,
+  ClipboardList,
 } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -62,8 +61,6 @@ export default function AssessmentEditor() {
   const [highlightedSection, setHighlightedSection] = useState(null);
   const [lastChange, setLastChange] = useState(null);
   const [responseMessage, setResponseMessage] = useState(null);
-  const [isSmartInterviewerEnabled, setIsSmartInterviewerEnabled] =
-    useState(true);
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareTab, setShareTab] = useState("single");
   const [candidateName, setCandidateName] = useState("");
@@ -74,19 +71,14 @@ export default function AssessmentEditor() {
   const [linkCopied, setLinkCopied] = useState(false);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
-  const [interviewerPrompt, setInterviewerPrompt] = useState("");
   const [contextSections, setContextSections] = useState([]);
   const [timeLimit, setTimeLimit] = useState({ hours: 4, minutes: 0 });
   const [startDeadline, setStartDeadline] = useState(7);
   const [timeLimitSaveTimeout, setTimeLimitSaveTimeout] = useState(null);
-  const [numInterviewQuestions, setNumInterviewQuestions] = useState(2);
-  const [numQuestionsSaveTimeout, setNumQuestionsSaveTimeout] = useState(null);
   const [starterFilesGitHubLink, setStarterFilesGitHubLink] = useState("");
   const [isEditingStarterFiles, setIsEditingStarterFiles] = useState(false);
   const [editedStarterFilesLink, setEditedStarterFilesLink] = useState("");
-  const [isEditingCustomInstructions, setIsEditingCustomInstructions] =
-    useState(false);
-  const [editedCustomInstructions, setEditedCustomInstructions] = useState("");
+  const [behavioralChecks, setBehavioralChecks] = useState([]);
   const [evaluationCriteria, setEvaluationCriteria] = useState([]);
   const [isSuggestingCriteria, setIsSuggestingCriteria] = useState(false);
   /** Validation result per criterion text: { [criterion]: { valid: boolean, reason?: string } } */
@@ -177,13 +169,6 @@ export default function AssessmentEditor() {
   const [assessment, setAssessment] = useState({
     projectDescription:
       "Build a simple REST API for a task management system. The candidate will create endpoints for CRUD operations on tasks and users, implement database relationships, and add basic authentication. This project tests practical backend skills in a realistic scenario.",
-    interviewQuestions: [
-      "Walk me through how you structured your database schema and why.",
-      "How did you handle authentication? What alternatives did you consider?",
-      "What was the most challenging part of this project?",
-      "How would you scale this API to handle 10,000 concurrent users?",
-      "If you had more time, what would you improve?",
-    ],
   });
 
   // Update assessment description and title when data is loaded
@@ -205,9 +190,12 @@ export default function AssessmentEditor() {
         const minutes = totalMinutes % 60;
         setTimeLimit({ hours, minutes });
       }
-      // Update numInterviewQuestions from database (only if different to avoid reset loops)
-      if (assessmentData.isSmartInterviewerEnabled !== undefined) {
-        setIsSmartInterviewerEnabled(assessmentData.isSmartInterviewerEnabled);
+      if (assessmentData.behavioralChecks?.length) {
+        setBehavioralChecks(
+          assessmentData.behavioralChecks.filter((c) => typeof c === "string")
+        );
+      } else {
+        setBehavioralChecks([]);
       }
       if (assessmentData.evaluationCriteria) {
         setEvaluationCriteria(
@@ -215,34 +203,6 @@ export default function AssessmentEditor() {
             ? assessmentData.evaluationCriteria.filter((c) => typeof c === "string")
             : []
         );
-      }
-      if (assessmentData.numInterviewQuestions !== undefined) {
-        const dbValue = assessmentData.numInterviewQuestions;
-        // Only update if it's actually different from current state
-        // This prevents resetting during save operations
-        setNumInterviewQuestions((prev) => {
-          if (prev !== dbValue) {
-            console.log(
-              `🔄 [AssessmentEditor] Updating numInterviewQuestions from ${prev} to ${dbValue}`
-            );
-            return dbValue;
-          }
-          return prev;
-        });
-      } else {
-        // If undefined in DB, ensure we have a default (but don't reset if user is editing)
-        setNumInterviewQuestions((prev) => {
-          if (prev === 5) {
-            // Already at default, no change needed
-            return prev;
-          }
-          // Only reset to default if we're loading for the first time
-          // Check if this is initial load by seeing if assessmentData was just set
-          console.log(
-            `⚠️ [AssessmentEditor] numInterviewQuestions is undefined in DB, keeping current value: ${prev}`
-          );
-          return prev;
-        });
       }
       // Update starterFilesGitHubLink from database
       if (assessmentData.starterFilesGitHubLink !== undefined) {
@@ -256,12 +216,6 @@ export default function AssessmentEditor() {
             ? assessmentData.starterCodeFiles
             : []
         );
-      }
-      // Update interviewerCustomInstructions from database
-      if (assessmentData.interviewerCustomInstructions !== undefined) {
-        const instructions = assessmentData.interviewerCustomInstructions || "";
-        setInterviewerPrompt(instructions);
-        setEditedCustomInstructions(instructions);
       }
     }
   }, [assessmentData]);
@@ -301,54 +255,6 @@ export default function AssessmentEditor() {
     };
   }, [timeLimit, assessmentId, currentUser, authReady, assessmentData]);
 
-  // Auto-save numInterviewQuestions when it changes (debounced)
-  useEffect(() => {
-    if (!assessmentId || !currentUser || !authReady || !assessmentData) {
-      return;
-    }
-
-    // Clear existing timeout
-    if (numQuestionsSaveTimeout) {
-      clearTimeout(numQuestionsSaveTimeout);
-    }
-
-    const currentNumQuestions = assessmentData.numInterviewQuestions ?? 2;
-
-    // Only save if it's different from what's in the database and valid
-    // Also check that it's a valid number (not NaN)
-    if (
-      numInterviewQuestions !== currentNumQuestions &&
-      numInterviewQuestions >= 1 &&
-      numInterviewQuestions <= 4 &&
-      !isNaN(numInterviewQuestions)
-    ) {
-      console.log(
-        `💾 [AssessmentEditor] Queuing save: ${numInterviewQuestions} (current: ${currentNumQuestions})`
-      );
-      const timeout = setTimeout(async () => {
-        console.log(
-          "💾 [AssessmentEditor] Auto-saving numInterviewQuestions:",
-          numInterviewQuestions
-        );
-        await saveAssessment({ numInterviewQuestions });
-      }, 1000); // Debounce: wait 1 second after last change
-
-      setNumQuestionsSaveTimeout(timeout);
-    }
-
-    return () => {
-      if (numQuestionsSaveTimeout) {
-        clearTimeout(numQuestionsSaveTimeout);
-      }
-    };
-  }, [
-    numInterviewQuestions,
-    assessmentId,
-    currentUser,
-    authReady,
-    assessmentData,
-  ]);
-
   // Save assessment changes to backend
   const saveAssessment = async (updates) => {
     if (!assessmentId || !currentUser) {
@@ -365,10 +271,6 @@ export default function AssessmentEditor() {
 
       if (result.success) {
         console.log("✅ [AssessmentEditor] Assessment saved:", result.data);
-        console.log(
-          "   numInterviewQuestions in response:",
-          result.data.numInterviewQuestions
-        );
         setAssessmentData(result.data);
         // Update local state if needed
         if (result.data.description) {
@@ -383,15 +285,6 @@ export default function AssessmentEditor() {
           const hours = Math.floor(totalMinutes / 60);
           const minutes = totalMinutes % 60;
           setTimeLimit({ hours, minutes });
-        }
-        // Update numInterviewQuestions in local state if it changed
-        // Use functional update to avoid conflicts with auto-save
-        if (result.data.numInterviewQuestions !== undefined) {
-          setNumInterviewQuestions((prev) => {
-            const newValue = result.data.numInterviewQuestions;
-            // Only update if different to avoid unnecessary re-renders
-            return prev !== newValue ? newValue : prev;
-          });
         }
         // Update starterFilesGitHubLink in local state if it changed
         if (result.data.starterFilesGitHubLink !== undefined) {
@@ -408,13 +301,12 @@ export default function AssessmentEditor() {
               : []
           );
         }
-        // Update interviewerCustomInstructions in local state if it changed
-        if (result.data.interviewerCustomInstructions !== undefined) {
-          const instructions = result.data.interviewerCustomInstructions || "";
-          setInterviewerPrompt(instructions);
-          if (!isEditingCustomInstructions) {
-            setEditedCustomInstructions(instructions);
-          }
+        if (result.data.behavioralChecks !== undefined) {
+          setBehavioralChecks(
+            Array.isArray(result.data.behavioralChecks)
+              ? result.data.behavioralChecks.filter((c) => typeof c === "string")
+              : []
+          );
         }
         return result;
       } else {
@@ -487,34 +379,6 @@ export default function AssessmentEditor() {
   const handleStarterFilesCancel = () => {
     setEditedStarterFilesLink(assessmentData?.starterFilesGitHubLink || "");
     setIsEditingStarterFiles(false);
-  };
-
-  /**
-   * Save custom instructions changes
-   */
-  const handleCustomInstructionsSave = async () => {
-    const instructionsToSave = editedCustomInstructions.trim() || null;
-    if (
-      instructionsToSave !==
-      (assessmentData?.interviewerCustomInstructions || null)
-    ) {
-      const result = await saveAssessment({
-        interviewerCustomInstructions: instructionsToSave,
-      });
-      if (result && result.success) {
-        setInterviewerPrompt(instructionsToSave || "");
-      }
-    } else {
-      setInterviewerPrompt(editedCustomInstructions.trim() || "");
-    }
-    setIsEditingCustomInstructions(false);
-  };
-
-  const handleCustomInstructionsCancel = () => {
-    setEditedCustomInstructions(
-      assessmentData?.interviewerCustomInstructions || ""
-    );
-    setIsEditingCustomInstructions(false);
   };
 
   const handleChatSubmit = async (message) => {
@@ -670,9 +534,9 @@ export default function AssessmentEditor() {
         setGeneratedSubmissionId(result.data.submissionId);
       } else {
         const errorMsg = "error" in result ? result.error : "Failed to generate link";
-        if (errorMsg.includes("SUBSCRIPTION_LIMIT_REACHED") || errorMsg.includes("limit")) {
+        if (errorMsg.includes("SUBSCRIPTION_LIMIT_REACHED")) {
           const shouldUpgrade = window.confirm(
-            "You've reached the free tier limit of 3 candidate submissions.\n\nUpgrade to continue inviting unlimited candidates.\n\nWould you like to view subscription plans?"
+            "You've reached a plan limit.\n\nUpgrade to continue.\n\nWould you like to view subscription plans?"
           );
           if (shouldUpgrade) window.location.href = createPageUrl("Subscription");
         } else {
@@ -896,147 +760,6 @@ export default function AssessmentEditor() {
               </div>
             </DocumentBlock>
 
-            {/* Smart AI Interviewer */}
-            <DocumentBlock
-              title="Smart AI Interviewer"
-              icon={BrainCircuit}
-              isActive={false}
-              isHighlighted={highlightedSection === "smartInterviewer"}
-              onSelect={() => {}}
-              onAddToContext={() => handleAddToContext("smartInterviewer")}
-              isInContext={contextSections.includes("smartInterviewer")}
-            >
-              <div className="space-y-4">
-                <div
-                  className={`flex items-start justify-between gap-4 ${
-                    !isSmartInterviewerEnabled ? "opacity-50" : ""
-                  }`}
-                >
-                  <div className="flex-1">
-                    <p
-                      className={`leading-relaxed ${
-                        isSmartInterviewerEnabled
-                          ? "text-gray-700"
-                          : "text-gray-400"
-                      }`}
-                    >
-                      Bridge AI will automatically generate follow-up questions
-                      tailored to each candidate's code submission, probing
-                      their reasoning and decision-making.
-                    </p>
-                  </div>
-                  <Switch
-                    checked={isSmartInterviewerEnabled}
-                    onCheckedChange={async (checked) => {
-                      setIsSmartInterviewerEnabled(checked);
-                      // Save immediately when toggled
-                      await saveAssessment({ isSmartInterviewerEnabled: checked });
-                    }}
-                    className="data-[state=checked]:bg-[#1E3A8A]"
-                  />
-                </div>
-                {isSmartInterviewerEnabled && (
-                  <div className="pt-3 border-t border-gray-100 space-y-4">
-                    <div>
-                      <label className="text-sm font-medium text-gray-700 mb-2 block">
-                        Number of Questions
-                      </label>
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="number"
-                          min="1"
-                          max="4"
-                          value={numInterviewQuestions}
-                          onChange={(e) => {
-                            const value = parseInt(e.target.value, 10);
-                            if (!isNaN(value) && value >= 1 && value <= 4) {
-                              setNumInterviewQuestions(value);
-                            }
-                          }}
-                          className="w-20 text-sm text-gray-700 bg-white border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20 focus:border-[#1E3A8A]"
-                        />
-                        <span className="text-sm text-gray-500">
-                          questions (1-4)
-                        </span>
-                      </div>
-                      <p className="text-xs text-gray-400 mt-1.5">
-                        Number of base questions for the ElevenLabs voice interview. The AI interviewer will ask a couple follow-up questions per base question to dive deeper.
-                      </p>
-                    </div>
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <label className="text-sm font-medium text-gray-700">
-                          Custom Instructions (optional)
-                        </label>
-                        {!isEditingCustomInstructions ? (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              setEditedCustomInstructions(interviewerPrompt);
-                              setIsEditingCustomInstructions(true);
-                            }}
-                            className="h-7 px-2 text-xs text-gray-500 hover:text-gray-700"
-                          >
-                            <Pencil className="w-3.5 h-3.5 mr-1.5" />
-                            Edit
-                          </Button>
-                        ) : (
-                          <div className="flex gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={handleCustomInstructionsCancel}
-                              className="h-7 px-2 text-xs"
-                              disabled={isSaving}
-                            >
-                              Cancel
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={handleCustomInstructionsSave}
-                              className="h-7 px-2 text-xs bg-[#1E3A8A] hover:bg-[#152a66]"
-                              disabled={isSaving}
-                            >
-                              Save
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                      {isEditingCustomInstructions ? (
-                        <textarea
-                          value={editedCustomInstructions}
-                          onChange={(e) =>
-                            setEditedCustomInstructions(e.target.value)
-                          }
-                          placeholder="E.g., Focus on system design decisions, ask about error handling strategies, probe for scalability considerations..."
-                          className="w-full min-h-[80px] text-sm text-gray-700 bg-white border border-gray-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20 focus:border-[#1E3A8A]"
-                        />
-                      ) : (
-                        <div
-                          onClick={() => {
-                            setEditedCustomInstructions(interviewerPrompt);
-                            setIsEditingCustomInstructions(true);
-                          }}
-                          className="w-full min-h-[80px] text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 cursor-text hover:bg-gray-100 transition-colors"
-                        >
-                          {interviewerPrompt || (
-                            <span className="text-gray-400 italic">
-                              No custom instructions set. Click to add
-                              instructions.
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      <p className="text-xs text-gray-400 mt-1.5">
-                        Guide the AI interviewer's focus and question style
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </DocumentBlock>
-
             {/* Time & Deadlines */}
             <DocumentBlock
               title="Time & Deadlines"
@@ -1226,6 +949,97 @@ export default function AssessmentEditor() {
                   {starterCodeFiles.length === 0 && (
                     <p className="text-xs text-gray-400 mt-2">No starter code files yet. Files will be auto-generated when you create an assessment with AI.</p>
                   )}
+                </div>
+              </div>
+            </DocumentBlock>
+
+            {/* Behavioral checks (shared product bar for all candidates) */}
+            <DocumentBlock
+              title="Behavioral checks"
+              icon={ClipboardList}
+              isActive={false}
+              isHighlighted={highlightedSection === "behavioralChecks"}
+              onSelect={() => {}}
+              onAddToContext={() => handleAddToContext("behavioralChecks")}
+              isInContext={contextSections.includes("behavioralChecks")}
+            >
+              <div className="space-y-4">
+                <p className="text-xs text-gray-500">
+                  Plain-language behaviors every submission on this assessment
+                  should satisfy (e.g. “User can add a note”). They are
+                  stack-agnostic—not tied to a specific API or file. Edit or add
+                  lines below, then save.
+                </p>
+                {behavioralChecks.length === 0 ? (
+                  <p className="text-sm text-gray-500 italic border border-dashed border-gray-200 rounded-lg px-3 py-4 bg-gray-50/80">
+                    No behavioral checks yet. They are generated when you create
+                    an assessment with AI, or you can add your own.
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {behavioralChecks.map((check, idx) => (
+                      <li key={idx} className="flex gap-2 items-start">
+                        <span
+                          className="mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#1E3A8A]/70"
+                          aria-hidden
+                        />
+                        <input
+                          type="text"
+                          value={check}
+                          onChange={(e) =>
+                            setBehavioralChecks((prev) => {
+                              const next = [...prev];
+                              next[idx] = e.target.value;
+                              return next;
+                            })
+                          }
+                          className="flex-1 text-sm text-gray-800 bg-white border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20 focus:border-[#1E3A8A]"
+                          placeholder="Observable behavior…"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            setBehavioralChecks((prev) =>
+                              prev.filter((_, i) => i !== idx)
+                            )
+                          }
+                          className="text-gray-500 hover:text-red-600 p-2 h-9 w-9 shrink-0"
+                          aria-label="Remove check"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setBehavioralChecks((prev) => [...prev, ""])}
+                    className="text-sm"
+                  >
+                    <Plus className="w-4 h-4 mr-1.5" />
+                    Add check
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={async () => {
+                      const checks = behavioralChecks
+                        .map((c) => (typeof c === "string" ? c.trim() : ""))
+                        .filter(Boolean);
+                      await saveAssessment({ behavioralChecks: checks });
+                      setBehavioralChecks(checks);
+                    }}
+                    disabled={isSaving}
+                    className="text-sm bg-[#1E3A8A] hover:bg-[#152a66]"
+                  >
+                    Save behavioral checks
+                  </Button>
                 </div>
               </div>
             </DocumentBlock>

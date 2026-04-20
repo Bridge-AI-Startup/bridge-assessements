@@ -8,9 +8,13 @@ import RepoIndexModel from "../models/repoIndex.js";
 import { deleteNamespace } from "../utils/pinecone.js";
 import validationErrorParser from "../utils/validationErrorParser.js";
 import { validateStarterCodeFiles } from "../utils/starterCodeValidation.js";
-import { generateAssessmentComponents } from "../services/assessmentGeneration.js";
+import {
+  generateAssessmentComponents,
+  generateBehavioralChecks,
+} from "../services/assessmentGeneration.js";
 import { processAssessmentChat } from "../services/assessmentChat.js";
 import { groundCriterion } from "../services/evaluation/grounder.js";
+import { shouldEnforceFreeTierAssessmentLimit } from "../utils/subscription.js";
 
 export type GenerateRequest = {
   description: string;
@@ -23,6 +27,7 @@ export type GenerateResponse = {
   title: string;
   description: string;
   timeLimit: number;
+  behavioralChecks: string[];
   starterCodeFiles: Array<{ path: string; content: string }>;
 };
 
@@ -34,6 +39,7 @@ export type CreateRequest = {
   starterFilesGitHubLink?: string;
   starterCodeFiles?: Array<{ path: string; content: string }>;
   interviewerCustomInstructions?: string;
+  behavioralChecks?: string[];
   evaluationCriteria?: string[];
   uid: string; // Added by verifyAuthToken middleware
 };
@@ -47,6 +53,7 @@ export type UpdateRequest = {
   starterCodeFiles?: Array<{ path: string; content: string }>;
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
+  behavioralChecks?: string[];
   evaluationCriteria?: string[];
   uid: string; // Added by verifyAuthToken middleware
 };
@@ -76,6 +83,7 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
       starterFilesGitHubLink,
       starterCodeFiles,
       interviewerCustomInstructions,
+      behavioralChecks,
       evaluationCriteria,
       uid,
     } = req.body as CreateRequest;
@@ -95,11 +103,11 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
       user.subscriptionStatus || (user as any).subscription?.subscriptionStatus;
     const isSubscribed = subscriptionStatus === "active";
 
-    if (!isSubscribed) {
+    if (!isSubscribed && shouldEnforceFreeTierAssessmentLimit()) {
       // Count existing assessments for this user
       const assessmentCount = await AssessmentModel.countDocuments({ userId });
 
-      // Free tier limit: 1 assessment
+      // Free tier limit: 1 assessment (production only)
       if (assessmentCount >= 1) {
         return res.status(403).json({
           error: "SUBSCRIPTION_LIMIT_REACHED",
@@ -125,6 +133,7 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
       starterFilesGitHubLink?: string;
       starterCodeFiles?: Array<{ path: string; content: string }>;
       interviewerCustomInstructions?: string;
+      behavioralChecks?: string[];
       evaluationCriteria?: string[];
     } = {
       userId,
@@ -151,6 +160,17 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
     if (interviewerCustomInstructions !== undefined) {
       assessmentData.interviewerCustomInstructions =
         interviewerCustomInstructions;
+    }
+
+    // Only include behavioralChecks if provided (array of strings)
+    if (
+      behavioralChecks !== undefined &&
+      Array.isArray(behavioralChecks) &&
+      behavioralChecks.length > 0
+    ) {
+      assessmentData.behavioralChecks = behavioralChecks.filter(
+        (c): c is string => typeof c === "string" && c.trim().length > 0
+      );
     }
 
     // Only include evaluationCriteria if provided (array of strings)
@@ -250,6 +270,7 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
       starterCodeFiles,
       interviewerCustomInstructions,
       isSmartInterviewerEnabled,
+      behavioralChecks,
       evaluationCriteria,
       uid,
     } = req.body as UpdateRequest;
@@ -298,6 +319,14 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
     }
     if (isSmartInterviewerEnabled !== undefined) {
       (assessment as any).isSmartInterviewerEnabled = isSmartInterviewerEnabled;
+    }
+    if (behavioralChecks !== undefined) {
+      const checks = Array.isArray(behavioralChecks)
+        ? behavioralChecks.filter(
+            (c): c is string => typeof c === "string" && c.trim().length > 0
+          )
+        : [];
+      (assessment as any).behavioralChecks = checks;
     }
     if (evaluationCriteria !== undefined) {
       const criteria = Array.isArray(evaluationCriteria)
@@ -449,13 +478,13 @@ export const generateAssessmentData: RequestHandler = async (
           (user as any).subscription?.subscriptionStatus;
         const isSubscribed = subscriptionStatus === "active";
 
-        if (!isSubscribed) {
+        if (!isSubscribed && shouldEnforceFreeTierAssessmentLimit()) {
           // Count existing assessments for this user
           const assessmentCount = await AssessmentModel.countDocuments({
             userId,
           });
 
-          // Free tier limit: 1 assessment
+          // Free tier limit: 1 assessment (production only)
           if (assessmentCount >= 1) {
             return res.status(403).json({
               error: "SUBSCRIPTION_LIMIT_REACHED",
@@ -486,6 +515,7 @@ export const generateAssessmentData: RequestHandler = async (
       title,
       description: generatedDescription,
       timeLimit,
+      behavioralChecks,
       starterCodeFiles,
     } = await generateAssessmentComponents(description, options);
 
@@ -506,6 +536,7 @@ export const generateAssessmentData: RequestHandler = async (
       title,
       description: generatedDescription || description, // Fallback to input if missing
       timeLimit,
+      behavioralChecks,
       starterCodeFiles,
     };
 
@@ -519,6 +550,68 @@ export const generateAssessmentData: RequestHandler = async (
     res.status(200).json(response);
   } catch (error) {
     console.error("❌ [generateAssessmentData] Error:", error);
+    next(error);
+  }
+};
+
+export type GenerateBehavioralChecksRequest = {
+  title: string;
+  description: string;
+  uid: string;
+};
+
+/**
+ * Generate behavioral checks from title + description (manual assessment creation path).
+ */
+export const generateBehavioralChecksData: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const { title, description } = req.body as GenerateBehavioralChecksRequest;
+    const { uid } = req.body as { uid: string };
+
+    if (uid) {
+      const userId = await getUserIdFromFirebaseUid(uid);
+      const UserModel = (await import("../models/user.js")).default;
+      const user = await UserModel.findById(userId);
+      if (user) {
+        const subscriptionStatus =
+          user.subscriptionStatus ||
+          (user as any).subscription?.subscriptionStatus;
+        const isSubscribed = subscriptionStatus === "active";
+
+        if (!isSubscribed && shouldEnforceFreeTierAssessmentLimit()) {
+          const assessmentCount = await AssessmentModel.countDocuments({
+            userId,
+          });
+          if (assessmentCount >= 1) {
+            return res.status(403).json({
+              error: "SUBSCRIPTION_LIMIT_REACHED",
+              message:
+                "You've reached the free tier limit of 1 assessment. Upgrade to create unlimited assessments.",
+              limit: 1,
+              current: assessmentCount,
+            });
+          }
+        }
+      }
+    }
+
+    const requirementsSummary =
+      description.length > 2000 ? description.slice(0, 2000) : description;
+    const behavioralChecks = await generateBehavioralChecks({
+      title: title.trim(),
+      description,
+      requirementsSummary,
+    });
+
+    res.status(200).json({ behavioralChecks });
+  } catch (error) {
+    console.error("❌ [generateBehavioralChecksData] Error:", error);
     next(error);
   }
 };

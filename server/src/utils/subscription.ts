@@ -34,3 +34,11 @@ export function getSubscriptionStatus(user: any): string | null {
     user.subscriptionStatus || user.subscription?.subscriptionStatus || null
   );
 }
+
+/**
+ * Free tier is capped at 1 assessment in production. In development, that cap
+ * is disabled so local testing is not blocked.
+ */
+export function shouldEnforceFreeTierAssessmentLimit(): boolean {
+  return process.env.NODE_ENV === "production";
+}

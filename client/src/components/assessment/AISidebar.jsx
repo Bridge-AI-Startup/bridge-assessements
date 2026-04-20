@@ -103,7 +103,6 @@ export default function AISidebar({
               >
                 {section === "projectDescription" && "Project Description"}
                 {section === "testCases" && "Test Cases"}
-                {section === "smartInterviewer" && "Smart Interviewer"}
                 <button
                   onClick={() => onRemoveContext?.(section)}
                   className="hover:text-red-500 ml-0.5"

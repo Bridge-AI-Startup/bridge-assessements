@@ -14,6 +14,14 @@ router.post(
   AssessmentController.generateAssessmentData
 );
 
+// Generate behavioral checks from title + description (manual creation)
+router.post(
+  "/generate-behavioral-checks",
+  [verifyAuthToken],
+  AssessmentValidator.generateBehavioralChecksValidation,
+  AssessmentController.generateBehavioralChecksData
+);
+
 // Create a new assessment
 router.post(
   "/",

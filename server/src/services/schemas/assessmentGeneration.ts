@@ -29,6 +29,17 @@ export const assessmentOutputSchema = z.object({
 
 export type AssessmentOutput = z.infer<typeof assessmentOutputSchema>;
 
+/** Plain-language behavioral checks (stack-agnostic, observable). */
+export const behavioralChecksOutputSchema = z.object({
+  checks: z
+    .array(z.string().min(1).max(400))
+    .min(5)
+    .max(18)
+    .describe("Observable behaviors any reasonable implementation should satisfy"),
+});
+
+export type BehavioralChecksOutput = z.infer<typeof behavioralChecksOutputSchema>;
+
 /** Step 1: requirements extraction + stack/level with confidence */
 export const requirementsExtractionSchema = z.object({
   summary: z.string().describe("Short requirements summary from the job description"),

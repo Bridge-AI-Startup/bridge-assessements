@@ -7,7 +7,11 @@ import { ArrowRight, AlertCircle, ArrowLeft } from "lucide-react";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import PresetPills from "@/components/assessment/PresetPills";
-import { createAssessment, generateAssessmentData } from "@/api/assessment";
+import {
+  createAssessment,
+  generateAssessmentData,
+  generateBehavioralChecksForAssessment,
+} from "@/api/assessment";
 import { suggestCriteria } from "@/api/evaluation";
 import { auth } from "@/firebase/firebase";
 import { onAuthStateChanged } from "firebase/auth";
@@ -118,7 +122,7 @@ export default function CreateAssessment() {
     try {
       const token = await currentUser.getIdToken();
 
-      /** @type {{ title: string; description: string; timeLimit: number; evaluationCriteria?: string[]; starterFilesGitHubLink?: string }} */
+      /** @type {{ title: string; description: string; timeLimit: number; behavioralChecks?: string[]; evaluationCriteria?: string[]; starterFilesGitHubLink?: string }} */
       let assessmentData;
 
       if (creationMode === "ai") {
@@ -194,6 +198,7 @@ export default function CreateAssessment() {
           title,
           description: generatedDescription,
           timeLimit,
+          behavioralChecks,
           starterCodeFiles,
         } = generateResult.data;
 
@@ -201,6 +206,7 @@ export default function CreateAssessment() {
           title: title,
           description: generatedDescription,
           timeLimit: timeLimit,
+          ...(behavioralChecks?.length ? { behavioralChecks } : {}),
           ...(starterCodeFiles?.length ? { starterCodeFiles } : {}),
         };
 
@@ -234,6 +240,35 @@ export default function CreateAssessment() {
           description: manualDescription.trim(),
           timeLimit: manualTimeLimit,
         };
+
+        const bcResult = await generateBehavioralChecksForAssessment(
+          assessmentData.title,
+          assessmentData.description,
+          token
+        );
+        if (!bcResult.success) {
+          if (bcResult.error === "SUBSCRIPTION_LIMIT_REACHED") {
+            setError(
+              "You've reached the free tier limit of 1 assessment. Upgrade to create unlimited assessments."
+            );
+            setIsGenerating(false);
+            const shouldUpgrade = window.confirm(
+              "You've reached the free tier limit of 1 assessment.\n\n" +
+                "Upgrade to create unlimited assessments.\n\n" +
+                "Would you like to view subscription plans?"
+            );
+            if (shouldUpgrade) {
+              window.location.href = createPageUrl("Subscription");
+            }
+            return;
+          }
+          console.warn(
+            "[CreateAssessment] Behavioral checks generation failed, continuing without:",
+            bcResult.error
+          );
+        } else if (bcResult.data.behavioralChecks?.length) {
+          assessmentData.behavioralChecks = bcResult.data.behavioralChecks;
+        }
       }
 
       // Add starter files GitHub link if provided (only for manual mode)
@@ -377,7 +412,7 @@ export default function CreateAssessment() {
           {/* Subheading */}
           <p className="text-lg text-gray-500 max-w-2xl mx-auto leading-relaxed">
             {creationMode === "ai"
-              ? "Drop in a job description, Bridge creates the take-home project, generates AI interview questions, and scores submissions for you."
+              ? "Drop in a job description, Bridge creates the take-home project and scores submissions for you."
               : "Create your own assessment by providing the title, description, and time limit."}
           </p>
         </motion.div>

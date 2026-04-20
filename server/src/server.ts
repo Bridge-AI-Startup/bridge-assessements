@@ -17,6 +17,7 @@ import billingRoutes from "./routes/billing.js";
 import llmProxyRoutes from "./routes/llmProxy.js";
 import evaluationRoutes from "./routes/evaluation.js";
 import proctoringRoutes from "./routes/proctoring.js";
+import competitionRoutes from "./routes/competition.js";
 import { errorHandler } from "./errors/handler.js";
 import { startIncrementalScheduler } from "./ai/transcript/incrementalScheduler.js";
 
@@ -177,8 +178,26 @@ app.use((req, res, next) => {
 
 console.log("✅ Body parsing configured");
 
+/** Dashboard/React Query polls these often — skip noisy request logs. */
+function shouldSkipVerboseRequestLog(
+  req: express.Request,
+): boolean {
+  if (req.method !== "GET") return false;
+  const p = req.path || "";
+  if (/^\/api\/submissions\/assessments\/[^/]+\/submissions\/?$/.test(p)) {
+    return true;
+  }
+  if (/^\/api\/competitions\/[^/]+\/leaderboard\/?$/.test(p)) {
+    return true;
+  }
+  return false;
+}
+
 // Request logging middleware
 app.use((req, res, next) => {
+  if (shouldSkipVerboseRequestLog(req)) {
+    return next();
+  }
   const timestamp = new Date().toISOString();
   // Force immediate output
   process.stdout.write(`\n${"=".repeat(60)}\n`);
@@ -229,10 +248,19 @@ app.use("/api/assessments", apiLimiter); // Apply general limit
 app.use("/api/assessments", assessmentRoutes);
 console.log("  ✅ /api/assessments routes registered");
 console.log("     - POST /api/assessments");
+console.log("     - POST /api/assessments/generate");
+console.log("     - POST /api/assessments/generate-behavioral-checks");
 console.log("     - GET /api/assessments");
 console.log("     - GET /api/assessments/:id");
 console.log("     - PATCH /api/assessments/:id");
 console.log("     - DELETE /api/assessments/:id");
+
+app.use("/api/competitions", apiLimiter);
+app.use("/api/competitions", competitionRoutes);
+console.log("  ✅ /api/competitions routes registered");
+console.log("     - GET /api/competitions/:slug");
+console.log("     - GET /api/competitions/:slug/leaderboard");
+console.log("     - POST /api/competitions/:slug/join");
 
 app.use("/api/submissions", apiLimiter); // Apply general limit
 app.use("/api/submissions", submissionRoutes);
@@ -242,7 +270,6 @@ console.log("     - GET /api/submissions/assessments/public/:id");
 console.log("     - GET /api/submissions/token/:token");
 console.log("     - POST /api/submissions/token/:token/start");
 console.log("     - POST /api/submissions/token/:token/submit");
-console.log("     - POST /api/submissions/start");
 console.log("     - GET /api/submissions/:id");
 console.log("     - PATCH /api/submissions/:id");
 console.log("     - POST /api/submissions/:id/submit");

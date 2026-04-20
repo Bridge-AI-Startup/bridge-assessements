@@ -66,10 +66,16 @@ const AssessmentSchema = new mongoose.Schema(
       trim: true,
     },
 
-    // Whether smart AI interviewer is enabled
+    // Whether smart AI interviewer is enabled (legacy; product no longer runs voice interviews)
     isSmartInterviewerEnabled: {
       type: Boolean,
-      default: true,
+      default: false,
+    },
+
+    // Stack-agnostic observable behaviors (product-level bar for all candidates on this assessment)
+    behavioralChecks: {
+      type: [String],
+      default: [],
     },
 
     // Evaluation criteria for grading submissions

@@ -15,6 +15,7 @@ export type Assessment = {
   starterCodeFiles?: StarterCodeFile[];
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
+  behavioralChecks?: string[];
   evaluationCriteria?: string[];
   createdAt: string;
   updatedAt: string;
@@ -28,6 +29,7 @@ export type AssessmentCreate = {
   starterFilesGitHubLink?: string;
   starterCodeFiles?: StarterCodeFile[];
   interviewerCustomInstructions?: string;
+  behavioralChecks?: string[];
   evaluationCriteria?: string[];
 };
 
@@ -40,6 +42,7 @@ export type AssessmentUpdate = {
   starterCodeFiles?: StarterCodeFile[];
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
+  behavioralChecks?: string[];
   evaluationCriteria?: string[];
 };
 
@@ -65,6 +68,7 @@ export async function createAssessment(
       title: string;
       description: string;
       timeLimit: number;
+      behavioralChecks?: string[];
       evaluationCriteria?: string[];
       starterCodeFiles?: StarterCodeFile[];
     } = {
@@ -72,6 +76,9 @@ export async function createAssessment(
       description: data.description,
       timeLimit: data.timeLimit,
     };
+    if (data.behavioralChecks && data.behavioralChecks.length > 0) {
+      requestBody.behavioralChecks = data.behavioralChecks;
+    }
     if (data.evaluationCriteria && data.evaluationCriteria.length > 0) {
       requestBody.evaluationCriteria = data.evaluationCriteria;
     }
@@ -229,6 +236,7 @@ export async function updateAssessment(
       starterCodeFiles?: StarterCodeFile[];
       interviewerCustomInstructions?: string;
       isSmartInterviewerEnabled?: boolean;
+      behavioralChecks?: string[];
       evaluationCriteria?: string[];
     } = {};
 
@@ -256,6 +264,9 @@ export async function updateAssessment(
     }
     if (data.isSmartInterviewerEnabled !== undefined) {
       updateBody.isSmartInterviewerEnabled = data.isSmartInterviewerEnabled;
+    }
+    if (data.behavioralChecks !== undefined) {
+      updateBody.behavioralChecks = data.behavioralChecks;
     }
     if (data.evaluationCriteria !== undefined) {
       updateBody.evaluationCriteria = data.evaluationCriteria;
@@ -336,6 +347,7 @@ export async function generateAssessmentData(
     title: string;
     description: string;
     timeLimit: number;
+    behavioralChecks?: string[];
     starterCodeFiles?: StarterCodeFile[];
   }>
 > {
@@ -466,6 +478,78 @@ export async function generateAssessmentData(
       error:
         result.error ||
         "Failed to generate assessment data - missing required fields",
+    };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Generate behavioral checks from title + description (manual assessment creation).
+ */
+export async function generateBehavioralChecksForAssessment(
+  title: string,
+  description: string,
+  token?: string
+): Promise<APIResult<{ behavioralChecks: string[] }>> {
+  try {
+    let authToken = token;
+    if (!authToken) {
+      const user = auth.currentUser;
+      if (!user) {
+        return { success: false, error: "No user is currently signed in" };
+      }
+      authToken = await user.getIdToken();
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/assessments/generate-behavioral-checks`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title, description }),
+      }
+    );
+
+    let result;
+    try {
+      result = await response.json();
+    } catch {
+      if (response.status === 403) {
+        return { success: false, error: "SUBSCRIPTION_LIMIT_REACHED" };
+      }
+      return {
+        success: false,
+        error: `Failed to generate behavioral checks (${response.status})`,
+      };
+    }
+
+    if (response.status === 403) {
+      return { success: false, error: "SUBSCRIPTION_LIMIT_REACHED" };
+    }
+
+    if (!response.ok) {
+      return {
+        success: false,
+        error:
+          result?.error ||
+          `Failed to generate behavioral checks (${response.status})`,
+      };
+    }
+
+    if (result && Array.isArray(result.behavioralChecks)) {
+      return {
+        success: true,
+        data: { behavioralChecks: result.behavioralChecks },
+      };
+    }
+
+    return {
+      success: false,
+      error: "Invalid response from generate behavioral checks",
     };
   } catch (error) {
     return handleAPIError(error);

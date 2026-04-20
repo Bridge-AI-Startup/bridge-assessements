@@ -48,18 +48,6 @@ const makeTimeSpentValidator = () =>
     .bail()
     .toInt();
 
-// Validators for starting a submission
-export const startSubmissionValidation = [
-  body("assessmentId")
-    .exists()
-    .withMessage("assessmentId is required")
-    .bail()
-    .isMongoId()
-    .withMessage("assessmentId must be a valid MongoDB ObjectId"),
-  makeCandidateNameValidator(),
-  makeCandidateEmailValidator(),
-];
-
 // Validators for updating a submission (auto-save)
 export const updateSubmissionValidation = [
   makeGithubLinkValidator(),

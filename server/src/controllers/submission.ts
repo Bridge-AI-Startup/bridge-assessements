@@ -1,5 +1,8 @@
 import { RequestHandler } from "express";
 import { validationResult } from "express-validator";
+import { createHash, randomUUID } from "crypto";
+import path from "path";
+import util from "util";
 
 import { AuthError } from "../errors/auth.js";
 import AssessmentModel from "../models/assessment.js";
@@ -27,9 +30,31 @@ import { interpretChunked } from "../services/evaluation/interpreterChunked.js";
 import { interpretStateful } from "../services/evaluation/interpreterStateful.js";
 import { getFrameStorage } from "../services/capture/storage.js";
 import { getCandidateAppBaseUrl } from "../utils/candidateAppUrl.js";
+import { gradeSubmissionBehavioral } from "../services/behavioralGrading/index.js";
+import { getGradingEvidenceStorage } from "../services/gradingEvidence/storage.js";
+import { calculateAndSaveScores } from "../services/scoring.js";
+import { getSubmissionCodeStorage } from "../services/submissionCode/storage.js";
 
 const TRANSCRIPT_POLL_INTERVAL_MS = 15000;
 const TRANSCRIPT_POLL_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
+const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b]);
+const SUBMISSION_SOURCE_MODE = (
+  process.env.SUBMISSION_SOURCE_MODE || "both"
+).toLowerCase();
+
+function looksLikeZipArchive(file: Express.Multer.File): boolean {
+  if (!file?.buffer || file.buffer.length < 2) return false;
+  if (file.buffer.subarray(0, 2).equals(ZIP_SIGNATURE)) return true;
+  return file.originalname?.toLowerCase().endsWith(".zip") === true;
+}
+
+function isGithubSubmissionEnabled(): boolean {
+  return SUBMISSION_SOURCE_MODE === "both" || SUBMISSION_SOURCE_MODE === "github";
+}
+
+function isUploadSubmissionEnabled(): boolean {
+  return SUBMISSION_SOURCE_MODE === "both" || SUBMISSION_SOURCE_MODE === "upload";
+}
 
 async function setEvaluationFailed(
   submissionId: string,
@@ -41,6 +66,56 @@ async function setEvaluationFailed(
       evaluationError: message,
     },
   });
+}
+
+async function setBehavioralGradingFailed(
+  submissionId: string,
+  message: string
+): Promise<void> {
+  await SubmissionModel.findByIdAndUpdate(submissionId, {
+    $set: {
+      behavioralGradingStatus: "failed",
+      behavioralGradingError: message,
+    },
+  });
+}
+
+function triggerBehavioralGradingInBackground(
+  submissionId: string,
+  source: "submitSubmissionByToken" | "submitSubmission" | "manual"
+): void {
+  SubmissionModel.findByIdAndUpdate(submissionId, {
+    $set: {
+      behavioralGradingStatus: "pending",
+      behavioralGradingError: null,
+      behavioralGradingReport: null,
+    },
+  })
+    .then(() => gradeSubmissionBehavioral(submissionId))
+    .then((report) =>
+      SubmissionModel.findByIdAndUpdate(submissionId, {
+        $set: {
+          behavioralGradingStatus: "completed",
+          behavioralGradingError: null,
+          behavioralGradingReport: report,
+        },
+      })
+    )
+    .catch((err) => {
+      const message =
+        err instanceof Error ? err.message : String(err ?? "unknown error");
+      console.error(
+        `[${source}] Behavioral grading failed for submission ${submissionId}: ${message}`
+      );
+      console.error(
+        `[${source}] Behavioral grading error detail:`,
+        util.inspect(err, { depth: 8, breakLength: 120 })
+      );
+      setBehavioralGradingFailed(
+        submissionId,
+        message
+      ).catch(() => {});
+    });
 }
 
 /**
@@ -197,12 +272,6 @@ async function loadRawJsonlForSubmission(submissionId: string): Promise<string |
   }
 }
 
-export type StartSubmissionRequest = {
-  assessmentId: string;
-  candidateName?: string;
-  candidateEmail?: string;
-};
-
 export type UpdateSubmissionRequest = {
   githubLink?: string;
   timeSpent?: number;
@@ -281,68 +350,6 @@ export const startAssessment: RequestHandler = async (req, res, next) => {
     response.timeRemaining = timeRemaining;
 
     res.status(200).json(response);
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Start a new submission (public endpoint - no auth required)
- * @deprecated - Use startAssessment with token instead
- */
-export const startSubmission: RequestHandler = async (req, res, next) => {
-  const errors = validationResult(req);
-  try {
-    validationErrorParser(errors);
-    const { assessmentId, candidateName, candidateEmail } =
-      req.body as StartSubmissionRequest;
-
-    // Verify assessment exists
-    const assessment = await AssessmentModel.findById(assessmentId);
-    if (!assessment) {
-      return res.status(404).json({ error: "Assessment not found" });
-    }
-
-    // Create new submission
-    const submissionData: {
-      assessmentId: string;
-      candidateName?: string;
-      candidateEmail?: string;
-      status: string;
-      startedAt: Date;
-      metadata?: {
-        ipAddress?: string;
-        userAgent?: string;
-      };
-    } = {
-      assessmentId,
-      status: "in-progress",
-      startedAt: new Date(),
-    };
-
-    if (candidateName) {
-      submissionData.candidateName = candidateName;
-    }
-    if (candidateEmail) {
-      submissionData.candidateEmail = candidateEmail;
-    }
-
-    // Add metadata if available
-    const ipAddress = req.ip || req.socket.remoteAddress;
-    const userAgent = req.get("user-agent");
-    if (ipAddress || userAgent) {
-      submissionData.metadata = {};
-      if (ipAddress) {
-        submissionData.metadata.ipAddress = ipAddress;
-      }
-      if (userAgent) {
-        submissionData.metadata.userAgent = userAgent;
-      }
-    }
-
-    const newSubmission = await SubmissionModel.create(submissionData);
-
-    res.status(201).json(newSubmission);
   } catch (error) {
     next(error);
   }
@@ -516,6 +523,11 @@ export const submitSubmissionByToken: RequestHandler = async (
 ) => {
   const errors = validationResult(req);
   try {
+    if (!isGithubSubmissionEnabled()) {
+      return res.status(403).json({
+        error: "GitHub URL submissions are currently disabled.",
+      });
+    }
     validationErrorParser(errors);
     const { token } = req.params;
     const { githubLink } = req.body as SubmitSubmissionRequest;
@@ -682,6 +694,202 @@ export const submitSubmissionByToken: RequestHandler = async (
         });
     }
 
+    // Trigger behavioral grading after submission (public repos only in v1)
+    if (
+      submission.githubRepo &&
+      submission.githubRepo.owner &&
+      submission.githubRepo.repo &&
+      submission.githubRepo.pinnedCommitSha
+    ) {
+      triggerBehavioralGradingInBackground(
+        submission._id.toString(),
+        "submitSubmissionByToken"
+      );
+    }
+
+    res.status(200).json(updatedSubmission);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Upload and submit code archive by token (public endpoint)
+ */
+export const uploadSubmissionByToken: RequestHandler = async (req, res, next) => {
+  try {
+    if (!isUploadSubmissionEnabled()) {
+      return res.status(403).json({
+        error: "Archive uploads are currently disabled.",
+      });
+    }
+    const { token } = req.params;
+    const archive = req.file;
+
+    if (!archive) {
+      return res.status(400).json({ error: "Archive file is required" });
+    }
+    if (!looksLikeZipArchive(archive)) {
+      return res
+        .status(400)
+        .json({ error: "Only .zip archives are supported" });
+    }
+
+    const submission = await SubmissionModel.findOne({ token }).populate(
+      "assessmentId"
+    );
+
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    if (submission.status === "submitted") {
+      return res
+        .status(400)
+        .json({ error: "Assessment has already been submitted" });
+    }
+
+    // Validate time limit server-side (same semantics as GitHub submit endpoint)
+    const assessment = submission.assessmentId as any;
+    if (assessment && assessment.timeLimit && submission.startedAt) {
+      const elapsedMinutes =
+        (Date.now() - new Date(submission.startedAt).getTime()) / (1000 * 60);
+      if (elapsedMinutes > assessment.timeLimit) {
+        submission.status = "expired";
+      }
+      submission.timeSpent = Math.floor(elapsedMinutes);
+    }
+
+    const submissionCodeStorage = getSubmissionCodeStorage();
+    const sha256 = createHash("sha256").update(archive.buffer).digest("hex");
+    const storageKey = `${submission._id.toString()}/archives/${Date.now()}-${randomUUID()}.zip`;
+    await submissionCodeStorage.storeArchive(storageKey, archive.buffer);
+
+    submission.codeSource = "upload";
+    submission.codeUpload = {
+      storageKey,
+      originalFilename: archive.originalname || "submission.zip",
+      sizeBytes: archive.size,
+      sha256,
+      uploadedAt: new Date(),
+    } as any;
+    submission.githubLink = null;
+    submission.githubRepo = {
+      owner: null,
+      repo: null,
+      refType: null,
+      ref: null,
+      pinnedCommitSha: null,
+    } as any;
+    submission.status =
+      submission.status === "expired" ? "expired" : "submitted";
+    submission.submittedAt = new Date();
+
+    await submission.save();
+
+    const updatedSubmission = await SubmissionModel.findOne({ token }).populate(
+      "assessmentId",
+      "title description timeLimit"
+    );
+
+    // Keep evaluation behavior aligned with GitHub submit flow.
+    const submissionIdStr = submission._id.toString();
+    const hasEvaluationCriteria =
+      Array.isArray(assessment?.evaluationCriteria) &&
+      assessment.evaluationCriteria.length > 0;
+    if (hasEvaluationCriteria) {
+      await SubmissionModel.findByIdAndUpdate(submissionIdStr, {
+        $set: { evaluationStatus: "pending", evaluationError: null },
+      });
+      ensureProctoringTranscriptAndEvaluate(submissionIdStr)
+        .then(async () => {
+          const sub = await SubmissionModel.findById(submissionIdStr);
+          if (!sub) return;
+          (sub as any).evaluationStatus = (sub as any).evaluationReport
+            ? "completed"
+            : "failed";
+          await sub.save();
+        })
+        .catch((err) => {
+          console.error(
+            `[uploadSubmissionByToken] ensureProctoringTranscriptAndEvaluate failed for ${submission._id}:`,
+            err
+          );
+          SubmissionModel.findByIdAndUpdate(submissionIdStr, {
+            $set: {
+              evaluationStatus: "failed",
+              evaluationError:
+                err instanceof Error ? err.message : "Evaluation failed.",
+            },
+          }).catch(() => {});
+        });
+    } else {
+      await SubmissionModel.findByIdAndUpdate(submissionIdStr, {
+        $set: {
+          evaluationStatus: "failed",
+          evaluationError: "Assessment has no evaluation criteria configured.",
+        },
+      });
+    }
+
+    // Trigger indexing in background (source-aware in snapshot abstraction).
+    indexSubmissionRepo(submissionIdStr).catch((error) => {
+      console.error(
+        `[uploadSubmissionByToken] Failed to index repository for submission ${submission._id}:`,
+        error
+      );
+    });
+
+    // Task execution remains conditioned on trace presence.
+    if (submission.llmWorkflow?.trace?.events?.length > 0) {
+      executeAllTasks(submission._id.toString())
+        .then(async (results) => {
+          const sub = await SubmissionModel.findById(submission._id);
+          if (!sub) return;
+          if (!sub.llmWorkflow) {
+            sub.llmWorkflow = {
+              trace: {
+                sessionId: "",
+                events: [],
+                totalTokens: 0,
+                totalCost: 0,
+                totalTime: 0,
+                totalCalls: 0,
+              },
+              taskResults: [],
+              scores: {},
+              evaluation: {
+                harnessVersion: "1.0.0",
+                tasksCompleted: 0,
+                tasksTotal: 0,
+              },
+            };
+          }
+          sub.llmWorkflow.taskResults = results;
+          sub.llmWorkflow.evaluation = sub.llmWorkflow.evaluation ?? {
+            harnessVersion: "1.0.0",
+            tasksCompleted: 0,
+            tasksTotal: 0,
+          };
+          sub.llmWorkflow.evaluation.tasksCompleted = results.filter(
+            (r: { status: string }) => r.status === "passed"
+          ).length;
+          sub.llmWorkflow.evaluation.tasksTotal = results.length;
+          await sub.save();
+        })
+        .catch((error) => {
+          console.error(
+            `[uploadSubmissionByToken] Failed to execute tasks for submission ${submission._id}:`,
+            error
+          );
+        });
+    }
+
+    triggerBehavioralGradingInBackground(
+      submission._id.toString(),
+      "submitSubmissionByToken"
+    );
+
     res.status(200).json(updatedSubmission);
   } catch (error) {
     next(error);
@@ -787,6 +995,19 @@ export const submitSubmission: RequestHandler = async (req, res, next) => {
       });
     }
 
+    // Trigger behavioral grading after submission (public repos only in v1)
+    if (
+      submission.githubRepo &&
+      submission.githubRepo.owner &&
+      submission.githubRepo.repo &&
+      submission.githubRepo.pinnedCommitSha
+    ) {
+      triggerBehavioralGradingInBackground(
+        submission._id.toString(),
+        "submitSubmission"
+      );
+    }
+
     res.status(200).json(updatedSubmission);
   } catch (error) {
     next(error);
@@ -825,6 +1046,25 @@ export const getSubmissionsForAssessment: RequestHandler = async (
         createdAt: -1,
       })
       .lean();
+
+    // Backfill workflow scores when an LLM trace exists but scores were not saved yet
+    const MAX_SCORE_BACKFILL = 8;
+    let scheduled = 0;
+    for (const sub of submissions) {
+      if (scheduled >= MAX_SCORE_BACKFILL) break;
+      if (sub.status !== "submitted" && sub.status !== "expired") continue;
+      const wf = (sub as any).llmWorkflow;
+      if (!wf?.trace?.events?.length) continue;
+      if (wf?.scores?.overall?.score != null) continue;
+
+      scheduled++;
+      calculateAndSaveScores(sub._id.toString()).catch((err) => {
+        console.warn(
+          `[getSubmissionsForAssessment] Workflow score backfill failed for ${sub._id}:`,
+          err
+        );
+      });
+    }
 
     res.status(200).json(submissions);
   } catch (error) {
@@ -943,15 +1183,17 @@ export const generateInterviewQuestionsByToken: RequestHandler = async (
       });
     }
 
-    // Verify GitHub repo info exists
-    if (
-      !submission.githubRepo ||
-      !submission.githubRepo.owner ||
-      !submission.githubRepo.repo ||
-      !submission.githubRepo.pinnedCommitSha
-    ) {
+    // Verify submission has code source metadata (GitHub or uploaded archive)
+    const hasGithubSource =
+      submission.codeSource !== "upload" &&
+      submission.githubRepo?.owner &&
+      submission.githubRepo?.repo &&
+      submission.githubRepo?.pinnedCommitSha;
+    const hasUploadSource =
+      submission.codeSource === "upload" && submission.codeUpload?.storageKey;
+    if (!hasGithubSource && !hasUploadSource) {
       return res.status(400).json({
-        error: "GitHub repository information not found for this submission",
+        error: "Code submission information not found for this submission",
       });
     }
 
@@ -965,9 +1207,10 @@ export const generateInterviewQuestionsByToken: RequestHandler = async (
       });
     }
 
-    // Check if smart interviewer is enabled
-    const isSmartInterviewerEnabled = (assessment as any).isSmartInterviewerEnabled !== false; // Default to true if not set
-    
+    // Interview pipeline is off unless explicitly enabled on the assessment
+    const isSmartInterviewerEnabled =
+      (assessment as any).isSmartInterviewerEnabled === true;
+
     if (!isSmartInterviewerEnabled) {
       return res.status(403).json({
         error: "Smart AI Interviewer is disabled for this assessment",
@@ -1132,15 +1375,17 @@ export const generateInterviewQuestions: RequestHandler = async (
       });
     }
 
-    // Verify GitHub repo info exists
-    if (
-      !submission.githubRepo ||
-      !submission.githubRepo.owner ||
-      !submission.githubRepo.repo ||
-      !submission.githubRepo.pinnedCommitSha
-    ) {
+    // Verify submission has code source metadata (GitHub or uploaded archive)
+    const hasGithubSource =
+      submission.codeSource !== "upload" &&
+      submission.githubRepo?.owner &&
+      submission.githubRepo?.repo &&
+      submission.githubRepo?.pinnedCommitSha;
+    const hasUploadSource =
+      submission.codeSource === "upload" && submission.codeUpload?.storageKey;
+    if (!hasGithubSource && !hasUploadSource) {
       return res.status(400).json({
-        error: "GitHub repository information not found for this submission",
+        error: "Code submission information not found for this submission",
       });
     }
 
@@ -1152,9 +1397,9 @@ export const generateInterviewQuestions: RequestHandler = async (
       });
     }
 
-    // Check if smart interviewer is enabled
-    const isSmartInterviewerEnabled = (assessment as any).isSmartInterviewerEnabled !== false; // Default to true if not set
-    
+    const isSmartInterviewerEnabled =
+      (assessment as any).isSmartInterviewerEnabled === true;
+
     if (!isSmartInterviewerEnabled) {
       return res.status(403).json({
         error: "Smart AI Interviewer is disabled for this assessment",
@@ -1382,17 +1627,9 @@ export const getRepoIndexStatus: RequestHandler = async (req, res, next) => {
       return res.status(404).json({ error: "Submission not found" });
     }
 
-    const pinnedCommitSha = submission.githubRepo?.pinnedCommitSha;
-
-    if (!pinnedCommitSha) {
-      return res.status(400).json({
-        error: "GitHub repository information not found for this submission",
-      });
-    }
-
-    const repoIndex = await RepoIndexModel.findOne({
-      submissionId: submission._id,
-      pinnedCommitSha,
+    const source = submission.codeSource === "upload" ? "upload" : "github";
+    const repoIndex = await RepoIndexModel.findOne({ submissionId: submission._id, source }).sort({
+      updatedAt: -1,
     });
 
     if (!repoIndex) {
@@ -1540,37 +1777,6 @@ export const generateShareLink: RequestHandler = async (req, res, next) => {
     // Get MongoDB user ID from Firebase UID
     const userId = await getUserIdFromFirebaseUid(uid);
 
-    // Get user to check subscription tier
-    const UserModel = (await import("../models/user.js")).default;
-    const user = await UserModel.findById(userId);
-    if (!user) {
-      throw AuthError.INVALID_AUTH_TOKEN;
-    }
-
-    // Check subscription limits - use subscriptionStatus === "active" as source of truth
-    const subscriptionStatus = user.subscriptionStatus || (user as any).subscription?.subscriptionStatus;
-    const isSubscribed = subscriptionStatus === "active";
-    
-    if (!isSubscribed) {
-      // Count total submissions across all assessments for this user
-      const userAssessments = await AssessmentModel.find({ userId });
-      const assessmentIds = userAssessments.map((a) => a._id);
-      const submissionCount = await SubmissionModel.countDocuments({
-        assessmentId: { $in: assessmentIds },
-      });
-
-      // Free tier limit: 3 submissions total
-      if (submissionCount >= 3) {
-        return res.status(403).json({
-          error: "SUBSCRIPTION_LIMIT_REACHED",
-          message:
-            "You've reached the free tier limit of 3 candidate submissions. Upgrade to continue.",
-          limit: 3,
-          current: submissionCount,
-        });
-      }
-    }
-
     // Verify assessment exists and belongs to the user
     const assessment = await AssessmentModel.findOne({
       _id: assessmentId,
@@ -1693,6 +1899,11 @@ export const calculateWorkflowScoresHandler: RequestHandler = async (
     submission.llmWorkflow.scores = scores;
     submission.llmWorkflow.scores.calculatedAt = new Date();
     submission.llmWorkflow.scores.calculationVersion = "1.0.0";
+    const subAny = submission as any;
+    subAny.scores = subAny.scores || {};
+    subAny.scores.overall = scores.overall.score;
+    subAny.scores.calculatedAt = new Date();
+    subAny.scores.calculationVersion = "2.0.0";
     await submission.save();
 
     res.json(scores);
@@ -1702,7 +1913,7 @@ export const calculateWorkflowScoresHandler: RequestHandler = async (
 };
 
 /**
- * Calculate full scores (completeness + workflow) for a submission
+ * Calculate workflow scores (5D + overall) when an LLM trace exists
  * POST /api/submissions/:submissionId/calculate-scores
  * Employer only (auth required)
  */
@@ -1739,6 +1950,163 @@ export const calculateScoresHandler: RequestHandler = async (
     const result = await calculateAndSaveScores(submissionId);
 
     res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Trigger behavioral grading (manual re-run)
+ * POST /api/submissions/:submissionId/grade-behavioral
+ * Employer only (auth required)
+ */
+export const gradeBehavioralHandler: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { submissionId } = req.params;
+    const uid = (req as any).user?.uid;
+    if (!uid) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const userId = await getUserIdFromFirebaseUid(uid);
+    const submission = await SubmissionModel.findById(submissionId).populate(
+      "assessmentId"
+    );
+
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    const assessment = submission.assessmentId as any;
+    if (assessment.userId.toString() !== userId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    triggerBehavioralGradingInBackground(submissionId, "manual");
+
+    return res.status(202).json({
+      message: "Behavioral grading queued.",
+      submissionId,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Read a behavioral grading artifact (employer only)
+ * GET /api/submissions/:submissionId/behavioral-artifact?key=<artifactKey>
+ */
+export const getBehavioralArtifactHandler: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { submissionId } = req.params;
+    const key = String(req.query.key || "");
+    const uid = (req as any).user?.uid;
+    if (!uid) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    if (!key) {
+      return res.status(400).json({ error: "Missing artifact key" });
+    }
+    if (!key.startsWith(`submissions/${submissionId}/`)) {
+      return res.status(400).json({ error: "Invalid artifact key scope" });
+    }
+
+    const userId = await getUserIdFromFirebaseUid(uid);
+    const submission = await SubmissionModel.findById(submissionId).populate(
+      "assessmentId"
+    );
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+    const assessment = submission.assessmentId as any;
+    if (assessment.userId.toString() !== userId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const storage = getGradingEvidenceStorage();
+    if (!(await storage.exists(key))) {
+      return res.status(404).json({ error: "Artifact not found" });
+    }
+
+    const ext = path.extname(key).toLowerCase();
+    const contentType =
+      ext === ".png"
+        ? "image/png"
+        : ext === ".jpg" || ext === ".jpeg"
+        ? "image/jpeg"
+        : ext === ".webp"
+        ? "image/webp"
+        : ext === ".json"
+        ? "application/json"
+        : "application/octet-stream";
+
+    const data = await storage.readArtifact(key);
+    res.setHeader("Content-Type", contentType);
+    return res.status(200).send(Buffer.from(data));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Download uploaded code archive for a submission (employer only)
+ * GET /api/submissions/:submissionId/code-archive
+ */
+export const getSubmissionCodeArchiveHandler: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { submissionId } = req.params;
+    const uid = (req as any).user?.uid;
+    if (!uid) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const userId = await getUserIdFromFirebaseUid(uid);
+    const submission = await SubmissionModel.findById(submissionId).populate(
+      "assessmentId"
+    );
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+    const assessment = submission.assessmentId as any;
+    if (assessment.userId.toString() !== userId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+    if (submission.codeSource !== "upload" || !submission.codeUpload?.storageKey) {
+      return res.status(400).json({
+        error: "No uploaded archive found for this submission",
+      });
+    }
+
+    const storage = getSubmissionCodeStorage();
+    const exists = await storage.exists(submission.codeUpload.storageKey);
+    if (!exists) {
+      return res.status(404).json({ error: "Archive not found" });
+    }
+
+    const archive = await storage.readArchive(submission.codeUpload.storageKey);
+    const fallbackName = `submission-${submission._id.toString()}.zip`;
+    const fileName =
+      submission.codeUpload.originalFilename?.trim() || fallbackName;
+
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${fileName.replace(/"/g, "")}"`
+    );
+    return res.status(200).send(Buffer.from(archive));
   } catch (error) {
     next(error);
   }

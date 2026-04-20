@@ -63,10 +63,10 @@ export default function Subscription() {
       price: "$0",
       period: "forever",
       color: "blue",
-      description: "Full access. Evaluate up to 3 candidates.",
+      description: "Full access to evaluate candidates on one assessment.",
       features: [
         "1 assessment",
-        "Up to 3 candidate submissions total",
+        "Unlimited candidate submissions",
         "Full AI follow-up interview",
         "Assessment drop off analytics",
       ],

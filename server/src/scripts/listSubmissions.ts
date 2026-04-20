@@ -33,7 +33,7 @@ async function main() {
     const submissions = await SubmissionModel.find(query)
       .sort({ submittedAt: -1, createdAt: -1 })
       .lean()
-      .select("_id candidateName candidateEmail status timeSpent submittedAt githubLink scores.overall scores.completeness llmWorkflow.trace.totalTokens llmWorkflow.trace.totalCost llmWorkflow.trace.totalTime");
+      .select("_id candidateName candidateEmail status timeSpent submittedAt githubLink scores.overall llmWorkflow.trace.totalTokens llmWorkflow.trace.totalCost llmWorkflow.trace.totalTime");
 
     if (submissions.length === 0) {
       console.log("No submissions found.");
@@ -46,10 +46,9 @@ async function main() {
       const name = s.candidateName ?? "(no name)";
       const time = s.timeSpent != null ? `${s.timeSpent}m` : "-";
       const overall = s.scores?.overall != null ? s.scores.overall : "-";
-      const completeness = s.scores?.completeness?.score != null ? `${s.scores.completeness.score}%` : "-";
       const github = s.githubLink ? "yes" : "no";
       console.log(`  ${id}`);
-      console.log(`    candidate: ${name}  time: ${time}  score: ${overall}/100  completeness: ${completeness}  github: ${github}`);
+      console.log(`    candidate: ${name}  time: ${time}  score: ${overall}/100  github: ${github}`);
       console.log("");
     }
     process.exit(0);

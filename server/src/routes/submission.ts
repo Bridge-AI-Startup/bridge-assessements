@@ -1,4 +1,5 @@
 import express from "express";
+import multer from "multer";
 
 import * as SubmissionController from "../controllers/submission.js";
 import * as TaskRunnerController from "../controllers/taskRunner.js";
@@ -10,6 +11,12 @@ import {
 import * as SubmissionValidator from "../validators/submissionValidation.js";
 
 const router = express.Router();
+const archiveUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: Number(process.env.SUBMISSION_UPLOAD_MAX_BYTES || 100 * 1024 * 1024),
+  },
+}).single("archive");
 
 // Public endpoint - Get assessment details (for candidate to view before starting)
 // Must come before /:id route
@@ -117,20 +124,19 @@ router.post(
   SubmissionController.searchCode
 );
 
-// Public endpoint - Start a new submission
-// Must come before /:id route
-router.post(
-  "/start",
-  SubmissionValidator.startSubmissionValidation,
-  SubmissionController.startSubmission
-);
-
 // Public endpoint - Final submission by token
 // Must come before /:id route
 router.post(
   "/token/:token/submit",
   SubmissionValidator.submitSubmissionValidation,
   SubmissionController.submitSubmissionByToken
+);
+
+// Public endpoint - Upload local archive and submit by token
+router.post(
+  "/token/:token/upload",
+  archiveUpload,
+  SubmissionController.uploadSubmissionByToken
 );
 
 // Public endpoint - Generate interview questions by token (for candidates)
@@ -156,11 +162,30 @@ router.post(
   SubmissionController.calculateWorkflowScoresHandler
 );
 
-// Employer endpoint - Calculate full scores (completeness + workflow)
+// Employer endpoint - Calculate workflow scores (same as calculate-workflow-scores aggregate path)
 router.post(
   "/:submissionId/calculate-scores",
   [verifyAuthToken],
   SubmissionController.calculateScoresHandler
+);
+
+// Employer endpoint - Trigger behavioral grading (manual re-run)
+router.post(
+  "/:submissionId/grade-behavioral",
+  [verifyAuthToken],
+  SubmissionController.gradeBehavioralHandler
+);
+
+router.get(
+  "/:submissionId/behavioral-artifact",
+  [verifyAuthToken],
+  SubmissionController.getBehavioralArtifactHandler
+);
+
+router.get(
+  "/:submissionId/code-archive",
+  [verifyAuthToken],
+  SubmissionController.getSubmissionCodeArchiveHandler
 );
 
 // Public endpoint - Final submission
