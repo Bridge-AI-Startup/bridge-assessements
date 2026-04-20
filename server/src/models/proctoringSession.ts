@@ -143,6 +143,14 @@ const ProctoringSessionSchema = new mongoose.Schema(
       startedAt: { type: Date, default: null },
       endedAt: { type: Date, default: null },
       error: { type: String, default: null },
+      /** Raw mic capture after ElevenLabs intro (listen-only mode); WebM blobs under companion/voice/ */
+      voiceChunks: [
+        {
+          storageKey: { type: String, required: true },
+          sizeBytes: { type: Number, default: 0 },
+          uploadedAt: { type: Date, default: Date.now },
+        },
+      ],
     },
   },
   { timestamps: true }

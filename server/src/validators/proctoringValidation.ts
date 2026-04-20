@@ -180,6 +180,21 @@ export const companionMessagesValidation = [
     .withMessage("timestampMs must be a non-negative integer"),
 ];
 
+export const companionVoiceChunkValidation = [
+  param("sessionId")
+    .isMongoId()
+    .withMessage("sessionId must be a valid MongoDB ObjectId"),
+  body("token")
+    .exists()
+    .withMessage("token is required")
+    .bail()
+    .isString()
+    .withMessage("token must be a string")
+    .bail()
+    .notEmpty()
+    .withMessage("token cannot be empty"),
+];
+
 export const getCompanionTranscriptValidation = [
   param("sessionId")
     .isMongoId()

@@ -516,7 +516,13 @@ export async function interpretRawTranscript(
 export async function getCompanionPrompt(
   sessionId: string,
   token: string
-): Promise<APIResult<{ prompt: string; firstMessage?: string }>> {
+): Promise<
+  APIResult<{
+    prompt: string;
+    firstMessage?: string;
+    localVoiceAfterIntro?: boolean;
+  }>
+> {
   try {
     const response = await post(
       `/proctoring/sessions/${sessionId}/companion/prompt`,
@@ -564,6 +570,34 @@ export async function getCompanionTranscript(
     const response = await get(url);
     const data = await response.json();
     return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Upload a mic-only WebM chunk (after ElevenLabs intro ends in listen-only mode).
+ */
+export async function uploadCompanionVoiceChunk(
+  sessionId: string,
+  token: string,
+  chunkBlob: Blob
+): Promise<APIResult<{ storageKey: string }>> {
+  try {
+    const formData = new FormData();
+    formData.append("token", token);
+    formData.append("chunk", chunkBlob, `voice-${Date.now()}.webm`);
+
+    const response = await fetch(
+      `${API_BASE_URL}/proctoring/sessions/${sessionId}/companion/voice`,
+      { method: "POST", body: formData }
+    );
+
+    const result = await response.json();
+    if (!response.ok) {
+      return { success: false, error: result.error || "Upload failed" };
+    }
+    return { success: true, data: result };
   } catch (error) {
     return handleAPIError(error);
   }

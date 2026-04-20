@@ -12,6 +12,7 @@ import { ProctoringError } from "../errors/proctoring.js";
 import {
   storeFrame,
   storeVideoChunk,
+  storeCompanionVoiceChunk,
 } from "../services/capture/frameStorage.js";
 import { getUserIdFromFirebaseUid } from "../utils/auth.js";
 
@@ -336,6 +337,33 @@ export const uploadVideoChunk: RequestHandler = async (req, res, next) => {
       endTime,
     });
 
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /api/proctoring/sessions/:sessionId/companion/voice — mic-only WebM after ElevenLabs intro ends
+export const uploadCompanionVoiceChunk: RequestHandler = async (
+  req,
+  res,
+  next,
+) => {
+  try {
+    const { sessionId } = req.params;
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: "No audio chunk provided" });
+    }
+
+    const token = req.body.token;
+    const session = await ProctoringSessionModel.findById(sessionId);
+    if (!session) throw ProctoringError.SESSION_NOT_FOUND;
+    if (session.token !== token) {
+      return res.status(403).json({ error: "Invalid token" });
+    }
+
+    const result = await storeCompanionVoiceChunk(sessionId, file.buffer);
     res.json(result);
   } catch (error) {
     next(error);
@@ -820,7 +848,7 @@ Do NOT give solutions, hints, or code. If they ask for help, say once that you'r
 
 Demo: When the candidate mentions creating a user schema (or working on a user schema), respond with exactly: "What variables are you thinking of making for the user schema?"`;
 
-/** When true (COMPANION_VOICE_LISTEN_ONLY), agent speaks only the first message then stays silent — for testing / voice capture. */
+/** When true (COMPANION_VOICE_LISTEN_ONLY), agent speaks only the first message; client disconnects ElevenLabs and records mic locally — for testing / voice capture. */
 const COMPANION_PROMPT_LISTEN_ONLY = `You are in VOICE CAPTURE MODE for a coding assessment.
 
 You have already delivered your ONLY spoken message (the opening line). For the entire rest of this session you MUST:
@@ -873,6 +901,8 @@ export const getCompanionPrompt: RequestHandler = async (req, res, next) => {
       res.json({
         prompt,
         firstMessage: COMPANION_FIRST_MESSAGE_LISTEN_ONLY,
+        /** Client ends ElevenLabs after intro audio and uploads WebM chunks to companion/voice */
+        localVoiceAfterIntro: true,
       });
     } else {
       res.json({ prompt });

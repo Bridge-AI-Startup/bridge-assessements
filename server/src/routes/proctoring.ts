@@ -108,6 +108,12 @@ router.post(
   ProctoringValidator.companionMessagesValidation,
   ProctoringController.recordCompanionMessages
 );
+router.post(
+  "/sessions/:sessionId/companion/voice",
+  videoUpload,
+  ProctoringValidator.companionVoiceChunkValidation,
+  ProctoringController.uploadCompanionVoiceChunk
+);
 router.get(
   "/sessions/:sessionId/companion/transcript",
   optionalAuthToken,

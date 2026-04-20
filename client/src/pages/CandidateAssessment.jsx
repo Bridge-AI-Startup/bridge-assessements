@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
-import JSZip from "jszip";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import {
@@ -8,16 +7,16 @@ import {
   AlertCircle,
   Play,
   Link as LinkIcon,
-  FolderOpen,
   Send,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   getSubmissionByToken,
   startAssessment,
-  uploadAssessmentArchive,
+  submitAssessment,
   optOutAssessment,
 } from "@/api/submission";
 import { createPageUrl } from "@/utils";
@@ -51,8 +50,7 @@ export default function CandidateAssessment() {
   const [isLoading, setIsLoading] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [selectedFolderFiles, setSelectedFolderFiles] = useState([]);
-  const [selectedFolderLabel, setSelectedFolderLabel] = useState("");
+  const [githubUrl, setGithubUrl] = useState("");
   const [timeRemaining, setTimeRemaining] = useState(null); // in minutes
   const [timeDisplay, setTimeDisplay] = useState(""); // formatted display
   const [showOptOutModal, setShowOptOutModal] = useState(false);
@@ -130,9 +128,8 @@ export default function CandidateAssessment() {
           if (result.data.status === "in-progress") {
             setTimeRemaining(result.data.timeRemaining);
           }
-          if (result.data.codeSource === "upload" && result.data.codeUpload) {
-            const fileName = result.data.codeUpload.originalFilename || "Archive uploaded";
-            setSelectedFolderLabel(fileName);
+          if (result.data.githubLink) {
+            setGithubUrl(result.data.githubLink);
           }
         } else {
           const errorMsg =
@@ -398,8 +395,8 @@ export default function CandidateAssessment() {
   };
 
   const handleSubmit = async () => {
-    if (selectedFolderFiles.length === 0) {
-      alert("Please select your project folder before submitting");
+    if (!githubUrl.trim()) {
+      alert("Please enter a GitHub repository URL");
       return;
     }
 
@@ -421,31 +418,9 @@ export default function CandidateAssessment() {
         }
         screenCapture.stopCapture();
       }
-      const zip = new JSZip();
-      for (const file of selectedFolderFiles) {
-        const relativePath = file.webkitRelativePath || file.name;
-        if (!relativePath || relativePath.endsWith("/")) continue;
-        // Skip heavy/generated folders for faster uploads.
-        if (
-          relativePath.includes("/node_modules/") ||
-          relativePath.startsWith("node_modules/") ||
-          relativePath.includes("/.git/") ||
-          relativePath.startsWith(".git/") ||
-          relativePath.includes("/dist/") ||
-          relativePath.startsWith("dist/")
-        ) {
-          continue;
-        }
-        zip.file(relativePath, file);
-      }
-      const archiveBlob = await zip.generateAsync({ type: "blob" });
-      const archiveFile = new File([archiveBlob], "submission.zip", {
-        type: "application/zip",
-      });
 
-      const result = await uploadAssessmentArchive(token, archiveFile);
+      const result = await submitAssessment(token, githubUrl.trim());
       if (result.success) {
-        // Redirect to submitted page
         navigate(`${createPageUrl("CandidateSubmitted")}?token=${token}`);
       } else {
         const errorMsg =
@@ -458,18 +433,6 @@ export default function CandidateAssessment() {
       alert("Failed to submit assessment");
       setIsSubmitting(false);
     }
-  };
-
-  const handleFolderSelection = (event) => {
-    const files = Array.from(event.target.files || []);
-    setSelectedFolderFiles(files);
-    if (!files.length) {
-      setSelectedFolderLabel("");
-      return;
-    }
-    const samplePath = files[0].webkitRelativePath || files[0].name;
-    const folderName = samplePath.split("/")[0] || "Selected folder";
-    setSelectedFolderLabel(`${folderName} (${files.length} files)`);
   };
 
   const handleOptOut = async () => {
@@ -944,40 +907,28 @@ export default function CandidateAssessment() {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Project Folder *
+                  GitHub repository URL *
                 </label>
-                <div className="space-y-2">
-                  <input
-                    id="submission-folder-input"
-                    type="file"
-                    className="hidden"
-                    webkitdirectory=""
-                    directory=""
-                    multiple
-                    onChange={handleFolderSelection}
+                <div className="relative">
+                  <LinkIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <Input
+                    value={githubUrl}
+                    onChange={(e) => setGithubUrl(e.target.value)}
+                    placeholder="https://github.com/username/repository"
+                    className="pl-10"
                   />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-full justify-start text-left border-gray-300"
-                    onClick={() =>
-                      document.getElementById("submission-folder-input")?.click()
-                    }
-                  >
-                    <FolderOpen className="w-4 h-4 mr-2 text-gray-500" />
-                    {selectedFolderLabel || "Choose project folder"}
-                  </Button>
-                  <p className="text-xs text-gray-500">
-                    Select your project folder; we will package and upload it automatically.
-                  </p>
                 </div>
+                <p className="text-xs text-gray-500 mt-1.5">
+                  Use a public repo URL, or ensure our systems can access a private repo you were
+                  invited to. The latest commit on your default branch will be recorded.
+                </p>
               </div>
 
               <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
                 <p className="text-sm text-blue-800">
                   <strong>Note:</strong> Please include any additional context,
-                  notes about your approach, trade-offs made, or things you'd
-                  improve with more time in your repository's README file.
+                  notes about your approach, trade-offs made, or things you&apos;d
+                  improve with more time in your repository&apos;s README file.
                 </p>
               </div>
 
@@ -985,7 +936,7 @@ export default function CandidateAssessment() {
                 <Button
                   onClick={handleSubmit}
                   disabled={
-                    selectedFolderFiles.length === 0 ||
+                    !githubUrl.trim() ||
                     isSubmitting ||
                     (timeRemaining !== null && timeRemaining <= 0)
                   }

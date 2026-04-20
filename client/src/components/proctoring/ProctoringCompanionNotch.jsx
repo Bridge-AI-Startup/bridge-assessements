@@ -3,13 +3,18 @@ import {
   useMemo,
   useRef,
   useEffect,
+  useCallback,
   useImperativeHandle,
   forwardRef,
 } from "react";
 import { useConversation } from "@elevenlabs/react";
 import { motion } from "framer-motion";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import { getCompanionPrompt, recordCompanionMessages } from "@/api/proctoring";
+import {
+  getCompanionPrompt,
+  recordCompanionMessages,
+  uploadCompanionVoiceChunk,
+} from "@/api/proctoring";
 import { cn } from "@/lib/utils";
 
 /** Default intro when server does not send `firstMessage` (interactive companion). */
@@ -17,6 +22,19 @@ const COMPANION_FIRST_MESSAGE =
   "You're about to start a coding problem as part of this assessment. I'm here as a quick check-in so you can talk through what you're doing as you code—it helps capture your thinking. Just explain what you're working on as you go. No pressure, and I won't give hints or answers. Ready when you are.";
 
 const FLUSH_INTERVAL_MS = 10000;
+/** Wait after agent stops speaking before ending ElevenLabs (handles pauses between TTS sentences). */
+const INTRO_END_DEBOUNCE_MS = 1200;
+/** If intro never completes, start local recording anyway. */
+const INTRO_FALLBACK_MS = 45000;
+
+function pickAudioMimeType() {
+  if (typeof MediaRecorder === "undefined") return "";
+  const candidates = ["audio/webm;codecs=opus", "audio/webm"];
+  for (const t of candidates) {
+    if (MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return "";
+}
 
 /**
  * Normalize ElevenLabs message to { role: "agent" | "candidate", text, timestampMs } for API.
@@ -69,6 +87,9 @@ const ProctoringCompanionNotch = forwardRef(function ProctoringCompanionNotch(
   const [prompt, setPrompt] = useState(null);
   /** Server override (e.g. listen-only testing mode from COMPANION_VOICE_LISTEN_ONLY). */
   const [firstMessageOverride, setFirstMessageOverride] = useState(null);
+  /** When true, end ElevenLabs after intro and record mic via MediaRecorder (server: COMPANION_VOICE_LISTEN_ONLY). */
+  const [localVoiceAfterIntro, setLocalVoiceAfterIntro] = useState(false);
+  const [localRecordingActive, setLocalRecordingActive] = useState(false);
   const [error, setError] = useState(null);
   const [transcript, setTranscript] = useState([]);
   const [expanded, setExpanded] = useState(false);
@@ -79,6 +100,13 @@ const ProctoringCompanionNotch = forwardRef(function ProctoringCompanionNotch(
   const startTimeRef = useRef(null);
   const flushIntervalRef = useRef(null);
   const startedRef = useRef(false);
+  const micStreamRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const conversationRef = useRef(null);
+  const introEndedRef = useRef(false);
+  const sawAgentSpeakingRef = useRef(false);
+  const introDebounceTimerRef = useRef(null);
+  const introFallbackTimerRef = useRef(null);
 
   const agentId = import.meta.env?.VITE_ELEVENLABS_AGENT_ID;
 
@@ -152,6 +180,138 @@ const ProctoringCompanionNotch = forwardRef(function ProctoringCompanionNotch(
   }, [conversation.conversationId]);
 
   useEffect(() => {
+    conversationRef.current = conversation;
+  }, [conversation]);
+
+  const clearIntroTimers = () => {
+    if (introDebounceTimerRef.current) {
+      clearTimeout(introDebounceTimerRef.current);
+      introDebounceTimerRef.current = null;
+    }
+    if (introFallbackTimerRef.current) {
+      clearTimeout(introFallbackTimerRef.current);
+      introFallbackTimerRef.current = null;
+    }
+  };
+
+  const startLocalMicRecording = useCallback(async () => {
+    const stream = micStreamRef.current;
+    if (!stream) {
+      setError("No microphone for recording");
+      return;
+    }
+    setLocalRecordingActive(true);
+    const mime = pickAudioMimeType();
+    let rec;
+    try {
+      rec = mime
+        ? new MediaRecorder(stream, { mimeType: mime })
+        : new MediaRecorder(stream);
+    } catch (e) {
+      console.error("[ProctoringCompanion] MediaRecorder:", e);
+      setError("Could not start voice recording");
+      return;
+    }
+    mediaRecorderRef.current = rec;
+    rec.ondataavailable = async (ev) => {
+      if (!ev.data || ev.data.size < 1) return;
+      try {
+        const result = await uploadCompanionVoiceChunk(
+          sessionId,
+          token,
+          ev.data,
+        );
+        if (!result.success) {
+          console.warn(
+            "[ProctoringCompanion] Voice chunk upload:",
+            result.error,
+          );
+        }
+      } catch (err) {
+        console.warn("[ProctoringCompanion] Voice chunk upload error:", err);
+      }
+    };
+    rec.onerror = (ev) => {
+      console.warn("[ProctoringCompanion] MediaRecorder error:", ev);
+    };
+    try {
+      rec.start(15000);
+    } catch (e) {
+      console.error("[ProctoringCompanion] rec.start:", e);
+      setError("Could not start voice recording");
+    }
+  }, [sessionId, token]);
+
+  const finishIntroAndStartLocalRecording = useCallback(async () => {
+    if (introEndedRef.current) return;
+    introEndedRef.current = true;
+    clearIntroTimers();
+    try {
+      await conversationRef.current?.endSession?.();
+    } catch {
+      // ignore
+    }
+    await startLocalMicRecording();
+  }, [startLocalMicRecording]);
+
+  useEffect(() => {
+    if (!localVoiceAfterIntro || introEndedRef.current) return;
+    if (conversation.status !== "connected") return;
+
+    if (conversation.isSpeaking) {
+      sawAgentSpeakingRef.current = true;
+      if (introDebounceTimerRef.current) {
+        clearTimeout(introDebounceTimerRef.current);
+        introDebounceTimerRef.current = null;
+      }
+      return undefined;
+    }
+
+    if (sawAgentSpeakingRef.current) {
+      introDebounceTimerRef.current = setTimeout(() => {
+        introDebounceTimerRef.current = null;
+        if (conversationRef.current?.isSpeaking) return;
+        void finishIntroAndStartLocalRecording();
+      }, INTRO_END_DEBOUNCE_MS);
+    }
+
+    return () => {
+      if (introDebounceTimerRef.current) {
+        clearTimeout(introDebounceTimerRef.current);
+        introDebounceTimerRef.current = null;
+      }
+    };
+  }, [
+    localVoiceAfterIntro,
+    conversation.status,
+    conversation.isSpeaking,
+    finishIntroAndStartLocalRecording,
+  ]);
+
+  useEffect(() => {
+    if (!localVoiceAfterIntro || conversation.status !== "connected") {
+      clearIntroTimers();
+      return undefined;
+    }
+    if (introEndedRef.current) return undefined;
+    introFallbackTimerRef.current = setTimeout(() => {
+      introFallbackTimerRef.current = null;
+      if (!introEndedRef.current) {
+        console.warn(
+          "[ProctoringCompanion] Intro fallback: starting local recording",
+        );
+        void finishIntroAndStartLocalRecording();
+      }
+    }, INTRO_FALLBACK_MS);
+    return () => {
+      if (introFallbackTimerRef.current) {
+        clearTimeout(introFallbackTimerRef.current);
+        introFallbackTimerRef.current = null;
+      }
+    };
+  }, [localVoiceAfterIntro, conversation.status, finishIntroAndStartLocalRecording]);
+
+  useEffect(() => {
     if (!sessionId || !token || !agentId) return;
 
     let cancelled = false;
@@ -161,6 +321,7 @@ const ProctoringCompanionNotch = forwardRef(function ProctoringCompanionNotch(
         if (cancelled || !result.success) return;
         setPrompt(result.data.prompt);
         setFirstMessageOverride(result.data.firstMessage ?? null);
+        setLocalVoiceAfterIntro(Boolean(result.data.localVoiceAfterIntro));
       } catch (e) {
         if (!cancelled)
           setError(e?.message || "Failed to load companion prompt");
@@ -180,7 +341,10 @@ const ProctoringCompanionNotch = forwardRef(function ProctoringCompanionNotch(
       if (!companionOverrides) return;
       startedRef.current = true;
       try {
-        await navigator.mediaDevices.getUserMedia({ audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+        });
+        micStreamRef.current = stream;
         if (cancelled) return;
         await conversation.startSession({
           agentId,
@@ -218,12 +382,16 @@ const ProctoringCompanionNotch = forwardRef(function ProctoringCompanionNotch(
   }, [sessionId, token]);
 
   useEffect(() => {
-    if (conversation.status !== "connected" || !startTimeRef.current) return;
+    if (
+      (conversation.status !== "connected" && !localRecordingActive) ||
+      !startTimeRef.current
+    )
+      return;
     const t = setInterval(() => {
       setElapsedSec(Math.floor((Date.now() - startTimeRef.current) / 1000));
     }, 1000);
     return () => clearInterval(t);
-  }, [conversation.status]);
+  }, [conversation.status, localRecordingActive]);
 
   useEffect(() => {
     if (transcriptEndRef.current) {
@@ -231,30 +399,73 @@ const ProctoringCompanionNotch = forwardRef(function ProctoringCompanionNotch(
     }
   }, [transcript]);
 
+  useEffect(() => {
+    return () => {
+      clearIntroTimers();
+      const rec = mediaRecorderRef.current;
+      if (rec && rec.state !== "inactive") {
+        try {
+          rec.stop();
+        } catch {
+          // ignore
+        }
+      }
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach((t) => t.stop());
+        micStreamRef.current = null;
+      }
+    };
+  }, []);
+
   useImperativeHandle(
     ref,
     () => ({
       async endAndFlush() {
         await flushBuffer();
+        const rec = mediaRecorderRef.current;
+        if (rec && rec.state === "recording") {
+          await new Promise((resolve) => {
+            const done = () => resolve();
+            rec.addEventListener("stop", done, { once: true });
+            try {
+              rec.requestData?.();
+            } catch {
+              // ignore
+            }
+            try {
+              rec.stop();
+            } catch {
+              done();
+            }
+            setTimeout(done, 2500);
+          });
+        }
         try {
-          await conversation.endSession();
+          await conversationRef.current?.endSession?.();
         } catch {
           // ignore
         }
+        if (micStreamRef.current) {
+          micStreamRef.current.getTracks().forEach((t) => t.stop());
+          micStreamRef.current = null;
+        }
       },
     }),
-    [sessionId, token, conversation],
+    [sessionId, token],
   );
 
-  const isConnected = conversation.status === "connected";
-  const isSpeaking = Boolean(conversation.isSpeaking);
+  const sessionActive =
+    conversation.status === "connected" || localRecordingActive;
+  const highlightActive =
+    Boolean(conversation.isSpeaking) || localRecordingActive;
   const displayMinutes = Math.floor(elapsedSec / 60);
   const displaySeconds = elapsedSec % 60;
   const timeLabel = `${String(displayMinutes).padStart(2, "0")}:${String(displaySeconds).padStart(2, "0")}`;
-  const lastLine =
-    transcript.length > 0
+  const lastLine = localRecordingActive
+    ? "Recording your voice — explain your thinking as you work."
+    : transcript.length > 0
       ? transcript[transcript.length - 1].text
-      : isConnected
+      : sessionActive
         ? "Companion active..."
         : "Connecting...";
 
@@ -271,10 +482,12 @@ const ProctoringCompanionNotch = forwardRef(function ProctoringCompanionNotch(
         layout
         className="bg-gray-900 text-white rounded-b-2xl shadow-xl border border-gray-700 border-t-0 overflow-hidden"
         animate={{
-          boxShadow: isSpeaking
+          boxShadow: highlightActive
             ? "0 4px 20px rgba(34, 197, 94, 0.25), 0 0 0 1px rgba(34, 197, 94, 0.2)"
             : "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)",
-          borderColor: isSpeaking ? "rgba(34, 197, 94, 0.5)" : "rgb(55 65 81)",
+          borderColor: highlightActive
+            ? "rgba(34, 197, 94, 0.5)"
+            : "rgb(55 65 81)",
         }}
         transition={{ type: "spring", stiffness: 400, damping: 30 }}
       >
@@ -283,24 +496,24 @@ const ProctoringCompanionNotch = forwardRef(function ProctoringCompanionNotch(
             <span className="font-mono text-sm tabular-nums text-gray-300">
               {timeLabel}
             </span>
-            {isConnected && (
+            {sessionActive && (
               <motion.span
                 className="relative flex h-2 w-2 flex-shrink-0"
                 animate={
-                  isSpeaking
+                  highlightActive
                     ? { scale: [1, 1.4, 1], opacity: [1, 0.6, 1] }
                     : { scale: 1, opacity: 1 }
                 }
                 transition={{
-                  repeat: isSpeaking ? Infinity : 0,
+                  repeat: highlightActive ? Infinity : 0,
                   duration: 1,
                   ease: "easeInOut",
                 }}
               >
-                {!isSpeaking && (
+                {!highlightActive && (
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
                 )}
-                {isSpeaking && (
+                {highlightActive && (
                   <motion.span
                     className="absolute inline-flex h-full w-full rounded-full bg-green-400"
                     animate={{ scale: [1, 2, 2], opacity: [0.6, 0, 0] }}
@@ -339,9 +552,11 @@ const ProctoringCompanionNotch = forwardRef(function ProctoringCompanionNotch(
             <div className="h-64 overflow-y-auto space-y-2 pr-1">
               {transcript.length === 0 ? (
                 <p className="text-sm text-gray-500 italic">
-                  {isConnected
-                    ? "Conversation will appear here..."
-                    : "Starting companion..."}
+                  {localRecordingActive
+                    ? "Voice is being recorded to your session (no AI replies)."
+                    : sessionActive
+                      ? "Conversation will appear here..."
+                      : "Starting companion..."}
                 </p>
               ) : (
                 transcript.map((entry, i) => (
