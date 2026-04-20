@@ -1,0 +1,9 @@
+server/node_modules/
+client/node_modules/
+
+# Local Mongo data (memory server cache / legacy mongod)
+.mongo-data/
+
+# Optional local overrides (secrets) — never commit
+server/config.env.local
+client/.env.production.local

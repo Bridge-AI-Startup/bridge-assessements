@@ -354,11 +354,17 @@ ${browserHint}
 
 Rules:
 - You MUST eventually use step=finish before iterations run out.
+- **Mandatory \`run_command\` before finish (critical):** Read \`--- Grading runtime (automated — use for honesty) ---\` in the first user message.
+  - If **App base URL available** is **yes**: you **must** use **at least one** \`step=run_command\` **in this agent session** before \`finish\`. Use it to hit the running app (e.g. \`curl -sS -i\` against paths you infer from \`read_file\` on routes; use **only** the **BASE_URL_FOR_CURL** origin from the user message — see **curl origin** below) and/or run a project test script (\`npm test\`, \`pytest\`, etc.) if the check concerns test results. **Do not** \`finish\` after **only** \`read_file\` / \`browser_*\` — always include a shell probe when the server URL exists. If every curl fails, you may still \`finish\` with **fail** or **inconclusive** and cite the failing command output.
+  - If **App base URL available** is **no**: still **prefer** at least one \`run_command\` (\`rg\`, \`grep\`, or the README’s test command) when the check is about **behavior** or **repo-wide** logic; **only** for a narrow “this exact file contains X” style check may you \`finish\` from \`read_file\` alone.
 - **Runtime vs static (critical):** Read \`--- Grading runtime (automated — use for honesty) ---\` in the first user message.
   - If the check concerns **HTTP/API behavior** — e.g. response JSON shape, **non-leakage** of ids, **status codes**, **rejecting** bad input, honeypot/bot rejection — and **App base URL available** is **yes** with a **successful** warmup GET: you **must** obtain **runtime** proof before \`finish\` with **pass**: use \`run_command\` to \`curl -s\` the relevant API paths (infer paths from \`read_file\` on routes; include needed headers if the app is behind /api). **Do not** pass such checks from \`read_file\` alone.
   - If **App base URL available** is **no**, or warmup GET **failed**, or **README runbook had a failed shell step** and the check **requires live HTTP** proof: you may use **inconclusive** (explain) — but if the check is **purely about source** (routes, auth, validators) and you **can** read the repo, still decide pass/fail from code. Do **not** use inconclusive just because relevant **files were not found**; see **Missing code** below.
   - For **purely static** checks (middleware on a route, file exists, validator chain present): \`read_file\` is enough — but see **Ownership** next; “static” does not mean “router only.”
 - **Ownership / authorization (critical):** If the behavioral check asks that employers **cannot** access **another user’s** assessments/submissions, or that access is **scoped to the owner**, **do not pass** from **route + middleware alone** (e.g. \`verifyEmployerToken\` only proves an authenticated employer). You **must** \`read_file\` the **controller (or service) handler** for that route and confirm the code **binds the resource to the current employer/user** (e.g. lookup by assessment id **and** owner id, or 404 when not owned). If the handler loads by id **without** comparing to the authenticated owner, **fail** — even if middleware is present.
+- **curl origin (critical):** If the user message includes \`--- BASE_URL_FOR_CURL ---\`, you **must** use **that exact URL** (scheme + host + port if present) as the origin for **every** \`curl\` to the candidate app. **Never** use \`http://127.0.0.1\`, \`http://localhost\`, or a port from the README/package.json for those probes — in the grading sandbox the app is reached via the **exposed** URL only; localhost curls usually **fail** or hit nothing even when the app is up. **browser_*** tools already use the same origin internally.
+- **Reachability vs wrong URL:** If a \`curl\` prints a JSON body or \`-i\` shows an HTTP status line, the server **was** reachable for that request — do **not** claim “application could not be reached” unless \`curl\` shows connection refused / timeout. Distinguish **wrong origin** (fix: use BASE_URL_FOR_CURL) from **endpoint returned 404** (valid response for testing).
+- **Honeypot / invite:** Endpoints named “invite” in the employer’s check often map to **share-link** or \`generate-link\` routes in code. Search with \`run_command\` \`rg -n "website|honeypot|generate-link|generateLink" server client\` and open validators — do **not** assume a file named \`invite.ts\` exists.
 - **Missing code (critical):** After reasonable probing (repository layout, \`routes/index.ts\`, \`rg\`/grep for symbols from the behavioral check), if **no relevant implementation** exists in the clone (wrong paths resolved, still nothing; or no route/handler/validator to evaluate), finish with **fail** — the submission does not demonstrate the required code. **Do not** choose **inconclusive** only because files were missing or paths were guessed wrong.
 - **Single-check scope (critical):** You grade **only** the one sentence in \`Behavioral check to evaluate\` below. The full assessment description is context; **other behavioral checks** (if listed) are scored in **separate** agent runs. Do **not** fail this check because the submission would fail a **different** check, unless the **current** sentence explicitly requires that behavior. **Do not double-penalize:** e.g. a wrong discount threshold belongs in the check that mentions that threshold—not in a check that only asks whether output **includes** fields such as item, quantity, cost, and discount **lines** (pass those on presence/readability of those fields; ignore whether the discount **amount** matches the spec unless this sentence says so).
 - If a behavioral check needs an edge case (e.g. empty list), propose a concrete command that exercises it (e.g. python -c "import ..." or a here-doc) when possible.
@@ -394,12 +400,15 @@ Safety: only standard dev commands; no destructive patterns.`;
 ---
 
 The sections above are from the real grading pipeline (clone + entry run + main file excerpt). Later messages labeled \`run_command result:\` may be **sandbox probes** you run yourself — that stdout is **not** the candidate's source tree unless it is clearly output from their **entry command** or a **file read** from the repo.
-${input.baseUrl ? `\nGrading app base URL (for browser_* tools): ${input.baseUrl}` : ""}
-
+${
+        input.baseUrl
+          ? `\n--- BASE_URL_FOR_CURL (mandatory origin for curl and API probes — do not use localhost or README ports) ---\n${input.baseUrl}\n--- end BASE_URL ---\n\nSame URL applies to browser_* tools (path-only steps use this origin).\n`
+          : "\n(No BASE_URL_FOR_CURL — App base URL was not available for this run. For HTTP checks you may try curl to a port shown in the runbook seed **if** the server was started in this sandbox, or use read_file for code-only proof; see Rules.)\n"
+      }
 You may use tools to gather more evidence for THIS behavioral check only. Start from the seed; use read_file to confirm anything claimed about code on disk.${
         input.baseUrl
-          ? " Use browser tools to validate user-visible behavior on the running app."
-          : ""
+          ? " The app is running — you **must** also use run_command (e.g. `curl -sS -i \"<BASE_URL_FOR_CURL>/…\"`) at least once before finish; see Rules → Mandatory run_command and curl origin. Use browser tools when the check is user-visible."
+          : " Prefer run_command (tests, rg) when evaluating behavior; see Rules → Mandatory run_command."
       }`,
     },
   ];
