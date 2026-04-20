@@ -61,6 +61,8 @@ A full-stack TypeScript application for creating and managing technical coding a
    # Server
    PORT=5050
    FRONTEND_URL=http://localhost:5173
+   # Production: if FRONTEND_URL is the marketing site, set SPA origin for candidate links:
+   # CANDIDATE_APP_URL=https://app.bridge-jobs.com
    NODE_ENV=development
    
    # Firebase Admin (REQUIRED for production)
@@ -86,6 +88,8 @@ A full-stack TypeScript application for creating and managing technical coding a
 
    **Frontend** (`client/.env`):
    ```env
+   # Optional: force copied candidate links to app host when window.origin differs
+   # VITE_APP_ORIGIN=https://app.bridge-jobs.com
    VITE_API_BASE_URL=http://localhost:5050/api
    VITE_FIREBASE_API_KEY=your_firebase_api_key
    VITE_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com

@@ -21,7 +21,8 @@ The client and server each have their own `package.json` and `node_modules`. The
 
 | Service         | Dev URL                          | Production URL                                           |
 |-----------------|----------------------------------|----------------------------------------------------------|
-| Frontend (Vite) | `http://localhost:5173`          | `https://www.bridge-jobs.com` (Vercel)                   |
+| Frontend (Vite SPA) | `http://localhost:5173`      | `https://app.bridge-jobs.com` (Vercel app deployment)    |
+| Marketing (Framer)  | —                                | `https://bridge-jobs.com` / `www.bridge-jobs.com`        |
 | Backend (Express)| `http://localhost:5050`         | `https://bridge-assessements-1.onrender.com` (Render)    |
 | Health check    | `http://localhost:5050/health`   | `https://bridge-assessements-1.onrender.com/health`      |
 | API base        | `http://localhost:5050/api`      | `https://bridge-assessements-1.onrender.com/api`         |
@@ -30,7 +31,7 @@ The client and server each have their own `package.json` and `node_modules`. The
 - The frontend Vite dev server runs on port `5173` by default.
 - The client resolves its API base URL in `client/src/config/api.js`: uses `VITE_API_URL` env var if set, otherwise `localhost:5050` in dev mode and the Render URL in production.
 - CORS allowed origins are hardcoded in `server/src/server.ts` -- if you add a new frontend domain, update the `allowedOrigins` array there.
-- Current allowed CORS origins: `FRONTEND_URL` env var, `https://www.bridge-jobs.com`, two Vercel preview domains, plus `localhost:5173` and `localhost:3000` in dev.
+- Current allowed CORS origins: `FRONTEND_URL` env var, `https://app.bridge-jobs.com`, `https://www.bridge-jobs.com`, `https://bridge-jobs.com`, two Vercel preview domains, plus `localhost:5173` and `localhost:3000` in dev.
 
 ## How to Run Locally
 
@@ -114,7 +115,8 @@ See `server/config.env.example` for the full list. Key variables:
 **Database & Server:**
 - `ATLAS_URI` / `DB_NAME` -- MongoDB connection
 - `PORT` -- Server port (default: 5050)
-- `FRONTEND_URL` -- For CORS (default: `http://localhost:5173`)
+- `FRONTEND_URL` -- For CORS (default: `http://localhost:5173`; may be marketing domain in prod)
+- `CANDIDATE_APP_URL` -- SPA origin for candidate share links and invite emails (e.g. `https://app.bridge-jobs.com`). If unset, share links use `APP_URL` then `FRONTEND_URL` (see `server/src/utils/candidateAppUrl.ts`).
 - `NODE_ENV` -- `development` or `production`
 
 **Authentication:**
@@ -178,6 +180,7 @@ See `server/config.env.example` for the full list. Key variables:
 
 ### Frontend (`client/.env.local`)
 - `VITE_API_URL` -- Override API base URL (optional, auto-detected from mode)
+- `VITE_APP_ORIGIN` -- Optional SPA origin for copied candidate links (e.g. `https://app.bridge-jobs.com`). Defaults to `window.location.origin` (see `client/src/config/origins.ts`).
 - `VITE_DEFAULT_COMPETITION_SLUG` -- Optional override for the competition slug (overrides [`client/src/config/competition.js`](client/src/config/competition.js) `SINGLE_COMPETITION_SLUG` when set)
 - `VITE_FIREBASE_API_KEY` / `VITE_FIREBASE_AUTH_DOMAIN` / `VITE_FIREBASE_PROJECT_ID`
 - `VITE_ELEVENLABS_AGENT_ID`

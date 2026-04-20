@@ -29,6 +29,7 @@ import { jsonlToScreenMoments } from "../services/evaluation/momentGrouper.js";
 import { interpretChunked } from "../services/evaluation/interpreterChunked.js";
 import { interpretStateful } from "../services/evaluation/interpreterStateful.js";
 import { getFrameStorage } from "../services/capture/storage.js";
+import { getCandidateAppBaseUrl } from "../utils/candidateAppUrl.js";
 import { gradeSubmissionBehavioral } from "../services/behavioralGrading/index.js";
 import { getGradingEvidenceStorage } from "../services/gradingEvidence/storage.js";
 import { calculateAndSaveScores } from "../services/scoring.js";
@@ -1796,9 +1797,8 @@ export const generateShareLink: RequestHandler = async (req, res, next) => {
       // startedAt will be null until candidate starts
     });
 
-    // Generate shareable link
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
-    const shareLink = `${frontendUrl}/CandidateAssessment?token=${submission.token}`;
+    // Generate shareable link (must target SPA host, not marketing site)
+    const shareLink = `${getCandidateAppBaseUrl()}/CandidateAssessment?token=${submission.token}`;
 
     res.status(201).json({
       token: submission.token,
@@ -2157,8 +2157,7 @@ export const bulkGenerateLinks: RequestHandler = async (req, res, next) => {
       throw AuthError.INVALID_AUTH_TOKEN; // Don't reveal whether assessment exists
     }
 
-    const appUrl =
-      process.env.APP_URL || process.env.FRONTEND_URL || "http://localhost:5173";
+    const appUrl = getCandidateAppBaseUrl();
 
     const results: Array<{
       submissionId: string;
@@ -2233,8 +2232,7 @@ export const sendInvites: RequestHandler = async (req, res, next) => {
     // Resolve MongoDB user ID from Firebase UID
     const userId = await getUserIdFromFirebaseUid(uid);
 
-    const appUrl =
-      process.env.APP_URL || process.env.FRONTEND_URL || "http://localhost:5173";
+    const appUrl = getCandidateAppBaseUrl();
 
     const { sendCandidateInvite } = await import("../services/email.js");
 
