@@ -65,6 +65,34 @@ export async function getSessionBySubmission(
 }
 
 /**
+ * Get an existing proctoring session for this candidate token (does not create a session).
+ * Returns success: false when the candidate has no session (e.g. declined recording).
+ */
+export async function getSessionByCandidateToken(
+  token: string
+): Promise<APIResult<ProctoringSession>> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/proctoring/sessions/by-candidate-token?token=${encodeURIComponent(token)}`
+    );
+    if (response.status === 404) {
+      return { success: false, error: "No proctoring session" };
+    }
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      return {
+        success: false,
+        error: data.error || `Failed to load proctoring session (${response.status})`,
+      };
+    }
+    const data = (await response.json()) as ProctoringSession;
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
  * Create a proctoring session for a submission token.
  */
 export async function createProctoringSession(

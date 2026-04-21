@@ -26,6 +26,7 @@ import ConsentScreen from "@/components/proctoring/ConsentScreen";
 import RecordingIndicator from "@/components/proctoring/RecordingIndicator";
 import {
   createProctoringSession,
+  getSessionByCandidateToken,
   grantConsent,
   recordSidecarEvents,
   completeSession as completeProctoringSession,
@@ -82,6 +83,8 @@ export default function CandidateAssessment() {
 
   // Stream lost state for reshare prompt
   const [showResharePrompt, setShowResharePrompt] = useState(false);
+  /** True when prompting because of page reload / remount (stream was never started this visit). */
+  const [reshareIsResume, setReshareIsResume] = useState(false);
 
   // Video recording refs
   const videoRecordersRef = useRef([]);
@@ -123,6 +126,25 @@ export default function CandidateAssessment() {
 
           if (result.data.status === "in-progress") {
             setTimeRemaining(result.data.timeRemaining);
+            // Reattach to an existing proctoring session after reload (browser ends screen share on refresh).
+            try {
+              const pRes = await getSessionByCandidateToken(token);
+              if (pRes.success && pRes.data) {
+                const sess = pRes.data;
+                const resumable =
+                  sess.consent?.granted &&
+                  (sess.status === "active" || sess.status === "paused");
+                if (resumable) {
+                  setProctoringSessionId(sess._id);
+                  setProctoringSubmissionId(String(result.data._id));
+                  setProctoringEnabled(true);
+                  setReshareIsResume(true);
+                  setShowResharePrompt(true);
+                }
+              }
+            } catch (e) {
+              console.warn("Could not check proctoring session:", e);
+            }
           }
           if (result.data.githubLink) {
             setGithubUrl(result.data.githubLink);
@@ -250,6 +272,7 @@ export default function CandidateAssessment() {
     if (!proctoringEnabled) return;
 
     screenCapture.onStreamLost(() => {
+      setReshareIsResume(false);
       setShowResharePrompt(true);
       sidecarBufferRef.current.push({
         type: "stream_lost",
@@ -260,6 +283,7 @@ export default function CandidateAssessment() {
 
     screenCapture.onStreamRestored(() => {
       setShowResharePrompt(false);
+      setReshareIsResume(false);
       sidecarBufferRef.current.push({
         type: "stream_restored",
         timestamp: Date.now(),
@@ -324,6 +348,7 @@ export default function CandidateAssessment() {
     const stream = await screenCapture.startCapture();
     if (stream) {
       setShowResharePrompt(false);
+      setReshareIsResume(false);
     }
   };
 
@@ -729,7 +754,21 @@ export default function CandidateAssessment() {
       {showResharePrompt && (
         <ResharePrompt
           onReshare={handleReshare}
-          onDismiss={() => setShowResharePrompt(false)}
+          onDismiss={() => {
+            setShowResharePrompt(false);
+            setReshareIsResume(false);
+          }}
+          title={reshareIsResume ? "Resume screen sharing" : undefined}
+          subtitle={
+            reshareIsResume
+              ? "Your session is still active — pick your screen again to continue recording."
+              : undefined
+          }
+          body={
+            reshareIsResume
+              ? "After a page refresh the browser stops screen capture. Reshare your monitor to keep recording, or dismiss to continue the assessment without recording."
+              : undefined
+          }
         />
       )}
 

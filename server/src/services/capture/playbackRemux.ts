@@ -13,10 +13,34 @@ import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 const execAsync = promisify(exec);
 const FFMPEG_PATH = ffmpegInstaller.path;
 
+/** Max stderr/stdout captured from ffmpeg (log lines only; stream is file-based). */
+const FFMPEG_LOG_MAX_BUFFER = 10 * 1024 * 1024;
+
 /**
- * Re-mux a raw concatenated WebM buffer (e.g. from MediaRecorder timeslice chunks)
- * so the container has correct duration and seeking. Returns the re-muxed buffer,
- * or null if ffmpeg is unavailable or fails (caller should fall back to raw concat).
+ * Re-mux a WebM file in-place on disk so the container has correct duration and seeking.
+ * @returns true if output was written successfully, false if ffmpeg is unavailable or fails.
+ */
+export async function remuxWebMFromPaths(
+  inputPath: string,
+  outputPath: string
+): Promise<boolean> {
+  try {
+    await execAsync(
+      `"${FFMPEG_PATH}" -f webm -i "${inputPath}" -c copy -y "${outputPath}" 2>&1`,
+      { maxBuffer: FFMPEG_LOG_MAX_BUFFER }
+    );
+    return true;
+  } catch (err) {
+    console.warn(
+      `[playbackRemux] ffmpeg re-mux failed:`,
+      (err as Error)?.message
+    );
+    return false;
+  }
+}
+
+/**
+ * @deprecated Prefer remuxWebMFromPaths + streaming I/O. Loads entire file into memory.
  */
 export async function remuxWebM(mergedBuffer: Buffer): Promise<Buffer | null> {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "proctoring-remux-"));
@@ -25,15 +49,12 @@ export async function remuxWebM(mergedBuffer: Buffer): Promise<Buffer | null> {
 
   try {
     await fs.writeFile(inputPath, mergedBuffer);
-    await execAsync(
-      `"${FFMPEG_PATH}" -f webm -i "${inputPath}" -c copy -y "${outputPath}" 2>&1`,
-      { maxBuffer: 50 * 1024 * 1024 }
-    );
-    const out = await fs.readFile(outputPath);
-    return out;
+    const ok = await remuxWebMFromPaths(inputPath, outputPath);
+    if (!ok) return null;
+    return await fs.readFile(outputPath);
   } catch (err) {
     console.warn(
-      `[playbackRemux] ffmpeg re-mux failed, playback will use raw concat:`,
+      `[playbackRemux] remuxWebM(buffer) failed:`,
       (err as Error)?.message
     );
     return null;

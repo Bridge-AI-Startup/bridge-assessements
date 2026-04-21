@@ -22,6 +22,7 @@ import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import ProctoringSessionModel from "../../models/proctoringSession.js";
 import { getFrameStorage } from "./storage.js";
 import { PreparedFrame } from "./framePrep.js";
+import { mergeLocalFilesSequential } from "./videoMerge.js";
 
 const execAsync = promisify(exec);
 const FFMPEG_PATH = ffmpegInstaller.path;
@@ -35,6 +36,9 @@ const THUMB_SIZE = 128; // Thumbnail size for diffing (128x128)
 const DIFF_THRESHOLD = 0.005; // 0.5% pixel change = keep frame
 const CHANNEL_THRESHOLD = 25; // Per-channel difference to count as changed pixel
 const MAX_IDLE_SEC = 10; // Force-keep a frame if none kept for this long
+/** Fit frames inside this box (preserves aspect ratio); reduces RAM vs full screen. */
+const EXTRACT_BOX_W = 1280;
+const EXTRACT_BOX_H = 720;
 
 /**
  * Check if ffmpeg is available and working.
@@ -140,11 +144,8 @@ export async function extractSmartFrames(
       } else {
         videoPath = path.join(tmpDir, "merged.webm");
         const mergeStart = Date.now();
-        log(`Screen ${screenIndex}: binary-merging ${chunkPaths.length} chunks...`);
-        const chunkBuffers = await Promise.all(
-          chunkPaths.map((p) => fs.readFile(p))
-        );
-        await fs.writeFile(videoPath, Buffer.concat(chunkBuffers));
+        log(`Screen ${screenIndex}: stream-merging ${chunkPaths.length} chunks...`);
+        await mergeLocalFilesSequential(chunkPaths, videoPath);
         log(`Screen ${screenIndex}: merge complete`, Date.now() - mergeStart);
       }
 
@@ -158,10 +159,13 @@ export async function extractSmartFrames(
       await fs.mkdir(candidatesDir);
 
       const fps = 1 / CANDIDATE_INTERVAL;
+      const vf = `fps=${fps},scale=${EXTRACT_BOX_W}:${EXTRACT_BOX_H}:force_original_aspect_ratio=decrease`;
       const ffmpegStart = Date.now();
-      log(`Screen ${screenIndex}: ffmpeg extracting candidates every ${CANDIDATE_INTERVAL}s (fps=${fps})...`);
+      log(
+        `Screen ${screenIndex}: ffmpeg extracting candidates every ${CANDIDATE_INTERVAL}s (fps=${fps}, max ${EXTRACT_BOX_W}x${EXTRACT_BOX_H})...`
+      );
       await execAsync(
-        `"${FFMPEG_PATH}" -f matroska -analyzeduration 10000000 -probesize 10000000 -i "${videoPath}" -vf "fps=${fps}" "${candidatesDir}/frame_%06d.png" 2>&1`,
+        `"${FFMPEG_PATH}" -f matroska -analyzeduration 10000000 -probesize 10000000 -i "${videoPath}" -vf "${vf}" "${candidatesDir}/frame_%06d.png" 2>&1`,
         { maxBuffer: 100 * 1024 * 1024 }
       );
       log(`Screen ${screenIndex}: ffmpeg extract done`, Date.now() - ffmpegStart);
@@ -219,7 +223,7 @@ export async function extractSmartFrames(
 
       log(`Screen ${screenIndex}: pixel diff kept ${keptIndices.length}/${totalCandidates} frames`, Date.now() - diffStart);
 
-      // Step 6: Read kept frames and build PreparedFrame objects
+      // Step 6: Read kept frames (already scaled by ffmpeg) and build PreparedFrame objects
       const loadStart = Date.now();
       for (const idx of keptIndices) {
         const framePath = path.join(candidatesDir, candidateFiles[idx]);
@@ -318,21 +322,6 @@ function parseLastTimeFromFfmpegOutput(output: string): number | null {
  * Merged MediaRecorder WebM chunks often report duration only when decoding; we now parse in both cases.
  */
 async function getVideoDuration(videoPath: string): Promise<number> {
-  // #region agent log
-  fetch("http://127.0.0.1:7403/ingest/af82ea2a-dacc-45e0-807f-943c645e14fb", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "16f1b3" },
-    body: JSON.stringify({
-      sessionId: "16f1b3",
-      hypothesisId: "entry",
-      location: "videoFrameExtractor.ts:getVideoDuration",
-      message: "getVideoDuration called",
-      data: { videoBasename: path.basename(videoPath) },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
-
   let try1Stdout: string | undefined;
   let try1Sec: number | null = null;
   try {
@@ -346,25 +335,6 @@ async function getVideoDuration(videoPath: string): Promise<number> {
   } catch (e) {
     try1Stdout = (e as any)?.stdout ?? "(catch no stdout)";
   }
-
-  // #region agent log
-  fetch("http://127.0.0.1:7403/ingest/af82ea2a-dacc-45e0-807f-943c645e14fb", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "16f1b3" },
-    body: JSON.stringify({
-      sessionId: "16f1b3",
-      hypothesisId: "try1",
-      location: "videoFrameExtractor.ts:after try1",
-      message: "first method result",
-      data: {
-        stdoutLength: try1Stdout?.length ?? 0,
-        stdoutSnippet: (try1Stdout ?? "").slice(0, 400),
-        parsedSec: try1Sec,
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
 
   // Run decode to null; ffmpeg prints Duration to stderr before decoding. Capture output on success and failure.
   let output = "";
@@ -383,27 +353,6 @@ async function getVideoDuration(videoPath: string): Promise<number> {
   if (sec == null && decodeSuccess) {
     sec = parseLastTimeFromFfmpegOutput(output);
   }
-
-  // #region agent log
-  fetch("http://127.0.0.1:7403/ingest/af82ea2a-dacc-45e0-807f-943c645e14fb", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "16f1b3" },
-    body: JSON.stringify({
-      sessionId: "16f1b3",
-      hypothesisId: "try2",
-      location: "videoFrameExtractor.ts:after decode",
-      message: "second method result",
-      data: {
-        decodeSuccess,
-        outputLength: output.length,
-        outputSnippet: output.slice(0, 600),
-        hasDurationSubstring: output.includes("Duration"),
-        parsedSec: sec,
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
 
   if (sec != null) return sec;
 

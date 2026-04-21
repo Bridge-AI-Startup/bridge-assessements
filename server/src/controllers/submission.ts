@@ -391,7 +391,8 @@ export const getSubmissionByToken: RequestHandler = async (req, res, next) => {
         const elapsedMinutes =
           (Date.now() - new Date(submission.startedAt).getTime()) / (1000 * 60);
         const remaining = Math.max(0, assessment.timeLimit - elapsedMinutes);
-        timeRemaining = Math.floor(remaining); // Round down to whole minutes
+        // Keep fractional minutes so the client countdown (uses decimal for seconds) does not jump on reload/sync.
+        timeRemaining = Number(remaining.toPrecision(12));
       }
     }
 
@@ -428,7 +429,7 @@ export const getSubmission: RequestHandler = async (req, res, next) => {
         const elapsedMinutes =
           (Date.now() - new Date(submission.startedAt).getTime()) / (1000 * 60);
         const remaining = Math.max(0, assessment.timeLimit - elapsedMinutes);
-        timeRemaining = Math.floor(remaining); // Round down to whole minutes
+        timeRemaining = Number(remaining.toPrecision(12));
       }
     }
 

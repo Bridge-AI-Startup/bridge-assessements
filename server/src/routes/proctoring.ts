@@ -49,6 +49,12 @@ router.post(
   ProctoringController.createSession
 );
 
+router.get(
+  "/sessions/by-candidate-token",
+  ProctoringValidator.getSessionByCandidateTokenValidation,
+  ProctoringController.getSessionByCandidateToken
+);
+
 router.post(
   "/sessions/:sessionId/consent",
   ProctoringValidator.grantConsentValidation,
