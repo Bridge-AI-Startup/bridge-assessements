@@ -33,7 +33,7 @@ async function main() {
 
   const dummies = await SubmissionModel.find({
     status: "submitted",
-    candidateEmail: { $nin: ["saaz@bridge.com", "quinn.davis@example.com"] },
+    candidateEmail: { $nin: ["saaz@bridge-jobs.com", "quinn.davis@example.com"] },
   })
     .lean()
     .exec();

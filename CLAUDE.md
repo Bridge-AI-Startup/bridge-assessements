@@ -361,8 +361,9 @@ server/src/
 - `GET /assessments/public/:id` -- Get public assessment details
 - `GET /token/:token` -- Get submission by token
 - `POST /token/:token/start` -- Start assessment (pending → in-progress, captures metadata)
-- `POST /token/:token/submit` -- Legacy GitHub URL submit flow (can be disabled via `SUBMISSION_SOURCE_MODE`)
-- `POST /token/:token/upload` -- Submit code by archive upload (`multipart/form-data`, field `archive`), stores upload metadata, starts indexing, auto-triggers behavioral grading
+- `POST /token/:token/submit` -- Legacy GitHub URL submit flow (can be disabled via `SUBMISSION_SOURCE_MODE`); accepts late submits within a 5-minute grace period after `timeLimit`, then returns 400 once grace expires
+- `POST /token/:token/submit-recording-only` -- Finalize timed-out attempts with proctoring/screen-recording evidence only (no code repo required); marks submission `expired`
+- `POST /token/:token/upload` -- Submit code by archive upload (`multipart/form-data`, field `archive`), stores upload metadata, starts indexing, auto-triggers behavioral grading; same 5-minute post-time-limit grace window as GitHub submit
 - `POST /token/:token/generate-interview` -- Generate interview questions
 - `POST /token/:token/opt-out` -- Opt out with reason
 - `POST /token/:token/upload-trace` -- Upload LLM interaction trace file (multer)

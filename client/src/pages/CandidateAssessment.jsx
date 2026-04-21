@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
@@ -17,6 +17,7 @@ import {
   getSubmissionByToken,
   startAssessment,
   submitAssessment,
+  submitRecordingOnlyAssessment,
   optOutAssessment,
 } from "@/api/submission";
 import { createPageUrl } from "@/utils";
@@ -26,6 +27,7 @@ import ConsentScreen from "@/components/proctoring/ConsentScreen";
 import RecordingIndicator from "@/components/proctoring/RecordingIndicator";
 import {
   createProctoringSession,
+  getSessionByCandidateToken,
   grantConsent,
   recordSidecarEvents,
   completeSession as completeProctoringSession,
@@ -37,6 +39,50 @@ import ResharePrompt from "@/components/proctoring/ResharePrompt";
 import { createVideoRecorder } from "@/lib/captureUtils";
 import { uploadVideoChunk } from "@/api/proctoring";
 import StarterCodeIDE from "@/components/StarterCodeIDE";
+
+const FINAL_SUBMISSION_GRACE_SECONDS = 5 * 60;
+
+function formatHms(totalSeconds) {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(
+    2,
+    "0"
+  )}:${String(seconds).padStart(2, "0")}`;
+}
+
+function playBuzzerSound() {
+  try {
+    const AudioCtx = window.AudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const master = ctx.createGain();
+    master.gain.value = 0.08;
+    master.connect(ctx.destination);
+
+    const osc1 = ctx.createOscillator();
+    const osc2 = ctx.createOscillator();
+    osc1.type = "sawtooth";
+    osc2.type = "square";
+    osc1.frequency.value = 180;
+    osc2.frequency.value = 90;
+    osc1.connect(master);
+    osc2.connect(master);
+    osc1.start();
+    osc2.start();
+    osc1.stop(ctx.currentTime + 0.8);
+    osc2.stop(ctx.currentTime + 0.8);
+
+    // Close the context after playback to avoid leaking audio resources.
+    setTimeout(() => {
+      ctx.close().catch(() => {});
+    }, 1000);
+  } catch {
+    // Best effort only; timeout behavior must continue even without sound.
+  }
+}
 
 export default function CandidateAssessment() {
   const [searchParams] = useSearchParams();
@@ -54,6 +100,11 @@ export default function CandidateAssessment() {
   const [showOptOutModal, setShowOptOutModal] = useState(false);
   const [optOutReason, setOptOutReason] = useState("");
   const [isOptingOut, setIsOptingOut] = useState(false);
+  const [isGracePeriodActive, setIsGracePeriodActive] = useState(false);
+  const [graceSecondsRemaining, setGraceSecondsRemaining] = useState(
+    FINAL_SUBMISSION_GRACE_SECONDS
+  );
+  const [hasMissedGracePeriod, setHasMissedGracePeriod] = useState(false);
 
   // Proctoring state
   const [showConsent, setShowConsent] = useState(false);
@@ -82,6 +133,12 @@ export default function CandidateAssessment() {
 
   // Stream lost state for reshare prompt
   const [showResharePrompt, setShowResharePrompt] = useState(false);
+  /** True when prompting because of page reload / remount (stream was never started this visit). */
+  const [reshareIsResume, setReshareIsResume] = useState(false);
+  const timeoutTriggeredRef = useRef(false);
+  const timeoutCleanupRunningRef = useRef(false);
+  const buzzerPlayedRef = useRef(false);
+  const recordingOnlySubmitTriggeredRef = useRef(false);
 
   // Video recording refs
   const videoRecordersRef = useRef([]);
@@ -123,6 +180,25 @@ export default function CandidateAssessment() {
 
           if (result.data.status === "in-progress") {
             setTimeRemaining(result.data.timeRemaining);
+            // Reattach to an existing proctoring session after reload (browser ends screen share on refresh).
+            try {
+              const pRes = await getSessionByCandidateToken(token);
+              if (pRes.success && pRes.data) {
+                const sess = pRes.data;
+                const resumable =
+                  sess.consent?.granted &&
+                  (sess.status === "active" || sess.status === "paused");
+                if (resumable) {
+                  setProctoringSessionId(sess._id);
+                  setProctoringSubmissionId(String(result.data._id));
+                  setProctoringEnabled(true);
+                  setReshareIsResume(true);
+                  setShowResharePrompt(true);
+                }
+              }
+            } catch (e) {
+              console.warn("Could not check proctoring session:", e);
+            }
           }
           if (result.data.githubLink) {
             setGithubUrl(result.data.githubLink);
@@ -205,6 +281,111 @@ export default function CandidateAssessment() {
     return () => clearInterval(interval);
   }, [timeRemaining]);
 
+  const stopProctoringForTimeout = useCallback(async () => {
+    if (timeoutCleanupRunningRef.current) return;
+    timeoutCleanupRunningRef.current = true;
+    try {
+      if (!proctoringEnabled) return;
+      await flushFrames();
+      if (proctoringSessionId) {
+        await completeProctoringSession(proctoringSessionId, token);
+      }
+      screenCapture.stopCapture();
+      setProctoringEnabled(false);
+    } catch (error) {
+      console.error("Failed to stop proctoring at timeout:", error);
+    } finally {
+      timeoutCleanupRunningRef.current = false;
+    }
+  }, [proctoringEnabled, flushFrames, proctoringSessionId, token, screenCapture]);
+
+  // Timeout handling: buzzer + stop recording + 5-minute final submission grace.
+  useEffect(() => {
+    if (!submission || submission.status !== "in-progress") return;
+    if (hasMissedGracePeriod || isGracePeriodActive) return;
+    if (!assessment?.timeLimit || !submission?.startedAt) return;
+
+    const elapsedSeconds =
+      (Date.now() - new Date(submission.startedAt).getTime()) / 1000;
+    const allowedSeconds = assessment.timeLimit * 60;
+    const overtimeSeconds = Math.max(0, Math.floor(elapsedSeconds - allowedSeconds));
+    const mainTimerExpired = timeRemaining !== null && timeRemaining <= 0;
+    if (!mainTimerExpired && overtimeSeconds <= 0) return;
+
+    if (overtimeSeconds >= FINAL_SUBMISSION_GRACE_SECONDS) {
+      timeoutTriggeredRef.current = true;
+      setIsGracePeriodActive(false);
+      setGraceSecondsRemaining(0);
+      setHasMissedGracePeriod(true);
+      stopProctoringForTimeout();
+      return;
+    }
+
+    if (!timeoutTriggeredRef.current) {
+      timeoutTriggeredRef.current = true;
+      if (!buzzerPlayedRef.current) {
+        buzzerPlayedRef.current = true;
+        playBuzzerSound();
+      }
+      stopProctoringForTimeout();
+    }
+
+    setHasMissedGracePeriod(false);
+    setIsGracePeriodActive(true);
+    setGraceSecondsRemaining(FINAL_SUBMISSION_GRACE_SECONDS - overtimeSeconds);
+  }, [
+    submission,
+    assessment,
+    timeRemaining,
+    isGracePeriodActive,
+    hasMissedGracePeriod,
+    stopProctoringForTimeout,
+  ]);
+
+  useEffect(() => {
+    if (!isGracePeriodActive) return;
+
+    const tick = setInterval(() => {
+      setGraceSecondsRemaining((prev) => {
+        if (prev <= 1) {
+          setIsGracePeriodActive(false);
+          setHasMissedGracePeriod(true);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(tick);
+  }, [isGracePeriodActive]);
+
+  // Auto-submit screen recording once the grace period expires.
+  useEffect(() => {
+    if (!hasMissedGracePeriod || !token) return;
+    if (recordingOnlySubmitTriggeredRef.current) return;
+    recordingOnlySubmitTriggeredRef.current = true;
+
+    const finalizeRecordingOnly = async () => {
+      try {
+        const result = await submitRecordingOnlyAssessment(token);
+        if (result.success) {
+          navigate(`${createPageUrl("CandidateSubmitted")}?token=${token}`);
+          return;
+        }
+        const errorMsg =
+          "error" in result
+            ? result.error
+            : "Failed to finalize timed-out assessment";
+        alert(errorMsg);
+      } catch (error) {
+        console.error("Failed to auto-submit screen recording:", error);
+        alert("Failed to auto-submit screen recording. Please contact support.");
+      }
+    };
+
+    finalizeRecordingOnly();
+  }, [hasMissedGracePeriod, token, navigate]);
+
   // Sidecar event capture: blur/focus/visibilitychange/copy/paste
   useEffect(() => {
     if (!proctoringEnabled || !proctoringSessionId || !token) return;
@@ -250,6 +431,7 @@ export default function CandidateAssessment() {
     if (!proctoringEnabled) return;
 
     screenCapture.onStreamLost(() => {
+      setReshareIsResume(false);
       setShowResharePrompt(true);
       sidecarBufferRef.current.push({
         type: "stream_lost",
@@ -260,6 +442,7 @@ export default function CandidateAssessment() {
 
     screenCapture.onStreamRestored(() => {
       setShowResharePrompt(false);
+      setReshareIsResume(false);
       sidecarBufferRef.current.push({
         type: "stream_restored",
         timestamp: Date.now(),
@@ -324,6 +507,7 @@ export default function CandidateAssessment() {
     const stream = await screenCapture.startCapture();
     if (stream) {
       setShowResharePrompt(false);
+      setReshareIsResume(false);
     }
   };
 
@@ -390,7 +574,7 @@ export default function CandidateAssessment() {
     }
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async ({ allowAfterMainTimer = false } = {}) => {
     if (!githubUrl.trim()) {
       alert("Please enter a GitHub repository URL");
       return;
@@ -398,6 +582,15 @@ export default function CandidateAssessment() {
 
     if (!token) {
       alert("No token provided");
+      return;
+    }
+
+    if (hasMissedGracePeriod) {
+      alert("Submission window has closed. You ran out of time.");
+      return;
+    }
+    if (!allowAfterMainTimer && timeRemaining !== null && timeRemaining <= 0) {
+      alert("Time is up. Please submit from the timeout popup.");
       return;
     }
 
@@ -417,6 +610,13 @@ export default function CandidateAssessment() {
       } else {
         const errorMsg =
           "error" in result ? result.error : "Failed to submit assessment";
+        if (
+          typeof errorMsg === "string" &&
+          errorMsg.toLowerCase().includes("submission window has closed")
+        ) {
+          setIsGracePeriodActive(false);
+          setHasMissedGracePeriod(true);
+        }
         alert(errorMsg);
         setIsSubmitting(false);
       }
@@ -564,6 +764,8 @@ export default function CandidateAssessment() {
             : ""
         }`
       : `${timeLimitMinutes} minute${timeLimitMinutes > 1 ? "s" : ""}`;
+  const shouldGrayOut = isGracePeriodActive || hasMissedGracePeriod;
+  const graceCountdownDisplay = formatHms(graceSecondsRemaining);
 
   if (!hasStarted) {
     return (
@@ -719,7 +921,7 @@ export default function CandidateAssessment() {
 
   // Started state - show submission form
   return (
-    <div className="min-h-screen bg-[#f8f9fb]">
+    <div className="min-h-screen bg-[#f8f9fb] relative">
       {/* Recording Indicator */}
       {proctoringEnabled && screenCapture.isSharing && (
         <RecordingIndicator streamCount={screenCapture.streams.length} />
@@ -729,7 +931,21 @@ export default function CandidateAssessment() {
       {showResharePrompt && (
         <ResharePrompt
           onReshare={handleReshare}
-          onDismiss={() => setShowResharePrompt(false)}
+          onDismiss={() => {
+            setShowResharePrompt(false);
+            setReshareIsResume(false);
+          }}
+          title={reshareIsResume ? "Resume screen sharing" : undefined}
+          subtitle={
+            reshareIsResume
+              ? "Your session is still active — pick your screen again to continue recording."
+              : undefined
+          }
+          body={
+            reshareIsResume
+              ? "After a page refresh the browser stops screen capture. Reshare your monitor to keep recording, or dismiss to continue the assessment without recording."
+              : undefined
+          }
         />
       )}
 
@@ -783,6 +999,10 @@ export default function CandidateAssessment() {
             <h2 className="text-lg font-semibold text-gray-900 mb-4">
               Project Instructions
             </h2>
+            <p className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              You&apos;re encouraged to work in your own development environment and use AI coding
+              tools if you find them helpful.
+            </p>
             <div className="prose prose-sm max-w-none text-gray-700 leading-relaxed">
               <ReactMarkdown
                 components={{
@@ -906,7 +1126,7 @@ export default function CandidateAssessment() {
 
               <div className="flex gap-3">
                 <Button
-                  onClick={handleSubmit}
+                  onClick={() => handleSubmit()}
                   disabled={
                     !githubUrl.trim() ||
                     isSubmitting ||
@@ -920,6 +1140,7 @@ export default function CandidateAssessment() {
                 <Button
                   onClick={() => setShowOptOutModal(true)}
                   variant="outline"
+                  disabled={shouldGrayOut}
                   className="px-4 py-5 border-gray-300 text-gray-700 hover:bg-gray-50"
                 >
                   <X className="w-4 h-4 mr-2" />
@@ -939,13 +1160,75 @@ export default function CandidateAssessment() {
         >
           <h3 className="font-medium text-[#1E3A8A] mb-2">Need Help?</h3>
           <p className="text-sm text-gray-600">
-            If you encounter any technical issues, contact support@bridge.ai
+            If you encounter any technical issues, contact saaz@bridge-jobs.com
           </p>
         </motion.div>
       </div>
 
+      {shouldGrayOut && (
+        <div className="fixed inset-0 bg-gray-700/35 backdrop-grayscale z-40" />
+      )}
+
+      {(isGracePeriodActive || hasMissedGracePeriod) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="w-full max-w-lg rounded-xl bg-white border border-gray-200 shadow-2xl p-6"
+          >
+            {!hasMissedGracePeriod ? (
+              <>
+                <h2 className="text-xl font-semibold text-gray-900 mb-2">
+                  Time is up
+                </h2>
+                <p className="text-sm text-gray-700 mb-4">
+                  Recording has stopped. You have one final 5-minute window to
+                  submit your repository.
+                </p>
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
+                  <p className="text-xs uppercase tracking-wide text-amber-700 mb-1">
+                    Grace Period Remaining
+                  </p>
+                  <p className="text-2xl font-mono font-semibold text-amber-900">
+                    {graceCountdownDisplay}
+                  </p>
+                </div>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    GitHub repository URL *
+                  </label>
+                  <Input
+                    value={githubUrl}
+                    onChange={(e) => setGithubUrl(e.target.value)}
+                    placeholder="https://github.com/username/repository"
+                  />
+                </div>
+                <Button
+                  onClick={() => handleSubmit({ allowAfterMainTimer: true })}
+                  disabled={!githubUrl.trim() || isSubmitting}
+                  className="w-full bg-[#1E3A8A] hover:bg-[#152a66] text-white"
+                >
+                  <Send className="w-4 h-4 mr-2" />
+                  {isSubmitting ? "Submitting..." : "Submit in Final Window"}
+                </Button>
+              </>
+            ) : (
+              <>
+                <h2 className="text-xl font-semibold text-red-700 mb-2">
+                  Time window closed
+                </h2>
+                <p className="text-sm text-gray-700">
+                  You ran out of time, so we are submitting your screen
+                  recording automatically.
+                </p>
+              </>
+            )}
+          </motion.div>
+        </div>
+      )}
+
       {/* Opt Out Modal - Available in both states */}
-      {showOptOutModal && (
+      {showOptOutModal && !shouldGrayOut && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}

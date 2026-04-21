@@ -4,10 +4,16 @@ import { AlertTriangle, Monitor, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 /**
- * Modal shown when screen share stream is lost.
+ * Modal shown when screen share stream is lost or after reload (resume).
  * Prompts user to reshare their screen.
  */
-export default function ResharePrompt({ onReshare, onDismiss }) {
+export default function ResharePrompt({
+  onReshare,
+  onDismiss,
+  title = "Screen Share Lost",
+  subtitle = "Your screen recording has stopped.",
+  body = "It looks like screen sharing was stopped. You can reshare your screen to continue recording, or dismiss this and continue without recording.",
+}) {
   const [isResharing, setIsResharing] = useState(false);
 
   const handleReshare = async () => {
@@ -31,19 +37,12 @@ export default function ResharePrompt({ onReshare, onDismiss }) {
             <AlertTriangle className="w-5 h-5 text-yellow-600" />
           </div>
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">
-              Screen Share Lost
-            </h2>
-            <p className="text-sm text-gray-500">
-              Your screen recording has stopped.
-            </p>
+            <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+            <p className="text-sm text-gray-500">{subtitle}</p>
           </div>
         </div>
 
-        <p className="text-sm text-gray-600 mb-6">
-          It looks like screen sharing was stopped. You can reshare your screen
-          to continue recording, or dismiss this and continue without recording.
-        </p>
+        <p className="text-sm text-gray-600 mb-6">{body}</p>
 
         <div className="flex gap-3">
           <Button

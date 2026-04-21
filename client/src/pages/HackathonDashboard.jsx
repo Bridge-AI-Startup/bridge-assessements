@@ -189,8 +189,9 @@ export default function HackathonDashboard() {
             {CHALLENGE_BRAND_NAME}
           </h1>
           <p className="mt-2 max-w-2xl text-slate-600">
-            Enter your details to get a personal link. Instructions and assessment details appear on
-            the next screen — same as a normal candidate invite, nothing is shown until then.
+            Enter your details to get a personal link. You&apos;re encouraged to code in your own
+            environment and use AI tools if helpful. Instructions and assessment details appear on the
+            next screen — same as a normal candidate invite, nothing is shown until then.
           </p>
         </div>
 

@@ -3,7 +3,10 @@ import { validationResult } from "express-validator";
 import crypto from "crypto";
 import mongoose from "mongoose";
 import path from "path";
+import os from "os";
+import { createReadStream } from "fs";
 import fs from "fs/promises";
+import { pipeline } from "stream/promises";
 import validationErrorParser from "../utils/validationErrorParser.js";
 import ProctoringSessionModel from "../models/proctoringSession.js";
 import SubmissionModel from "../models/submission.js";
@@ -168,6 +171,36 @@ export const completeSession: RequestHandler = async (req, res, next) => {
     session.status = "completed";
     session.stats.captureEndedAt = new Date();
     await session.save();
+
+    res.json(session);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /api/proctoring/sessions/by-candidate-token?token=
+/** Look up an existing proctoring session for this submission token (no create). Used after reload to resume recording. */
+export const getSessionByCandidateToken: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+
+    const token = String(req.query.token).trim();
+
+    const submission = await SubmissionModel.findOne({ token });
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    const session = await ProctoringSessionModel.findOne({
+      submissionId: submission._id,
+    });
+    if (!session) {
+      return res.status(404).json({ error: "No proctoring session" });
+    }
+    if (session.token !== token) {
+      return res.status(403).json({ error: "Invalid token" });
+    }
 
     res.json(session);
   } catch (error) {
@@ -392,41 +425,86 @@ async function resolveSessionVideoChunkKeys(
   return chunks;
 }
 
-/** Load and optionally re-mux session video. Works for in-DB videoChunks or storage-only listKeys (existing and new). */
-async function getSessionVideoBuffer(
+/**
+ * Merge session video chunks to a temp file and optionally remux with ffmpeg.
+ * Streams one chunk at a time into the merge file (no full-recording Buffer in RAM).
+ * Caller must await `cleanup()` after the response stream finishes (see pipeline + finally).
+ */
+async function buildSessionWebmForPlayback(
   sessionId: string,
   session: { videoChunks?: unknown[] } | null,
   storage: { listKeys: (prefix: string) => Promise<string[]>; getVideoChunk: (key: string) => Promise<Buffer> }
-): Promise<{ buffer: Buffer; remuxed: boolean } | null> {
-  dv("[getSessionVideoBuffer] sessionId =", sessionId);
+): Promise<{ filePath: string; cleanup: () => Promise<void>; remuxed: boolean } | null> {
+  dv("[buildSessionWebmForPlayback] sessionId =", sessionId);
   const chunks = await resolveSessionVideoChunkKeys(sessionId, session, storage);
   if (chunks.length === 0) {
-    dv("[getSessionVideoBuffer] no chunks resolved, returning null");
+    dv("[buildSessionWebmForPlayback] no chunks resolved, returning null");
     return null;
   }
-  dv("[getSessionVideoBuffer] loading", chunks.length, "chunks from storage");
-  const buffers: Buffer[] = [];
-  for (let i = 0; i < chunks.length; i++) {
-    const c = chunks[i];
-    try {
-      const buf = await storage.getVideoChunk(c.storageKey);
-      buffers.push(buf);
-      dv("[getSessionVideoBuffer] chunk", i + 1, "/", chunks.length, "key =", c.storageKey, "size =", buf.length);
-    } catch (err) {
-      dv("[getSessionVideoBuffer] FAILED to read chunk", i + 1, "key =", c.storageKey, "error =", (err as Error)?.message ?? err);
-      throw err;
-    }
-  }
-  const merged = Buffer.concat(buffers);
-  dv("[getSessionVideoBuffer] merged size =", merged.length);
+  dv("[buildSessionWebmForPlayback] merging", chunks.length, "chunks to temp file");
 
-  const { remuxWebM } = await import("../services/capture/playbackRemux.js");
-  const remuxed = await remuxWebM(merged);
-  dv("[getSessionVideoBuffer] remuxed =", remuxed != null, "final buffer length =", (remuxed ?? merged).length);
-  return {
-    buffer: remuxed ?? merged,
-    remuxed: remuxed != null,
+  const tmpDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), `proctoring-playback-${sessionId}-`)
+  );
+  const mergedPath = path.join(tmpDir, "merged.webm");
+  const remuxedPath = path.join(tmpDir, "remuxed.webm");
+
+  const cleanup = async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   };
+
+  try {
+    const { appendBuffersSequential } = await import(
+      "../services/capture/videoMerge.js"
+    );
+
+    async function* chunkBuffers(): AsyncGenerator<Buffer> {
+      for (let i = 0; i < chunks.length; i++) {
+        const c = chunks[i];
+        try {
+          const buf = await storage.getVideoChunk(c.storageKey);
+          dv(
+            "[buildSessionWebmForPlayback] chunk",
+            i + 1,
+            "/",
+            chunks.length,
+            "key =",
+            c.storageKey,
+            "size =",
+            buf.length
+          );
+          yield buf;
+        } catch (err) {
+          dv(
+            "[buildSessionWebmForPlayback] FAILED chunk",
+            i + 1,
+            "key =",
+            c.storageKey,
+            "error =",
+            (err as Error)?.message ?? err
+          );
+          throw err;
+        }
+      }
+    }
+
+    await appendBuffersSequential(chunkBuffers(), mergedPath);
+
+    const { remuxWebMFromPaths } = await import(
+      "../services/capture/playbackRemux.js"
+    );
+    const remuxOk = await remuxWebMFromPaths(mergedPath, remuxedPath);
+    dv("[buildSessionWebmForPlayback] remuxOk =", remuxOk);
+
+    return {
+      filePath: remuxOk ? remuxedPath : mergedPath,
+      cleanup,
+      remuxed: remuxOk,
+    };
+  } catch (err) {
+    await cleanup();
+    throw err;
+  }
 }
 
 // GET /api/proctoring/sessions/:sessionId/playback-video
@@ -471,16 +549,22 @@ export const getPlaybackVideo: RequestHandler = async (req, res, next) => {
 
     const { getFrameStorage } = await import("../services/capture/storage.js");
     const storage = getFrameStorage();
-    dv("[getPlaybackVideo] step 5: calling getSessionVideoBuffer");
-    const result = await getSessionVideoBuffer(sessionId, session, storage);
+    dv("[getPlaybackVideo] step 5: calling buildSessionWebmForPlayback");
+    const result = await buildSessionWebmForPlayback(sessionId, session, storage);
     if (!result) {
-      dv("[getPlaybackVideo] step 6: getSessionVideoBuffer returned null, returning 404");
+      dv("[getPlaybackVideo] step 6: buildSessionWebmForPlayback returned null, returning 404");
       return res.status(404).json({ error: "No video chunks found for this session" });
     }
-    dv("[getPlaybackVideo] step 6: sending video buffer length =", result.buffer.length);
-    res.setHeader("Content-Type", "video/webm");
-    res.setHeader("Content-Disposition", "inline");
-    res.send(result.buffer);
+    try {
+      const st = await fs.stat(result.filePath);
+      dv("[getPlaybackVideo] step 6: streaming file bytes =", st.size, "remuxed =", result.remuxed);
+      res.setHeader("Content-Type", "video/webm");
+      res.setHeader("Content-Disposition", "inline");
+      res.setHeader("Content-Length", String(st.size));
+      await pipeline(createReadStream(result.filePath), res);
+    } finally {
+      await result.cleanup();
+    }
   } catch (error) {
     dv("[getPlaybackVideo] CAUGHT ERROR:", (error as Error)?.message ?? error);
     next(error);
@@ -496,15 +580,24 @@ export const downloadSessionVideo: RequestHandler = async (req, res, next) => {
     const storage = getFrameStorage();
 
     const session = await ProctoringSessionModel.findById(sessionId);
-    const result = await getSessionVideoBuffer(sessionId, session, storage);
+    const result = await buildSessionWebmForPlayback(sessionId, session, storage);
 
     if (!result) {
       return res.status(404).json({ error: "No video chunks found for this session" });
     }
 
-    res.setHeader("Content-Type", "video/webm");
-    res.setHeader("Content-Disposition", `attachment; filename="proctoring-${sessionId}.webm"`);
-    res.send(result.buffer);
+    try {
+      const st = await fs.stat(result.filePath);
+      res.setHeader("Content-Type", "video/webm");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="proctoring-${sessionId}.webm"`
+      );
+      res.setHeader("Content-Length", String(st.size));
+      await pipeline(createReadStream(result.filePath), res);
+    } finally {
+      await result.cleanup();
+    }
   } catch (error) {
     next(error);
   }

@@ -1,8 +1,21 @@
-import { body, param } from "express-validator";
+import { body, param, query } from "express-validator";
 
 /**
  * Validators for proctoring operations
  */
+
+export const getSessionByCandidateTokenValidation = [
+  query("token")
+    .exists()
+    .withMessage("token is required")
+    .bail()
+    .isString()
+    .withMessage("token must be a string")
+    .bail()
+    .trim()
+    .notEmpty()
+    .withMessage("token cannot be empty"),
+];
 
 export const createSessionValidation = [
   body("token")
