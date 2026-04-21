@@ -346,7 +346,7 @@ export const PROMPT_GENERATE_INTERVIEW_QUESTIONS_RETRIEVAL = {
       numQuestions === 1 ? "" : "s"
     } based on the provided assessment description and code snippets from the candidate's submission.
 
-These questions will be used in a voice interview powered by ElevenLabs. The AI interviewer will ask each base question and then ask exactly 1-2 follow-up questions maximum per base question to dive deeper, so make sure each base question is substantial enough to support meaningful follow-up discussion.
+These questions will be used in a live voice interview. The interviewer will ask each base question and then ask exactly 1-2 follow-up questions maximum per base question to dive deeper, so make sure each base question is substantial enough to support meaningful follow-up discussion.
 
 Requirements:
 - Generate exactly ${numQuestions} thoughtful, specific question${
@@ -458,7 +458,7 @@ Guidelines:
 };
 
 // ============================================================================
-// INTERVIEW AGENT PROMPT (ElevenLabs)
+// INTERVIEW AGENT PROMPT (voice interview)
 // ============================================================================
 
 export const PROMPT_INTERVIEW_AGENT = {
@@ -467,7 +467,7 @@ export const PROMPT_INTERVIEW_AGENT = {
     questionsList: string,
     customInstructions?: string,
   ) => {
-    const basePrompt = `You are a technical interviewer conducting a live verbal interview powered by ElevenLabs.
+    const basePrompt = `You are a technical interviewer conducting a live verbal interview.
 
 Rules:
 - Ask the questions in order

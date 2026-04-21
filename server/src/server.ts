@@ -101,7 +101,24 @@ const apiLimiter = rateLimit({
   message: {
     error: "Too many requests from this IP, please try again later.",
   },
-  // Skip rate limiting in development for easier testing
+  skip: (req) => {
+    if (process.env.NODE_ENV === "development") return true;
+    // Proctoring uses its own limiter (many frame/video posts per minute).
+    const path = req.originalUrl?.split("?")[0] || "";
+    return path.startsWith("/api/proctoring");
+  },
+});
+
+// Screen capture uploads many small requests (frames, video chunks, events).
+// Use a separate, high ceiling so normal assessments are not blocked by the general API cap.
+const proctoringLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 8000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: "Too many proctoring requests from this IP, please try again later.",
+  },
   skip: (req) => process.env.NODE_ENV === "development",
 });
 
@@ -132,6 +149,7 @@ const webhookLimiter = rateLimit({
 
 console.log("✅ Rate limiting configured");
 console.log("   - General API: 100 requests per 15 minutes");
+console.log("   - Proctoring uploads: 8000 requests per 15 minutes (separate cap)");
 console.log("   - Authentication: 5 requests per 15 minutes");
 console.log("   - Webhooks: 50 requests per 15 minutes");
 console.log("   - Rate limiting disabled in development mode");
@@ -299,12 +317,8 @@ app.use("/api/llm-proxy", llmProxyRoutes);
 console.log("  ✅ /api/llm-proxy routes registered");
 console.log("     - POST /api/llm-proxy/chat");
 
-app.use("/api", apiLimiter);
-app.use("/api", evaluationRoutes);
-console.log("  ✅ Evaluation routes registered");
-console.log("     - POST /api/evaluate");
-console.log("     - POST /api/validate-criterion");
-console.log("     - POST /api/suggest-criteria");
+// Register before `app.use("/api", apiLimiter)` so frame/video traffic does not consume the general 100/15min bucket.
+app.use("/api/proctoring", proctoringLimiter);
 app.use("/api/proctoring", proctoringRoutes);
 console.log("  ✅ /api/proctoring routes registered");
 console.log("     - POST /api/proctoring/sessions");
@@ -315,6 +329,13 @@ console.log("     - POST /api/proctoring/sessions/:sessionId/complete");
 console.log(
   "     - POST /api/proctoring/sessions/:sessionId/generate-transcript",
 );
+
+app.use("/api", apiLimiter);
+app.use("/api", evaluationRoutes);
+console.log("  ✅ Evaluation routes registered");
+console.log("     - POST /api/evaluate");
+console.log("     - POST /api/validate-criterion");
+console.log("     - POST /api/suggest-criteria");
 
 // 404 handler
 app.use((req, res) => {

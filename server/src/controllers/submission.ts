@@ -1655,7 +1655,7 @@ export const generateInterviewQuestions: RequestHandler = async (
 
 /**
  * Get interview agent prompt for a submission (public endpoint - auth disabled for testing)
- * Returns a formatted system prompt string that can be used with ElevenLabs agent
+ * Returns a formatted system prompt string for the voice interview agent
  */
 export const getInterviewAgentPrompt: RequestHandler = async (
   req,

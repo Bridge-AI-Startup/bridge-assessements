@@ -415,7 +415,8 @@ server/src/
 - `POST /elevenlabs` -- ElevenLabs post-call transcript webhook (HMAC signature verified, generates summary)
 
 ### Rate Limiting (production only, disabled in dev)
-- General API: 100 requests / 15 minutes per IP
+- General API: 100 requests / 15 minutes per IP (shared across most `/api/*` routes; proctoring excluded)
+- Proctoring (`/api/proctoring/*`): 8000 requests / 15 minutes per IP (separate limiter; screen capture is high-volume)
 - Auth endpoints (`/api/users/whoami`): 5 requests / 15 minutes per IP
 - Webhooks: 50 requests / 15 minutes per IP
 - Competition join (`POST /api/competitions/:slug/join`): 30 requests / 60 minutes per IP
