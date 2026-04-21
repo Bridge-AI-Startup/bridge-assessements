@@ -42,6 +42,7 @@ import { collectBehavioralArtifactKeys } from "../utils/behavioralEvidenceKeys.j
 
 const TRANSCRIPT_POLL_INTERVAL_MS = 15000;
 const TRANSCRIPT_POLL_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
+const FINAL_SUBMISSION_GRACE_MINUTES = 5;
 const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b]);
 const SUBMISSION_SOURCE_MODE = (
   process.env.SUBMISSION_SOURCE_MODE || "both"
@@ -59,6 +60,27 @@ function isGithubSubmissionEnabled(): boolean {
 
 function isUploadSubmissionEnabled(): boolean {
   return SUBMISSION_SOURCE_MODE === "both" || SUBMISSION_SOURCE_MODE === "upload";
+}
+
+function getSubmissionTimingWindow(
+  submission: any,
+  assessment: any
+): {
+  elapsedMinutes: number | null;
+  isLate: boolean;
+  isBeyondGrace: boolean;
+} {
+  if (!assessment?.timeLimit || !submission?.startedAt) {
+    return { elapsedMinutes: null, isLate: false, isBeyondGrace: false };
+  }
+
+  const elapsedMinutes =
+    (Date.now() - new Date(submission.startedAt).getTime()) / (1000 * 60);
+  const isLate = elapsedMinutes > assessment.timeLimit;
+  const isBeyondGrace =
+    elapsedMinutes > assessment.timeLimit + FINAL_SUBMISSION_GRACE_MINUTES;
+
+  return { elapsedMinutes, isLate, isBeyondGrace };
 }
 
 async function setEvaluationFailed(
@@ -558,14 +580,19 @@ export const submitSubmissionByToken: RequestHandler = async (
 
     // Validate time limit server-side
     const assessment = submission.assessmentId as any;
-    if (assessment && assessment.timeLimit && submission.startedAt) {
-      const elapsedMinutes =
-        (Date.now() - new Date(submission.startedAt).getTime()) / (1000 * 60);
-      if (elapsedMinutes > assessment.timeLimit) {
-        // Time exceeded - mark as expired but still allow submission
+    const timing = getSubmissionTimingWindow(submission, assessment);
+    if (timing.elapsedMinutes !== null) {
+      submission.timeSpent = Math.floor(timing.elapsedMinutes);
+      if (timing.isBeyondGrace) {
+        return res.status(400).json({
+          error:
+            "Submission window has closed. You ran out of time and missed the 5-minute grace period.",
+        });
+      }
+      if (timing.isLate) {
+        // Time exceeded - mark as expired but still allow submission within grace window.
         submission.status = "expired";
       }
-      submission.timeSpent = Math.floor(elapsedMinutes);
     }
 
     // Parse and resolve GitHub repository information
@@ -723,6 +750,105 @@ export const submitSubmissionByToken: RequestHandler = async (
 };
 
 /**
+ * Finalize a timed-out submission by token using screen recording only.
+ * No code repository is required for this path.
+ */
+export const submitRecordingOnlyByToken: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { token } = req.params;
+
+    const submission = await SubmissionModel.findOne({ token }).populate(
+      "assessmentId"
+    );
+
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    if (
+      (submission.status === "submitted" || submission.status === "expired") &&
+      submission.submittedAt
+    ) {
+      const alreadySubmitted = await SubmissionModel.findOne({ token }).populate(
+        "assessmentId",
+        "title description timeLimit"
+      );
+      return res.status(200).json(alreadySubmitted);
+    }
+
+    const assessment = submission.assessmentId as any;
+    const timing = getSubmissionTimingWindow(submission, assessment);
+
+    // This endpoint is only valid after the main assessment timer has elapsed.
+    if (timing.elapsedMinutes !== null) {
+      if (!timing.isLate) {
+        return res.status(400).json({
+          error:
+            "Recording-only submission is only available after the assessment time limit has elapsed.",
+        });
+      }
+      submission.timeSpent = Math.floor(timing.elapsedMinutes);
+    }
+
+    submission.status = "expired";
+    submission.submittedAt = new Date();
+    await submission.save();
+
+    const submissionIdStr = submission._id.toString();
+    const hasEvaluationCriteria =
+      Array.isArray(assessment?.evaluationCriteria) &&
+      assessment.evaluationCriteria.length > 0;
+
+    if (hasEvaluationCriteria) {
+      await SubmissionModel.findByIdAndUpdate(submissionIdStr, {
+        $set: { evaluationStatus: "pending", evaluationError: null },
+      });
+      ensureProctoringTranscriptAndEvaluate(submissionIdStr)
+        .then(async () => {
+          const sub = await SubmissionModel.findById(submissionIdStr);
+          if (!sub) return;
+          (sub as any).evaluationStatus = (sub as any).evaluationReport
+            ? "completed"
+            : "failed";
+          await sub.save();
+        })
+        .catch((err) => {
+          console.error(
+            `[submitRecordingOnlyByToken] ensureProctoringTranscriptAndEvaluate failed for ${submission._id}:`,
+            err
+          );
+          SubmissionModel.findByIdAndUpdate(submissionIdStr, {
+            $set: {
+              evaluationStatus: "failed",
+              evaluationError:
+                err instanceof Error ? err.message : "Evaluation failed.",
+            },
+          }).catch(() => {});
+        });
+    } else {
+      await SubmissionModel.findByIdAndUpdate(submissionIdStr, {
+        $set: {
+          evaluationStatus: "failed",
+          evaluationError: "Assessment has no evaluation criteria configured.",
+        },
+      });
+    }
+
+    const updatedSubmission = await SubmissionModel.findOne({ token }).populate(
+      "assessmentId",
+      "title description timeLimit"
+    );
+    return res.status(200).json(updatedSubmission);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Upload and submit code archive by token (public endpoint)
  */
 export const uploadSubmissionByToken: RequestHandler = async (req, res, next) => {
@@ -760,13 +886,18 @@ export const uploadSubmissionByToken: RequestHandler = async (req, res, next) =>
 
     // Validate time limit server-side (same semantics as GitHub submit endpoint)
     const assessment = submission.assessmentId as any;
-    if (assessment && assessment.timeLimit && submission.startedAt) {
-      const elapsedMinutes =
-        (Date.now() - new Date(submission.startedAt).getTime()) / (1000 * 60);
-      if (elapsedMinutes > assessment.timeLimit) {
+    const timing = getSubmissionTimingWindow(submission, assessment);
+    if (timing.elapsedMinutes !== null) {
+      submission.timeSpent = Math.floor(timing.elapsedMinutes);
+      if (timing.isBeyondGrace) {
+        return res.status(400).json({
+          error:
+            "Submission window has closed. You ran out of time and missed the 5-minute grace period.",
+        });
+      }
+      if (timing.isLate) {
         submission.status = "expired";
       }
-      submission.timeSpent = Math.floor(elapsedMinutes);
     }
 
     const submissionCodeStorage = getSubmissionCodeStorage();
@@ -932,10 +1063,22 @@ export const submitSubmission: RequestHandler = async (req, res, next) => {
 
     // Check if time limit has been exceeded
     const assessment = submission.assessmentId as any;
-    if (assessment && assessment.timeLimit) {
+    const timing = getSubmissionTimingWindow(submission, assessment);
+    if (timing.elapsedMinutes !== null) {
+      submission.timeSpent = Math.floor(timing.elapsedMinutes);
+      if (timing.isBeyondGrace) {
+        return res.status(400).json({
+          error:
+            "Submission window has closed. You ran out of time and missed the 5-minute grace period.",
+        });
+      }
+      if (timing.isLate) {
+        // Still allow submission but mark as expired (within grace window)
+        submission.status = "expired";
+      }
+    } else if (assessment && assessment.timeLimit) {
       const timeElapsed = timeSpent || submission.timeSpent;
       if (timeElapsed > assessment.timeLimit) {
-        // Still allow submission but mark as expired
         submission.status = "expired";
       }
     }
@@ -968,7 +1111,8 @@ export const submitSubmission: RequestHandler = async (req, res, next) => {
     if (timeSpent !== undefined) {
       submission.timeSpent = timeSpent;
     }
-    submission.status = "submitted";
+    submission.status =
+      submission.status === "expired" ? "expired" : "submitted";
     submission.submittedAt = new Date();
 
     await submission.save();

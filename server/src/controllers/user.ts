@@ -291,7 +291,7 @@ export const deleteAccount: RequestHandler = async (req, res, next) => {
 /**
  * PATCH /api/users/hackathon-default-slug
  * Body: { slug: string | null } — null or "" clears; slug must match competition slug format.
- * Only the user whose email matches HACKATHON_ADMIN_EMAIL (default saaz.m@icloud.com).
+ * Only the user whose email matches HACKATHON_ADMIN_EMAIL (default saaz@bridge-jobs.com).
  */
 export const setHackathonDefaultSlug: RequestHandler = async (req, res, next) => {
   const errors = validationResult(req);

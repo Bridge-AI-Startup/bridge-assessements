@@ -1,12 +1,12 @@
 /**
- * Seed demo data for saaz@bridge.com: one assessment, Saaz's submission (full
+ * Seed demo data for saaz@bridge-jobs.com: one assessment, Saaz's submission (full
  * evaluation + interview), and several extra dummy submissions with mixed statuses.
  * For local/demo use.
  *
  * Usage (from server directory):
  *   npx tsx src/scripts/seedDemoSubmission.ts
  *
- * Recommended: sign up as saaz@bridge.com in the app first, then run this script
+ * Recommended: sign up as saaz@bridge-jobs.com in the app first, then run this script
  * so the assessment and submission appear under your account. If the user does
  * not exist, a stub user is created (firebaseUid: demo-saaz-bridge).
  *
@@ -21,7 +21,7 @@ import UserModel from "../models/user.js";
 import AssessmentModel from "../models/assessment.js";
 import SubmissionModel from "../models/submission.js";
 
-const DEMO_EMAIL = "saaz@bridge.com";
+const DEMO_EMAIL = "saaz@bridge-jobs.com";
 const DEMO_FIREBASE_UID = "demo-saaz-bridge";
 
 const DEMO_INTERVIEW_TRANSCRIPT = {

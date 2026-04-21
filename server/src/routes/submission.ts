@@ -141,6 +141,12 @@ router.post(
   SubmissionController.submitSubmissionByToken
 );
 
+// Public endpoint - Finalize timed-out attempt with screen recording only
+router.post(
+  "/token/:token/submit-recording-only",
+  SubmissionController.submitRecordingOnlyByToken
+);
+
 // Public endpoint - Upload local archive and submit by token
 router.post(
   "/token/:token/upload",

@@ -269,6 +269,29 @@ export async function submitAssessment(
 }
 
 /**
+ * Finalize a timed-out assessment with screen recording only.
+ */
+export async function submitRecordingOnlyAssessment(
+  token: string
+): Promise<APIResult<Submission>> {
+  try {
+    const response = await post(`/submissions/token/${token}/submit-recording-only`, {});
+    const result = await response.json();
+
+    if (result && result._id) {
+      return { success: true, data: result as Submission };
+    }
+
+    return {
+      success: false,
+      error: result.error || "Failed to finalize timed-out assessment",
+    };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
  * Upload a local code archive and submit assessment (candidate endpoint)
  */
 export async function uploadAssessmentArchive(
