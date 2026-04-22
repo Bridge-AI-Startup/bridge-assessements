@@ -42,7 +42,13 @@ export default function ResharePrompt({
           </div>
         </div>
 
-        <p className="text-sm text-gray-600 mb-6">{body}</p>
+        <p className="text-sm text-gray-600 mb-4">{body}</p>
+
+        <div className="mb-6 p-3 rounded-lg border border-amber-200 bg-amber-50 text-sm text-amber-950">
+          <strong className="font-semibold">Eligibility:</strong> When the share
+          dialog opens, pick <strong className="font-semibold">Entire Screen</strong>{" "}
+          (full display), not a window or tab only.
+        </div>
 
         <div className="flex gap-3">
           <Button

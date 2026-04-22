@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Monitor, Shield, Eye, CheckCircle, XCircle } from "lucide-react";
+import { Monitor, Shield, Eye, CheckCircle, XCircle, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export default function ConsentScreen({ onConsent, onDecline }) {
@@ -25,6 +25,23 @@ export default function ConsentScreen({ onConsent, onDecline }) {
         </p>
       </div>
 
+      <div
+        className="flex items-start gap-3 p-4 mb-6 rounded-xl border border-amber-200 bg-amber-50 text-left"
+        role="status"
+      >
+        <AlertTriangle className="w-5 h-5 text-amber-700 flex-shrink-0 mt-0.5" />
+        <div className="text-sm text-amber-950">
+          <p className="font-semibold text-amber-950 mb-1">Eligibility</p>
+          <p>
+            In the next step your browser will ask what to share. To remain
+            eligible for official scoring, choose{" "}
+            <strong className="font-semibold">Entire Screen</strong> (your full
+            display). Sharing only a single app window or a browser tab may make
+            your attempt ineligible.
+          </p>
+        </div>
+      </div>
+
       <div className="space-y-3 mb-6">
         <div className="flex items-start gap-3">
           <Eye className="w-5 h-5 text-blue-500 mt-0.5 flex-shrink-0" />
@@ -43,8 +60,8 @@ export default function ConsentScreen({ onConsent, onDecline }) {
         <div className="flex items-start gap-3">
           <Monitor className="w-5 h-5 text-purple-500 mt-0.5 flex-shrink-0" />
           <p className="text-sm text-gray-600">
-            You choose which screen(s) to share. You can stop sharing at any
-            time.
+            You can add more than one display if you use multiple monitors. You
+            can stop sharing at any time.
           </p>
         </div>
       </div>
