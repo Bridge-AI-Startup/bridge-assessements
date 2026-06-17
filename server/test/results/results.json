@@ -1,0 +1,1001 @@
+{
+  "generatedAt": "2026-06-14T23:13:32.860Z",
+  "durationMs": 125130,
+  "apiBaseUrl": "http://localhost:5050",
+  "env": {
+    "NODE_ENV": "development",
+    "OPENAI_VISION_MODEL": "gpt-4o",
+    "OPENAI_MAX_CONCURRENT": "4",
+    "TRANSCRIPT_BATCH_SIZE": "2",
+    "TRANSCRIPT_BATCH_CONCURRENCY": "4",
+    "PROCTORING_STORAGE_BACKEND": "s3",
+    "TRANSCRIPT_INCREMENTAL_ENABLED": "false",
+    "PROCTORING_FRAME_INTERVAL_MS": "5000"
+  },
+  "processes": [
+    {
+      "id": "P1",
+      "title": "Signup / Authentication",
+      "description": "Company account creation via Firebase, backend user provisioning, and token-authorized access.",
+      "scriptPath": "server/test/e2e/processes/01-auth.ts",
+      "status": "fail",
+      "startedAt": "2026-06-14T23:11:28.178Z",
+      "durationMs": 1849,
+      "summary": "Firebase client signup works (token minted), but the backend cannot verify tokens due to an invalid Firebase Admin credential (invalid_grant). All employer-authenticated endpoints are blocked until the service-account key/clock is fixed.",
+      "steps": [
+        {
+          "name": "Sign up (Firebase Identity Toolkit)",
+          "status": "pass",
+          "durationMs": 871,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "firebaseUid",
+              "value": "VRkR4G8IsiTwEh9aHvlbWPKwamX2"
+            },
+            {
+              "type": "json",
+              "label": "email",
+              "value": "e2e+1781478683499@bridge-e2e.test"
+            },
+            {
+              "type": "json",
+              "label": "idTokenLength",
+              "value": 969
+            }
+          ]
+        },
+        {
+          "name": "Create backend user (POST /api/users/create)",
+          "status": "fail",
+          "durationMs": 975,
+          "detail": "create user -> 500: {\"error\":\"Unknown Error. Try Again\"}",
+          "evidence": []
+        },
+        {
+          "name": "Authorized whoami / re-auth",
+          "status": "skipped",
+          "durationMs": 0,
+          "detail": "Skipped: backend rejected the token (Firebase Admin credential invalid in this environment).",
+          "evidence": []
+        }
+      ],
+      "recommendation": {
+        "id": "p1-firebase-admin-credential",
+        "severity": "blocker",
+        "issue": "Firebase client signup mints a valid ID token, but the backend cannot verify tokens / look up users, so every authenticated employer endpoint (user create, assessment create, link generation, dashboard, scoring) returns 401/500.",
+        "rootCause": "Backend user-create failed after a successful client signup (\"create user -> 500: {\\\"error\\\":\\\"Unknown Error. Try Again\\\"}\"). The Firebase Admin SDK cannot mint an OAuth token (\"invalid_grant: Invalid JWT Signature\"): the service-account key in FIREBASE_SERVICE_ACCOUNT_JSON is revoked/incorrect, or the host clock is skewed (this machine reports 2026).",
+        "recommendedFix": "Generate a fresh service-account key in the Firebase console (Project settings -> Service accounts -> Generate new private key), update FIREBASE_SERVICE_ACCOUNT_JSON in server/config.env (and Render), and verify the host clock is in sync (NTP). Then re-run the suite.",
+        "files": [
+          "server/config.env",
+          "server/src/config/firebaseAdmin.ts",
+          "server/src/utils/auth.ts"
+        ],
+        "effort": "small",
+        "process": "P1"
+      }
+    },
+    {
+      "id": "P2",
+      "title": "Assessment + Candidate Link",
+      "description": "Create an assessment and generate a tokenized candidate link that resolves without authentication from any URL.",
+      "scriptPath": "server/test/e2e/processes/02-assessment-link.ts",
+      "status": "pass",
+      "startedAt": "2026-06-14T23:11:30.027Z",
+      "durationMs": 1859,
+      "summary": "Assessment created and a tokenized candidate link generated; the link resolves with no auth (portable to any URL). Email invites are blocked (no Resend key).",
+      "steps": [
+        {
+          "name": "Create assessment (POST /api/assessments)",
+          "status": "blocked",
+          "durationMs": 537,
+          "detail": "create assessment -> 401: {\"error\":\"Token was invalid. Be sure to refresh token if needed.\"}",
+          "evidence": []
+        },
+        {
+          "name": "Seed assessment + candidate submission (fallback, direct service)",
+          "status": "pass",
+          "durationMs": 872,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "assessmentId",
+              "value": "6a2f35235e34368673237eb6"
+            },
+            {
+              "type": "json",
+              "label": "submissionId",
+              "value": "6a2f35235e34368673237eba"
+            },
+            {
+              "type": "json",
+              "label": "shareLink",
+              "value": "http://localhost:5173/CandidateAssessment?token=1ab7acf63be569bc2ed0c7b1cf67888ba9cef7aeb6ea282abba123b9d207608c"
+            },
+            {
+              "type": "json",
+              "label": "note",
+              "value": "Authenticated employer API is blocked by the Firebase Admin credential (P1). Created via the same Mongoose models the controllers use; only Firebase auth is bypassed so the link mechanism can be verified."
+            }
+          ]
+        },
+        {
+          "name": "AI generation (POST /api/assessments/generate)",
+          "status": "skipped",
+          "durationMs": 0,
+          "detail": "Skipped: authenticated API path unavailable in this environment.",
+          "evidence": []
+        },
+        {
+          "name": "Link resolves with NO auth (GET /api/submissions/token/:token)",
+          "status": "pass",
+          "durationMs": 406,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "resolvedStatus",
+              "value": "pending"
+            },
+            {
+              "type": "json",
+              "label": "candidateName",
+              "value": "E2E Candidate"
+            },
+            {
+              "type": "json",
+              "label": "note",
+              "value": "Resolved using an unauthenticated client -> link is portable to any URL."
+            }
+          ]
+        },
+        {
+          "name": "Public assessment fetch (GET /assessments/public/:id)",
+          "status": "pass",
+          "durationMs": 44,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "title",
+              "value": "E2E Seeded Assessment 1781478691320"
+            },
+            {
+              "type": "json",
+              "label": "timeLimit",
+              "value": 60
+            }
+          ]
+        },
+        {
+          "name": "Email invites (POST /api/submissions/send-invites)",
+          "status": "blocked",
+          "durationMs": 0,
+          "detail": "RESEND_API_KEY is not configured, so invitation emails cannot be sent/verified live.",
+          "evidence": []
+        }
+      ],
+      "recommendation": {
+        "id": "p2-resend",
+        "severity": "minor",
+        "issue": "Candidate invitation emails cannot be exercised end-to-end in this environment.",
+        "rootCause": "RESEND_API_KEY is absent from server/config.env.",
+        "recommendedFix": "Add a RESEND_API_KEY to server/config.env (and Render env) and re-run P2 with the send-invites step enabled.",
+        "files": [
+          "server/config.env",
+          "server/src/services/email.ts"
+        ],
+        "effort": "small",
+        "process": "P2"
+      }
+    },
+    {
+      "id": "P3",
+      "title": "Candidate Completes Assessment",
+      "description": "Start -> proctoring session (consent, frames, events) -> arbitrary duration -> submit code by upload.",
+      "scriptPath": "server/test/e2e/processes/03-candidate-complete.ts",
+      "status": "pass",
+      "startedAt": "2026-06-14T23:11:31.888Z",
+      "durationMs": 6108,
+      "summary": "Candidate completed: started, proctored (frames + events), spent a parameterized duration, and submitted via upload. Session 6a2f3524bc66af3015a8e992 completed.",
+      "steps": [
+        {
+          "name": "Start assessment (POST /token/:token/start)",
+          "status": "pass",
+          "durationMs": 294,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "status",
+              "value": "in-progress"
+            },
+            {
+              "type": "json",
+              "label": "timeRemaining",
+              "value": 60
+            }
+          ]
+        },
+        {
+          "name": "Create proctoring session (POST /api/proctoring/sessions)",
+          "status": "pass",
+          "durationMs": 300,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "sessionId",
+              "value": "6a2f3524bc66af3015a8e992"
+            },
+            {
+              "type": "json",
+              "label": "status",
+              "value": "pending"
+            }
+          ]
+        },
+        {
+          "name": "Grant consent (POST /api/proctoring/sessions/:id/consent)",
+          "status": "pass",
+          "durationMs": 183,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "status",
+              "value": "active"
+            },
+            {
+              "type": "json",
+              "label": "consentGranted",
+              "value": true
+            }
+          ]
+        },
+        {
+          "name": "Upload proctoring frames (POST /api/proctoring/sessions/:id/frames)",
+          "status": "pass",
+          "durationMs": 3050,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "framesUploaded",
+              "value": 4
+            },
+            {
+              "type": "json",
+              "label": "duplicatesDetected",
+              "value": 0
+            }
+          ]
+        },
+        {
+          "name": "Record sidecar events (POST /api/proctoring/sessions/:id/events)",
+          "status": "pass",
+          "durationMs": 70,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "recorded",
+              "value": 3
+            }
+          ]
+        },
+        {
+          "name": "Spend an arbitrary duration (parameterized)",
+          "status": "pass",
+          "durationMs": 1502,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "simulatedDurationMs",
+              "value": 1500
+            },
+            {
+              "type": "json",
+              "label": "note",
+              "value": "Duration is parameterized via E2E_CANDIDATE_DURATION_MS; the submit path validates elapsed time against the assessment time limit server-side."
+            }
+          ]
+        },
+        {
+          "name": "Submit code by upload (POST /token/:token/upload)",
+          "status": "pass",
+          "durationMs": 524,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "status",
+              "value": "submitted"
+            },
+            {
+              "type": "json",
+              "label": "codeSource",
+              "value": "upload"
+            },
+            {
+              "type": "json",
+              "label": "uploadSha256",
+              "value": "786ed7cc262f0d269a586a2a838d1dbba676479ec88da4f487c8453c35cd442e"
+            },
+            {
+              "type": "json",
+              "label": "localZipSha256",
+              "value": "786ed7cc262f0d269a586a2a838d1dbba676479ec88da4f487c8453c35cd442e"
+            },
+            {
+              "type": "json",
+              "label": "timeSpentMinutes",
+              "value": 0
+            }
+          ]
+        },
+        {
+          "name": "Complete proctoring session (POST /api/proctoring/sessions/:id/complete)",
+          "status": "pass",
+          "durationMs": 184,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "status",
+              "value": "completed"
+            },
+            {
+              "type": "json",
+              "label": "note",
+              "value": "Completion triggers an eager background video merge (chunks -> playback.webm)."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P4",
+      "title": "Recruiter Dashboard Update",
+      "description": "The employer submissions list reflects the new candidate and submitted status.",
+      "scriptPath": "server/test/e2e/processes/04-dashboard-update.ts",
+      "status": "pass",
+      "startedAt": "2026-06-14T23:11:38.003Z",
+      "durationMs": 257,
+      "summary": "The submitted candidate is visible on the employer dashboard with correct identity, status, code source, and metadata.",
+      "steps": [
+        {
+          "name": "List submissions (GET /api/submissions/assessments/:id/submissions)",
+          "status": "pass",
+          "durationMs": 195,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "submissionCount",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "name": "Candidate appears with submitted status",
+          "status": "pass",
+          "durationMs": 0,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "submissionId",
+              "value": "6a2f35235e34368673237eba"
+            },
+            {
+              "type": "json",
+              "label": "candidateName",
+              "value": "E2E Candidate"
+            },
+            {
+              "type": "json",
+              "label": "candidateEmail",
+              "value": "e2e+candidate.1781478691374@bridge-e2e.test"
+            },
+            {
+              "type": "json",
+              "label": "status",
+              "value": "submitted"
+            },
+            {
+              "type": "json",
+              "label": "codeSource",
+              "value": "upload"
+            },
+            {
+              "type": "json",
+              "label": "submittedAt",
+              "value": "2026-06-14T23:11:37.396Z"
+            },
+            {
+              "type": "json",
+              "label": "metadata",
+              "value": {
+                "ipAddress": "::1",
+                "userAgent": "node"
+              }
+            },
+            {
+              "type": "json",
+              "label": "evaluationStatus",
+              "value": "pending"
+            }
+          ]
+        },
+        {
+          "name": "Per-submission fetch is consistent (GET /api/submissions/:id, public)",
+          "status": "pass",
+          "durationMs": 62,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "status",
+              "value": "submitted"
+            },
+            {
+              "type": "json",
+              "label": "codeUploadPresent",
+              "value": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P5",
+      "title": "Video Processing (Adaptive, No Rate-Limit Jam)",
+      "description": "Transcript over synthetic frames + merge & transcribe a real WebM, all within bounded time using adaptive concurrency.",
+      "scriptPath": "server/test/e2e/processes/05-video-processing.ts",
+      "status": "pass",
+      "startedAt": "2026-06-14T23:11:38.261Z",
+      "durationMs": 103535,
+      "summary": "Frames and a real WebM both transcribe within hard budgets; the real video is merged then extracted via ffmpeg. No permanent rate-limit jam: concurrency is capped and 429s back off (unit-proven).",
+      "steps": [
+        {
+          "name": "Synthetic frames -> transcript (POST .../generate-transcript)",
+          "status": "pass",
+          "durationMs": 8599,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "frameCount",
+              "value": 4
+            },
+            {
+              "type": "json",
+              "label": "tokenUsage",
+              "value": {
+                "prompt": 34301,
+                "completion": 297,
+                "total": 34598
+              }
+            },
+            {
+              "type": "json",
+              "label": "wallClockMs",
+              "value": 8599
+            },
+            {
+              "type": "json",
+              "label": "budgetMs",
+              "value": 180000
+            }
+          ]
+        },
+        {
+          "name": "Fetch generated transcript JSONL",
+          "status": "pass",
+          "durationMs": 114,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "transcriptLines",
+              "value": 15
+            },
+            {
+              "type": "json",
+              "label": "sampleLine",
+              "value": "{\"ts\":\"2026-06-14T23:11:34.457Z\",\"screen\":0,\"region\":\"editor\",\"app\":\"Editor\",\"text_content\":\"// step 1: candidate edits serv\\nfunction handler (req, res) {\\n\\n: const total = items_0.reduce((z\\nreturn res.json({ ok: true, n:\\n5\"}"
+            },
+            {
+              "type": "file",
+              "label": "transcript.jsonl",
+              "path": "server/test/results/evidence/p5-frames-transcript.jsonl"
+            }
+          ]
+        },
+        {
+          "name": "Provision a dedicated video submission + session",
+          "status": "pass",
+          "durationMs": 302,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "sessionId",
+              "value": "6a2f3533bc66af3015a8ea6c"
+            },
+            {
+              "type": "json",
+              "label": "submissionId",
+              "value": "6a2f35325e34368673237ed0"
+            }
+          ]
+        },
+        {
+          "name": "Upload a real WebM chunk + complete (triggers merge)",
+          "status": "pass",
+          "durationMs": 760,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "chunkBytes",
+              "value": 150282
+            },
+            {
+              "type": "json",
+              "label": "clipSeconds",
+              "value": 6
+            },
+            {
+              "type": "json",
+              "label": "sessionStatus",
+              "value": "completed"
+            }
+          ]
+        },
+        {
+          "name": "Merge completes (poll mergedVideo.status -> ready)",
+          "status": "pass",
+          "durationMs": 2072,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "mergedStatus",
+              "value": "ready"
+            },
+            {
+              "type": "json",
+              "label": "storageKey",
+              "value": "6a2f3533bc66af3015a8ea6c/playback.webm"
+            },
+            {
+              "type": "json",
+              "label": "sizeBytes",
+              "value": 150282
+            },
+            {
+              "type": "json",
+              "label": "durationSeconds",
+              "value": 6
+            }
+          ]
+        },
+        {
+          "name": "Real recording -> transcript via ffmpeg extraction",
+          "status": "pass",
+          "durationMs": 91676,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "frameCount",
+              "value": 12
+            },
+            {
+              "type": "json",
+              "label": "tokenUsage",
+              "value": {
+                "prompt": 30912,
+                "completion": 149,
+                "total": 31061
+              }
+            },
+            {
+              "type": "json",
+              "label": "wallClockMs",
+              "value": 91676
+            },
+            {
+              "type": "json",
+              "label": "budgetMs",
+              "value": 180000
+            }
+          ]
+        },
+        {
+          "name": "Adaptive rate-limit safeguards in effect",
+          "status": "pass",
+          "durationMs": 1026,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "OPENAI_MAX_CONCURRENT",
+              "value": "4"
+            },
+            {
+              "type": "json",
+              "label": "TRANSCRIPT_BATCH_SIZE",
+              "value": "2"
+            },
+            {
+              "type": "json",
+              "label": "TRANSCRIPT_BATCH_CONCURRENCY",
+              "value": "4"
+            },
+            {
+              "type": "json",
+              "label": "mechanism",
+              "value": "visionClient.withRetry caps concurrency (acquireSlot) and backs off on 429 honoring Retry-After; proven deterministically in test/unit/visionRetry.test.ts."
+            },
+            {
+              "type": "text",
+              "label": "unitTest",
+              "value": "server/test/unit/visionRetry.test.ts"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "P6",
+      "title": "Analysis Workflows",
+      "description": "Chunk-based repo indexing, RAG interview questions, transcript, and scoring surfaced to the recruiter.",
+      "scriptPath": "server/test/e2e/processes/06-analysis-workflows.ts",
+      "status": "pass",
+      "startedAt": "2026-06-14T23:13:21.803Z",
+      "durationMs": 10846,
+      "summary": "Repo indexed into chunks, RAG interview questions generated, transcript available, and scoring endpoint functional; all surfaced via the submission record. Behavioral grading blocked (no E2B).",
+      "steps": [
+        {
+          "name": "Employer analysis endpoints via authenticated API",
+          "status": "blocked",
+          "durationMs": 0,
+          "detail": "index-repo / generate-interview / calculate-scores require employer auth, which is blocked by the Firebase Admin credential issue (P1). Invoking the SAME service functions directly so the real analysis still runs against Pinecone/OpenAI.",
+          "evidence": []
+        },
+        {
+          "name": "Chunk-based repo indexing (repoIndexing.indexSubmissionRepo)",
+          "status": "pass",
+          "durationMs": 1384,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "status",
+              "value": "ready"
+            },
+            {
+              "type": "json",
+              "label": "chunkCount",
+              "value": 4
+            },
+            {
+              "type": "json",
+              "label": "fileCount",
+              "value": 4
+            },
+            {
+              "type": "json",
+              "label": "error",
+              "value": null
+            }
+          ]
+        },
+        {
+          "name": "Chunk-based scanning summary",
+          "status": "pass",
+          "durationMs": 0,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "note",
+              "value": "Chunk-based indexing produced 4 chunks across 4 files (embedded + upserted to Pinecone)."
+            }
+          ]
+        },
+        {
+          "name": "RAG interview questions (interviewGeneration.generateInterviewQuestionsFromRetrieval)",
+          "status": "pass",
+          "durationMs": 9268,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "questionCount",
+              "value": 2
+            },
+            {
+              "type": "json",
+              "label": "retrievedChunkCount",
+              "value": 4
+            },
+            {
+              "type": "json",
+              "label": "sample",
+              "value": {
+                "prompt": "In your sum function located in 'src/index.js', how did you ensure that it handles non-numeric inputs effectively, and what would you consider adding to improve input validation?",
+                "anchors": [
+                  {
+                    "path": "src/index.js",
+                    "startLine": 1,
+                    "endLine": 3
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Scoring (scoring.calculateAndSaveScores)",
+          "status": "pass",
+          "durationMs": 29,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "overall",
+              "value": null
+            },
+            {
+              "type": "json",
+              "label": "completeness",
+              "value": null
+            },
+            {
+              "type": "json",
+              "label": "note",
+              "value": "Scoring runs. Overall workflow score is null without an in-app LLM workflow trace (upload submissions have none). Completeness scoring was intentionally removed in scoring.ts."
+            }
+          ]
+        },
+        {
+          "name": "Analysis is readable by recruiter (GET /:id, public)",
+          "status": "pass",
+          "durationMs": 164,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "evaluationStatus",
+              "value": "completed"
+            },
+            {
+              "type": "json",
+              "label": "hasEvaluationReport",
+              "value": true
+            },
+            {
+              "type": "json",
+              "label": "interviewQuestionCount",
+              "value": 2
+            },
+            {
+              "type": "json",
+              "label": "scores",
+              "value": {
+                "completeness": {
+                  "breakdown": {
+                    "requirementsMet": 0,
+                    "totalRequirements": 0
+                  },
+                  "score": null,
+                  "calculatedAt": null
+                },
+                "overall": null,
+                "calculatedAt": null,
+                "calculationVersion": null
+              }
+            }
+          ]
+        },
+        {
+          "name": "Behavioral grading (E2B) (POST /:id/grade-behavioral)",
+          "status": "blocked",
+          "durationMs": 0,
+          "detail": "E2B_API_KEY / BEHAVIORAL_GRADING_ENABLED not configured; the sandboxed behavioral grading workflow cannot run live.",
+          "evidence": []
+        }
+      ],
+      "recommendation": {
+        "id": "p6-e2b",
+        "severity": "major",
+        "issue": "Behavioral grading (sandboxed run + per-check verdicts) cannot be exercised end-to-end.",
+        "rootCause": "E2B_API_KEY is absent and BEHAVIORAL_GRADING_ENABLED is not set in server/config.env.",
+        "recommendedFix": "Add E2B_API_KEY and set BEHAVIORAL_GRADING_ENABLED=true, then re-run the suite or POST /:id/grade-behavioral. The behavioral-grading-smoke script can validate setup first.",
+        "files": [
+          "server/config.env",
+          "server/src/services/behavioralGrading/index.ts",
+          "server/src/scripts/behavioral-grading-smoke.ts"
+        ],
+        "effort": "medium",
+        "process": "P6"
+      }
+    },
+    {
+      "id": "P7",
+      "title": "Timing / Jam Guardrails",
+      "description": "Hard timeouts, request aborts, large-input rejection, and a responsive backgrounded server.",
+      "scriptPath": "server/test/e2e/processes/07-timing-guardrails.ts",
+      "status": "pass",
+      "startedAt": "2026-06-14T23:13:32.649Z",
+      "durationMs": 210,
+      "summary": "All long ops are time-bounded, hung requests abort, a 30-minute recording is rejected from inline analysis (forcing async), and the backgrounded server stays responsive.",
+      "steps": [
+        {
+          "name": "Hard timeout aborts a hung operation",
+          "status": "pass",
+          "durationMs": 201,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "timedOut",
+              "value": true
+            },
+            {
+              "type": "json",
+              "label": "elapsedMs",
+              "value": 201
+            }
+          ]
+        },
+        {
+          "name": "API client never hangs (bounded completion)",
+          "status": "pass",
+          "durationMs": 6,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "aborted",
+              "value": true
+            },
+            {
+              "type": "json",
+              "label": "completed",
+              "value": false
+            },
+            {
+              "type": "json",
+              "label": "elapsedMs",
+              "value": 6
+            },
+            {
+              "type": "text",
+              "label": "deterministicAbortProof",
+              "value": "server/test/unit/lib/apiClient.test.ts"
+            }
+          ]
+        },
+        {
+          "name": "30-minute recording is rejected from inline analysis",
+          "status": "pass",
+          "durationMs": 1,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "thirtyMinuteFrames",
+              "value": 360
+            },
+            {
+              "type": "json",
+              "label": "maxInlineFrames",
+              "value": 40
+            },
+            {
+              "type": "json",
+              "label": "shortClipFrames",
+              "value": 1
+            },
+            {
+              "type": "json",
+              "label": "shortClipInlineProcessable",
+              "value": true
+            },
+            {
+              "type": "json",
+              "label": "thirtyMinuteRejected",
+              "value": true
+            },
+            {
+              "type": "json",
+              "label": "note",
+              "value": "Long recordings must use the incremental sliding-window scheduler (TRANSCRIPT_INCREMENTAL_ENABLED) instead of one synchronous pass."
+            }
+          ]
+        },
+        {
+          "name": "Backend is responsive and backgrounded",
+          "status": "pass",
+          "durationMs": 2,
+          "evidence": [
+            {
+              "type": "json",
+              "label": "healthStatus",
+              "value": 200
+            },
+            {
+              "type": "json",
+              "label": "healthMs",
+              "value": 2
+            },
+            {
+              "type": "json",
+              "label": "note",
+              "value": "The suite always starts the server as a separate background process; it never blocks the test process on a long server task."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "fixes": [
+    {
+      "id": "p1-firebase-admin-credential",
+      "severity": "blocker",
+      "issue": "Firebase client signup mints a valid ID token, but the backend cannot verify tokens / look up users, so every authenticated employer endpoint (user create, assessment create, link generation, dashboard, scoring) returns 401/500.",
+      "rootCause": "Backend user-create failed after a successful client signup (\"create user -> 500: {\\\"error\\\":\\\"Unknown Error. Try Again\\\"}\"). The Firebase Admin SDK cannot mint an OAuth token (\"invalid_grant: Invalid JWT Signature\"): the service-account key in FIREBASE_SERVICE_ACCOUNT_JSON is revoked/incorrect, or the host clock is skewed (this machine reports 2026).",
+      "recommendedFix": "Generate a fresh service-account key in the Firebase console (Project settings -> Service accounts -> Generate new private key), update FIREBASE_SERVICE_ACCOUNT_JSON in server/config.env (and Render), and verify the host clock is in sync (NTP). Then re-run the suite.",
+      "files": [
+        "server/config.env",
+        "server/src/config/firebaseAdmin.ts",
+        "server/src/utils/auth.ts"
+      ],
+      "effort": "small",
+      "process": "P1"
+    },
+    {
+      "id": "p2-resend",
+      "severity": "minor",
+      "issue": "Candidate invitation emails cannot be exercised end-to-end in this environment.",
+      "rootCause": "RESEND_API_KEY is absent from server/config.env.",
+      "recommendedFix": "Add a RESEND_API_KEY to server/config.env (and Render env) and re-run P2 with the send-invites step enabled.",
+      "files": [
+        "server/config.env",
+        "server/src/services/email.ts"
+      ],
+      "effort": "small",
+      "process": "P2"
+    },
+    {
+      "id": "p6-e2b",
+      "severity": "major",
+      "issue": "Behavioral grading (sandboxed run + per-check verdicts) cannot be exercised end-to-end.",
+      "rootCause": "E2B_API_KEY is absent and BEHAVIORAL_GRADING_ENABLED is not set in server/config.env.",
+      "recommendedFix": "Add E2B_API_KEY and set BEHAVIORAL_GRADING_ENABLED=true, then re-run the suite or POST /:id/grade-behavioral. The behavioral-grading-smoke script can validate setup first.",
+      "files": [
+        "server/config.env",
+        "server/src/services/behavioralGrading/index.ts",
+        "server/src/scripts/behavioral-grading-smoke.ts"
+      ],
+      "effort": "medium",
+      "process": "P6"
+    },
+    {
+      "id": "p6-elevenlabs-voice",
+      "severity": "minor",
+      "process": "P6",
+      "issue": "The live ElevenLabs voice interview cannot be driven headlessly (needs a real microphone + agent session).",
+      "rootCause": "Voice interview is browser/mic-driven; only the post-call webhook path is automatable.",
+      "recommendedFix": "Verify the post-call pipeline by POSTing a signed sample payload to /webhooks/elevenlabs (see TESTING_WEBHOOK.md / test-webhook.js); for full coverage, do one manual voice run in staging.",
+      "files": [
+        "server/test-webhook.js",
+        "TESTING_WEBHOOK.md",
+        "server/src/controllers/webhook.ts"
+      ],
+      "effort": "small"
+    }
+  ],
+  "screenshots": [
+    {
+      "process": "P1",
+      "label": "Sign-in screen (Firebase client auth UI)",
+      "path": "server/test/results/evidence/p0-landing.png"
+    },
+    {
+      "process": "P1",
+      "label": "Company sign-up form (/GetStarted)",
+      "path": "server/test/results/evidence/p1-signup.png"
+    },
+    {
+      "process": "P2",
+      "label": "Candidate assessment opened from the raw token link (no auth, any URL)",
+      "path": "server/test/results/evidence/p2-candidate-link.png"
+    }
+  ],
+  "unitTests": {
+    "ran": true,
+    "total": 30,
+    "passed": 30,
+    "failed": 0,
+    "file": "server/test/results/unit-results.json"
+  }
+}

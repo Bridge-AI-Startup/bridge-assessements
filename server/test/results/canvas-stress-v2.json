@@ -1,0 +1,311 @@
+{
+  "generatedAt": "2026-06-17T03:20:12.917Z",
+  "pipelineVersion": "v2-time-aware",
+  "baseline": {
+    "strongMatched": 6,
+    "strongTotal": 12,
+    "strongAccuracy": 0.5,
+    "pipelineVersion": "v1-raw-ocr"
+  },
+  "v2": {
+    "strongMatched": 12,
+    "strongTotal": 12,
+    "strongAccuracy": 1,
+    "pipelineVersion": "v2-time-aware"
+  },
+  "login": {
+    "url": "https://www.bridge-jobs.com/",
+    "email": "demo@bridgeai-demo.com",
+    "password": "BridgeDemo2026!"
+  },
+  "assessmentId": "6a30cb825c1e8969b7c21110",
+  "assessmentTitle": "Resilient Webhook Dispatcher — Live Coding Sessions (30+ min stress set)",
+  "accuracy": {
+    "strongMatched": 12,
+    "strongTotal": 12,
+    "strongAccuracy": 1,
+    "note": "Accuracy is over the 'strong' (unambiguous) ground-truth assertions per clip. 'mid'/soft assertions are reported but not scored."
+  },
+  "totals": {
+    "framesProcessed": 4652,
+    "durationMinutes": 129,
+    "visionJam": false,
+    "tokenRecallAll": 1
+  },
+  "candidates": [
+    {
+      "variant": "steady",
+      "label": "Steady writer",
+      "durationLabel": "31:00",
+      "frames": 1031,
+      "overall10": 8.8,
+      "tokenRecall": 1,
+      "strongMatched": 3,
+      "strongTotal": 3,
+      "refineMs": null,
+      "evalEventCount": null,
+      "temporalInsightCount": null,
+      "intent": "Module-by-module webhook dispatcher; pytest/ruff each pass; moderate AI + browser docs.",
+      "summary": "During the session, the candidate worked on implementing a webhook delivery service, focusing on concurrency and error handling. They began by reviewing the problem requirements and researching Python's asyncio synchronization primitives to understand how to implement concurrency effectively. Throughout the session, they made incremental code edits, frequently testing their implementation and refining it based on the output. The candidate engaged with AI tools for assistance on specific aspects, such as implementing exponential backoff and ensuring idempotency in their delivery logic. They demonstrated a methodical approach by iteratively validating their changes through testing, confirming successful delivery multiple times, and continuously refining their code based on feedback and research. The session concluded with the candidate finalizing their implementation, ensuring it met the specified requirements for reliability and performance.",
+      "checks": [
+        {
+          "label": "Builds incrementally",
+          "intended": "builds models/ratelimiter/backoff/dispatcher/api/tests module by module, typed across the clip",
+          "expected": "high",
+          "strong": true,
+          "score": 9,
+          "band": "high",
+          "match": true,
+          "verdict": "At 44–61s, the candidate continued to work on the rate-limiting implementation, making incremental edits to the code while occasionally glancing at the AI chat for assistance."
+        },
+        {
+          "label": "Tests own work",
+          "intended": "runs `pytest -q` (passes) and `ruff check .` each pass",
+          "expected": "high",
+          "strong": true,
+          "score": 9,
+          "band": "high",
+          "match": true,
+          "verdict": "From 61–73s, the candidate executed tests in the terminal and monitored the output, indicating an iterative process of testing and refining their implementation."
+        },
+        {
+          "label": "Relied on AI",
+          "intended": "moderate AI: occasional chat + some inline completions / Cmd-K edits accepted",
+          "expected": "mid",
+          "strong": false,
+          "score": 9,
+          "band": "high",
+          "match": false,
+          "verdict": "At 44–61s, the candidate continued to work on the rate-limiting implementation, making incremental edits to the code while occasionally glancing at the AI chat for assistance."
+        },
+        {
+          "label": "Web research",
+          "intended": "reads the task page, then asyncio docs / StackOverflow / AWS backoff blog in the browser",
+          "expected": "high",
+          "strong": true,
+          "score": 8,
+          "band": "high",
+          "match": true,
+          "verdict": "At 315–319s, the candidate switched to the browser to research timeout strategies, indicating a proactive approach to understanding best practices for handling timeouts in their im"
+        }
+      ]
+    },
+    {
+      "variant": "bursty",
+      "label": "Bursty typist",
+      "durationLabel": "32:30",
+      "frames": 1571,
+      "overall10": 8.5,
+      "tokenRecall": 1,
+      "strongMatched": 3,
+      "strongTotal": 3,
+      "refineMs": null,
+      "evalEventCount": null,
+      "temporalInsightCount": null,
+      "intent": "Fast typed bursts across files; pytest each pass; light inline AI; long doc-reading.",
+      "summary": "During the session, the candidate worked on implementing a webhook dispatcher service, focusing on various aspects such as error handling, rate limiting, and delivery logic. They began by reviewing the problem requirements and then proceeded to write code for an asynchronous HTTP client, incorporating features like token acquisition for rate limiting. Throughout the session, the candidate engaged with an AI tool multiple times, seeking assistance and integrating suggestions into their code, which indicated a collaborative approach to problem-solving. They also conducted extensive testing using pytest, refining their implementation based on test results, and actively researched best practices for error handling and backoff strategies. Key moments included debugging cycles where they addressed test failures and iteratively improved their code, demonstrating a methodical approach to ensuring robustness in their service. The session concluded with the candidate finalizing their implementation and confirming that all tests passed successfully.",
+      "checks": [
+        {
+          "label": "Builds incrementally",
+          "intended": "fast bursts but still typed line-by-line across files (no wholesale paste)",
+          "expected": "high",
+          "strong": true,
+          "score": 8,
+          "band": "high",
+          "match": true,
+          "verdict": "At 119–119s, the candidate ran tests using pytest, indicating they are validating their implementation and checking for correctness."
+        },
+        {
+          "label": "Tests own work",
+          "intended": "runs pytest each pass (pass/fail surfaced)",
+          "expected": "high",
+          "strong": true,
+          "score": 9,
+          "band": "high",
+          "match": true,
+          "verdict": "At 119–119s, the candidate ran tests using pytest, indicating they are validating their implementation and checking for correctness."
+        },
+        {
+          "label": "Relied on AI",
+          "intended": "light AI: a few inline completions / Cmd-K edits, no chat panel",
+          "expected": "mid",
+          "strong": false,
+          "score": 8,
+          "band": "high",
+          "match": false,
+          "verdict": "[ai usage] From 291–455s, candidate engaged with the AI chat tool multiple times, seeking assistance and integrating suggestions into their code, indicating sustained use of AI ass"
+        },
+        {
+          "label": "Web research",
+          "intended": "long documentation/StackOverflow/blog reading sessions in the browser",
+          "expected": "high",
+          "strong": true,
+          "score": 9,
+          "band": "high",
+          "match": true,
+          "verdict": "From 125–223s, the candidate engaged in a sustained research session in the browser, looking into thread-safe token bucket implementations to enhance their solution."
+        }
+      ]
+    },
+    {
+      "variant": "ai_heavy",
+      "label": "AI-assisted",
+      "durationLabel": "31:30",
+      "frames": 614,
+      "overall10": 8.5,
+      "tokenRecall": 1,
+      "strongMatched": 2,
+      "strongTotal": 2,
+      "refineMs": null,
+      "evalEventCount": null,
+      "temporalInsightCount": null,
+      "intent": "Heavy AI chat + inline completions + Cmd-K; browses docs every cycle.",
+      "summary": "During the session, the candidate worked on implementing a thread-safe token-bucket rate limiter in Python. They began by reviewing the assessment instructions and exploring the project structure in VS Code before diving into the problem statement. The candidate engaged extensively with an AI assistant, seeking guidance on various implementation details, particularly around concurrency and error handling. Throughout the coding process, they iteratively refined their logic for token acquisition, backoff strategies, and managing delivery attempts, while also conducting research on relevant topics such as asyncio semaphores and idempotency. The candidate demonstrated a methodical approach, frequently testing their implementation to ensure correctness and robustness, and they maintained a focus on integrating AI suggestions into their code. As the session progressed, they finalized their implementation, reflecting a thorough understanding of the requirements and attention to detail.",
+      "checks": [
+        {
+          "label": "Builds incrementally",
+          "intended": "accepts large AI-suggested blocks + Cmd-K diffs (semi-incremental)",
+          "expected": "mid",
+          "strong": false,
+          "score": 8,
+          "band": "high",
+          "match": false,
+          "verdict": "From 576–600s, the candidate ran tests twice, achieving a 100% pass rate both times, indicating confidence in their implementation's correctness."
+        },
+        {
+          "label": "Tests own work",
+          "intended": "runs pytest only on some passes",
+          "expected": "mid",
+          "strong": false,
+          "score": 9,
+          "band": "high",
+          "match": false,
+          "verdict": "At 576s, the candidate runs tests for their implementation, achieving a 100% pass rate, which indicates confidence in their code's correctness."
+        },
+        {
+          "label": "Relied on AI",
+          "intended": "heavy reliance: repeated AI chat prompts + many inline completions + Cmd-K inline edits",
+          "expected": "high",
+          "strong": true,
+          "score": 9,
+          "band": "high",
+          "match": true,
+          "verdict": "From 162–198s, the candidate engaged in a sustained interaction with the AI assistant, reviewing and integrating its suggestions into their coding approach, indicating a thorough e"
+        },
+        {
+          "label": "Web research",
+          "intended": "browses docs/SO/blog every cycle alongside the AI chat",
+          "expected": "high",
+          "strong": true,
+          "score": 8,
+          "band": "high",
+          "match": true,
+          "verdict": "At 258s, candidate switched to a browser to review documentation on asyncio semaphores, indicating a brief research session to support their implementation."
+        }
+      ]
+    },
+    {
+      "variant": "debug",
+      "label": "Debug / test loop",
+      "durationLabel": "33:30",
+      "frames": 1436,
+      "overall10": 8.5,
+      "tokenRecall": 1,
+      "strongMatched": 4,
+      "strongTotal": 4,
+      "refineMs": null,
+      "evalEventCount": null,
+      "temporalInsightCount": null,
+      "intent": "edit -> pytest fail -> traceback -> fix -> green; Cmd-K backoff fix; google traceback.",
+      "summary": "During the session, the candidate worked on implementing a \"Resilient Webhook Dispatcher,\" focusing on the logic for handling webhooks, rate limiting, and backoff strategies. They began by thoroughly reading the problem statement and requirements before diving into coding, demonstrating a methodical approach to their implementation. Throughout the session, the candidate engaged in a cycle of coding, testing, and refining their code, particularly addressing issues related to error handling and ensuring robustness in their logic. They frequently utilized AI assistance to clarify concepts such as exponential backoff with jitter and to troubleshoot specific implementation challenges. The candidate also conducted extensive research to resolve testing failures, indicating a proactive approach to debugging. Overall, they maintained a steady pace in refining their code and validating its functionality through repeated testing.",
+      "checks": [
+        {
+          "label": "Builds incrementally",
+          "intended": "iteratively edits and fixes across files (not pasted)",
+          "expected": "high",
+          "strong": true,
+          "score": 8,
+          "band": "high",
+          "match": true,
+          "verdict": "At 37–39s, the candidate refined their implementation of the rate limiter, indicating a cycle of coding and refining based on their understanding of the requirements."
+        },
+        {
+          "label": "Tests own work",
+          "intended": "edit -> pytest fail -> read traceback -> fix -> re-run green, plus git diff --stat",
+          "expected": "high",
+          "strong": true,
+          "score": 9,
+          "band": "high",
+          "match": true,
+          "verdict": "From 288–303s, the candidate demonstrated a debug loop by refining their implementation, running tests, and addressing issues based on test results, indicating a methodical approac"
+        },
+        {
+          "label": "Relied on AI",
+          "intended": "uses Cmd-K to apply the backoff fix + AI chat + inline completions",
+          "expected": "high",
+          "strong": true,
+          "score": 8,
+          "band": "high",
+          "match": true,
+          "verdict": "AI CHAT — Assistant"
+        },
+        {
+          "label": "Web research",
+          "intended": "googles the failing-test traceback in the browser",
+          "expected": "high",
+          "strong": true,
+          "score": 9,
+          "band": "high",
+          "match": true,
+          "verdict": "The candidate accessed documentation at docs.python.org and StackOverflow."
+        }
+      ]
+    }
+  ],
+  "deployment": {
+    "submissionsVisible": 4,
+    "submissionsWithScores": 4,
+    "submissionsStatus": 200
+  },
+  "scriptPath": "server/test/video-eval/seedStressDemo.ts",
+  "fixes": [
+    {
+      "id": "eval-truncation",
+      "status": "fixed",
+      "issue": "Criterion JSON truncated at maxTokens=2048 on long transcripts.",
+      "fix": "Raised maxTokens to 4096 + structured-output retry.",
+      "files": [
+        "server/src/services/evaluation/evaluator.ts"
+      ]
+    },
+    {
+      "id": "long-transcript-overflow",
+      "status": "fixed",
+      "issue": "Full 30-min transcript exceeded 128k context window.",
+      "fix": "compactTranscriptForPrompt() downsamples while preserving high-signal events.",
+      "files": [
+        "server/src/services/evaluation/compactTranscript.ts"
+      ]
+    },
+    {
+      "id": "time-aware-refinement",
+      "status": "fixed",
+      "issue": "C1/C2 failed on raw OCR — no temporal progression (incremental build, test cycles).",
+      "fix": "v2 pipeline: timestamp-aware stateful interpretation + temporal insights + hybrid eval transcript.",
+      "files": [
+        "server/src/services/evaluation/transcriptRefinement.ts",
+        "server/src/services/evaluation/timeAwareInsights.ts",
+        "server/src/services/evaluation/enrichedEvaluationAdapter.ts"
+      ]
+    },
+    {
+      "id": "batch-extraction-blowup",
+      "status": "fixed",
+      "issue": "0.5s interval on 30-min clips → 3,780 frames; transcription timed out.",
+      "fix": "PROCTORING_CANDIDATE_INTERVAL_SEC env override (3s for stress seeding).",
+      "files": [
+        "server/src/services/capture/videoFrameExtractor.ts"
+      ]
+    }
+  ]
+}

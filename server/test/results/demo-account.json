@@ -1,0 +1,226 @@
+{
+  "generatedAt": "2026-06-15T22:02:03.655Z",
+  "login": {
+    "url": "https://www.bridge-jobs.com/",
+    "email": "demo@bridgeai-demo.com",
+    "password": "BridgeDemo2026!",
+    "note": "Sign in on the deployed site, then open the assessment to view submissions."
+  },
+  "firebaseUid": "U5RTTuxzt9PtIyZoqDmttdqlMg13",
+  "userId": "6a30759984c34d799cfd9370",
+  "assessmentId": "6a30759984c34d799cfd9373",
+  "assessmentTitle": "Prime Numbers Kata — Take-Home",
+  "candidates": [
+    {
+      "name": "Dana Okafor",
+      "profile": "Diligent test-driven",
+      "variant": "diligent",
+      "submissionId": "6a30759b84c34d799cfd9379",
+      "sessionId": "6a30759b84c34d799cfd937b",
+      "overallScore10": 9,
+      "overallScore100": 90,
+      "frames": 20,
+      "transcriptSegments": 39,
+      "transcriptMs": 49925,
+      "evalMs": 11879,
+      "perCriterion": [
+        {
+          "criterion": "The candidate builds their solution incrementally, writing a",
+          "score": 9,
+          "band": "high",
+          "evaluable": true
+        },
+        {
+          "criterion": "The candidate tests their own code by writing and running te",
+          "score": 9,
+          "band": "high",
+          "evaluable": true
+        },
+        {
+          "criterion": "The candidate relied on an AI coding assistant (e.g. Cursor,",
+          "score": 0,
+          "band": "low",
+          "evaluable": false
+        }
+      ]
+    },
+    {
+      "name": "Sam Rivera",
+      "profile": "Solid incremental",
+      "variant": "strong",
+      "submissionId": "6a3075dc84c34d799cfd939c",
+      "sessionId": "6a3075dc84c34d799cfd939e",
+      "overallScore10": 8.5,
+      "overallScore100": 85,
+      "frames": 19,
+      "transcriptSegments": 39,
+      "transcriptMs": 30666,
+      "evalMs": 17691,
+      "perCriterion": [
+        {
+          "criterion": "The candidate builds their solution incrementally, writing a",
+          "score": 9,
+          "band": "high",
+          "evaluable": true
+        },
+        {
+          "criterion": "The candidate tests their own code by writing and running te",
+          "score": 8,
+          "band": "high",
+          "evaluable": true
+        },
+        {
+          "criterion": "The candidate relied on an AI coding assistant (e.g. Cursor,",
+          "score": 0,
+          "band": "low",
+          "evaluable": false
+        }
+      ]
+    },
+    {
+      "name": "Alex Chen",
+      "profile": "AI-assisted",
+      "variant": "ai_assisted",
+      "submissionId": "6a30760f84c34d799cfd93bf",
+      "sessionId": "6a30760f84c34d799cfd93c1",
+      "overallScore10": 5.5,
+      "overallScore100": 55,
+      "frames": 17,
+      "transcriptSegments": 35,
+      "transcriptMs": 33653,
+      "evalMs": 12550,
+      "perCriterion": [
+        {
+          "criterion": "The candidate builds their solution incrementally, writing a",
+          "score": 6,
+          "band": "high",
+          "evaluable": true
+        },
+        {
+          "criterion": "The candidate tests their own code by writing and running te",
+          "score": 5,
+          "band": "mid",
+          "evaluable": true
+        },
+        {
+          "criterion": "The candidate relied on an AI coding assistant (e.g. Cursor,",
+          "score": 0,
+          "band": "low",
+          "evaluable": false
+        }
+      ]
+    },
+    {
+      "name": "Jordan Blake",
+      "profile": "Rushed paste",
+      "variant": "rushed",
+      "submissionId": "6a30763e84c34d799cfd93e0",
+      "sessionId": "6a30763e84c34d799cfd93e2",
+      "overallScore10": 3,
+      "overallScore100": 30,
+      "frames": 17,
+      "transcriptSegments": 11,
+      "transcriptMs": 17690,
+      "evalMs": 10868,
+      "perCriterion": [
+        {
+          "criterion": "The candidate builds their solution incrementally, writing a",
+          "score": 5,
+          "band": "mid",
+          "evaluable": true
+        },
+        {
+          "criterion": "The candidate tests their own code by writing and running te",
+          "score": 1,
+          "band": "low",
+          "evaluable": true
+        },
+        {
+          "criterion": "The candidate relied on an AI coding assistant (e.g. Cursor,",
+          "score": 0,
+          "band": "low",
+          "evaluable": false
+        }
+      ]
+    }
+  ],
+  "deploymentVerification": {
+    "signInOk": true,
+    "api": "https://bridge-assessements-1.onrender.com",
+    "whoamiStatus": 200,
+    "whoami": {
+      "subscription": {
+        "tier": "paid",
+        "subscriptionStatus": "active",
+        "currentPeriodEnd": "2027-06-15T21:58:49.673Z",
+        "stripeCustomerId": null,
+        "stripeSubscriptionId": null
+      },
+      "_id": "6a30759984c34d799cfd9370",
+      "firebaseUid": "U5RTTuxzt9PtIyZoqDmttdqlMg13",
+      "companyName": "BridgeAI Demo",
+      "email": "demo@bridgeai-demo.com",
+      "companyLogoUrl": null,
+      "stripeCustomerId": null,
+      "stripeSubscriptionId": null,
+      "subscriptionStatus": "active",
+      "currentPeriodEnd": "2027-06-15T21:58:49.673Z",
+      "cancelAtPeriodEnd": false,
+      "cancellationReason": null,
+      "cancellationDate": null,
+      "hackathonDefaultSlug": null,
+      "createdAt": "2026-06-15T21:58:49.678Z",
+      "updatedAt": "2026-06-15T21:58:49.678Z",
+      "__v": 0,
+      "hackathonAdmin": false,
+      "subscriptionInfo": {
+        "tier": "paid",
+        "subscriptionStatus": "active",
+        "isSubscribed": true,
+        "assessmentCount": 0,
+        "assessmentLimit": null,
+        "submissionCount": 0,
+        "submissionLimit": null,
+        "canCreateAssessment": true,
+        "canCreateSubmission": true
+      }
+    },
+    "submissionsStatus": 200,
+    "submissionsVisible": 4,
+    "submissionsWithScores": 4
+  },
+  "videoPlaybackOnDeployment": [
+    {
+      "name": "Dana Okafor",
+      "sessionId": "6a30759b84c34d799cfd937b",
+      "uploadStatus": "skip",
+      "completeStatus": "skip",
+      "playbackStatus": 200,
+      "playbackBytes": 139705
+    },
+    {
+      "name": "Sam Rivera",
+      "sessionId": "6a3075dc84c34d799cfd939e",
+      "uploadStatus": 200,
+      "completeStatus": 200,
+      "playbackStatus": 200,
+      "playbackBytes": 115672
+    },
+    {
+      "name": "Alex Chen",
+      "sessionId": "6a30760f84c34d799cfd93c1",
+      "uploadStatus": 200,
+      "completeStatus": 200,
+      "playbackStatus": 200,
+      "playbackBytes": 48726
+    },
+    {
+      "name": "Jordan Blake",
+      "sessionId": "6a30763e84c34d799cfd93e2",
+      "uploadStatus": 200,
+      "completeStatus": 200,
+      "playbackStatus": 200,
+      "playbackBytes": 27527
+    }
+  ]
+}

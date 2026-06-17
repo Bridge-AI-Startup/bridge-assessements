@@ -1,0 +1,119 @@
+{
+  "generatedAt": "2026-06-16T17:36:44.504Z",
+  "login": {
+    "url": "https://www.bridge-jobs.com/",
+    "email": "demo@bridgeai-demo.com",
+    "password": "BridgeDemo2026!"
+  },
+  "userId": "6a30759984c34d799cfd9370",
+  "assessmentId": "6a30cb825c1e8969b7c21110",
+  "assessmentTitle": "Resilient Webhook Dispatcher — Live Coding Sessions (30+ min stress set)",
+  "accuracy": {
+    "strongMatched": 2,
+    "strongTotal": 2,
+    "strongAccuracy": 1,
+    "note": "Accuracy is over the 'strong' (unambiguous) ground-truth assertions per clip. 'mid'/soft assertions are reported but not scored."
+  },
+  "candidates": [
+    {
+      "variant": "ai_heavy",
+      "label": "AI-assisted",
+      "submissionId": "6a3182c62356559b0503d333",
+      "sessionId": "6a3182c62356559b0503d335",
+      "durationSeconds": 1890,
+      "frames": 614,
+      "transcriptSegments": 1763,
+      "transcriptMs": 1690951,
+      "evalMs": 71914,
+      "overallScore10": 4.5,
+      "overallScore100": 45,
+      "transcriptQuality": {
+        "tokenRecall": 1,
+        "foundTokens": [
+          "TokenBucket",
+          "backoff_delay",
+          "try_acquire",
+          "Dispatcher",
+          "Webhook",
+          "pytest",
+          "async",
+          "jitter",
+          "Semaphore",
+          "httpx"
+        ],
+        "missingTokens": [],
+        "nonEmptySegments": 1763
+      },
+      "summary": "During the session, the candidate worked on implementing a thread-safe token-bucket rate limiter in Python. They began by exploring the problem requirements and utilized an AI tool to gather information on how to approach the implementation, repeatedly prompting for guidance on specific technical details. The candidate focused on minimizing contention by keeping the critical section small and using a monotonic timestamp for token management. They also discussed strategies for handling concurrent requests and implementing exponential backoff for retries. Throughout the session, they demonstrated a methodical approach, iterating on their ideas and refining their understanding of the problem through AI interactions.",
+      "checks": [
+        {
+          "criterion": "The candidate builds their solution incrementally, writing and refinin",
+          "expectedBand": "mid",
+          "strong": false,
+          "intendedBehavior": "accepts large AI-suggested blocks + Cmd-K diffs (semi-incremental)",
+          "actualScore": 1,
+          "actualBand": "low",
+          "evaluable": true,
+          "confidence": "low",
+          "verdict": "The transcript contains no evidence of the candidate incrementally building their solution. There are no indications of saving changes to different files, making iterative changes, or discussing their thought process. Instead, the candidate appears to be pasting large blocks of code without explanation, which is contrary to the expected behavior for this criterion.",
+          "evidenceSnippet": "The transcript contains no evidence of the candidate incrementally building their solution. There are no indications of saving changes to different files, making iterative changes,",
+          "match": false
+        },
+        {
+          "criterion": "The candidate verifies their own work by running tests or linters in t",
+          "expectedBand": "mid",
+          "strong": false,
+          "intendedBehavior": "runs pytest only on some passes",
+          "actualScore": 1,
+          "actualBand": "low",
+          "evaluable": true,
+          "confidence": "low",
+          "verdict": "There is no evidence in the transcript that the candidate ran any tests or linters, nor did they react to any output from such tools. The absence of any relevant actions or discussions regarding testing or linting indicates a clear lack of engagement with this critical aspect of the coding process.",
+          "evidenceSnippet": "There is no evidence in the transcript that the candidate ran any tests or linters, nor did they react to any output from such tools. The absence of any relevant actions or discuss",
+          "match": false
+        },
+        {
+          "criterion": "The candidate relied on an AI coding assistant — AI chat, inline code ",
+          "expectedBand": "high",
+          "strong": true,
+          "intendedBehavior": "heavy reliance: repeated AI chat prompts + many inline completions + Cmd-K inline edits",
+          "actualScore": 8,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "high",
+          "verdict": "The candidate demonstrated a strong reliance on the AI coding assistant, sending multiple prompts and receiving detailed responses that were incorporated into their coding process. This consistent interaction indicates effective use of AI assistance throughout the task.",
+          "evidenceSnippet": "ant\no way to implement",
+          "match": true
+        },
+        {
+          "criterion": "The candidate opens a web browser and navigates to external pages — fo",
+          "expectedBand": "high",
+          "strong": true,
+          "intendedBehavior": "browses docs/SO/blog every cycle alongside the AI chat",
+          "actualScore": 8,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "high",
+          "verdict": "The candidate demonstrated strong proactive research skills by accessing multiple external resources, including official documentation and StackOverflow. They opened relevant pages that pertain to their coding task, indicating a good level of engagement with external resources.",
+          "evidenceSnippet": "The candidate accessed 'docs.python.org' and 'stackoverflow'.",
+          "match": true
+        }
+      ],
+      "strongMatched": 2,
+      "strongTotal": 2
+    }
+  ],
+  "deploymentVerification": {
+    "api": "https://bridge-assessements-1.onrender.com",
+    "submissionsStatus": 200,
+    "submissionsVisible": 4,
+    "submissionsWithScores": 4
+  },
+  "videoPlaybackOnDeployment": [
+    {
+      "variant": "ai_heavy",
+      "sessionId": "6a3182c62356559b0503d335",
+      "status": 404
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{"ts":"2026-06-14T23:11:34.457Z","screen":0,"region":"editor","app":"Editor","text_content":"// step 1: candidate edits serv\nfunction handler (req, res) {\n\n: const total = items_0.reduce((z\nreturn res.json({ ok: true, n:\n5"}
+{"ts":"2026-06-14T23:11:34.457Z","ts_end":"2026-06-14T23:11:34.457Z","screen":0,"region":"file_tree","app":"VS Code","text_content":"EXPLORER\nsrc/\n    server.ts\n    utils_0.t"}
+{"ts":"2026-06-14T23:11:34.457Z","screen":0,"region":"terminal","app":"Terminal","text_content":"$ npm test # run 1\nPASS 1 of 4 suites"}
+{"ts":"2026-06-14T23:11:35.457Z","screen":0,"region":"editor","app":"Editor","text_content":"// step 2: candidate edits serv\nfunction handler_1(req, res) {\n\n: const total = items_1.reduce((z\nreturn res.json({ ok: true, n:\n5"}
+{"ts":"2026-06-14T23:11:35.457Z","ts_end":"2026-06-14T23:11:35.457Z","screen":0,"region":"file_tree","app":"VS Code","text_content":"EXPLORER\nsrc/\n    server.ts\n    utils_1.t"}
+{"ts":"2026-06-14T23:11:35.457Z","screen":0,"region":"terminal","app":"Terminal","text_content":"$ npm test # run 2\nPASS 2 of 4 suites"}
+{"ts":"2026-06-14T23:11:36.216Z","description":"[EVENT] Candidate left the assessment window","event_type":"window_blur"}
+{"ts":"2026-06-14T23:11:36.457Z","screen":0,"region":"editor","app":"Editor","text_content":"// step 3: candidate edits serv\nfunction handler_2(req, res) {\n\n: const total = items_2.reduce((z\nreturn res.json({ ok: true, n:\n5"}
+{"ts":"2026-06-14T23:11:36.457Z","ts_end":"2026-06-14T23:11:36.457Z","screen":0,"region":"file_tree","app":"VS Code","text_content":"EXPLORER\nsrc/\n    server.ts\n    utils_2.t"}
+{"ts":"2026-06-14T23:11:36.457Z","screen":0,"region":"terminal","app":"Terminal","text_content":"$ npm test # run 3\nPASS 3 of 4 suites"}
+{"ts":"2026-06-14T23:11:36.516Z","description":"[EVENT] Clipboard paste detected","event_type":"clipboard_paste"}
+{"ts":"2026-06-14T23:11:36.916Z","description":"[EVENT] Candidate returned to the assessment window","event_type":"window_focus"}
+{"ts":"2026-06-14T23:11:37.457Z","screen":0,"region":"editor","app":"Editor","text_content":"// step 4: candidate edits serv\nfunction handler_3(req, res) {\n\n: const total = items_3.reduce((z\nreturn res.json({ ok: true, n:\n5"}
+{"ts":"2026-06-14T23:11:37.457Z","ts_end":"2026-06-14T23:11:37.457Z","screen":0,"region":"file_tree","app":"VS Code","text_content":"EXPLORER\nsrc/\n    server.ts\n    utils_3.t"}
+{"ts":"2026-06-14T23:11:37.457Z","screen":0,"region":"terminal","app":"Terminal","text_content":"$ npm test # run 4\nPASS 4 of 4 suites"}
