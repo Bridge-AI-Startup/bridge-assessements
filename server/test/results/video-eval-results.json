@@ -1,0 +1,181 @@
+{
+  "generatedAt": "2026-06-14T23:39:34.587Z",
+  "apiBaseUrl": "(direct service calls — no HTTP)",
+  "env": {
+    "NODE_ENV": "development",
+    "OPENAI_VISION_MODEL": "gpt-4o",
+    "OPENAI_MAX_CONCURRENT": "4",
+    "TRANSCRIPT_BATCH_SIZE": "2",
+    "TRANSCRIPT_BATCH_CONCURRENCY": "4",
+    "PROCTORING_STORAGE_BACKEND": "s3"
+  },
+  "status": "pass",
+  "error": null,
+  "steps": [
+    {
+      "name": "Generate coding screencast",
+      "status": "pass",
+      "durationSeconds": 241,
+      "stateCount": 33,
+      "sizeBytes": 117596,
+      "sha256": "7747ff4ef1a7e66b17d6077e3b700c49046eb1dfc61056f6d6acbc0d55e96b4c",
+      "fixtureMs": 2530
+    },
+    {
+      "name": "Seed session + store video chunk",
+      "status": "pass",
+      "sessionId": "6a2f3bb9db7b7755b8cd480d",
+      "submissionId": "6a2f3bb9db7b7755b8cd480b",
+      "chunkKey": "6a2f3bb9db7b7755b8cd480d/video/chunk-0.webm"
+    },
+    {
+      "name": "Transcript generation",
+      "status": "pass",
+      "framesExtracted": 27,
+      "transcriptSegments": 55,
+      "tokenUsage": {
+        "prompt": 277673,
+        "completion": 1218,
+        "total": 278891
+      },
+      "transcriptMs": 35398,
+      "storageKey": "6a2f3bb9db7b7755b8cd480d/transcript.jsonl"
+    },
+    {
+      "name": "Transcript quality",
+      "status": "pass",
+      "tokenRecall": 1,
+      "foundTokens": [
+        "is_prime",
+        "primes_up_to",
+        "pytest",
+        "passed",
+        "def",
+        "return"
+      ],
+      "missingTokens": [],
+      "nonEmptyRatio": 1
+    },
+    {
+      "name": "Score comparison vs expected",
+      "status": "pass",
+      "matched": 3,
+      "total": 3,
+      "accuracy": 1,
+      "overallScore": 8.5
+    }
+  ],
+  "video": {
+    "durationSeconds": 241,
+    "stateCount": 33,
+    "sizeBytes": 117596,
+    "sha256": "7747ff4ef1a7e66b17d6077e3b700c49046eb1dfc61056f6d6acbc0d55e96b4c",
+    "width": 1280,
+    "height": 720,
+    "evidence": "server/test/results/evidence/video-eval-coding-session.webm",
+    "sampleFrame": "server/test/results/evidence/video-eval-sample-frame.png"
+  },
+  "pipeline": {
+    "eventCount": 55,
+    "transcriptSegments": 55,
+    "framesExtracted": 27,
+    "tokenUsage": {
+      "prompt": 277673,
+      "completion": 1218,
+      "total": 278891
+    },
+    "transcriptStorageKey": "6a2f3bb9db7b7755b8cd480d/transcript.jsonl"
+  },
+  "timings": {
+    "fixtureMs": 2530,
+    "transcriptMs": 35398,
+    "evalMs": 26949,
+    "totalMs": 65957
+  },
+  "quality": {
+    "totalSegments": 55,
+    "nonEmptySegments": 55,
+    "nonEmptyRatio": 1,
+    "totalChars": 5109,
+    "expectedTokens": [
+      "is_prime",
+      "primes_up_to",
+      "pytest",
+      "passed",
+      "def",
+      "return"
+    ],
+    "foundTokens": [
+      "is_prime",
+      "primes_up_to",
+      "pytest",
+      "passed",
+      "def",
+      "return"
+    ],
+    "missingTokens": [],
+    "tokenRecall": 1
+  },
+  "evaluation": {
+    "overallScore": 8.5,
+    "sessionSummary": "During the session, the candidate worked on implementing a function to determine prime numbers in a Python script. They began by reading the problem requirements and then proceeded to code the `is_prime` function, gradually building its logic to handle various cases, including edge cases for numbers less than 2. After completing the function, they wrote a second function, `primes_up_to`, to generate a list of prime numbers up to a specified limit. The candidate then created unit tests using pytest to validate the functionality of both the `is_prime` and `primes_up_to` functions. They encountered a bug when a test for `is_prime(1)` failed, which prompted them to revise the logic to ensure that 1 was correctly identified as not prime. After fixing the issue, they successfully ran the tests, confirming that all assertions passed.",
+    "comparison": {
+      "comparisons": [
+        {
+          "criterion": "The candidate builds their solution incrementally, writing and refining code step by step rather than pasting a finished solution.",
+          "expected": "high",
+          "rationale": "The screencast shows code being typed line by line across many frames (is_prime, then primes_up_to, then tests).",
+          "actualScore": 9,
+          "actualBand": "high",
+          "confidence": "high",
+          "evaluable": true,
+          "verdict": "The candidate consistently demonstrated an incremental approach to coding by progressively developing the 'is_prime' and 'primes_up_to' functions, refining their code based on test results, and articulating their thought process throughout the session.",
+          "match": true
+        },
+        {
+          "criterion": "The candidate tests their own code by writing and running tests in a terminal.",
+          "expected": "high",
+          "rationale": "The terminal runs pytest, surfaces a failing test, the candidate fixes the bug, and re-runs to green.",
+          "actualScore": 8,
+          "actualBand": "high",
+          "confidence": "high",
+          "evaluable": true,
+          "verdict": "The candidate demonstrated strong evidence of testing their code by writing multiple test functions, executing them, and modifying their code based on test results. They clearly engaged in the testing process, which supports a high score.",
+          "match": true
+        },
+        {
+          "criterion": "The candidate relied on an AI coding assistant (e.g. Cursor, Copilot, ChatGPT) to generate the solution.",
+          "expected": "low",
+          "rationale": "There is no AI chat panel or assistant interaction anywhere in the recording.",
+          "actualScore": 0,
+          "actualBand": "low",
+          "confidence": "low",
+          "evaluable": false,
+          "verdict": "The criterion cannot be assessed because it does not specify observable behavior. A screen recording may show the candidate using an AI coding assistant, but it won't clearly indicate whether they relied on it for generating the solution. To reformulate, the criterion could be: 'Uses an AI coding assistant to generate code snippets during the assessment,' which can be observed by showing the candidate interacting with the AI tool.",
+          "match": true
+        }
+      ],
+      "matched": 3,
+      "total": 3,
+      "accuracy": 1,
+      "pass": true
+    }
+  },
+  "rateLimit": {
+    "hitPermanentJam": false,
+    "note": "Transcript completed in 35.4s within the 480s budget. Bounded concurrency (OPENAI_MAX_CONCURRENT=4) + Retry-After backoff (visionClient.withRetry) prevent permanent jams; proven in test/unit/visionRetry.test.ts."
+  },
+  "evidence": {
+    "transcript": "server/test/results/evidence/video-eval-transcript.jsonl",
+    "sampleFrame": "server/test/results/evidence/video-eval-sample-frame.png",
+    "video": "server/test/results/evidence/video-eval-coding-session.webm"
+  },
+  "cleanup": {
+    "users": 1,
+    "assessments": 1,
+    "submissions": 1,
+    "proctoringSessions": 1,
+    "repoIndexes": 0,
+    "firebaseDeleted": 0
+  }
+}

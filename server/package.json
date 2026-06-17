@@ -10,8 +10,16 @@
     "dev": "nodemon --env-file=config.env --exec tsx src/server.ts",
     "e2b-smoke": "tsx src/scripts/e2b-smoke.ts",
     "behavioral-grading-smoke": "tsx src/scripts/behavioral-grading-smoke.ts",
+    "backfill:proctoring-video": "tsx src/scripts/backfillMergedProctoringVideos.ts",
     "playwright:install": "playwright install chromium",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run test/unit",
+    "e2e": "tsx test/e2e/runAll.ts",
+    "test:video-eval": "tsx test/video-eval/runVideoEvaluation.ts",
+    "gen:stress-videos": "tsx test/video-eval/generateStressVideos.ts",
+    "seed:stress-demo": "tsx --env-file=config.env test/video-eval/seedStressDemo.ts",
+    "seed:demo-account": "tsx --env-file=config.env test/video-eval/seedDemoAccount.ts",
     "postinstall": "npx playwright install chromium"
   },
   "keywords": [],
@@ -55,6 +63,7 @@
     "@types/multer": "^2.0.0",
     "@types/sharp": "^0.31.1",
     "nodemon": "^3.1.0",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "vitest": "^2.1.9"
   }
 }

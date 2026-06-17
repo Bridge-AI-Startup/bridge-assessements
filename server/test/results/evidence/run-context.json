@@ -1,0 +1,15 @@
+{
+  "apiBaseUrl": "http://localhost:5050",
+  "recruiter": {
+    "email": "e2e+1781478384743@bridge-e2e.test",
+    "password": "Pw!1781478385182aA1",
+    "companyName": "E2E Co 2026-06-14T23:06:25.182Z"
+  },
+  "assessmentId": "6a2f33f26cc236a00b0f934f",
+  "candidate": {
+    "token": "f769606c8b880cadf211bf30ad78a71dbd20725d0c44f1feaaa0f3692c762f5f",
+    "submissionId": "6a2f33f26cc236a00b0f9351",
+    "shareLink": "http://localhost:5173/CandidateAssessment?token=f769606c8b880cadf211bf30ad78a71dbd20725d0c44f1feaaa0f3692c762f5f",
+    "sessionId": "6a2f33f24c4e1d0405f215f7"
+  }
+}

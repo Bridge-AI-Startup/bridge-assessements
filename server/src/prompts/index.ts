@@ -786,8 +786,12 @@ WHAT TO FOCUS ON:
 4. DEBUGGING BEHAVIOR — when tests fail, do they read the error, trace the code, or just ask AI to fix it?
 5. INTENT — why are they doing what they're doing? Reading constraints to understand the problem, or skimming to get started fast?
 
+TIMESTAMPS (REQUIRED):
+Each moment includes ts_seconds and ts_end_seconds (seconds since session start). Every behavioral_summary MUST cite the time range it covers, e.g. "At 120–145s, candidate switched from models/ratelimiter.py to tests/test_dispatcher.py and typed a new test case."
+Describe transitions over time: file switches, edit→test→fix cycles, AI prompt→response→code change, incremental typing vs large paste.
+
 MOMENT INDEXING:
-Each moment in the array has an implicit 0-based index (the first moment is index 0, the second is index 1, etc.). When you produce events, specify which moments each event covers using moment_range: [start_index, end_index] (inclusive). We compute timestamps from these indices in code — do NOT output any timestamp numbers yourself.
+Each moment also has an implicit 0-based index. Specify which moments each event covers using moment_range: [start_index, end_index] (inclusive). We compute canonical ts/ts_end from these indices in code, but your behavioral_summary must still cite ts_seconds–ts_end_seconds from the input moments.
 
 DO NOT:
 - Describe UI chrome (toolbar labels, "sharing your screen" banners, menu items)
@@ -867,7 +871,7 @@ ${priorContext}
 SCREEN MOMENTS FOR THIS CHUNK (0-indexed within this chunk):
 ${momentsJson}
 
-Interpret what the candidate is doing in these moments. Reference moments by their array index in moment_range. Return JSON only.`;
+Interpret what the candidate is doing in these moments. Each moment includes ts_seconds and ts_end_seconds — cite these ranges in every behavioral_summary. Reference moments by their array index in moment_range. Return JSON only.`;
   },
 };
 
@@ -907,8 +911,42 @@ ${priorContext}
 SCREEN MOMENTS FOR THIS BATCH (0-indexed within this batch):
 ${momentsJson}
 
-Describe what the candidate is doing in these moments. Reference moments by their array index in moment_range. Update the running summary to include everything from prior batches plus this batch. Return JSON only.`;
+Describe what the candidate is doing in these moments. Each moment includes ts_seconds and ts_end_seconds — cite these ranges in every behavioral_summary. Reference moments by their array index in moment_range. Update the running summary to include everything from prior batches plus this batch. Return JSON only.`;
   },
+};
+
+export const PROMPT_GENERATE_TEMPORAL_INSIGHTS = {
+  provider: "openai" as AIProvider,
+  model: "gpt-4o-mini",
+
+  system: `You analyze timestamped behavioral events from a coding assessment screen recording and identify multi-step TEMPORAL PATTERNS that span multiple events.
+
+INPUT: A JSON array of enriched events. Each has ts, ts_end (seconds since session start), behavioral_summary, intent, and regions_present.
+
+YOUR JOB: Produce insights that describe how behavior evolved OVER TIME — not single moments. Focus on:
+1. incremental_build — candidate builds solution file-by-file or function-by-function across multiple time ranges (not one paste)
+2. test_cycle — candidate runs tests/linters (pytest, ruff) and reacts to pass/fail output
+3. debug_loop — edit → test fail → read error → fix → re-run pattern
+4. ai_usage — sustained or repeated AI chat / inline completion usage vs one-off question
+5. research — sustained browser/documentation reading sessions
+6. workflow_transition — meaningful shift in activity (e.g. finished reading spec → started coding)
+
+RULES:
+- Every insight MUST use exact ts and ts_end values from the input events (you may span from first event ts to last event ts_end in a pattern).
+- observation must cite the time range in plain language (e.g. "From 300–420s, candidate ran pytest three times, fixing backoff logic after each failure").
+- Only report patterns supported by the input events. Do not hallucinate.
+- Prefer fewer, high-confidence insights over many vague ones.
+- confidence: high = clear multi-step pattern; medium = partial evidence; low = weak inference
+
+Respond with JSON only: { "insights": [{ "ts": number, "ts_end": number, "insight_type": string, "observation": string, "confidence": "high"|"medium"|"low" }] }`,
+
+  userTemplate: (eventsJson: string, eventCount: number) =>
+    `Analyze these ${eventCount} timestamped behavioral events and identify temporal patterns.
+
+EVENTS:
+${eventsJson}
+
+Return JSON only: { "insights": [...] }`,
 };
 
 export const PROMPT_LLM_JUDGE = {

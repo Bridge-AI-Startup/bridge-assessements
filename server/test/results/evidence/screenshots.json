@@ -1,0 +1,17 @@
+[
+  {
+    "process": "P1",
+    "label": "Sign-in screen (Firebase client auth UI)",
+    "path": "server/test/results/evidence/p0-landing.png"
+  },
+  {
+    "process": "P1",
+    "label": "Company sign-up form (/GetStarted)",
+    "path": "server/test/results/evidence/p1-signup.png"
+  },
+  {
+    "process": "P2",
+    "label": "Candidate assessment opened from the raw token link (no auth, any URL)",
+    "path": "server/test/results/evidence/p2-candidate-link.png"
+  }
+]
