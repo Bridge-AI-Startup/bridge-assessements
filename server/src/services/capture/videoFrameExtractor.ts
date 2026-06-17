@@ -31,7 +31,14 @@ const log = (msg: string, elapsedMs?: number) =>
   console.log(`[${new Date().toISOString()}] [videoExtractor] ${msg}${elapsedMs != null ? ` (+${elapsedMs}ms)` : ""}`);
 
 // Extraction config
-const CANDIDATE_INTERVAL = 0.5; // Extract a candidate frame every 0.5s
+// Candidate extraction cadence in seconds. Default 0.5s catches every keystroke
+// for normal-length sessions. For very long recordings processed in one batch
+// (e.g. backfill/seeding of 30+ min clips), 0.5s yields thousands of candidate
+// frames and an impractically long transcription; override via env to coarsen.
+const CANDIDATE_INTERVAL = (() => {
+  const raw = Number(process.env.PROCTORING_CANDIDATE_INTERVAL_SEC);
+  return Number.isFinite(raw) && raw > 0 ? raw : 0.5;
+})();
 const THUMB_SIZE = 128; // Thumbnail size for diffing (128x128)
 const DIFF_THRESHOLD = 0.005; // 0.5% pixel change = keep frame
 const CHANNEL_THRESHOLD = 25; // Per-channel difference to count as changed pixel
@@ -54,212 +61,277 @@ export async function isFFmpegAvailable(): Promise<boolean> {
 }
 
 /**
+ * Run ffmpeg + pixel-diff selection for one on-disk WebM (already merged if needed).
+ */
+async function extractFramesFromVideoPath(
+  sessionId: string,
+  screenIndex: number,
+  videoPath: string,
+  realStartTime: number,
+): Promise<PreparedFrame[]> {
+  const scratchDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), `proctoring-${sessionId}-s${screenIndex}-scratch-`),
+  );
+  const out: PreparedFrame[] = [];
+  try {
+    const durationStart = Date.now();
+    const durationSec = await getVideoDuration(videoPath);
+    log(
+      `Screen ${screenIndex}: video duration ${durationSec.toFixed(1)}s`,
+      Date.now() - durationStart,
+    );
+
+    const candidatesDir = path.join(scratchDir, "candidates");
+    await fs.mkdir(candidatesDir);
+
+    const fps = 1 / CANDIDATE_INTERVAL;
+    const vf = `fps=${fps},scale=${EXTRACT_BOX_W}:${EXTRACT_BOX_H}:force_original_aspect_ratio=decrease`;
+    const ffmpegStart = Date.now();
+    log(
+      `Screen ${screenIndex}: ffmpeg extracting candidates every ${CANDIDATE_INTERVAL}s (fps=${fps}, max ${EXTRACT_BOX_W}x${EXTRACT_BOX_H})...`,
+    );
+    await execAsync(
+      `"${FFMPEG_PATH}" -f matroska -analyzeduration 10000000 -probesize 10000000 -i "${videoPath}" -vf "${vf}" "${candidatesDir}/frame_%06d.png" 2>&1`,
+      { maxBuffer: 100 * 1024 * 1024 },
+    );
+    log(`Screen ${screenIndex}: ffmpeg extract done`, Date.now() - ffmpegStart);
+
+    const candidateFiles = (await fs.readdir(candidatesDir))
+      .filter((f) => f.endsWith(".png"))
+      .sort();
+
+    const totalCandidates = candidateFiles.length;
+    log(`Screen ${screenIndex}: ${totalCandidates} candidate frames on disk`);
+
+    if (totalCandidates === 0) return [];
+
+    let lastKeptThumb: Buffer | null = null;
+    let lastKeptTimeSec = -MAX_IDLE_SEC;
+    const keptIndices: number[] = [];
+    const diffStart = Date.now();
+
+    for (let i = 0; i < totalCandidates; i++) {
+      const framePath = path.join(candidatesDir, candidateFiles[i]);
+      const timeSec = i * CANDIDATE_INTERVAL;
+
+      const thumbData = await sharp(framePath)
+        .resize(THUMB_SIZE, THUMB_SIZE, { fit: "fill" })
+        .raw()
+        .toBuffer();
+
+      let shouldKeep = false;
+
+      if (lastKeptThumb === null) {
+        shouldKeep = true;
+      } else {
+        const diffRatio = computePixelDiff(lastKeptThumb, thumbData);
+        if (diffRatio >= DIFF_THRESHOLD) {
+          shouldKeep = true;
+        }
+      }
+
+      if (!shouldKeep && timeSec - lastKeptTimeSec >= MAX_IDLE_SEC) {
+        shouldKeep = true;
+      }
+
+      if (shouldKeep) {
+        keptIndices.push(i);
+        lastKeptTimeSec = timeSec;
+        lastKeptThumb = thumbData;
+      }
+    }
+
+    log(
+      `Screen ${screenIndex}: pixel diff kept ${keptIndices.length}/${totalCandidates} frames`,
+      Date.now() - diffStart,
+    );
+
+    const loadStart = Date.now();
+    for (const idx of keptIndices) {
+      const framePath = path.join(candidatesDir, candidateFiles[idx]);
+      const buffer = await fs.readFile(framePath);
+      const timeSec = idx * CANDIDATE_INTERVAL;
+      const capturedAt = new Date(realStartTime + timeSec * 1000);
+      const dimensions = parsePngDimensions(buffer);
+
+      out.push({
+        storageKey: `${sessionId}/extracted/${timeSec.toFixed(2)}-${screenIndex}.png`,
+        buffer,
+        screenIndex,
+        capturedAt,
+        width: dimensions.width,
+        height: dimensions.height,
+      });
+    }
+    log(
+      `Screen ${screenIndex}: loaded ${keptIndices.length} frames into memory`,
+      Date.now() - loadStart,
+    );
+    return out;
+  } finally {
+    await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
  * Extract frames from session video using pixel-diff smart selection.
  * Returns PreparedFrame[] ready for the transcript pipeline.
  */
 export async function extractSmartFrames(
-  sessionId: string
+  sessionId: string,
 ): Promise<PreparedFrame[]> {
   const session = await ProctoringSessionModel.findById(sessionId);
-  if (!session || !session.videoChunks || session.videoChunks.length === 0) {
-    log("No video chunks found");
+  if (!session) {
+    log("No session");
     return [];
   }
+
+  const mergedReady =
+    (session as any).mergedVideo?.status === "ready" &&
+    (session as any).mergedVideo?.storageKey;
+
   const extractStart = Date.now();
 
-  // Group chunks by screen index
-  const chunksByScreen = new Map<
-    number,
-    Array<{ storageKey: string; startTime: Date; screenIndex: number }>
-  >();
-  for (const chunk of session.videoChunks) {
-    const c = chunk as any;
-    const screenIndex = c.screenIndex as number;
-    if (!chunksByScreen.has(screenIndex)) {
-      chunksByScreen.set(screenIndex, []);
-    }
-    chunksByScreen.get(screenIndex)!.push({
-      storageKey: c.storageKey,
-      startTime: new Date(c.startTime),
-      screenIndex,
-    });
-  }
-
-  // Real wall-clock start time for timestamp computation
-  // Priority: captureStartedAt > first video chunk startTime > session createdAt
   const captureStartedAt =
     session.stats?.captureStartedAt ||
-    (session.videoChunks[0] as any)?.startTime ||
+    (session.videoChunks?.[0] as any)?.startTime ||
     (session as any).createdAt;
   const realStartTime = captureStartedAt
     ? new Date(captureStartedAt).getTime()
     : Date.now();
 
-  // Sanity check: if the resolved time is before year 2020, something is wrong
   if (realStartTime < new Date("2020-01-01").getTime()) {
-    console.warn(`[${new Date().toISOString()}] [videoExtractor] WARNING: realStartTime resolved to ${new Date(realStartTime).toISOString()}, falling back to Date.now()`);
+    console.warn(
+      `[${new Date().toISOString()}] [videoExtractor] WARNING: realStartTime resolved to ${new Date(realStartTime).toISOString()}, falling back to Date.now()`,
+    );
   }
-
-  log(`Session start: ${new Date(realStartTime).toISOString()}; ${chunksByScreen.size} screen(s)`);
 
   const allFrames: PreparedFrame[] = [];
   const storage = getFrameStorage();
+  let screenCountForLog = 0;
 
-  for (const [screenIndex, chunks] of chunksByScreen) {
-    const sortedChunks = [...chunks].sort(
-      (a, b) => a.startTime.getTime() - b.startTime.getTime()
+  if (mergedReady) {
+    const key = (session as any).mergedVideo.storageKey as string;
+    log(`Using merged video at ${key}`);
+    screenCountForLog = 1;
+    log(
+      `Session start: ${new Date(realStartTime).toISOString()}; 1 screen(s) (merged)`,
     );
 
-    const tmpDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), `proctoring-${sessionId}-s${screenIndex}-`)
+    const workDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), `proctoring-${sessionId}-merged-`),
     );
-
     try {
-      // Step 1: Download chunks to temp files
-      const downloadStart = Date.now();
-      log(`Screen ${screenIndex}: downloading ${sortedChunks.length} chunks...`);
-      const chunkPaths: string[] = [];
-      for (let i = 0; i < sortedChunks.length; i++) {
-        const chunkPath = path.join(
-          tmpDir,
-          `chunk_${String(i).padStart(4, "0")}.webm`
-        );
-        const buffer = await storage.getVideoChunk(
-          sortedChunks[i].storageKey
-        );
-        await fs.writeFile(chunkPath, buffer);
-        chunkPaths.push(chunkPath);
-      }
-      log(`Screen ${screenIndex}: downloaded ${chunkPaths.length} chunks`, Date.now() - downloadStart);
-
-      // Step 2: Merge chunks if multiple.
-      // MediaRecorder timeslice chunks are NOT standalone files — only the
-      // first chunk has the WebM/EBML header. Subsequent chunks are raw
-      // Cluster elements. So we binary-concatenate them into a single file
-      // rather than using ffmpeg's concat demuxer (which expects each file
-      // to be independently decodable).
-      let videoPath: string;
-      if (chunkPaths.length === 1) {
-        videoPath = chunkPaths[0];
-      } else {
-        videoPath = path.join(tmpDir, "merged.webm");
-        const mergeStart = Date.now();
-        log(`Screen ${screenIndex}: stream-merging ${chunkPaths.length} chunks...`);
-        await mergeLocalFilesSequential(chunkPaths, videoPath);
-        log(`Screen ${screenIndex}: merge complete`, Date.now() - mergeStart);
-      }
-
-      // Step 3: Get video duration
-      const durationStart = Date.now();
-      const durationSec = await getVideoDuration(videoPath);
-      log(`Screen ${screenIndex}: video duration ${durationSec.toFixed(1)}s`, Date.now() - durationStart);
-
-      // Step 4: Extract ALL candidate frames at high rate
-      const candidatesDir = path.join(tmpDir, "candidates");
-      await fs.mkdir(candidatesDir);
-
-      const fps = 1 / CANDIDATE_INTERVAL;
-      const vf = `fps=${fps},scale=${EXTRACT_BOX_W}:${EXTRACT_BOX_H}:force_original_aspect_ratio=decrease`;
-      const ffmpegStart = Date.now();
-      log(
-        `Screen ${screenIndex}: ffmpeg extracting candidates every ${CANDIDATE_INTERVAL}s (fps=${fps}, max ${EXTRACT_BOX_W}x${EXTRACT_BOX_H})...`
+      const videoPath = path.join(workDir, "merged.webm");
+      const { pipeline } = await import("stream/promises");
+      const { createWriteStream } = await import("fs");
+      await pipeline(
+        await storage.openReadStream(key),
+        createWriteStream(videoPath),
       );
-      await execAsync(
-        `"${FFMPEG_PATH}" -f matroska -analyzeduration 10000000 -probesize 10000000 -i "${videoPath}" -vf "${vf}" "${candidatesDir}/frame_%06d.png" 2>&1`,
-        { maxBuffer: 100 * 1024 * 1024 }
+      const frames = await extractFramesFromVideoPath(
+        sessionId,
+        0,
+        videoPath,
+        realStartTime,
       );
-      log(`Screen ${screenIndex}: ffmpeg extract done`, Date.now() - ffmpegStart);
-
-      const candidateFiles = (await fs.readdir(candidatesDir))
-        .filter((f) => f.endsWith(".png"))
-        .sort();
-
-      const totalCandidates = candidateFiles.length;
-      log(`Screen ${screenIndex}: ${totalCandidates} candidate frames on disk`);
-
-      if (totalCandidates === 0) continue;
-
-      // Step 5: Generate thumbnails and diff against LAST KEPT frame.
-      let lastKeptThumb: Buffer | null = null;
-      let lastKeptTimeSec = -MAX_IDLE_SEC;
-      const keptIndices: number[] = [];
-      const diffStart = Date.now();
-
-      for (let i = 0; i < totalCandidates; i++) {
-        const framePath = path.join(candidatesDir, candidateFiles[i]);
-        const timeSec = i * CANDIDATE_INTERVAL;
-
-        // Generate thumbnail for diffing
-        const thumbData = await sharp(framePath)
-          .resize(THUMB_SIZE, THUMB_SIZE, { fit: "fill" })
-          .raw()
-          .toBuffer();
-
-        let shouldKeep = false;
-
-        if (lastKeptThumb === null) {
-          // Always keep first frame
-          shouldKeep = true;
-        } else {
-          // Diff against last KEPT frame — changes accumulate over time
-          const diffRatio = computePixelDiff(lastKeptThumb, thumbData);
-
-          if (diffRatio >= DIFF_THRESHOLD) {
-            shouldKeep = true;
-          }
-        }
-
-        // Safety net: keep at least 1 frame every MAX_IDLE_SEC
-        if (!shouldKeep && timeSec - lastKeptTimeSec >= MAX_IDLE_SEC) {
-          shouldKeep = true;
-        }
-
-        if (shouldKeep) {
-          keptIndices.push(i);
-          lastKeptTimeSec = timeSec;
-          lastKeptThumb = thumbData; // Only update reference on keep
-        }
-      }
-
-      log(`Screen ${screenIndex}: pixel diff kept ${keptIndices.length}/${totalCandidates} frames`, Date.now() - diffStart);
-
-      // Step 6: Read kept frames (already scaled by ffmpeg) and build PreparedFrame objects
-      const loadStart = Date.now();
-      for (const idx of keptIndices) {
-        const framePath = path.join(candidatesDir, candidateFiles[idx]);
-        const buffer = await fs.readFile(framePath);
-        const timeSec = idx * CANDIDATE_INTERVAL;
-        const capturedAt = new Date(realStartTime + timeSec * 1000);
-        const dimensions = parsePngDimensions(buffer);
-
-        allFrames.push({
-          storageKey: `${sessionId}/extracted/${timeSec.toFixed(2)}-${screenIndex}.png`,
-          buffer,
-          screenIndex,
-          capturedAt,
-          width: dimensions.width,
-          height: dimensions.height,
-        });
-      }
-      log(`Screen ${screenIndex}: loaded ${keptIndices.length} frames into memory`, Date.now() - loadStart);
+      allFrames.push(...frames);
     } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
+  } else if (!session.videoChunks?.length) {
+    log("No video chunks found");
+    return [];
+  } else {
+    const chunksByScreen = new Map<
+      number,
+      Array<{ storageKey: string; startTime: Date; screenIndex: number }>
+    >();
+    for (const chunk of session.videoChunks) {
+      const c = chunk as any;
+      const screenIndex = c.screenIndex as number;
+      if (!chunksByScreen.has(screenIndex)) {
+        chunksByScreen.set(screenIndex, []);
+      }
+      chunksByScreen.get(screenIndex)!.push({
+        storageKey: c.storageKey,
+        startTime: new Date(c.startTime),
+        screenIndex,
+      });
+    }
+
+    screenCountForLog = chunksByScreen.size;
+    log(
+      `Session start: ${new Date(realStartTime).toISOString()}; ${chunksByScreen.size} screen(s)`,
+    );
+
+    for (const [screenIndex, chunks] of chunksByScreen) {
+      const sortedChunks = [...chunks].sort(
+        (a, b) => a.startTime.getTime() - b.startTime.getTime(),
+      );
+
+      const tmpDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), `proctoring-${sessionId}-s${screenIndex}-`),
+      );
+
+      try {
+        const downloadStart = Date.now();
+        log(`Screen ${screenIndex}: downloading ${sortedChunks.length} chunks...`);
+        const chunkPaths: string[] = [];
+        for (let i = 0; i < sortedChunks.length; i++) {
+          const chunkPath = path.join(
+            tmpDir,
+            `chunk_${String(i).padStart(4, "0")}.webm`,
+          );
+          const buffer = await storage.getVideoChunk(sortedChunks[i].storageKey);
+          await fs.writeFile(chunkPath, buffer);
+          chunkPaths.push(chunkPath);
+        }
+        log(
+          `Screen ${screenIndex}: downloaded ${chunkPaths.length} chunks`,
+          Date.now() - downloadStart,
+        );
+
+        let videoPath: string;
+        if (chunkPaths.length === 1) {
+          videoPath = chunkPaths[0];
+        } else {
+          videoPath = path.join(tmpDir, "merged.webm");
+          const mergeStart = Date.now();
+          log(
+            `Screen ${screenIndex}: stream-merging ${chunkPaths.length} chunks...`,
+          );
+          await mergeLocalFilesSequential(chunkPaths, videoPath);
+          log(`Screen ${screenIndex}: merge complete`, Date.now() - mergeStart);
+        }
+
+        const frames = await extractFramesFromVideoPath(
+          sessionId,
+          screenIndex,
+          videoPath,
+          realStartTime,
+        );
+        allFrames.push(...frames);
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      }
     }
   }
 
-  // Sort chronologically
   allFrames.sort(
-    (a, b) => a.capturedAt.getTime() - b.capturedAt.getTime()
+    (a, b) => a.capturedAt.getTime() - b.capturedAt.getTime(),
   );
 
-  // Update session stats
   await ProctoringSessionModel.findByIdAndUpdate(sessionId, {
     "stats.videoStats.extractedFrameCount": allFrames.length,
     "stats.videoStats.extractionMethod":
       allFrames.length > 0 ? "fixed_interval" : null,
   });
 
-  log(`Total: ${allFrames.length} frames from ${chunksByScreen.size} screen(s)`, Date.now() - extractStart);
+  log(
+    `Total: ${allFrames.length} frames from ${screenCountForLog} screen(s)`,
+    Date.now() - extractStart,
+  );
 
   return allFrames;
 }

@@ -10,9 +10,13 @@ A concise guide to the full flow: session → capture → storage → transcript
 |------|-----|--------------|
 | **Create** | `POST /api/proctoring/sessions` | Client sends submission `token`. Server creates a **ProctoringSession** (or returns existing) with `status: "pending"`. |
 | **Consent** | `POST .../consent` | Client sends `token` + `screens`. Server sets `consent.granted`, `consent.grantedAt`, and **`status: "active"`**. Only after this can frames/video be uploaded. |
-| **Complete** | `POST .../complete` | Client calls when recording stops. Server sets **`status: "completed"`**. |
+| **Complete** | `POST .../complete` | Client calls when recording stops. Server sets **`status: "completed"`** and kicks off **background merge** of WebM chunks into `{sessionId}/playback.webm` (see below). |
 
-The **ProctoringSession** document (MongoDB) stores: `submissionId`, `token`, `status`, `consent`, `screens`, `frames[]`, `sidecarEvents[]`, `videoChunks[]`, `transcript` (status, storageKey, refinedStatus, generationId, lastIncrementalAt, etc.), and `stats` (totalFrames, uniqueFrames, captureStartedAt, captureEndedAt).
+The **ProctoringSession** document (MongoDB) stores: `submissionId`, `token`, `status`, `consent`, `screens`, `frames[]`, `sidecarEvents[]`, `videoChunks[]` (cleared after merge), **`mergedVideo`** (status, storageKey, duration, etc.), `transcript` (status, storageKey, refinedStatus, generationId, lastIncrementalAt, etc.), and `stats` (totalFrames, uniqueFrames, captureStartedAt, captureEndedAt).
+
+### Merge after session ends
+
+When the candidate **completes** the proctoring session, **submits** the assessment (GitHub, token, or upload flow), or **opts out**, the API triggers **`mergeSessionVideo`**: concat MediaRecorder chunks for screen 0, **ffmpeg remux**, write **`{sessionId}/playback.webm`**, set **`mergedVideo.status = ready`**, then **delete** `{sessionId}/video/*.webm` chunk objects and clear `videoChunks[]` in Mongo (metadata update happens **before** chunk deletes to avoid races with transcript generation). Playback and download stream this merged object when `mergedVideo.status === ready`; otherwise they fall back to on-demand chunk merge (legacy / failed merge). **Backfill (retroactive S3/local → `playback.webm`):** from `server/`, `npx tsx src/scripts/backfillMergedProctoringVideos.ts` or `npm run backfill:proctoring-video`. Flags: `--dry-run` (list candidates + storage `.webm` counts), `--session=<MongoId>`, `--limit=N`. Picks up sessions with chunk rows in Mongo **or** `status: completed` with empty `videoChunks` (still scans `{sessionId}/video/` in storage). Resets `mergedVideo` if marked `ready` but the merged object is missing, then re-merges when chunks still exist.
 
 ---
 
@@ -24,7 +28,7 @@ Two capture paths:
 
 - Client uses `getDisplayMedia()` and records with **MediaRecorder** (WebM).
 - Chunks are sent to `POST .../sessions/:sessionId/video` (FormData with token + chunk blob).
-- Server calls **`storeVideoChunk`**: writes to storage as `{sessionId}/video/{ts}-{screenIndex}.webm` and appends to `session.videoChunks[]`.
+- Server calls **`storeVideoChunk`**: writes to storage as `{sessionId}/video/{ts}-{screenIndex}.webm` and appends to `session.videoChunks[]`. These objects are **temporary** until the eager merge runs.
 
 ### Screenshots (fallback)
 
@@ -33,7 +37,7 @@ Two capture paths:
 
 **Sidecar events** (tab_switch, blur, focus, copy, paste, etc.) go to `POST .../events` and are stored in `session.sidecarEvents[]`.
 
-**Storage** is behind **IFrameStorage**: **LocalFrameStorage** (default, under `PROCTORING_STORAGE_DIR`) or **S3FrameStorage** when `PROCTORING_STORAGE_BACKEND=s3` or `PROCTORING_S3_BUCKET` is set. Keys are identical in both modes: `{sessionId}/frames/...`, `{sessionId}/video/...`, `{sessionId}/transcript.jsonl`, `{sessionId}/transcript_refined.jsonl`, `{sessionId}/transcript-gen-checkpoint.json`.
+**Storage** is behind **IFrameStorage**: **LocalFrameStorage** (default, under `PROCTORING_STORAGE_DIR`) or **S3FrameStorage** when `PROCTORING_STORAGE_BACKEND=s3` or `PROCTORING_S3_BUCKET` is set. Keys are identical in both modes: `{sessionId}/frames/...`, `{sessionId}/video/...` (chunks, removed after merge), **`{sessionId}/playback.webm`** (merged screen 0), `{sessionId}/transcript.jsonl`, `{sessionId}/transcript_refined.jsonl`, `{sessionId}/transcript-gen-checkpoint.json`.
 
 ### S3 (production)
 
@@ -48,7 +52,7 @@ Two capture paths:
 Before the AI runs, frames are prepared by **framePrep**:
 
 - **`prepareSessionForTranscript(sessionId)`**
-  - If the session has **video chunks** and ffmpeg is available: **video frame extraction** — extract candidate frames from WebM (e.g. every 0.5s), build small thumbnails, keep frames where pixel diff exceeds a threshold (and at least one frame every N seconds). Result: list of **PreparedFrame** (buffer, capturedAt, screenIndex, width, height).
+  - If the session has **`mergedVideo.status === ready`** or **video chunks** and ffmpeg is available: **video frame extraction** — reads the merged `{sessionId}/playback.webm` when ready, otherwise concatenated chunks; extract candidate frames from WebM (e.g. every 0.5s), build small thumbnails, keep frames where pixel diff exceeds a threshold (and at least one frame every N seconds). Result: list of **PreparedFrame** (buffer, capturedAt, screenIndex, width, height).
   - If no video or extraction fails: **screenshot fallback** — load each `session.frames[]` from storage by `storageKey` into the same **PreparedFrame** format.
   - Also loads **sidecar events** and **screens**.
   - Returns **PreparedSessionData**: `frames`, `sidecarEvents`, `screens`, `captureStartedAt`, `captureEndedAt`.

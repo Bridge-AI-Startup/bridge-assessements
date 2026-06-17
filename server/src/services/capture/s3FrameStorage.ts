@@ -6,6 +6,7 @@ import {
   HeadObjectCommand,
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
+import { Readable } from "stream";
 import type { IFrameStorage } from "./storage.js";
 
 function contentTypeForKey(key: string): string | undefined {
@@ -122,6 +123,16 @@ export class S3FrameStorage implements IFrameStorage {
       new GetObjectCommand({ Bucket: this.bucket, Key: key })
     );
     return bodyToBuffer(out.Body);
+  }
+
+  async openReadStream(key: string): Promise<Readable> {
+    const out = await this.client.send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: key })
+    );
+    const body = out.Body;
+    if (!body) throw new Error("S3 GetObject: empty body");
+    if (body instanceof Readable) return body;
+    return Readable.from(body as AsyncIterable<Uint8Array>);
   }
 
   /**

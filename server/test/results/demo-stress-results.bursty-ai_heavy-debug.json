@@ -1,0 +1,681 @@
+{
+  "generatedAt": "2026-06-17T03:19:58.318Z",
+  "pipelineVersion": "v2-time-aware",
+  "login": {
+    "url": "https://www.bridge-jobs.com/",
+    "email": "demo@bridgeai-demo.com",
+    "password": "BridgeDemo2026!"
+  },
+  "userId": "6a30759984c34d799cfd9370",
+  "assessmentId": "6a30cb825c1e8969b7c21110",
+  "assessmentTitle": "Resilient Webhook Dispatcher — Live Coding Sessions (30+ min stress set)",
+  "baseline": {
+    "strongMatched": 6,
+    "strongTotal": 12,
+    "strongAccuracy": 0.5,
+    "pipelineVersion": "v1-raw-ocr",
+    "candidates": [
+      {
+        "variant": "steady",
+        "label": "Steady writer",
+        "submissionId": "6a30cb825c1e8969b7c21114",
+        "sessionId": "6a30cb825c1e8969b7c21117",
+        "durationSeconds": 1860,
+        "frames": 1031,
+        "transcriptSegments": 3097,
+        "transcriptMs": null,
+        "evalMs": null,
+        "overallScore10": 5.8,
+        "overallScore100": 58,
+        "transcriptQuality": {
+          "tokenRecall": 1,
+          "foundTokens": [
+            "TokenBucket",
+            "backoff_delay",
+            "try_acquire",
+            "Dispatcher",
+            "Webhook",
+            "pytest",
+            "async",
+            "jitter",
+            "Semaphore",
+            "httpx"
+          ],
+          "missingTokens": [],
+          "nonEmptySegments": 3096
+        },
+        "summary": "During the session, the candidate worked on a coding assessment focused on building a service for reliable webhook dispatching. They began by reviewing the problem requirements and then engaged in extensive coding, frequently utilizing AI prompts for guidance on implementing features such as exponential backoff and idempotency in their solution. Throughout the session, they conducted numerous tests to validate their code, with several instances of delivering and confirming successful method executions. The candidate also searched for additional resources and documentation to enhance their understanding of specific concepts, indicating a thorough approach to problem-solving. Overall, the session was characterized by a systematic coding and testing process, with active use of AI assistance to address challenges encountered along the way.",
+        "checks": [
+          {
+            "criterion": "The candidate builds their solution incrementally, writing and refinin",
+            "expectedBand": "high",
+            "strong": true,
+            "intendedBehavior": "builds models/ratelimiter/backoff/dispatcher/api/tests module by module, typed across the clip",
+            "actualScore": 1,
+            "actualBand": "low",
+            "evaluable": true,
+            "confidence": "low",
+            "verdict": "The transcript shows no evidence of the candidate building their solution incrementally. There are no observations of the candidate making incremental changes, discussing their thought process, or interacting with multiple files. Instead, the candidate appears to be delivering methods without any visible iterations or refinements, indicating a lack of incremental development.",
+            "evidenceSnippet": "The transcript shows no evidence of the candidate building their solution incrementally. There are no observations of the candidate making incremental changes, discussing their tho",
+            "match": false
+          },
+          {
+            "criterion": "The candidate verifies their own work by running tests or linters in t",
+            "expectedBand": "high",
+            "strong": true,
+            "intendedBehavior": "runs `pytest -q` (passes) and `ruff check .` each pass",
+            "actualScore": 5,
+            "actualBand": "mid",
+            "evaluable": true,
+            "confidence": "medium",
+            "verdict": "The candidate demonstrated some ability to verify their work by running tests in the terminal, as evidenced by multiple instances of running commands that returned 'DELIVERING\nDELIVERED\nmethod'. However, there is no evidence of the candidate reacting to the output or modifying their code based on the results, which limits the strength of the evidence.",
+            "evidenceSnippet": "The candidate runs a test command in the terminal, indicated by 'DELIVERING\nDELIVERED\nmethod'.",
+            "match": false
+          },
+          {
+            "criterion": "The candidate relied on an AI coding assistant — AI chat, inline code ",
+            "expectedBand": "mid",
+            "strong": false,
+            "intendedBehavior": "moderate AI: occasional chat + some inline completions / Cmd-K edits accepted",
+            "actualScore": 9,
+            "actualBand": "high",
+            "evaluable": true,
+            "confidence": "high",
+            "verdict": "The candidate consistently interacted with the AI coding assistant throughout the assessment, sending numerous prompts for assistance. This behavior demonstrates a strong reliance on the AI tool to aid in solving coding problems, fulfilling the criterion effectively.",
+            "evidenceSnippet": "The candidate interacted with the AI assistant.",
+            "match": false
+          },
+          {
+            "criterion": "The candidate opens a web browser and navigates to external pages — fo",
+            "expectedBand": "high",
+            "strong": true,
+            "intendedBehavior": "reads the task page, then asyncio docs / StackOverflow / AWS backoff blog in the browser",
+            "actualScore": 8,
+            "actualBand": "high",
+            "evaluable": true,
+            "confidence": "high",
+            "verdict": "The candidate demonstrated strong initiative in seeking external resources by performing multiple searches for relevant documentation and StackOverflow pages. They specifically referenced official documentation and relevant links, indicating a proactive approach to problem-solving.",
+            "evidenceSnippet": "The candidate searches for 'docs.python.org', 'stackoverflow', and 'https'.",
+            "match": true
+          }
+        ],
+        "strongMatched": 1,
+        "strongTotal": 3,
+        "reusedFromPriorRun": true
+      },
+      {
+        "variant": "bursty",
+        "label": "Bursty typist",
+        "submissionId": "6a30d47d5c1e8969b7c213de",
+        "sessionId": "6a30d47d5c1e8969b7c213e0",
+        "durationSeconds": 1950,
+        "frames": 1571,
+        "transcriptSegments": 4631,
+        "transcriptMs": null,
+        "evalMs": null,
+        "overallScore10": 5.8,
+        "overallScore100": 58,
+        "transcriptQuality": {
+          "tokenRecall": 1,
+          "foundTokens": [
+            "TokenBucket",
+            "backoff_delay",
+            "try_acquire",
+            "Dispatcher",
+            "Webhook",
+            "pytest",
+            "async",
+            "jitter",
+            "Semaphore",
+            "httpx"
+          ],
+          "missingTokens": [],
+          "nonEmptySegments": 4631
+        },
+        "summary": "During the session, the candidate engaged in a coding assessment that involved searching for information and implementing a solution related to a thread-safe token bucket rate limiter. They frequently utilized an AI assistant for guidance and clarification on various coding concepts. The candidate spent significant time testing their code, running commands to reload the application, and checking for errors. They also conducted extensive searches on Stack Overflow and other resources to gather insights and examples relevant to their task. Throughout the session, they demonstrated a methodical approach, iterating on their code based on the results of their tests and the information obtained from their searches.",
+        "checks": [
+          {
+            "criterion": "The candidate builds their solution incrementally, writing and refinin",
+            "expectedBand": "high",
+            "strong": true,
+            "intendedBehavior": "fast bursts but still typed line-by-line across files (no wholesale paste)",
+            "actualScore": 1,
+            "actualBand": "low",
+            "evaluable": true,
+            "confidence": "low",
+            "verdict": "The transcript shows no evidence of the candidate building their solution incrementally. There are no observations of switching between multiple files, making incremental changes, or discussing their thought process. Instead, the candidate appears to be running tests frequently without any indication of intermediate coding steps or refinements.",
+            "evidenceSnippet": "The transcript shows no evidence of the candidate building their solution incrementally. There are no observations of switching between multiple files, making incremental changes, ",
+            "match": false
+          },
+          {
+            "criterion": "The candidate verifies their own work by running tests or linters in t",
+            "expectedBand": "high",
+            "strong": true,
+            "intendedBehavior": "runs pytest each pass (pass/fail surfaced)",
+            "actualScore": 5,
+            "actualBand": "mid",
+            "evaluable": true,
+            "confidence": "medium",
+            "verdict": "The candidate frequently runs the command 'uvicorn dispatcher.api:app —reload', indicating an attempt to verify their work. However, there is no evidence of them checking the output or making adjustments based on the results, leading to a mixed evaluation.",
+            "evidenceSnippet": "The candidate runs the command 'uvicorn dispatcher.api:app —reload'.",
+            "match": false
+          },
+          {
+            "criterion": "The candidate relied on an AI coding assistant — AI chat, inline code ",
+            "expectedBand": "mid",
+            "strong": false,
+            "intendedBehavior": "light AI: a few inline completions / Cmd-K edits, no chat panel",
+            "actualScore": 8,
+            "actualBand": "high",
+            "evaluable": true,
+            "confidence": "high",
+            "verdict": "The candidate demonstrated a strong reliance on the AI coding assistant by sending multiple ai_prompt messages throughout the assessment, indicating active engagement with the tool.",
+            "evidenceSnippet": "The candidate sent an ai_prompt message to the AI assistant.",
+            "match": false
+          },
+          {
+            "criterion": "The candidate opens a web browser and navigates to external pages — fo",
+            "expectedBand": "high",
+            "strong": true,
+            "intendedBehavior": "long documentation/StackOverflow/blog reading sessions in the browser",
+            "actualScore": 9,
+            "actualBand": "high",
+            "evaluable": true,
+            "confidence": "high",
+            "verdict": "The candidate demonstrated strong resourcefulness by actively searching for and navigating to multiple external resources, including official documentation and relevant StackOverflow pages, to gather information pertinent to solving the coding problem.",
+            "evidenceSnippet": "The candidate references 'docs.python.org' and 'stackoverflow' in their search.",
+            "match": true
+          }
+        ],
+        "strongMatched": 1,
+        "strongTotal": 3,
+        "reusedFromPriorRun": true
+      },
+      {
+        "variant": "ai_heavy",
+        "label": "AI-assisted",
+        "submissionId": "6a3182c62356559b0503d333",
+        "sessionId": "6a3182c62356559b0503d335",
+        "durationSeconds": 1890,
+        "frames": 614,
+        "transcriptSegments": 1763,
+        "transcriptMs": null,
+        "evalMs": null,
+        "overallScore10": 4.5,
+        "overallScore100": 45,
+        "transcriptQuality": {
+          "tokenRecall": 1,
+          "foundTokens": [
+            "TokenBucket",
+            "backoff_delay",
+            "try_acquire",
+            "Dispatcher",
+            "Webhook",
+            "pytest",
+            "async",
+            "jitter",
+            "Semaphore",
+            "httpx"
+          ],
+          "missingTokens": [],
+          "nonEmptySegments": 1763
+        },
+        "summary": "During the session, the candidate worked on implementing a thread-safe token-bucket rate limiter in Python. They began by exploring the problem requirements and utilized an AI tool to gather information on how to approach the implementation, repeatedly prompting for guidance on specific technical details. The candidate focused on minimizing contention by keeping the critical section small and using a monotonic timestamp for token management. They also discussed strategies for handling concurrent requests and implementing exponential backoff for retries. Throughout the session, they demonstrated a methodical approach, iterating on their ideas and refining their understanding of the problem through AI interactions.",
+        "checks": [
+          {
+            "criterion": "The candidate builds their solution incrementally, writing and refinin",
+            "expectedBand": "mid",
+            "strong": false,
+            "intendedBehavior": "accepts large AI-suggested blocks + Cmd-K diffs (semi-incremental)",
+            "actualScore": 1,
+            "actualBand": "low",
+            "evaluable": true,
+            "confidence": "low",
+            "verdict": "The transcript contains no evidence of the candidate incrementally building their solution. There are no indications of saving changes to different files, making iterative changes, or discussing their thought process. Instead, the candidate appears to be pasting large blocks of code without explanation, which is contrary to the expected behavior for this criterion.",
+            "evidenceSnippet": "The transcript contains no evidence of the candidate incrementally building their solution. There are no indications of saving changes to different files, making iterative changes,",
+            "match": false
+          },
+          {
+            "criterion": "The candidate verifies their own work by running tests or linters in t",
+            "expectedBand": "mid",
+            "strong": false,
+            "intendedBehavior": "runs pytest only on some passes",
+            "actualScore": 1,
+            "actualBand": "low",
+            "evaluable": true,
+            "confidence": "low",
+            "verdict": "There is no evidence in the transcript that the candidate ran any tests or linters, nor did they react to any output from such tools. The absence of any relevant actions or discussions regarding testing or linting indicates a clear lack of engagement with this critical aspect of the coding process.",
+            "evidenceSnippet": "There is no evidence in the transcript that the candidate ran any tests or linters, nor did they react to any output from such tools. The absence of any relevant actions or discuss",
+            "match": false
+          },
+          {
+            "criterion": "The candidate relied on an AI coding assistant — AI chat, inline code ",
+            "expectedBand": "high",
+            "strong": true,
+            "intendedBehavior": "heavy reliance: repeated AI chat prompts + many inline completions + Cmd-K inline edits",
+            "actualScore": 8,
+            "actualBand": "high",
+            "evaluable": true,
+            "confidence": "high",
+            "verdict": "The candidate demonstrated a strong reliance on the AI coding assistant, sending multiple prompts and receiving detailed responses that were incorporated into their coding process. This consistent interaction indicates effective use of AI assistance throughout the task.",
+            "evidenceSnippet": "ant\no way to implement",
+            "match": true
+          },
+          {
+            "criterion": "The candidate opens a web browser and navigates to external pages — fo",
+            "expectedBand": "high",
+            "strong": true,
+            "intendedBehavior": "browses docs/SO/blog every cycle alongside the AI chat",
+            "actualScore": 8,
+            "actualBand": "high",
+            "evaluable": true,
+            "confidence": "high",
+            "verdict": "The candidate demonstrated strong proactive research skills by accessing multiple external resources, including official documentation and StackOverflow. They opened relevant pages that pertain to their coding task, indicating a good level of engagement with external resources.",
+            "evidenceSnippet": "The candidate accessed 'docs.python.org' and 'stackoverflow'.",
+            "match": true
+          }
+        ],
+        "strongMatched": 2,
+        "strongTotal": 2,
+        "reusedFromPriorRun": true
+      },
+      {
+        "variant": "debug",
+        "label": "Debug / test loop",
+        "submissionId": "6a3173ea93dce5be9bd77a48",
+        "sessionId": "6a3173ea93dce5be9bd77a4a",
+        "durationSeconds": 2010,
+        "frames": 1436,
+        "transcriptSegments": 4363,
+        "transcriptMs": null,
+        "evalMs": null,
+        "overallScore10": 6.5,
+        "overallScore100": 65,
+        "transcriptQuality": {
+          "tokenRecall": 1,
+          "foundTokens": [
+            "TokenBucket",
+            "backoff_delay",
+            "try_acquire",
+            "Dispatcher",
+            "Webhook",
+            "pytest",
+            "async",
+            "jitter",
+            "Semaphore",
+            "httpx"
+          ],
+          "missingTokens": [],
+          "nonEmptySegments": 4362
+        },
+        "summary": "During the session, the candidate worked on implementing a method that involved handling exponential backoff with jitter for a retry loop. They began by reviewing the requirements and then proceeded to write code, frequently testing their implementation using the fill method. Throughout the session, the candidate utilized an AI assistant multiple times to seek guidance on specific coding challenges, particularly regarding the implementation of the backoff strategy. They encountered several testing phases, where they addressed issues and refined their code based on the results of their tests. The candidate also engaged in searching for additional resources and examples online to enhance their understanding and approach to the problem. Overall, the session was characterized by a cycle of coding, testing, and seeking assistance, demonstrating a methodical approach to problem-solving.",
+        "checks": [
+          {
+            "criterion": "The candidate builds their solution incrementally, writing and refinin",
+            "expectedBand": "high",
+            "strong": true,
+            "intendedBehavior": "iteratively edits and fixes across files (not pasted)",
+            "actualScore": 5,
+            "actualBand": "mid",
+            "evaluable": true,
+            "confidence": "medium",
+            "verdict": "The candidate demonstrated some incremental development by testing the 'fill method' multiple times throughout the session. However, there is no clear evidence of refining code across multiple files or discussing their thought process while coding. The testing behavior indicates some level of incremental development, but the lack of comprehensive evidence leads to a medium confidence score.",
+            "evidenceSnippet": "The candidate tests the 'fill method'.",
+            "match": false
+          },
+          {
+            "criterion": "The candidate verifies their own work by running tests or linters in t",
+            "expectedBand": "high",
+            "strong": true,
+            "intendedBehavior": "edit -> pytest fail -> read traceback -> fix -> re-run green, plus git diff --stat",
+            "actualScore": 5,
+            "actualBand": "mid",
+            "evaluable": true,
+            "confidence": "medium",
+            "verdict": "The candidate ran multiple test commands but did not demonstrate any reaction to the outputs or modify their code based on the results. This indicates a lack of engagement with the testing process.",
+            "evidenceSnippet": "The candidate runs a test command in the terminal: 'fill method\ne method'.",
+            "match": false
+          },
+          {
+            "criterion": "The candidate relied on an AI coding assistant — AI chat, inline code ",
+            "expectedBand": "high",
+            "strong": true,
+            "intendedBehavior": "uses Cmd-K to apply the backoff fix + AI chat + inline completions",
+            "actualScore": 8,
+            "actualBand": "high",
+            "evaluable": true,
+            "confidence": "high",
+            "verdict": "The candidate demonstrated strong reliance on an AI coding assistant throughout the coding task, as evidenced by multiple instances of sending prompts to the assistant for help. This consistent interaction indicates a good integration of AI assistance into their coding process.",
+            "evidenceSnippet": "The candidate interacted with the AI assistant.",
+            "match": true
+          },
+          {
+            "criterion": "The candidate opens a web browser and navigates to external pages — fo",
+            "expectedBand": "high",
+            "strong": true,
+            "intendedBehavior": "googles the failing-test traceback in the browser",
+            "actualScore": 8,
+            "actualBand": "high",
+            "evaluable": true,
+            "confidence": "high",
+            "verdict": "The candidate demonstrated strong evidence of actively seeking information from external sources, including multiple searches on Google and references to official documentation and Stack Overflow. This consistent behavior across several moments indicates a proactive approach to problem-solving.",
+            "evidenceSnippet": "The candidate references 'docs.python.org' and 'stackoverflow' in the context of their assessment.",
+            "match": true
+          }
+        ],
+        "strongMatched": 2,
+        "strongTotal": 4,
+        "reusedFromPriorRun": true
+      }
+    ]
+  },
+  "v2": {
+    "strongMatched": 9,
+    "strongTotal": 9,
+    "strongAccuracy": 1,
+    "pipelineVersion": "v2-time-aware"
+  },
+  "accuracy": {
+    "strongMatched": 9,
+    "strongTotal": 9,
+    "strongAccuracy": 1,
+    "note": "Accuracy is over the 'strong' (unambiguous) ground-truth assertions per clip. 'mid'/soft assertions are reported but not scored."
+  },
+  "candidates": [
+    {
+      "variant": "bursty",
+      "label": "Bursty typist",
+      "submissionId": "6a30d47d5c1e8969b7c213de",
+      "sessionId": "6a30d47d5c1e8969b7c213e0",
+      "durationSeconds": 1950,
+      "frames": 1571,
+      "transcriptSegments": 4631,
+      "transcriptMs": 0,
+      "refineMs": 1884415,
+      "evalMs": 75894,
+      "overallScore10": 8.5,
+      "overallScore100": 85,
+      "transcriptQuality": {
+        "tokenRecall": 1,
+        "foundTokens": [
+          "TokenBucket",
+          "backoff_delay",
+          "try_acquire",
+          "Dispatcher",
+          "Webhook",
+          "pytest",
+          "async",
+          "jitter",
+          "Semaphore",
+          "httpx"
+        ],
+        "missingTokens": [],
+        "nonEmptySegments": 4631
+      },
+      "summary": "During the session, the candidate worked on implementing a webhook dispatcher service, focusing on various aspects such as error handling, rate limiting, and delivery logic. They began by reviewing the problem requirements and then proceeded to write code for an asynchronous HTTP client, incorporating features like token acquisition for rate limiting. Throughout the session, the candidate engaged with an AI tool multiple times, seeking assistance and integrating suggestions into their code, which indicated a collaborative approach to problem-solving. They also conducted extensive testing using pytest, refining their implementation based on test results, and actively researched best practices for error handling and backoff strategies. Key moments included debugging cycles where they addressed test failures and iteratively improved their code, demonstrating a methodical approach to ensuring robustness in their service. The session concluded with the candidate finalizing their implementation and confirming that all tests passed successfully.",
+      "checks": [
+        {
+          "criterion": "The candidate builds their solution incrementally, writing and refinin",
+          "expectedBand": "high",
+          "strong": true,
+          "intendedBehavior": "fast bursts but still typed line-by-line across files (no wholesale paste)",
+          "actualScore": 8,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "high",
+          "verdict": "The candidate demonstrated a strong incremental approach to building their solution, as evidenced by multiple instances of writing, testing, and refining their code. They engaged in a clear cycle of coding and testing, revisiting and modifying their implementation based on test results, which indicates a methodical and iterative development process.",
+          "evidenceSnippet": "At 119–119s, the candidate ran tests using pytest, indicating they are validating their implementation and checking for correctness.",
+          "match": true
+        },
+        {
+          "criterion": "The candidate verifies their own work by running tests or linters in t",
+          "expectedBand": "high",
+          "strong": true,
+          "intendedBehavior": "runs pytest each pass (pass/fail surfaced)",
+          "actualScore": 9,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "high",
+          "verdict": "The candidate demonstrated strong evidence of verifying their work by running tests multiple times, analyzing the results, and making adjustments based on the feedback. They actively engaged in a debug loop, refining their implementation and ensuring correctness through thorough testing practices.",
+          "evidenceSnippet": "At 119–119s, the candidate ran tests using pytest, indicating they are validating their implementation and checking for correctness.",
+          "match": true
+        },
+        {
+          "criterion": "The candidate relied on an AI coding assistant — AI chat, inline code ",
+          "expectedBand": "mid",
+          "strong": false,
+          "intendedBehavior": "light AI: a few inline completions / Cmd-K edits, no chat panel",
+          "actualScore": 8,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "medium",
+          "verdict": "The candidate demonstrated good engagement with the AI coding assistant, utilizing it multiple times for assistance and clarification. However, the reliance on AI was not consistent throughout the session, leading to a score reflecting good but not strong evidence of integration.",
+          "evidenceSnippet": "[ai usage] From 291–455s, candidate engaged with the AI chat tool multiple times, seeking assistance and integrating suggestions into their code, indicating sustained use of AI ass",
+          "match": false
+        },
+        {
+          "criterion": "The candidate opens a web browser and navigates to external pages — fo",
+          "expectedBand": "high",
+          "strong": true,
+          "intendedBehavior": "long documentation/StackOverflow/blog reading sessions in the browser",
+          "actualScore": 9,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "high",
+          "verdict": "The candidate demonstrated strong initiative and resourcefulness by actively researching external resources, including Stack Overflow and AWS documentation, to enhance their understanding and implementation of the problem. This is evidenced by multiple instances of sustained research sessions where they sought specific information relevant to their coding task.",
+          "evidenceSnippet": "From 125–223s, the candidate engaged in a sustained research session in the browser, looking into thread-safe token bucket implementations to enhance their solution.",
+          "match": true
+        }
+      ],
+      "strongMatched": 3,
+      "strongTotal": 3,
+      "pipelineVersion": "v2-time-aware",
+      "evalEventCount": 1584,
+      "temporalInsightCount": 101
+    },
+    {
+      "variant": "ai_heavy",
+      "label": "AI-assisted",
+      "submissionId": "6a3182c62356559b0503d333",
+      "sessionId": "6a3182c62356559b0503d335",
+      "durationSeconds": 1890,
+      "frames": 614,
+      "transcriptSegments": 1763,
+      "transcriptMs": 0,
+      "refineMs": 1002502,
+      "evalMs": 39022,
+      "overallScore10": 8.5,
+      "overallScore100": 85,
+      "transcriptQuality": {
+        "tokenRecall": 1,
+        "foundTokens": [
+          "TokenBucket",
+          "backoff_delay",
+          "try_acquire",
+          "Dispatcher",
+          "Webhook",
+          "pytest",
+          "async",
+          "jitter",
+          "Semaphore",
+          "httpx"
+        ],
+        "missingTokens": [],
+        "nonEmptySegments": 1763
+      },
+      "summary": "During the session, the candidate worked on implementing a thread-safe token-bucket rate limiter in Python. They began by reviewing the assessment instructions and exploring the project structure in VS Code before diving into the problem statement. The candidate engaged extensively with an AI assistant, seeking guidance on various implementation details, particularly around concurrency and error handling. Throughout the coding process, they iteratively refined their logic for token acquisition, backoff strategies, and managing delivery attempts, while also conducting research on relevant topics such as asyncio semaphores and idempotency. The candidate demonstrated a methodical approach, frequently testing their implementation to ensure correctness and robustness, and they maintained a focus on integrating AI suggestions into their code. As the session progressed, they finalized their implementation, reflecting a thorough understanding of the requirements and attention to detail.",
+      "checks": [
+        {
+          "criterion": "The candidate builds their solution incrementally, writing and refinin",
+          "expectedBand": "mid",
+          "strong": false,
+          "intendedBehavior": "accepts large AI-suggested blocks + Cmd-K diffs (semi-incremental)",
+          "actualScore": 8,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "high",
+          "verdict": "The candidate exhibited strong evidence of an incremental coding approach by engaging in multiple test cycles, refining their implementation based on feedback, and actively integrating AI suggestions throughout the process. They demonstrated a structured approach to coding, which aligns well with the criterion of building a solution step by step rather than pasting a finished solution.",
+          "evidenceSnippet": "From 576–600s, the candidate ran tests twice, achieving a 100% pass rate both times, indicating confidence in their implementation's correctness.",
+          "match": false
+        },
+        {
+          "criterion": "The candidate verifies their own work by running tests or linters in t",
+          "expectedBand": "mid",
+          "strong": false,
+          "intendedBehavior": "runs pytest only on some passes",
+          "actualScore": 9,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "high",
+          "verdict": "The candidate demonstrated strong evidence of verifying their work by running tests multiple times, achieving a 100% pass rate, and actively engaging in debugging cycles to refine their implementation. Their consistent focus on testing and validation indicates a thorough understanding of code quality and debugging practices.",
+          "evidenceSnippet": "At 576s, the candidate runs tests for their implementation, achieving a 100% pass rate, which indicates confidence in their code's correctness.",
+          "match": false
+        },
+        {
+          "criterion": "The candidate relied on an AI coding assistant — AI chat, inline code ",
+          "expectedBand": "high",
+          "strong": true,
+          "intendedBehavior": "heavy reliance: repeated AI chat prompts + many inline completions + Cmd-K inline edits",
+          "actualScore": 9,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "high",
+          "verdict": "The candidate demonstrated a strong reliance on the AI coding assistant throughout the coding task, as evidenced by multiple instances of sustained interaction with the AI, actively integrating its suggestions into their implementation. This consistent engagement with the AI indicates a thorough understanding of how to leverage AI tools effectively in their coding process.",
+          "evidenceSnippet": "From 162–198s, the candidate engaged in a sustained interaction with the AI assistant, reviewing and integrating its suggestions into their coding approach, indicating a thorough e",
+          "match": true
+        },
+        {
+          "criterion": "The candidate opens a web browser and navigates to external pages — fo",
+          "expectedBand": "high",
+          "strong": true,
+          "intendedBehavior": "browses docs/SO/blog every cycle alongside the AI chat",
+          "actualScore": 8,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "high",
+          "verdict": "The candidate demonstrated a strong initiative in researching external resources to support their coding task. They opened a web browser multiple times to consult documentation and relevant forums, such as Stack Overflow, to clarify implementation details and improve their understanding of specific concepts. This consistent behavior indicates a proactive approach to problem-solving.",
+          "evidenceSnippet": "At 258s, candidate switched to a browser to review documentation on asyncio semaphores, indicating a brief research session to support their implementation.",
+          "match": true
+        }
+      ],
+      "strongMatched": 2,
+      "strongTotal": 2,
+      "pipelineVersion": "v2-time-aware",
+      "evalEventCount": 1172,
+      "temporalInsightCount": 47
+    },
+    {
+      "variant": "debug",
+      "label": "Debug / test loop",
+      "submissionId": "6a3173ea93dce5be9bd77a48",
+      "sessionId": "6a3173ea93dce5be9bd77a4a",
+      "durationSeconds": 2010,
+      "frames": 1436,
+      "transcriptSegments": 4363,
+      "transcriptMs": 0,
+      "refineMs": 1631954,
+      "evalMs": 81202,
+      "overallScore10": 8.5,
+      "overallScore100": 85,
+      "transcriptQuality": {
+        "tokenRecall": 1,
+        "foundTokens": [
+          "TokenBucket",
+          "backoff_delay",
+          "try_acquire",
+          "Dispatcher",
+          "Webhook",
+          "pytest",
+          "async",
+          "jitter",
+          "Semaphore",
+          "httpx"
+        ],
+        "missingTokens": [],
+        "nonEmptySegments": 4362
+      },
+      "summary": "During the session, the candidate worked on implementing a \"Resilient Webhook Dispatcher,\" focusing on the logic for handling webhooks, rate limiting, and backoff strategies. They began by thoroughly reading the problem statement and requirements before diving into coding, demonstrating a methodical approach to their implementation. Throughout the session, the candidate engaged in a cycle of coding, testing, and refining their code, particularly addressing issues related to error handling and ensuring robustness in their logic. They frequently utilized AI assistance to clarify concepts such as exponential backoff with jitter and to troubleshoot specific implementation challenges. The candidate also conducted extensive research to resolve testing failures, indicating a proactive approach to debugging. Overall, they maintained a steady pace in refining their code and validating its functionality through repeated testing.",
+      "checks": [
+        {
+          "criterion": "The candidate builds their solution incrementally, writing and refinin",
+          "expectedBand": "high",
+          "strong": true,
+          "intendedBehavior": "iteratively edits and fixes across files (not pasted)",
+          "actualScore": 8,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "high",
+          "verdict": "The candidate demonstrated a strong incremental approach to building their solution, as evidenced by multiple instances of refining code, running tests, and making adjustments based on feedback. They consistently engaged in a cycle of coding, testing, and refining, which aligns well with the criterion of building a solution incrementally.",
+          "evidenceSnippet": "At 37–39s, the candidate refined their implementation of the rate limiter, indicating a cycle of coding and refining based on their understanding of the requirements.",
+          "match": true
+        },
+        {
+          "criterion": "The candidate verifies their own work by running tests or linters in t",
+          "expectedBand": "high",
+          "strong": true,
+          "intendedBehavior": "edit -> pytest fail -> read traceback -> fix -> re-run green, plus git diff --stat",
+          "actualScore": 9,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "high",
+          "verdict": "The candidate consistently demonstrated a strong ability to verify their work by running tests, interpreting the results, and making necessary adjustments. They engaged in multiple debug loops, confirmed successful test executions, and refined their implementation based on feedback, indicating a thorough and methodical approach to validating their code.",
+          "evidenceSnippet": "From 288–303s, the candidate demonstrated a debug loop by refining their implementation, running tests, and addressing issues based on test results, indicating a methodical approac",
+          "match": true
+        },
+        {
+          "criterion": "The candidate relied on an AI coding assistant — AI chat, inline code ",
+          "expectedBand": "high",
+          "strong": true,
+          "intendedBehavior": "uses Cmd-K to apply the backoff fix + AI chat + inline completions",
+          "actualScore": 8,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "high",
+          "verdict": "The candidate demonstrated strong reliance on AI assistance throughout the coding process, frequently engaging with the AI for guidance and integrating its suggestions into their implementation. This consistent interaction indicates a solid use of AI tools to enhance their coding efforts.",
+          "evidenceSnippet": "AI CHAT — Assistant",
+          "match": true
+        },
+        {
+          "criterion": "The candidate opens a web browser and navigates to external pages — fo",
+          "expectedBand": "high",
+          "strong": true,
+          "intendedBehavior": "googles the failing-test traceback in the browser",
+          "actualScore": 9,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "high",
+          "verdict": "The candidate demonstrated strong evidence of seeking external resources by actively using a web browser to access official documentation, search for solutions on StackOverflow, and conduct research on Google. They engaged with multiple relevant sources throughout the assessment, indicating a thorough approach to problem-solving.",
+          "evidenceSnippet": "The candidate accessed documentation at docs.python.org and StackOverflow.",
+          "match": true
+        }
+      ],
+      "strongMatched": 4,
+      "strongTotal": 4,
+      "pipelineVersion": "v2-time-aware",
+      "evalEventCount": 2429,
+      "temporalInsightCount": 96
+    }
+  ],
+  "deploymentVerification": {
+    "api": "https://bridge-assessements-1.onrender.com",
+    "submissionsStatus": 401,
+    "submissionsBody": "Token was invalid. Be sure to refresh token if needed."
+  },
+  "videoPlaybackOnDeployment": [
+    {
+      "variant": "bursty",
+      "sessionId": "6a30d47d5c1e8969b7c213e0",
+      "status": 401
+    },
+    {
+      "variant": "ai_heavy",
+      "sessionId": "6a3182c62356559b0503d335",
+      "status": 401
+    },
+    {
+      "variant": "debug",
+      "sessionId": "6a3173ea93dce5be9bd77a4a",
+      "status": 401
+    }
+  ]
+}

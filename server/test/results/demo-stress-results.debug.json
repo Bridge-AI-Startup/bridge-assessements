@@ -1,0 +1,120 @@
+{
+  "generatedAt": "2026-06-16T17:36:50.747Z",
+  "login": {
+    "url": "https://www.bridge-jobs.com/",
+    "email": "demo@bridgeai-demo.com",
+    "password": "BridgeDemo2026!"
+  },
+  "userId": "6a30759984c34d799cfd9370",
+  "assessmentId": "6a30cb825c1e8969b7c21110",
+  "assessmentTitle": "Resilient Webhook Dispatcher — Live Coding Sessions (30+ min stress set)",
+  "accuracy": {
+    "strongMatched": 2,
+    "strongTotal": 4,
+    "strongAccuracy": 0.5,
+    "note": "Accuracy is over the 'strong' (unambiguous) ground-truth assertions per clip. 'mid'/soft assertions are reported but not scored."
+  },
+  "candidates": [
+    {
+      "variant": "debug",
+      "label": "Debug / test loop",
+      "submissionId": "6a3173ea93dce5be9bd77a48",
+      "sessionId": "6a3173ea93dce5be9bd77a4a",
+      "durationSeconds": 2010,
+      "frames": 1436,
+      "transcriptSegments": 4363,
+      "transcriptMs": null,
+      "evalMs": null,
+      "overallScore10": 6.5,
+      "overallScore100": 65,
+      "transcriptQuality": {
+        "tokenRecall": 1,
+        "foundTokens": [
+          "TokenBucket",
+          "backoff_delay",
+          "try_acquire",
+          "Dispatcher",
+          "Webhook",
+          "pytest",
+          "async",
+          "jitter",
+          "Semaphore",
+          "httpx"
+        ],
+        "missingTokens": [],
+        "nonEmptySegments": 4362
+      },
+      "summary": "During the session, the candidate worked on implementing a method that involved handling exponential backoff with jitter for a retry loop. They began by reviewing the requirements and then proceeded to write code, frequently testing their implementation using the fill method. Throughout the session, the candidate utilized an AI assistant multiple times to seek guidance on specific coding challenges, particularly regarding the implementation of the backoff strategy. They encountered several testing phases, where they addressed issues and refined their code based on the results of their tests. The candidate also engaged in searching for additional resources and examples online to enhance their understanding and approach to the problem. Overall, the session was characterized by a cycle of coding, testing, and seeking assistance, demonstrating a methodical approach to problem-solving.",
+      "checks": [
+        {
+          "criterion": "The candidate builds their solution incrementally, writing and refinin",
+          "expectedBand": "high",
+          "strong": true,
+          "intendedBehavior": "iteratively edits and fixes across files (not pasted)",
+          "actualScore": 5,
+          "actualBand": "mid",
+          "evaluable": true,
+          "confidence": "medium",
+          "verdict": "The candidate demonstrated some incremental development by testing the 'fill method' multiple times throughout the session. However, there is no clear evidence of refining code across multiple files or discussing their thought process while coding. The testing behavior indicates some level of incremental development, but the lack of comprehensive evidence leads to a medium confidence score.",
+          "evidenceSnippet": "The candidate tests the 'fill method'.",
+          "match": false
+        },
+        {
+          "criterion": "The candidate verifies their own work by running tests or linters in t",
+          "expectedBand": "high",
+          "strong": true,
+          "intendedBehavior": "edit -> pytest fail -> read traceback -> fix -> re-run green, plus git diff --stat",
+          "actualScore": 5,
+          "actualBand": "mid",
+          "evaluable": true,
+          "confidence": "medium",
+          "verdict": "The candidate ran multiple test commands but did not demonstrate any reaction to the outputs or modify their code based on the results. This indicates a lack of engagement with the testing process.",
+          "evidenceSnippet": "The candidate runs a test command in the terminal: 'fill method\ne method'.",
+          "match": false
+        },
+        {
+          "criterion": "The candidate relied on an AI coding assistant — AI chat, inline code ",
+          "expectedBand": "high",
+          "strong": true,
+          "intendedBehavior": "uses Cmd-K to apply the backoff fix + AI chat + inline completions",
+          "actualScore": 8,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "high",
+          "verdict": "The candidate demonstrated strong reliance on an AI coding assistant throughout the coding task, as evidenced by multiple instances of sending prompts to the assistant for help. This consistent interaction indicates a good integration of AI assistance into their coding process.",
+          "evidenceSnippet": "The candidate interacted with the AI assistant.",
+          "match": true
+        },
+        {
+          "criterion": "The candidate opens a web browser and navigates to external pages — fo",
+          "expectedBand": "high",
+          "strong": true,
+          "intendedBehavior": "googles the failing-test traceback in the browser",
+          "actualScore": 8,
+          "actualBand": "high",
+          "evaluable": true,
+          "confidence": "high",
+          "verdict": "The candidate demonstrated strong evidence of actively seeking information from external sources, including multiple searches on Google and references to official documentation and Stack Overflow. This consistent behavior across several moments indicates a proactive approach to problem-solving.",
+          "evidenceSnippet": "The candidate references 'docs.python.org' and 'stackoverflow' in the context of their assessment.",
+          "match": true
+        }
+      ],
+      "strongMatched": 2,
+      "strongTotal": 4,
+      "reusedFromPriorRun": true
+    }
+  ],
+  "deploymentVerification": {
+    "api": "https://bridge-assessements-1.onrender.com",
+    "submissionsStatus": 200,
+    "submissionsVisible": 4,
+    "submissionsWithScores": 4
+  },
+  "videoPlaybackOnDeployment": [
+    {
+      "variant": "debug",
+      "sessionId": "6a3173ea93dce5be9bd77a4a",
+      "status": 404
+    }
+  ]
+}

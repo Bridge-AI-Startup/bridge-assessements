@@ -105,3 +105,33 @@ export type EnrichedTranscript = {
     processing_time_ms: number
   }
 }
+
+// ============================================================================
+// Time-aware refinement (enriched transcript → evaluation-ready events)
+// ============================================================================
+
+export type TemporalInsightType =
+  | "incremental_build"
+  | "test_cycle"
+  | "debug_loop"
+  | "ai_usage"
+  | "research"
+  | "workflow_transition"
+
+/** Cross-event temporal pattern identified in a second refinement pass. */
+export type TemporalInsight = {
+  ts: number
+  ts_end: number
+  insight_type: TemporalInsightType
+  observation: string
+  confidence: "high" | "medium" | "low"
+}
+
+/** Output of the full refinement pipeline (interpretation + temporal insights + hybrid merge). */
+export type RefinedTranscript = {
+  version: "v2"
+  enriched: EnrichedTranscript
+  temporal_insights: TemporalInsight[]
+  evaluation_events: TranscriptEvent[]
+  refined_at: string
+}

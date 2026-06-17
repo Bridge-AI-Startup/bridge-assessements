@@ -1,5 +1,6 @@
 import { jsonrepair } from "jsonrepair";
 import { PROMPT_EVALUATE_CRITERION } from "../../prompts/index.js";
+import { compactTranscriptForPrompt } from "./compactTranscript.js";
 import { unwrapObject } from "./llmJson.js";
 import { createChatCompletion } from "../langchainAI.js";
 import { criterionResultSchema } from "../schemas/evaluation.js";
@@ -68,11 +69,16 @@ function fallbackCriterionResult(
   };
 }
 
-/** Parse and validate LLM response; on schema failure use fallback so the pipeline never crashes. */
+/**
+ * Parse and validate LLM response. Returns `ok: false` (with a fallback result)
+ * when the structured output is missing required fields — most commonly because
+ * the response was truncated at the token limit on long transcripts. Callers can
+ * use `ok` to decide whether to retry before accepting the fallback.
+ */
 function parseCriterionResult(
   content: string,
   criterion: string,
-): CriterionResult {
+): { result: CriterionResult; ok: boolean } {
   const unwrapped = unwrapObject(parseEvaluatorJson(content));
   const raw =
     unwrapped !== null &&
@@ -83,12 +89,58 @@ function parseCriterionResult(
   const parsed = criterionResultSchema.safeParse(raw);
   if (parsed.success) {
     return {
-      ...parsed.data,
-      criterion,
-      evaluable: isEvaluable(parsed.data),
+      result: {
+        ...parsed.data,
+        criterion,
+        evaluable: isEvaluable(parsed.data),
+      },
+      ok: true,
     };
   }
-  return fallbackCriterionResult(raw, criterion);
+  return { result: fallbackCriterionResult(raw, criterion), ok: false };
+}
+
+/** Max output tokens for a criterion evaluation. Large enough that a full
+ * evidence array plus verdict is not truncated on long (30+ min) transcripts. */
+const EVAL_MAX_TOKENS = 4096;
+
+const RETRY_NUDGE =
+  "Your previous response was incomplete or not valid JSON (it was likely cut off before all fields were written). " +
+  "Respond again with a SINGLE complete, valid JSON object containing exactly these fields: " +
+  "criterion (string), evidence (array of at most 6 items, each { ts, ts_end, observation }), " +
+  "score (integer 1-10), confidence ('high' | 'medium' | 'low'), and verdict (a concise paragraph under 80 words). " +
+  "Output only the JSON object and nothing else.";
+
+/** Run the evaluator prompt, retrying once if the response failed schema
+ * validation (e.g. truncated output). Falls back to the first attempt's
+ * best-effort result if the retry also fails. */
+async function evaluateWithRetry(
+  messages: Array<{ role: "system" | "user"; content: string }>,
+  criterion: string,
+): Promise<CriterionResult> {
+  const first = await callEvaluator(messages, criterion);
+  if (first.ok) return first.result;
+
+  const retryMessages = [
+    ...messages,
+    { role: "user" as const, content: RETRY_NUDGE },
+  ];
+  const second = await callEvaluator(retryMessages, criterion);
+  return second.ok ? second.result : first.result;
+}
+
+async function callEvaluator(
+  messages: Array<{ role: "system" | "user"; content: string }>,
+  criterion: string,
+): Promise<{ result: CriterionResult; ok: boolean }> {
+  const { content } = await createChatCompletion("transcript_evaluation", messages, {
+    provider: PROMPT_EVALUATE_CRITERION.provider,
+    model: PROMPT_EVALUATE_CRITERION.model,
+    temperature: 0,
+    maxTokens: EVAL_MAX_TOKENS,
+    responseFormat: { type: "json_object" },
+  });
+  return parseCriterionResult(content, criterion);
 }
 
 /**
@@ -126,7 +178,11 @@ export async function evaluateCriterion(
   criterion: string,
   transcript: TranscriptEvent[],
 ): Promise<CriterionResult> {
-  const transcriptJson = JSON.stringify(transcript, null, 2);
+  const transcriptJson = JSON.stringify(
+    compactTranscriptForPrompt(transcript),
+    null,
+    2,
+  );
 
   const messages = [
     { role: "system" as const, content: PROMPT_EVALUATE_CRITERION.system },
@@ -139,19 +195,7 @@ export async function evaluateCriterion(
     },
   ];
 
-  const { content } = await createChatCompletion(
-    "transcript_evaluation",
-    messages,
-    {
-      provider: PROMPT_EVALUATE_CRITERION.provider,
-      model: PROMPT_EVALUATE_CRITERION.model,
-      temperature: 0,
-      maxTokens: 2048,
-      responseFormat: { type: "json_object" },
-    },
-  );
-
-  return parseCriterionResult(content, criterion);
+  return evaluateWithRetry(messages, criterion);
 }
 
 /**
@@ -164,7 +208,11 @@ export async function evaluateCriterionWithGrounding(
   filteredTranscript: TranscriptEvent[],
   originalCriterion: string,
 ): Promise<CriterionResult> {
-  const transcriptJson = JSON.stringify(filteredTranscript, null, 2);
+  const transcriptJson = JSON.stringify(
+    compactTranscriptForPrompt(filteredTranscript),
+    null,
+    2,
+  );
   const escapedCriterion = originalCriterion.replace(/"/g, '\\"');
 
   const userContent = `CRITERION: ${originalCriterion}
@@ -198,17 +246,5 @@ In all string fields (criterion, observation, verdict), escape any double quotes
     { role: "user" as const, content: userContent },
   ];
 
-  const { content } = await createChatCompletion(
-    "transcript_evaluation",
-    messages,
-    {
-      provider: PROMPT_EVALUATE_CRITERION.provider,
-      model: PROMPT_EVALUATE_CRITERION.model,
-      temperature: 0,
-      maxTokens: 2048,
-      responseFormat: { type: "json_object" },
-    },
-  );
-
-  return parseCriterionResult(content, originalCriterion);
+  return evaluateWithRetry(messages, originalCriterion);
 }

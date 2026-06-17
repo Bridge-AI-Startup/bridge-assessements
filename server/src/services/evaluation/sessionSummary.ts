@@ -1,5 +1,6 @@
 import { PROMPT_TRANSCRIPT_SESSION_SUMMARY } from "../../prompts/index.js";
 import { createChatCompletion } from "../langchainAI.js";
+import { compactTranscriptForPrompt } from "./compactTranscript.js";
 import type { TranscriptEvent } from "../../types/evaluation.js";
 
 /**
@@ -9,7 +10,11 @@ import type { TranscriptEvent } from "../../types/evaluation.js";
 export async function generateSessionSummary(
   transcript: TranscriptEvent[]
 ): Promise<string> {
-  const transcriptJson = JSON.stringify(transcript, null, 2);
+  const transcriptJson = JSON.stringify(
+    compactTranscriptForPrompt(transcript),
+    null,
+    2,
+  );
 
   const messages = [
     { role: "system" as const, content: PROMPT_TRANSCRIPT_SESSION_SUMMARY.system },

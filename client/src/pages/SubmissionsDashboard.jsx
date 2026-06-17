@@ -111,6 +111,14 @@ function getRecordingRubric0to100(sub) {
   return avg == null ? null : avg * 10;
 }
 
+/** True when workflow rubric scores exist (used to default the evaluation modal tab). */
+function hasEvaluableWorkflowReport(sub) {
+  const n =
+    sub?.evaluationReport?.criteria_results?.filter((r) => r.evaluable)
+      ?.length ?? 0;
+  return n > 0;
+}
+
 /** Behavioral checks → 0–100 (pass=1, inconclusive=0.5, fail=0), when grading completed. */
 function getBehavioralPass0to100(sub) {
   if (sub.behavioralGradingStatus !== "completed") return null;
@@ -397,6 +405,7 @@ export default function SubmissionsDashboard() {
   );
   const behavioralArtifactsLoadedForIdRef = React.useRef(null);
   const recordingVideoObjectUrlRef = React.useRef(null);
+  const recordingMergePollRef = React.useRef(null);
   const { toast } = useToast();
 
   const handleOpenRunProjectModal = (githubUrl) => {
@@ -496,10 +505,14 @@ export default function SubmissionsDashboard() {
     };
   }, [behavioralArtifactUrls]);
 
-  // Default evaluation modal to Final code tab (demo-first)
+  // Default evaluation modal tab: rubric scores → Final code; otherwise screen recording first
   useEffect(() => {
-    if (showEvaluationModal) {
-      setEvaluationTab("execution");
+    if (showEvaluationModal && selectedEvaluationSubmission?._id) {
+      setEvaluationTab(
+        hasEvaluableWorkflowReport(selectedEvaluationSubmission)
+          ? "execution"
+          : "recording",
+      );
     }
   }, [showEvaluationModal, selectedEvaluationSubmission?._id]);
 
@@ -529,6 +542,10 @@ export default function SubmissionsDashboard() {
     if (recordingVideoObjectUrlRef.current) {
       URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
       recordingVideoObjectUrlRef.current = null;
+    }
+    if (recordingMergePollRef.current) {
+      clearInterval(recordingMergePollRef.current);
+      recordingMergePollRef.current = null;
     }
     setRecordingVideoObjectUrl(null);
     setRecordingSession(null);
@@ -584,7 +601,13 @@ export default function SubmissionsDashboard() {
             setRecordingTranscript(segments);
           }
         }
-        if (selectedEvaluationSubmission?.evaluationReport) {
+        const employerCanWatchRecording =
+          Boolean(selectedEvaluationSubmission?.evaluationReport) ||
+          session.status === "completed" ||
+          session.mergedVideo?.status === "ready";
+        const mergeInFlight = session.mergedVideo?.status === "merging";
+
+        if (employerCanWatchRecording && !mergeInFlight) {
           const sessionIdForVideo =
             session._id != null && typeof session._id === "string"
               ? session._id
@@ -620,9 +643,63 @@ export default function SubmissionsDashboard() {
           setRecordingVideoLoading(false);
         } else {
           setRecordingVideoLoading(false);
-          console.log(
-            "[proctoring-video] client step 5 SKIP: no evaluationReport, not fetching video"
-          );
+          if (mergeInFlight) {
+            console.log(
+              "[proctoring-video] client step 5 SKIP: merged video is still being prepared"
+            );
+          } else {
+            console.log(
+              "[proctoring-video] client step 5 SKIP: recording not ready for playback yet"
+            );
+          }
+        }
+
+        if (!cancelled && mergeInFlight) {
+          if (recordingMergePollRef.current) {
+            clearInterval(recordingMergePollRef.current);
+            recordingMergePollRef.current = null;
+          }
+          recordingMergePollRef.current = setInterval(async () => {
+            if (cancelled) return;
+            try {
+              const tok = await currentUser.getIdToken();
+              const sr = await getSessionBySubmission(submissionId, tok);
+              if (!sr.success || !sr.data || cancelled) return;
+              setRecordingSession(sr.data);
+              const stillMerging = sr.data.mergedVideo?.status === "merging";
+              if (!stillMerging) {
+                if (recordingMergePollRef.current) {
+                  clearInterval(recordingMergePollRef.current);
+                  recordingMergePollRef.current = null;
+                }
+                const canWatchNow =
+                  Boolean(selectedEvaluationSubmission?.evaluationReport) ||
+                  sr.data.status === "completed" ||
+                  sr.data.mergedVideo?.status === "ready";
+                if (canWatchNow && sr.data.mergedVideo?.status !== "merging") {
+                  setRecordingVideoLoading(true);
+                  const sessionIdForVideo =
+                    sr.data._id != null && typeof sr.data._id === "string"
+                      ? sr.data._id
+                      : sr.data._id?.toString?.() ?? String(sr.data._id);
+                  const videoResult = await getProctoringVideoPlaybackUrl(
+                    sessionIdForVideo,
+                    tok
+                  );
+                  if (!cancelled && videoResult.success && videoResult.data) {
+                    if (recordingVideoObjectUrlRef.current) {
+                      URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
+                    }
+                    recordingVideoObjectUrlRef.current = videoResult.data;
+                    setRecordingVideoObjectUrl(videoResult.data);
+                  }
+                  if (!cancelled) setRecordingVideoLoading(false);
+                }
+              }
+            } catch (e) {
+              console.warn("[proctoring-video] merge poll failed:", e?.message ?? e);
+            }
+          }, 4000);
         }
       } catch (err) {
         console.log("[proctoring-video] client CAUGHT ERROR:", err?.message ?? err);
@@ -637,6 +714,10 @@ export default function SubmissionsDashboard() {
     return () => {
       cancelled = true;
       setRecordingVideoLoading(false);
+      if (recordingMergePollRef.current) {
+        clearInterval(recordingMergePollRef.current);
+        recordingMergePollRef.current = null;
+      }
       if (recordingVideoObjectUrlRef.current) {
         URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
         recordingVideoObjectUrlRef.current = null;
@@ -646,6 +727,7 @@ export default function SubmissionsDashboard() {
   }, [
     evaluationTab,
     selectedEvaluationSubmission?._id,
+    selectedEvaluationSubmission?.evaluationReport,
     currentUser,
   ]);
 
@@ -1703,9 +1785,7 @@ export default function SubmissionsDashboard() {
                             submission
                           ).join(" · ");
                           const hasEvaluationReport =
-                            submission.evaluationReport?.criteria_results?.filter(
-                              (r) => r.evaluable
-                            )?.length > 0;
+                            hasEvaluableWorkflowReport(submission);
                           // Show loading while waiting for first score signal (recording rubric, behavioral, or trace)
                           const submittedRecently =
                             submission.submittedAt &&
@@ -1756,15 +1836,30 @@ export default function SubmissionsDashboard() {
                           }
                           if (evaluationPending) {
                             return (
-                              <div className="flex items-center gap-2 text-sm text-gray-500">
-                                <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
-                                <span>Evaluating…</span>
+                              <div className="flex flex-col gap-1.5 items-start">
+                                <div className="flex items-center gap-2 text-sm text-gray-500">
+                                  <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+                                  <span>Evaluating…</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedEvaluationSubmission(submission);
+                                    setEvaluationTab("recording");
+                                    setShowEvaluationModal(true);
+                                  }}
+                                  className="text-left text-xs font-medium text-[#1E3A8A] hover:underline"
+                                  title="Watch the screen capture while scores are still generating"
+                                >
+                                  View screen recording
+                                </button>
                               </div>
                             );
                           }
                           if (showRunEvaluation) {
                             return (
-                              <div className="flex flex-col gap-1">
+                              <div className="flex flex-col gap-1.5 items-start">
                                 <Button
                                     onClick={async (e) => {
                                       e.stopPropagation();
@@ -1841,6 +1936,19 @@ export default function SubmissionsDashboard() {
                                       ? "Running…"
                                       : "Run evaluation"}
                                   </Button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedEvaluationSubmission(submission);
+                                    setEvaluationTab("recording");
+                                    setShowEvaluationModal(true);
+                                  }}
+                                  className="text-left text-xs font-medium text-[#1E3A8A] hover:underline"
+                                  title="Watch the screen capture"
+                                >
+                                  View screen recording
+                                </button>
                               </div>
                             );
                           }
@@ -2945,7 +3053,12 @@ export default function SubmissionsDashboard() {
             >
               <TabsList className="w-full justify-start">
                 <TabsTrigger value="execution">Final code</TabsTrigger>
-                <TabsTrigger value="recording">Workflow evaluation</TabsTrigger>
+                <TabsTrigger
+                  value="recording"
+                  title="Screen recording, transcript, and workflow rubric (available before scores finish)"
+                >
+                  Recording & rubric
+                </TabsTrigger>
                 <TabsTrigger value="agent">Agent communication</TabsTrigger>
               </TabsList>
 
@@ -3402,6 +3515,135 @@ export default function SubmissionsDashboard() {
 
               <TabsContent value="recording" className="mt-4">
                 <div className="max-h-[70vh] overflow-y-auto pr-1 space-y-4">
+                  {/* Screen recording — available once session completes / merged, before workflow scores */}
+                  {selectedEvaluationSubmission &&
+                  recordingSession &&
+                  (selectedEvaluationSubmission.evaluationReport ||
+                    recordingSession.status === "completed" ||
+                    recordingSession.mergedVideo?.status === "ready" ||
+                    recordingSession.mergedVideo?.status === "merging") ? (
+                    <div className="space-y-3">
+                      <h3 className="text-sm font-semibold text-gray-900">
+                        Screen recording
+                      </h3>
+                      {recordingSession.mergedVideo?.status === "merging" ? (
+                        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-900">
+                          Preparing recording… This may take a minute. You can
+                          refresh this tab or come back shortly.
+                        </div>
+                      ) : (
+                        <>
+                          {(() => {
+                            const report =
+                              selectedEvaluationSubmission.evaluationReport;
+                            const criteriaResults = report?.criteria_results ?? [];
+                            const highlights = [];
+                            for (const r of criteriaResults) {
+                              if (!Array.isArray(r.evidence)) continue;
+                              for (const ev of r.evidence) {
+                                const ts = Number(ev.ts);
+                                const tsEnd = Number(ev.ts_end ?? ev.ts);
+                                if (!Number.isFinite(ts)) continue;
+                                highlights.push({
+                                  startSec: ts,
+                                  endSec:
+                                    Number.isFinite(tsEnd) && tsEnd > ts
+                                      ? tsEnd
+                                      : undefined,
+                                  label:
+                                    ev.observation?.slice(0, 80) ?? "Evidence",
+                                  category: r.criterion ?? "Evidence",
+                                  description: ev.observation ?? null,
+                                  score: r.score,
+                                });
+                              }
+                            }
+                            const durationHintSec =
+                              recordingSession?.mergedVideo?.durationSeconds > 0
+                                ? recordingSession.mergedVideo.durationSeconds
+                                : recordingSession?.stats?.videoStats
+                                      ?.durationSeconds > 0
+                                  ? recordingSession.stats.videoStats
+                                      .durationSeconds
+                                  : recordingSession?.videoChunks?.length > 0
+                                    ? (() => {
+                                        let sum = 0;
+                                        for (const c of recordingSession.videoChunks) {
+                                          const start = c.startTime
+                                            ? new Date(c.startTime).getTime()
+                                            : NaN;
+                                          const end = (
+                                            c.endTime
+                                              ? new Date(c.endTime)
+                                              : c.startTime
+                                                ? new Date(c.startTime)
+                                                : null
+                                          )?.getTime();
+                                          if (
+                                            Number.isFinite(start) &&
+                                            Number.isFinite(end) &&
+                                            end >= start
+                                          )
+                                            sum += (end - start) / 1000;
+                                        }
+                                        return sum > 0 ? sum : undefined;
+                                      })()
+                                    : undefined;
+                            return (
+                              <div className="mb-2 space-y-1">
+                                {recordingVideoLoading ? (
+                                  <div className="rounded-xl border border-gray-200 bg-gray-50 overflow-hidden w-full">
+                                    <div className="relative aspect-video bg-gray-900 flex flex-col items-center justify-center gap-3">
+                                      <Loader2
+                                        className="w-10 h-10 text-white/80 animate-spin"
+                                        aria-hidden
+                                      />
+                                      <p className="text-sm text-white/90 font-medium">
+                                        Loading video…
+                                      </p>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <VideoTimelineWithCriteria
+                                    key={
+                                      selectedEvaluationSubmission._id ??
+                                      recordingSession._id
+                                    }
+                                    highlights={highlights}
+                                    videoUrl={recordingVideoObjectUrl ?? null}
+                                    durationHintSec={durationHintSec}
+                                    className="w-full"
+                                  />
+                                )}
+                              </div>
+                            );
+                          })()}
+                          <p className="text-xs text-gray-500 pt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+                            {recordingVideoObjectUrl && recordingSession ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  downloadProctoringVideo(recordingSession._id)
+                                }
+                                className="text-[#1E3A8A] hover:underline"
+                              >
+                                Download recording
+                              </button>
+                            ) : null}
+                          </p>
+                          <p className="text-xs text-gray-500 pt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+                            <Link
+                              to="/DemoReplay"
+                              className="text-[#1E3A8A] hover:underline"
+                            >
+                              Timeline demo with sample video
+                            </Link>
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  ) : null}
+
                   {/* Workflow evaluation (when assessment had evaluation criteria) */}
                   {selectedEvaluationSubmission?.evaluationReport ? (
                     <div className="space-y-4">
@@ -3457,79 +3699,6 @@ export default function SubmissionsDashboard() {
                           </p>
                         </div>
                       )}
-
-                      {/* Timeline with criteria highlights; duration from video */}
-                      {(() => {
-                        const report =
-                          selectedEvaluationSubmission.evaluationReport;
-                        const criteriaResults = report.criteria_results ?? [];
-                        const highlights = [];
-                        for (const r of criteriaResults) {
-                          if (!Array.isArray(r.evidence)) continue;
-                          for (const ev of r.evidence) {
-                            const ts = Number(ev.ts);
-                            const tsEnd = Number(ev.ts_end ?? ev.ts);
-                            if (!Number.isFinite(ts)) continue;
-                            highlights.push({
-                              startSec: ts,
-                              endSec:
-                                Number.isFinite(tsEnd) && tsEnd > ts
-                                  ? tsEnd
-                                  : undefined,
-                              label: ev.observation?.slice(0, 80) ?? "Evidence",
-                              category: r.criterion ?? "Evidence",
-                              description: ev.observation ?? null,
-                              score: r.score,
-                            });
-                          }
-                        }
-                        const durationHintSec =
-                          recordingSession?.stats?.videoStats?.durationSeconds > 0
-                            ? recordingSession.stats.videoStats.durationSeconds
-                            : recordingSession?.videoChunks?.length > 0
-                              ? (() => {
-                                  let sum = 0;
-                                  for (const c of recordingSession.videoChunks) {
-                                    const start = c.startTime ? new Date(c.startTime).getTime() : NaN;
-                                    const end = (c.endTime ? new Date(c.endTime) : c.startTime ? new Date(c.startTime) : null)?.getTime();
-                                    if (Number.isFinite(start) && Number.isFinite(end) && end >= start) sum += (end - start) / 1000;
-                                  }
-                                  return sum > 0 ? sum : undefined;
-                                })()
-                              : undefined;
-                        return (
-                          <div className="mb-2 space-y-1">
-                            {recordingVideoLoading ? (
-                              <div className="rounded-xl border border-gray-200 bg-gray-50 overflow-hidden w-full">
-                                <div className="relative aspect-video bg-gray-900 flex flex-col items-center justify-center gap-3">
-                                  <Loader2 className="w-10 h-10 text-white/80 animate-spin" aria-hidden />
-                                  <p className="text-sm text-white/90 font-medium">Loading video…</p>
-                                </div>
-                              </div>
-                            ) : (
-                              <VideoTimelineWithCriteria
-                                key={selectedEvaluationSubmission._id}
-                                highlights={highlights}
-                                videoUrl={recordingVideoObjectUrl ?? null}
-                                durationHintSec={durationHintSec}
-                                className="w-full"
-                              />
-                            )}
-                          </div>
-                        );
-                      })()}
-
-                      <p className="text-xs text-gray-500 pt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
-                        {recordingVideoObjectUrl && recordingSession ? (
-                          <button
-                            type="button"
-                            onClick={() => downloadProctoringVideo(recordingSession._id)}
-                            className="text-[#1E3A8A] hover:underline"
-                          >
-                            Download recording
-                          </button>
-                        ) : null}
-                      </p>
 
                       {selectedEvaluationSubmission.evaluationReport
                         .criteria_results?.length > 0 && (
@@ -3628,15 +3797,6 @@ export default function SubmissionsDashboard() {
                           </div>
                         </div>
                       )}
-
-                      <p className="text-xs text-gray-500 pt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
-                        <Link
-                          to="/DemoReplay"
-                          className="text-[#1E3A8A] hover:underline"
-                        >
-                          Timeline demo with sample video
-                        </Link>
-                      </p>
                     </div>
                   ) : null}
 

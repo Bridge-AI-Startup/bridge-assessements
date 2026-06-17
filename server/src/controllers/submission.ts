@@ -27,10 +27,13 @@ import ProctoringSessionModel from "../models/proctoringSession.js";
 import { getProctoringTranscriptForSubmission } from "../services/evaluation/proctoringTranscriptAdapter.js";
 import { evaluateTranscript } from "../services/evaluation/orchestrator.js";
 import { generateTranscript, finalizeTranscriptFromIncremental } from "../ai/transcript/generator.js";
-import { jsonlToScreenMoments } from "../services/evaluation/momentGrouper.js";
-import { interpretChunked } from "../services/evaluation/interpreterChunked.js";
-import { interpretStateful } from "../services/evaluation/interpreterStateful.js";
+import {
+  refineTranscriptFromJsonl,
+  storeRefinedTranscript,
+  markRefinementFailed,
+} from "../services/evaluation/transcriptRefinement.js";
 import { getFrameStorage } from "../services/capture/storage.js";
+import { mergeProctoringVideoForSubmission } from "../services/capture/sessionVideoMerge.js";
 import {
   gradeSubmissionBehavioral,
   isBehavioralGradingEnabled,
@@ -242,32 +245,38 @@ async function ensureProctoringTranscriptAndEvaluate(
   (updatedSub as any).screenRecordingTranscript = transcript;
   await updatedSub.save();
 
-  // Activity interpretation: enrich raw transcript with behavioral observations
-  try {
-    const rawJsonl = await loadRawJsonlForSubmission(submissionId);
-    if (rawJsonl) {
-      const moments = jsonlToScreenMoments(rawJsonl);
-      if (moments.length > 0) {
-        const strategy = (process.env.INTERPRETER_STRATEGY || "stateful") as "chunked" | "stateful";
-        const enriched = strategy === "chunked"
-          ? await interpretChunked(moments)
-          : await interpretStateful(moments);
-        const subForEnriched = await SubmissionModel.findById(submissionId);
-        if (subForEnriched) {
-          (subForEnriched as any).enrichedTranscript = enriched;
-          await subForEnriched.save();
-        }
+  let eventsForEval = transcript;
+  const rawJsonl = await loadRawJsonlForSubmission(submissionId);
+  if (rawJsonl && process.env.SKIP_REFINEMENT !== "1") {
+    try {
+      await ProctoringSessionModel.findByIdAndUpdate(session._id, {
+        "transcript.refinedStatus": "generating",
+      });
+      const refined = await refineTranscriptFromJsonl(rawJsonl);
+      await storeRefinedTranscript(session._id.toString(), refined);
+      if (refined.evaluation_events.length > 0) {
+        eventsForEval = refined.evaluation_events;
       }
+      const subForRefined = await SubmissionModel.findById(submissionId);
+      if (subForRefined) {
+        (subForRefined as any).enrichedTranscript = refined.enriched;
+        (subForRefined as any).refinedTranscript = refined;
+        await subForRefined.save();
+      }
+    } catch (err) {
+      console.warn(
+        `[ensureProctoringTranscriptAndEvaluate] Transcript refinement failed for ${submissionId}:`,
+        err
+      );
+      await markRefinementFailed(
+        session._id.toString(),
+        err instanceof Error ? err.message : "Refinement failed"
+      );
     }
-  } catch (err) {
-    console.warn(
-      `[ensureProctoringTranscriptAndEvaluate] Activity interpretation failed for ${submissionId}:`,
-      err
-    );
   }
 
   try {
-    const report = await evaluateTranscript(transcript, criteria, {
+    const report = await evaluateTranscript(eventsForEval, criteria, {
       groundings: assessment.evaluationCriteriaGroundings,
     });
     const subAfter = await SubmissionModel.findById(submissionId);
@@ -626,6 +635,8 @@ export const submitSubmissionByToken: RequestHandler = async (
 
     await submission.save();
 
+    mergeProctoringVideoForSubmission(submission._id.toString());
+
     const updatedSubmission = await SubmissionModel.findOne({ token }).populate(
       "assessmentId",
       "title description timeLimit"
@@ -927,6 +938,8 @@ export const uploadSubmissionByToken: RequestHandler = async (req, res, next) =>
 
     await submission.save();
 
+    mergeProctoringVideoForSubmission(submission._id.toString());
+
     const updatedSubmission = await SubmissionModel.findOne({ token }).populate(
       "assessmentId",
       "title description timeLimit"
@@ -1116,6 +1129,8 @@ export const submitSubmission: RequestHandler = async (req, res, next) => {
     submission.submittedAt = new Date();
 
     await submission.save();
+
+    mergeProctoringVideoForSubmission(submission._id.toString());
 
     const updatedSubmission = await SubmissionModel.findById(id).populate(
       "assessmentId",
@@ -2114,6 +2129,17 @@ export const optOutByToken: RequestHandler = async (req, res, next) => {
     submission.status = "opted-out";
 
     await submission.save();
+
+    await ProctoringSessionModel.updateOne(
+      { submissionId: submission._id },
+      {
+        $set: {
+          status: "completed",
+          "stats.captureEndedAt": new Date(),
+        },
+      },
+    );
+    mergeProctoringVideoForSubmission(submission._id.toString());
 
     const updatedSubmission = await SubmissionModel.findById(
       submission._id

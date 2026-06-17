@@ -471,6 +471,12 @@ const SubmissionSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Time-aware refined transcript (interpretation + temporal insights + hybrid eval events)
+    refinedTranscript: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+
     // Evaluation report (result of the full evaluation pipeline)
     evaluationReport: {
       type: mongoose.Schema.Types.Mixed,

@@ -1,5 +1,7 @@
 import fs from "fs/promises";
+import { createReadStream } from "fs";
 import path from "path";
+import type { Readable } from "stream";
 
 import { S3FrameStorage } from "./s3FrameStorage.js";
 
@@ -15,6 +17,8 @@ export interface IFrameStorage {
   getTranscript(key: string): Promise<string>;
   storeVideoChunk(key: string, buffer: Buffer): Promise<void>;
   getVideoChunk(key: string): Promise<Buffer>;
+  /** Stream large blobs (e.g. merged playback.webm) without loading fully into RAM. */
+  openReadStream(key: string): Promise<Readable>;
   listKeys(prefix: string): Promise<string[]>;
   exists(key: string): Promise<boolean>;
   delete(key: string): Promise<void>;
@@ -66,6 +70,10 @@ export class LocalFrameStorage implements IFrameStorage {
 
   async getVideoChunk(key: string): Promise<Buffer> {
     return fs.readFile(this.resolvePath(key));
+  }
+
+  async openReadStream(key: string): Promise<Readable> {
+    return createReadStream(this.resolvePath(key));
   }
 
   async listKeys(prefix: string): Promise<string[]> {
