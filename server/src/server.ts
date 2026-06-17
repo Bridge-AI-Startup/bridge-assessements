@@ -24,6 +24,12 @@ import { startIncrementalScheduler } from "./ai/transcript/incrementalScheduler.
 const PORT = process.env.PORT || 5050;
 const app = express();
 
+// Render (and similar hosts) terminate TLS and set X-Forwarded-For. express-rate-limit
+// requires trust proxy so req.ip reflects the real client, not the load balancer.
+if (process.env.NODE_ENV === "production") {
+  app.set("trust proxy", 1);
+}
+
 console.log("🔧 Initializing Express server...");
 
 // Check NODE_ENV - warn if not set in production
