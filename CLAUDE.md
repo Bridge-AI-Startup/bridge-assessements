@@ -165,10 +165,12 @@ See `server/config.env.example` for the full list. Key variables:
 **Proctoring / Screen Capture:**
 - `PROCTORING_STORAGE_DIR` -- Local filesystem root when not using S3 (default: `./storage/proctoring`)
 - `PROCTORING_STORAGE_BACKEND` -- `local` (default) or `s3`. If `PROCTORING_S3_BUCKET` or `AWS_S3_BUCKET` is set, S3 is used even when this is unset.
-- `PROCTORING_S3_BUCKET` / `AWS_S3_BUCKET` -- S3 bucket for frames, video chunks, transcripts (same key layout as local)
+- `PROCTORING_S3_BUCKET` / `AWS_S3_BUCKET` -- S3 bucket for frames, video chunks, merged `playback.webm`, transcripts (same key layout as local)
+- `PROCTORING_VIDEO_MERGE_MAX_CONCURRENT` -- Max concurrent eager WebM merge jobs (concat + remux; default: `2`)
 - `AWS_REGION` / `AWS_DEFAULT_REGION` -- Required for S3
 - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` -- IAM user credentials on hosts like Render (or use default credential chain)
 - One-time migration: `npx tsx src/scripts/migrateProctoringLocalToS3.ts` (see `server/docs/VIDEO_PROCTORING_SYSTEM.md`)
+- Retroactive WebM merge (chunks → `playback.webm`): from `server/`, `npm run backfill:proctoring-video` (same as `npx tsx src/scripts/backfillMergedProctoringVideos.ts`; use `--dry-run` first)
 - `TRANSCRIPT_GENERATION_ENABLED` -- Enable/disable AI transcript generation (default: `true`)
 - `PROCTORING_FRAME_INTERVAL_MS` -- Capture interval in ms (default: `5000`)
 - `PROCTORING_DEDUP_THRESHOLD` -- Pixel diff threshold for dedup (default: `0.03`)
@@ -258,6 +260,7 @@ server/src/
 │   │   ├── storage.ts       # IFrameStorage + getFrameStorage() (local vs S3)
 │   │   ├── s3FrameStorage.ts # S3FrameStorage (PROCTORING_STORAGE_BACKEND=s3 or bucket set)
 │   │   ├── frameStorage.ts  # Store/retrieve frames and video chunks, update session model
+│   │   ├── sessionVideoMerge.ts # Eager merge chunks → playback.webm + delete chunks; buildSessionWebmForPlayback
 │   │   ├── serverDedup.ts   # SHA-256 hash-based server-side frame deduplication
 │   │   └── framePrep.ts     # PreparedSessionData builder (boundary contract for AI module)
 │   └── schemas/
@@ -302,6 +305,7 @@ server/src/
 │       ├── stitcher.ts    # Merge batch outputs into chronological JSONL; parseTranscriptJsonlToSegments for merge
 │       └── manifestInjector.ts  # Inject sidecar events into transcript
 └── scripts/               # Utility/migration scripts
+    ├── backfillMergedProctoringVideos.ts # Merge legacy WebM chunks → playback.webm + mergedVideo
     ├── backfillInterviewQuestions.ts
     ├── duplicateSubmissionWithTrace.ts
     ├── generateDummyConversation.ts
@@ -607,7 +611,9 @@ Sidecar Events: `sidecarEvents[]` { type (enum: tab_switch/window_blur/window_fo
 
 Transcript: `transcript` { status (not_started/generating/completed/failed), storageKey, generatedAt, error, frameCount, tokenUsage { prompt, completion, total } }
 
-Video: `videoChunks[]` { storageKey, screenIndex, startTime, endTime, sizeBytes }
+Video: `videoChunks[]` { storageKey, screenIndex, startTime, endTime, sizeBytes } — cleared after a successful eager merge.
+
+Merged recording (screen 0): `mergedVideo` { status (`not_started` / `merging` / `ready` / `failed`), storageKey (typically `{sessionId}/playback.webm`), sizeBytes, durationSeconds, mergedAt, error, chunksDeletedAt, mergingStartedAt }. After **complete**, **submit** (all submit paths), or **opt-out**, the server merges + remuxes chunk WebMs into one file in storage, updates Mongo, then deletes per-chunk objects.
 
 Stats: `stats` { totalFrames, uniqueFrames, duplicatesSkipped, totalSizeBytes, captureStartedAt, captureEndedAt }
 

@@ -41,6 +41,16 @@ export type ProctoringSession = {
     endTime?: string | null;
     sizeBytes?: number;
   }>;
+  mergedVideo?: {
+    status: "not_started" | "merging" | "ready" | "failed";
+    storageKey?: string | null;
+    sizeBytes?: number;
+    durationSeconds?: number;
+    mergedAt?: string | null;
+    error?: string | null;
+    chunksDeletedAt?: string | null;
+    mergingStartedAt?: string | null;
+  };
   createdAt: string;
   updatedAt: string;
 };

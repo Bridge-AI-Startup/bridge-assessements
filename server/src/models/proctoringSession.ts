@@ -114,6 +114,21 @@ const ProctoringSessionSchema = new mongoose.Schema(
         sizeBytes: { type: Number, default: 0 },
       },
     ],
+    /** Single merged+remuxed WebM for screen 0; chunks removed from storage after successful merge. */
+    mergedVideo: {
+      status: {
+        type: String,
+        enum: ["not_started", "merging", "ready", "failed"],
+        default: "not_started",
+      },
+      storageKey: { type: String, default: null },
+      sizeBytes: { type: Number, default: 0 },
+      durationSeconds: { type: Number, default: 0 },
+      mergedAt: { type: Date, default: null },
+      error: { type: String, default: null },
+      chunksDeletedAt: { type: Date, default: null },
+      mergingStartedAt: { type: Date, default: null },
+    },
     stats: {
       totalFrames: { type: Number, default: 0 },
       uniqueFrames: { type: Number, default: 0 },

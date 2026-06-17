@@ -20,7 +20,10 @@ import type {
   EnrichedTranscriptEvent,
 } from "../../types/evaluation.js";
 
-const MOMENTS_PER_BATCH = 10;
+function getMomentsPerBatch(): number {
+  const n = parseInt(process.env.INTERPRETER_MOMENTS_PER_BATCH || "10", 10);
+  return Number.isFinite(n) && n >= 1 ? n : 10;
+}
 
 interface RawBatchOutput {
   events: {
@@ -52,7 +55,7 @@ export async function interpretStateful(
   }
 
   const llmMoments = prepareMomentsForLLM(moments);
-  const batches = createBatches(llmMoments, MOMENTS_PER_BATCH);
+  const batches = createBatches(llmMoments, getMomentsPerBatch());
 
   const allEvents: EnrichedTranscriptEvent[] = [];
   let runningSummary = "";

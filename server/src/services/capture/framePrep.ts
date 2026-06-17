@@ -51,12 +51,15 @@ export async function prepareSessionForTranscript(
 
   let preparedFrames: PreparedFrame[] = [];
   const hasVideo =
-    session.videoChunks && session.videoChunks.length > 0;
+    (session.videoChunks && session.videoChunks.length > 0) ||
+    (session as any).mergedVideo?.status === "ready";
 
   if (hasVideo) {
     const ffmpegOk = await isFFmpegAvailable();
     if (ffmpegOk) {
-      log(`Video chunks found (${session.videoChunks.length}), starting smart extraction...`);
+      log(
+        `Video source available (chunks=${session.videoChunks?.length ?? 0}, merged=${(session as any).mergedVideo?.status === "ready"}), starting smart extraction...`,
+      );
       try {
         const extractStart = Date.now();
         preparedFrames = await extractSmartFrames(sessionId);
