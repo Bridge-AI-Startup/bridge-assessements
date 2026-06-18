@@ -17,6 +17,7 @@ import {
   getSubmissionByToken,
   startAssessment,
   submitAssessment,
+  uploadAssessmentArchive,
   submitRecordingOnlyAssessment,
   optOutAssessment,
 } from "@/api/submission";
@@ -39,6 +40,7 @@ import ResharePrompt from "@/components/proctoring/ResharePrompt";
 import { createVideoRecorder } from "@/lib/captureUtils";
 import { uploadVideoChunk } from "@/api/proctoring";
 import StarterCodeIDE from "@/components/StarterCodeIDE";
+import SubmissionFileDropzone from "@/components/assessment/SubmissionFileDropzone";
 
 const FINAL_SUBMISSION_GRACE_SECONDS = 5 * 60;
 
@@ -95,6 +97,8 @@ export default function CandidateAssessment() {
   const [isStarting, setIsStarting] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [githubUrl, setGithubUrl] = useState("");
+  const [uploadArchive, setUploadArchive] = useState(null);
+  const [uploadArchiveInfo, setUploadArchiveInfo] = useState(null);
   const [timeRemaining, setTimeRemaining] = useState(null); // in minutes
   const [timeDisplay, setTimeDisplay] = useState(""); // formatted display
   const [showOptOutModal, setShowOptOutModal] = useState(false);
@@ -574,9 +578,32 @@ export default function CandidateAssessment() {
     }
   };
 
+  const hasSubmissionReady = Boolean(githubUrl.trim() || uploadArchive);
+
+  const handleArchiveReady = (archive, info) => {
+    setUploadArchive(archive);
+    setUploadArchiveInfo(info);
+    setGithubUrl("");
+  };
+
+  const handleClearArchive = () => {
+    setUploadArchive(null);
+    setUploadArchiveInfo(null);
+  };
+
+  const handleGithubChange = (value) => {
+    setGithubUrl(value);
+    if (value.trim()) {
+      setUploadArchive(null);
+      setUploadArchiveInfo(null);
+    }
+  };
+
   const handleSubmit = async ({ allowAfterMainTimer = false } = {}) => {
-    if (!githubUrl.trim()) {
-      alert("Please enter a GitHub repository URL");
+    if (!githubUrl.trim() && !uploadArchive) {
+      alert(
+        "Please enter a GitHub repository URL or upload your project files"
+      );
       return;
     }
 
@@ -604,7 +631,9 @@ export default function CandidateAssessment() {
         screenCapture.stopCapture();
       }
 
-      const result = await submitAssessment(token, githubUrl.trim());
+      const result = uploadArchive
+        ? await uploadAssessmentArchive(token, uploadArchive)
+        : await submitAssessment(token, githubUrl.trim());
       if (result.success) {
         navigate(`${createPageUrl("CandidateSubmitted")}?token=${token}`);
       } else {
@@ -1099,15 +1128,16 @@ export default function CandidateAssessment() {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  GitHub repository URL *
+                  GitHub repository URL
                 </label>
                 <div className="relative">
                   <LinkIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <Input
                     value={githubUrl}
-                    onChange={(e) => setGithubUrl(e.target.value)}
+                    onChange={(e) => handleGithubChange(e.target.value)}
                     placeholder="https://github.com/username/repository"
                     className="pl-10"
+                    disabled={Boolean(uploadArchive)}
                   />
                 </div>
                 <p className="text-xs text-gray-500 mt-1.5">
@@ -1116,11 +1146,35 @@ export default function CandidateAssessment() {
                 </p>
               </div>
 
+              <div className="flex items-center gap-3">
+                <div className="h-px flex-1 bg-gray-200" />
+                <span className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                  or
+                </span>
+                <div className="h-px flex-1 bg-gray-200" />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Upload project files
+                </label>
+                <SubmissionFileDropzone
+                  disabled={Boolean(githubUrl.trim()) || isSubmitting}
+                  archiveInfo={uploadArchiveInfo}
+                  onArchiveReady={handleArchiveReady}
+                  onClear={handleClearArchive}
+                />
+                <p className="text-xs text-gray-500 mt-1.5">
+                  Drag and drop your project folder or files. We&apos;ll package them into a zip
+                  before upload.
+                </p>
+              </div>
+
               <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
                 <p className="text-sm text-blue-800">
                   <strong>Note:</strong> Please include any additional context,
                   notes about your approach, trade-offs made, or things you&apos;d
-                  improve with more time in your repository&apos;s README file.
+                  improve with more time in your README file.
                 </p>
               </div>
 
@@ -1128,7 +1182,7 @@ export default function CandidateAssessment() {
                 <Button
                   onClick={() => handleSubmit()}
                   disabled={
-                    !githubUrl.trim() ||
+                    !hasSubmissionReady ||
                     isSubmitting ||
                     (timeRemaining !== null && timeRemaining <= 0)
                   }
@@ -1183,7 +1237,7 @@ export default function CandidateAssessment() {
                 </h2>
                 <p className="text-sm text-gray-700 mb-4">
                   Recording has stopped. You have one final 5-minute window to
-                  submit your repository.
+                  submit your work.
                 </p>
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
                   <p className="text-xs uppercase tracking-wide text-amber-700 mb-1">
@@ -1193,19 +1247,36 @@ export default function CandidateAssessment() {
                     {graceCountdownDisplay}
                   </p>
                 </div>
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    GitHub repository URL *
-                  </label>
-                  <Input
-                    value={githubUrl}
-                    onChange={(e) => setGithubUrl(e.target.value)}
-                    placeholder="https://github.com/username/repository"
+                <div className="mb-4 space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      GitHub repository URL
+                    </label>
+                    <Input
+                      value={githubUrl}
+                      onChange={(e) => handleGithubChange(e.target.value)}
+                      placeholder="https://github.com/username/repository"
+                      disabled={Boolean(uploadArchive)}
+                    />
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="h-px flex-1 bg-gray-200" />
+                    <span className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                      or
+                    </span>
+                    <div className="h-px flex-1 bg-gray-200" />
+                  </div>
+                  <SubmissionFileDropzone
+                    compact
+                    disabled={Boolean(githubUrl.trim()) || isSubmitting}
+                    archiveInfo={uploadArchiveInfo}
+                    onArchiveReady={handleArchiveReady}
+                    onClear={handleClearArchive}
                   />
                 </div>
                 <Button
                   onClick={() => handleSubmit({ allowAfterMainTimer: true })}
-                  disabled={!githubUrl.trim() || isSubmitting}
+                  disabled={!hasSubmissionReady || isSubmitting}
                   className="w-full bg-[#1E3A8A] hover:bg-[#152a66] text-white"
                 >
                   <Send className="w-4 h-4 mr-2" />

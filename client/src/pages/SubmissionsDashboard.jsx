@@ -59,6 +59,7 @@ import {
 } from "@/api/submission";
 import { runSubmissionEvaluation } from "@/api/evaluation";
 import VideoTimelineWithCriteria from "@/components/proctoring/VideoTimelineWithCriteria";
+import BehavioralGradingLiveTrace from "@/components/submissions/BehavioralGradingLiveTrace";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Sheet,
@@ -333,6 +334,61 @@ function BehavioralCaseEvidenceBody({
         </div>
       )}
     </>
+  );
+}
+
+function behavioralSetupTone(setup) {
+  if (!setup?.status) return "neutral";
+  if (setup.status === "ready") return "ok";
+  if (setup.status === "degraded") return "warn";
+  return "fail";
+}
+
+function BehavioralSetupPanel({ report }) {
+  const setup = report?.setup;
+  if (!setup?.summary) return null;
+  const tone = behavioralSetupTone(setup);
+  const border =
+    tone === "ok"
+      ? "border-green-200 bg-green-50 text-green-900"
+      : tone === "warn"
+        ? "border-amber-200 bg-amber-50 text-amber-900"
+        : "border-red-200 bg-red-50 text-red-900";
+  return (
+    <div className={`rounded-md border p-3 text-sm space-y-2 ${border}`}>
+      <p className="font-medium">
+        Environment setup: {setup.status}
+        {report?.failureCategory ? (
+          <span className="font-normal text-xs ml-2 opacity-80">
+            ({report.failureCategory})
+          </span>
+        ) : null}
+      </p>
+      <p className="text-xs leading-snug whitespace-pre-wrap">{setup.summary}</p>
+      {Array.isArray(setup.failedSteps) && setup.failedSteps.length > 0 ? (
+        <ul className="text-xs space-y-1 list-disc pl-4">
+          {setup.failedSteps.slice(0, 4).map((step, i) => (
+            <li key={`${step.purpose}-${i}`}>
+              [{step.purpose}] exit {step.exitCode ?? "?"} —{" "}
+              {(step.command || "").slice(0, 100)}
+              {step.stderrSnippet ? (
+                <span className="block text-[11px] opacity-80 mt-0.5">
+                  {step.stderrSnippet}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {setup.healthWait?.logTail ? (
+        <details className="text-xs">
+          <summary className="cursor-pointer font-medium">Start log tail</summary>
+          <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] opacity-90">
+            {setup.healthWait.logTail}
+          </pre>
+        </details>
+      ) : null}
+    </div>
   );
 }
 
@@ -787,22 +843,34 @@ export default function SubmissionsDashboard() {
     loadSubmissions();
   }, [loadSubmissions]);
 
+  // Keep candidate detail panel in sync when list refreshes (e.g. behavioral poll)
+  useEffect(() => {
+    if (!selectedEvaluationSubmission?._id) return;
+    const fresh = submissions.find(
+      (s) => s._id === selectedEvaluationSubmission._id
+    );
+    if (fresh) setSelectedEvaluationSubmission(fresh);
+  }, [submissions, selectedEvaluationSubmission?._id]);
+
   // Poll submissions while any are waiting for automatic evaluation (transcript + score)
   useEffect(() => {
     const submittedRecently = (s) =>
       s.submittedAt &&
       Date.now() - new Date(s.submittedAt).getTime() < 15 * 60 * 1000;
+    const hasPendingBehavioral = submissions.some(
+      (s) => s.behavioralGradingStatus === "pending"
+    );
     const hasPending = submissions.some(
       (s) =>
         (s.status === "submitted" &&
         !s.evaluationReport?.criteria_results?.length &&
         (s.evaluationStatus === "pending" ||
             (s.evaluationStatus !== "failed" && submittedRecently(s)))) ||
-        s.behavioralGradingStatus === "pending"
+        hasPendingBehavioral
     );
     if (!hasPending || !assessmentId || !currentUser) return;
 
-    const POLL_MS = 5000;
+    const POLL_MS = hasPendingBehavioral ? 1200 : 5000;
     const MAX_POLLS = 180; // 15 min
     let polls = 0;
     const interval = setInterval(async () => {
@@ -1218,6 +1286,31 @@ export default function SubmissionsDashboard() {
     setSubmissionToDelete(null);
   };
 
+  const applyBehavioralPendingLocally = (submissionId) => {
+    const checksTotal = assessment?.behavioralChecks?.length ?? 0;
+    const pendingPatch = {
+      behavioralGradingStatus: "pending",
+      behavioralGradingError: null,
+      behavioralGradingReport: null,
+      behavioralGradingProgress: {
+        phase: "sandbox",
+        phaseLabel: "Queued — provisioning E2B sandbox…",
+        checkIndex: null,
+        checksTotal,
+        agentSteps: [],
+        completedChecks: [],
+      },
+    };
+    setSubmissions((prev) =>
+      prev.map((s) =>
+        s._id === submissionId ? { ...s, ...pendingPatch } : s
+      )
+    );
+    setSelectedEvaluationSubmission((prev) =>
+      prev?._id === submissionId ? { ...prev, ...pendingPatch } : prev
+    );
+  };
+
   const handleRunBehavioralGrading = async (submission) => {
     if (!currentUser) {
       toast({
@@ -1228,7 +1321,15 @@ export default function SubmissionsDashboard() {
       return;
     }
 
+    if (submission.behavioralGradingStatus === "pending") {
+      return;
+    }
+
     setBehavioralGradingSubmissionId(submission._id);
+    applyBehavioralPendingLocally(submission._id);
+    if (selectedEvaluationSubmission?._id === submission._id) {
+      setExpandedBehavioralCases(new Set());
+    }
     try {
       const token = await currentUser.getIdToken();
       const result = await runBehavioralGrading(submission._id, token);
@@ -1238,12 +1339,14 @@ export default function SubmissionsDashboard() {
           description: result.error || "Please try again.",
           variant: "destructive",
         });
+        setBehavioralGradingSubmissionId(null);
+        await loadSubmissions();
         return;
       }
 
       toast({
         title: "Behavioral grading queued",
-        description: "Scoring and evidence capture is running in the background.",
+        description: "Agent is running checks in the sandbox — trace updates live below.",
       });
       await loadSubmissions();
     } catch (error) {
@@ -1252,10 +1355,22 @@ export default function SubmissionsDashboard() {
         description: error?.message || "Please try again.",
         variant: "destructive",
       });
-    } finally {
       setBehavioralGradingSubmissionId(null);
+      await loadSubmissions();
     }
   };
+
+  useEffect(() => {
+    if (!behavioralGradingSubmissionId) return;
+    const sub = submissions.find((s) => s._id === behavioralGradingSubmissionId);
+    if (
+      sub &&
+      sub.behavioralGradingStatus !== "pending" &&
+      sub.behavioralGradingStatus != null
+    ) {
+      setBehavioralGradingSubmissionId(null);
+    }
+  }, [submissions, behavioralGradingSubmissionId]);
 
   const loadBehavioralArtifacts = async (submission) => {
     if (!currentUser) return;
@@ -1751,13 +1866,25 @@ export default function SubmissionsDashboard() {
                             <Badge
                               className={`w-fit ${
                                 submission.behavioralGradingStatus === "completed"
-                                  ? "bg-green-100 text-green-700"
+                                  ? submission.behavioralGradingReport?.setup
+                                      ?.status === "failed"
+                                    ? "bg-red-100 text-red-700"
+                                    : submission.behavioralGradingReport?.setup
+                                          ?.status === "degraded"
+                                      ? "bg-amber-100 text-amber-800"
+                                      : "bg-green-100 text-green-700"
                                   : submission.behavioralGradingStatus === "failed"
                                   ? "bg-red-100 text-red-700"
                                   : "bg-amber-100 text-amber-800"
                               }`}
                             >
                               Behavioral: {submission.behavioralGradingStatus}
+                              {submission.behavioralGradingStatus === "completed" &&
+                              submission.behavioralGradingReport?.setup?.status &&
+                              submission.behavioralGradingReport.setup.status !==
+                                "ready"
+                                ? ` (${submission.behavioralGradingReport.setup.status})`
+                                : ""}
                             </Badge>
                           )}
                           {submission.behavioralGradingStatus === "failed" &&
@@ -2648,9 +2775,22 @@ export default function SubmissionsDashboard() {
                   "failed" &&
                   selectedBehavioralSubmission.behavioralGradingError && (
                     <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                      {selectedBehavioralSubmission.behavioralGradingReport
+                        ?.failureCategory ? (
+                        <p className="text-xs font-medium uppercase tracking-wide mb-1">
+                          Failure:{" "}
+                          {
+                            selectedBehavioralSubmission.behavioralGradingReport
+                              .failureCategory
+                          }
+                        </p>
+                      ) : null}
                       {selectedBehavioralSubmission.behavioralGradingError}
                     </div>
                   )}
+                <BehavioralSetupPanel
+                  report={selectedBehavioralSubmission.behavioralGradingReport}
+                />
                 <div className="text-sm text-gray-700">
                   <p>
                     README requirement:{" "}
@@ -3173,6 +3313,13 @@ export default function SubmissionsDashboard() {
                                 {selectedEvaluationSubmission.behavioralGradingError}
                               </p>
                             )}
+                            <div className="mt-2">
+                              <BehavioralSetupPanel
+                                report={
+                                  selectedEvaluationSubmission?.behavioralGradingReport
+                                }
+                              />
+                            </div>
                           </div>
                           <div className="flex items-center gap-2">
                             <Button
@@ -3197,9 +3344,30 @@ export default function SubmissionsDashboard() {
                             </Button>
                           </div>
                         </div>
+                        {(() => {
+                          const showBehavioralLiveTrace =
+                            selectedEvaluationSubmission?.behavioralGradingStatus ===
+                              "pending" ||
+                            (behavioralGradingSubmissionId ===
+                              selectedEvaluationSubmission?._id &&
+                              !selectedEvaluationSubmission?.behavioralGradingReport
+                                ?.cases?.length);
+                          return showBehavioralLiveTrace ? (
+                            <BehavioralGradingLiveTrace
+                              progress={
+                                selectedEvaluationSubmission.behavioralGradingProgress
+                              }
+                              behavioralChecks={assessment?.behavioralChecks ?? []}
+                            />
+                          ) : null;
+                        })()}
                         {(selectedEvaluationSubmission?.behavioralGradingReport
                           ?.cases || []
-                        ).length > 0 && (
+                        ).length > 0 &&
+                          selectedEvaluationSubmission?.behavioralGradingStatus !==
+                            "pending" &&
+                          behavioralGradingSubmissionId !==
+                            selectedEvaluationSubmission?._id && (
                           <div className="space-y-2">
                             {(selectedEvaluationSubmission.behavioralGradingReport
                               ?.cases || []

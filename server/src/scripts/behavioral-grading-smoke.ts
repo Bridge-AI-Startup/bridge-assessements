@@ -35,6 +35,8 @@ async function main(): Promise<void> {
   console.log("elapsedMs:", elapsedMs);
   console.log("sandboxId:", report.sandbox.sandboxId);
   console.log("readmeRequirementPassed:", report.runbook.readmeRequirementPassed);
+  console.log("setupStatus:", report.setup?.status);
+  console.log("setupSummary:", report.setup?.summary?.slice(0, 200));
   console.log("caseCounts:", { passed, failed, inconclusive });
   console.log("reportArtifactKey:", report.reportArtifactKey ?? "n/a");
 }

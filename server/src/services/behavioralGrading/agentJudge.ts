@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import path from "path";
 import { setTimeout as delay } from "timers/promises";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type AriaRole, type Browser, type Page } from "playwright";
 import { z } from "zod";
 import {
   createChatCompletionWithStructuredOutput,
@@ -10,6 +10,7 @@ import {
 import { getGradingEvidenceStorage } from "../gradingEvidence/storage.js";
 import type { GradingSandboxContext } from "../e2b/graderSandbox.js";
 import { bashLc } from "./artifacts.js";
+import type { BehavioralBrowserSession } from "./browserSession.js";
 import {
   type BehavioralJudgeInput,
   type BehavioralJudgeResult,
@@ -28,6 +29,21 @@ const BROWSER_FILL_TIMEOUT_MS = 20_000;
 const MAX_SCREENSHOT_BYTES = 3_000_000;
 const REGEX_PATTERN_MAX_LEN = 500;
 
+const BROWSER_ROLE_VALUES = [
+  "button",
+  "link",
+  "textbox",
+  "checkbox",
+  "radio",
+  "heading",
+  "listitem",
+  "tab",
+  "menuitem",
+  "combobox",
+  "searchbox",
+  "switch",
+] as const;
+
 export type AgentToolTraceEntry = {
   iteration: number;
   tool:
@@ -35,8 +51,11 @@ export type AgentToolTraceEntry = {
     | "read_file"
     | "browser_goto"
     | "browser_click"
+    | "browser_click_role"
+    | "browser_click_text"
     | "browser_fill"
     | "browser_screenshot"
+    | "browser_snapshot"
     | "browser_expect";
   detail: string;
   outputPreview: string;
@@ -67,6 +86,19 @@ const agentTurnSchema = z.discriminatedUnion("step", [
     thought: z.string().max(600).optional(),
   }),
   z.object({
+    step: z.literal("browser_click_role"),
+    role: z.enum(BROWSER_ROLE_VALUES),
+    name: z.string().max(200).optional(),
+    exact: z.boolean().optional(),
+    thought: z.string().max(600).optional(),
+  }),
+  z.object({
+    step: z.literal("browser_click_text"),
+    text: z.string().min(1).max(200),
+    exact: z.boolean().optional(),
+    thought: z.string().max(600).optional(),
+  }),
+  z.object({
     step: z.literal("browser_fill"),
     selector: z.string().min(1).max(500),
     value: z.string().max(4000),
@@ -76,6 +108,10 @@ const agentTurnSchema = z.discriminatedUnion("step", [
     step: z.literal("browser_screenshot"),
     label: z.string().max(200).optional(),
     fullPage: z.boolean().optional(),
+    thought: z.string().max(600).optional(),
+  }),
+  z.object({
+    step: z.literal("browser_snapshot"),
     thought: z.string().max(600).optional(),
   }),
   z.object({
@@ -105,10 +141,16 @@ function summarizeAgentAction(r: AgentTurn): string {
       return r.urlPath;
     case "browser_click":
       return r.selector;
+    case "browser_click_role":
+      return r.name ? `${r.role} "${r.name}"` : r.role;
+    case "browser_click_text":
+      return r.text.length > 80 ? `${r.text.slice(0, 80)}…` : r.text;
     case "browser_fill":
       return `${r.selector} ← ${r.value.length} chars`;
     case "browser_screenshot":
       return r.label?.trim() || "viewport";
+    case "browser_snapshot":
+      return "accessibility tree";
     case "browser_expect":
       return `${r.mode}: ${r.pattern.slice(0, 120)}${r.pattern.length > 120 ? "…" : ""}`;
     case "finish":
@@ -209,6 +251,38 @@ function resolveBrowserUrl(baseUrl: string, urlPath: string): string {
   return new URL(pathPart, base).toString();
 }
 
+async function navigateWithWait(page: Page, url: string): Promise<void> {
+  try {
+    await page.goto(url, {
+      waitUntil: "networkidle",
+      timeout: BROWSER_GOTO_TIMEOUT_MS,
+    });
+  } catch {
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: BROWSER_GOTO_TIMEOUT_MS,
+    });
+  }
+  await delay(300);
+}
+
+async function snapshotPageAccessibility(page: Page): Promise<string> {
+  const url = page.url();
+  const title = await page.title();
+  let aria = "";
+  try {
+    aria = await page.locator("body").ariaSnapshot({ timeout: 8000 });
+  } catch (e) {
+    aria = `(aria snapshot unavailable: ${
+      e instanceof Error ? e.message : String(e)
+    })`;
+  }
+  const combined = `URL: ${url}\nTitle: ${title}\n\nAccessibility tree:\n${aria}`;
+  return combined.length <= MAX_TOOL_OUTPUT
+    ? combined
+    : `${combined.slice(0, MAX_TOOL_OUTPUT)}\n… (truncated)`;
+}
+
 async function snapshotPageText(page: Page): Promise<string> {
   const title = await page.title();
   const text = await page.evaluate(
@@ -280,6 +354,10 @@ export type AgentJudgeContext = BehavioralJudgeInput & {
   submissionId?: string;
   /** Other criteria from the same assessment (each graded in its own run). Used to prevent cross-check reasoning. */
   otherBehavioralChecks?: string[];
+  /** Shared session across checks; orchestrator owns lifecycle when set. */
+  browserSession?: BehavioralBrowserSession;
+  /** When false with browserSession, do not close browser in finally (default true). */
+  manageBrowserLifecycle?: boolean;
 };
 
 /**
@@ -290,14 +368,18 @@ export async function runAgentBehavioralJudge(
   input: AgentJudgeContext
 ): Promise<BehavioralJudgeResult & { agentTrace: AgentToolTraceEntry[] }> {
   const trace: AgentToolTraceEntry[] = [];
+  const useSharedSession = Boolean(input.browserSession);
+  const shouldCloseLocalBrowser =
+    input.manageBrowserLifecycle !== false && !useSharedSession;
   let browser: Browser | null = null;
   let page: Page | null = null;
   /** Set on first failed launch (or env); all later browser_* steps reuse this error without re-launching. */
   let browserLaunchError: string | null =
-    process.env.BEHAVIORAL_SKIP_BROWSER === "1" ||
+    input.browserSession?.launchError ??
+    (process.env.BEHAVIORAL_SKIP_BROWSER === "1" ||
     process.env.BEHAVIORAL_SKIP_BROWSER === "true"
       ? "[browser disabled] BEHAVIORAL_SKIP_BROWSER is set; use read_file, run_command, and the seed HTTP excerpt instead of browser_* tools."
-      : null;
+      : null);
 
   const ensureBrowserPage = async (): Promise<Page> => {
     if (browserLaunchError) {
@@ -305,6 +387,9 @@ export async function runAgentBehavioralJudge(
     }
     if (!input.baseUrl?.trim()) {
       throw new Error("No baseUrl");
+    }
+    if (input.browserSession) {
+      return input.browserSession.getPage(input.baseUrl);
     }
     if (!page) {
       try {
@@ -322,6 +407,7 @@ export async function runAgentBehavioralJudge(
   };
 
   const closeBrowser = async () => {
+    if (!shouldCloseLocalBrowser) return;
     try {
       await page?.close();
     } catch {
@@ -337,8 +423,11 @@ export async function runAgentBehavioralJudge(
   };
 
   const browserHint = input.baseUrl
-    ? `- step=browser_goto: open a path on the candidate's running app (urlPath like \`/\` or \`/orders\`). Same origin only.
+    ? `- step=browser_goto: open a path on the candidate's running app (urlPath like \`/\` or \`/orders\`). Waits for network idle when possible. Same origin only.
+- step=browser_snapshot: accessibility tree of the current page (roles/names). Prefer over guessing CSS selectors.
 - step=browser_click: click a CSS selector on the **current** page; then visible text snapshot.
+- step=browser_click_role: click by ARIA role + optional accessible name (e.g. role=button, name="Add note"). Prefer over raw CSS when labels exist.
+- step=browser_click_text: click visible text (substring match; set exact=true for full match).
 - step=browser_fill: type into an input/textarea (\`selector\` + \`value\`). Clears then fills like Playwright. Then visible text snapshot.
 - step=browser_screenshot: capture PNG of the viewport (or fullPage=true for tall pages). Stored server-side; you get an artifact key + short confirmation. Use after UI changes you need to preserve visually.
 - step=browser_expect: assert on **visible** text — mode \`contains\` | \`not_contains\` | \`regex\` plus \`pattern\` (substring or JS regex source). Returns pass/fail + text excerpt. Use after navigation or actions.`
@@ -559,11 +648,8 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
           try {
             const url = resolveBrowserUrl(input.baseUrl, result.urlPath);
             const pg = await ensureBrowserPage();
-            await pg.goto(url, {
-              waitUntil: "domcontentloaded",
-              timeout: BROWSER_GOTO_TIMEOUT_MS,
-            });
-            outputPreview = await snapshotPageText(pg);
+            await navigateWithWait(pg, url);
+            outputPreview = await snapshotPageAccessibility(pg);
             success = true;
           } catch (e) {
             outputPreview = `[error] ${
@@ -616,6 +702,77 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
         messages.push({
           role: "user",
           content: `browser_click result:\n${outputPreview}`,
+        });
+        continue;
+      }
+
+      if (result.step === "browser_click_role") {
+        let outputPreview = "";
+        let success = false;
+        if (!input.baseUrl?.trim()) {
+          outputPreview =
+            "[error] browser_click_role requires a running app URL (web_server profile).";
+        } else {
+          try {
+            const pg = await ensureBrowserPage();
+            const locator = pg.getByRole(result.role as AriaRole, {
+              name: result.name,
+              exact: result.exact,
+            });
+            await locator.click({ timeout: BROWSER_CLICK_TIMEOUT_MS });
+            await delay(300);
+            outputPreview = await snapshotPageAccessibility(pg);
+            success = true;
+          } catch (e) {
+            outputPreview = `[error] ${
+              e instanceof Error ? e.message : String(e)
+            }`;
+          }
+        }
+        trace.push({
+          iteration: iter,
+          tool: "browser_click_role",
+          detail: summarizeAgentAction(result),
+          outputPreview,
+          success,
+        });
+        messages.push({
+          role: "user",
+          content: `browser_click_role result:\n${outputPreview}`,
+        });
+        continue;
+      }
+
+      if (result.step === "browser_click_text") {
+        let outputPreview = "";
+        let success = false;
+        if (!input.baseUrl?.trim()) {
+          outputPreview =
+            "[error] browser_click_text requires a running app URL (web_server profile).";
+        } else {
+          try {
+            const pg = await ensureBrowserPage();
+            const locator = pg.getByText(result.text, { exact: result.exact });
+            await locator.click({ timeout: BROWSER_CLICK_TIMEOUT_MS });
+            await delay(300);
+            outputPreview = await snapshotPageAccessibility(pg);
+            success = true;
+          } catch (e) {
+            outputPreview = `[error] ${
+              e instanceof Error ? e.message : String(e)
+            }`;
+          }
+        }
+        trace.push({
+          iteration: iter,
+          tool: "browser_click_text",
+          detail: summarizeAgentAction(result),
+          outputPreview,
+          success,
+        });
+        messages.push({
+          role: "user",
+          content: `browser_click_text result:\n${outputPreview}`,
         });
         continue;
       }
@@ -699,6 +856,37 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
         messages.push({
           role: "user",
           content: `browser_screenshot result:\n${outputPreview}`,
+        });
+        continue;
+      }
+
+      if (result.step === "browser_snapshot") {
+        let outputPreview = "";
+        let success = false;
+        if (!input.baseUrl?.trim()) {
+          outputPreview =
+            "[error] browser_snapshot requires a running app URL (web_server profile).";
+        } else {
+          try {
+            const pg = await ensureBrowserPage();
+            outputPreview = await snapshotPageAccessibility(pg);
+            success = true;
+          } catch (e) {
+            outputPreview = `[error] ${
+              e instanceof Error ? e.message : String(e)
+            }`;
+          }
+        }
+        trace.push({
+          iteration: iter,
+          tool: "browser_snapshot",
+          detail: "accessibility tree",
+          outputPreview,
+          success,
+        });
+        messages.push({
+          role: "user",
+          content: `browser_snapshot result:\n${outputPreview}`,
         });
         continue;
       }

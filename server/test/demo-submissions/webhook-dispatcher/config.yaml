@@ -1,0 +1,12 @@
+dispatcher:
+  max_concurrency: 16
+  per_destination_rate: 5.0
+  per_destination_burst: 10
+  retry:
+    max_attempts: 6
+    base_delay_ms: 200
+    max_delay_ms: 30000
+    jitter: full
+  http:
+    connect_timeout_s: 3.0
+    read_timeout_s: 10.0

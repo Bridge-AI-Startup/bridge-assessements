@@ -36,8 +36,14 @@ import { getFrameStorage } from "../services/capture/storage.js";
 import { mergeProctoringVideoForSubmission } from "../services/capture/sessionVideoMerge.js";
 import {
   gradeSubmissionBehavioral,
+  inferFailureCategory,
   isBehavioralGradingEnabled,
 } from "../services/behavioralGrading/index.js";
+import {
+  isStressDemoAssessment,
+  beginStressDemoBehavioralSimulation,
+  triggerStressDemoBehavioralSimulationInBackground,
+} from "../services/behavioralGrading/stressDemoSimulation.js";
 import { getGradingEvidenceStorage } from "../services/gradingEvidence/storage.js";
 import { calculateAndSaveScores } from "../services/scoring.js";
 import { getSubmissionCodeStorage } from "../services/submissionCode/storage.js";
@@ -102,10 +108,21 @@ async function setBehavioralGradingFailed(
   submissionId: string,
   message: string
 ): Promise<void> {
+  const failureCategory = inferFailureCategory(message);
   await SubmissionModel.findByIdAndUpdate(submissionId, {
     $set: {
       behavioralGradingStatus: "failed",
       behavioralGradingError: message,
+      behavioralGradingReport: {
+        failureCategory,
+        setup: {
+          status: "failed",
+          phase: failureCategory === "timeout" ? "health_wait" : "runbook",
+          summary: message,
+          failedSteps: [],
+        },
+        cases: [],
+      },
     },
   });
 }
@@ -2285,6 +2302,18 @@ export const gradeBehavioralHandler: RequestHandler = async (
     const assessment = submission.assessmentId as any;
     if (assessment.userId.toString() !== userId) {
       return res.status(403).json({ error: "Access denied" });
+    }
+
+    const assessmentId = assessment._id.toString();
+
+    // VP stress demo: simulate E2B (pending → staged delay → canned report). No sandbox.
+    if (isStressDemoAssessment(assessmentId)) {
+      await beginStressDemoBehavioralSimulation(submissionId);
+      triggerStressDemoBehavioralSimulationInBackground(submissionId);
+      return res.status(202).json({
+        message: "Behavioral grading queued.",
+        submissionId,
+      });
     }
 
     if (!isBehavioralGradingEnabled()) {

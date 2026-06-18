@@ -19,6 +19,9 @@
     "test:video-eval": "tsx test/video-eval/runVideoEvaluation.ts",
     "gen:stress-videos": "tsx test/video-eval/generateStressVideos.ts",
     "seed:stress-demo": "tsx --env-file=config.env test/video-eval/seedStressDemo.ts",
+    "seed:stress-demo-behavioral": "tsx --env-file=config.env test/video-eval/seedStressDemoBehavioralGrading.ts",
+    "seed:stress-demo-code": "tsx --env-file=config.env test/video-eval/seedStressDemoSubmissionCode.ts",
+    "seed:stress-demo-extras": "npm run seed:stress-demo-behavioral && npm run seed:stress-demo-code",
     "seed:demo-account": "tsx --env-file=config.env test/video-eval/seedDemoAccount.ts",
     "postinstall": "npx playwright install chromium"
   },

@@ -514,6 +514,12 @@ const SubmissionSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+
+    // Live progress during behavioral grading (stress-demo simulation + future streaming)
+    behavioralGradingProgress: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
   },
   {
     timestamps: true, // Adds createdAt and updatedAt automatically

@@ -97,6 +97,27 @@ export type Submission = {
   };
   behavioralGradingStatus?: "pending" | "completed" | "failed" | null;
   behavioralGradingError?: string | null;
+  behavioralGradingProgress?: {
+    phase?: string;
+    phaseLabel?: string;
+    checkIndex?: number | null;
+    checksTotal?: number;
+    checkText?: string;
+    agentSteps?: Array<{
+      iteration: number;
+      tool: string;
+      detail: string;
+      status: "pending" | "running" | "done";
+      outputPreview?: string;
+    }>;
+    completedChecks?: Array<{
+      checkIndex: number;
+      checkText: string;
+      verdict: "pass" | "fail" | "inconclusive";
+    }>;
+    startedAt?: string;
+    updatedAt?: string;
+  } | null;
   behavioralGradingReport?: {
     sandbox?: { sandboxId?: string; timeoutMs?: number };
     runbook?: {
@@ -116,11 +137,33 @@ export type Submission = {
       executionProfile?: string;
       evidence?: unknown[];
     };
+    setup?: {
+      status?: "ready" | "degraded" | "failed";
+      phase?: string;
+      summary?: string;
+      failedSteps?: Array<{
+        purpose?: string;
+        command?: string;
+        exitCode?: number;
+        stderrSnippet?: string;
+      }>;
+      healthWait?: {
+        attempted?: boolean;
+        ready?: boolean;
+        attempts?: number;
+        elapsedMs?: number;
+        lastError?: string;
+        logTail?: string;
+      };
+    };
+    failureCategory?: "setup" | "judge" | "timeout" | "disabled" | "unknown" | null;
     cases?: Array<{
       checkText: string;
+      checkIndex?: number;
       verdict: "pass" | "fail" | "inconclusive";
       evidence?: unknown[];
       artifacts?: string[];
+      isolation?: "fresh_browser_context";
     }>;
     startedAt?: string;
     completedAt?: string;

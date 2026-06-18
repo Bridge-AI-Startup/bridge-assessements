@@ -12,14 +12,26 @@ import {
   type StepEvidence,
 } from "./executor.js";
 import { runAgentBehavioralJudge } from "./agentJudge.js";
+import { BehavioralBrowserSession } from "./browserSession.js";
 import { extractRunbook } from "./planner.js";
 import { behavioralInfo } from "./log.js";
+import {
+  buildCliSetupStatus,
+  orderChecksForIsolation,
+  waitForAppReady,
+  type GradingFailureCategory,
+  type RunbookSetupStatus,
+} from "./setupHealth.js";
 
 export type BehavioralCaseResult = {
   checkText: string;
+  /** Original index in assessment.behavioralChecks (stable after isolation reorder). */
+  checkIndex: number;
   verdict: "pass" | "fail" | "inconclusive";
   evidence: StepEvidence[];
   artifacts: string[];
+  /** Fresh browser context per check when web grading (G). */
+  isolation?: "fresh_browser_context";
 };
 
 export type BehavioralGradingReport = {
@@ -35,6 +47,8 @@ export type BehavioralGradingReport = {
     baseUrl?: string;
     executionProfile?: "cli_stdout" | "web_server" | "unclear";
   };
+  setup: RunbookSetupStatus;
+  failureCategory?: GradingFailureCategory | null;
   cases: BehavioralCaseResult[];
   startedAt: string;
   completedAt: string;
@@ -192,6 +206,12 @@ function assessmentDescriptionExcerpt(assessment: any): string {
   return `${raw.slice(0, ASSESSMENT_DESC_MAX)}\n…`;
 }
 
+export {
+  inferFailureCategory,
+  type GradingFailureCategory,
+  type RunbookSetupStatus,
+} from "./setupHealth.js";
+
 export async function gradeSubmissionBehavioral(
   submissionId: string
 ): Promise<BehavioralGradingReport> {
@@ -264,8 +284,22 @@ export async function gradeSubmissionBehavioral(
         });
 
         const executionProfile = runbook.executionProfile ?? "unclear";
-        const effectiveBaseUrl =
+        let effectiveBaseUrl =
           executionProfile === "cli_stdout" ? undefined : runbookResult.baseUrl;
+
+        let setup: RunbookSetupStatus;
+        if (effectiveBaseUrl?.trim()) {
+          setup = await waitForAppReady(
+            ctx,
+            effectiveBaseUrl,
+            runbookResult.evidence
+          );
+          if (setup.status === "failed") {
+            behavioralInfo("setup_failed", { summary: setup.summary });
+          }
+        } else {
+          setup = buildCliSetupStatus(runbookResult.evidence);
+        }
 
         const assessmentTitle =
           typeof assessment?.title === "string" ? assessment.title : "Assessment";
@@ -281,7 +315,10 @@ export async function gradeSubmissionBehavioral(
         );
         const httpEx = judgeArtifacts.httpBodyExcerpt || "";
         const runtimeHints = {
-          baseUrlAvailable: Boolean(effectiveBaseUrl?.trim()),
+          baseUrlAvailable:
+            Boolean(effectiveBaseUrl?.trim()) &&
+            setup.status !== "failed" &&
+            (setup.healthWait?.ready ?? setup.status === "ready"),
           anyRunbookCommandFailed: runbookResult.evidence.some(
             (e) => e.type === "command" && !e.success
           ),
@@ -297,73 +334,96 @@ export async function gradeSubmissionBehavioral(
         });
 
         const cases: BehavioralCaseResult[] = [];
+        const orderedChecks = orderChecksForIsolation(behavioralChecks);
+        const browserSession = effectiveBaseUrl?.trim()
+          ? new BehavioralBrowserSession()
+          : null;
 
-        for (let i = 0; i < behavioralChecks.length; i += 1) {
-          const checkText = behavioralChecks[i];
-          const startedAtJudge = new Date().toISOString();
-          const otherBehavioralChecks = behavioralChecks.filter(
-            (_, j) => j !== i
-          );
+        try {
+          for (let ord = 0; ord < orderedChecks.length; ord += 1) {
+            const { checkText, originalIndex: checkIndex } =
+              orderedChecks[ord];
+            const startedAtJudge = new Date().toISOString();
+            const otherBehavioralChecks = behavioralChecks.filter(
+              (_, j) => j !== checkIndex
+            );
 
-          behavioralInfo("judge_check_start", {
-            index: i + 1,
-            total: behavioralChecks.length,
-            preview: checkText.slice(0, 100),
-          });
+            if (browserSession) {
+              await browserSession.resetIsolation();
+            }
 
-          const judgeResult = await runAgentBehavioralJudge({
-            assessmentTitle,
-            assessmentDescription,
-            behavioralCheck: checkText,
-            executionProfile,
-            readmeExcerpt,
-            artifacts: judgeArtifacts,
-            runtimeHints,
-            repoPath,
-            ctx,
-            baseUrl: effectiveBaseUrl,
-            submissionId,
-            otherBehavioralChecks,
-          });
-          const finishedAtJudge = new Date().toISOString();
+            behavioralInfo("judge_check_start", {
+              index: ord + 1,
+              checkIndex,
+              total: behavioralChecks.length,
+              preview: checkText.slice(0, 100),
+            });
 
-          const evidence: StepEvidence[] = [
-            {
-              id: randomUUID(),
-              type: "judge",
-              startedAt: startedAtJudge,
-              finishedAt: finishedAtJudge,
-              success: judgeResult.verdict === "pass",
-              verdict: judgeResult.verdict,
-              rationale: judgeResult.rationale,
-              citations: judgeResult.citations,
-              input: {
-                entryCommand: judgeArtifacts.entryCommand,
-                mainSourcePath: judgeArtifacts.mainSourcePath,
+            const judgeResult = await runAgentBehavioralJudge({
+              assessmentTitle,
+              assessmentDescription,
+              behavioralCheck: checkText,
+              executionProfile,
+              readmeExcerpt,
+              artifacts: judgeArtifacts,
+              runtimeHints,
+              repoPath,
+              ctx,
+              baseUrl: effectiveBaseUrl,
+              submissionId,
+              otherBehavioralChecks,
+              browserSession: browserSession ?? undefined,
+              manageBrowserLifecycle: !browserSession,
+            });
+            const finishedAtJudge = new Date().toISOString();
+
+            const evidence: StepEvidence[] = [
+              {
+                id: randomUUID(),
+                type: "judge",
+                startedAt: startedAtJudge,
+                finishedAt: finishedAtJudge,
+                success: judgeResult.verdict === "pass",
+                verdict: judgeResult.verdict,
+                rationale: judgeResult.rationale,
+                citations: judgeResult.citations,
+                input: {
+                  entryCommand: judgeArtifacts.entryCommand,
+                  mainSourcePath: judgeArtifacts.mainSourcePath,
+                },
+                ...(judgeResult.agentTrace?.length
+                  ? { agentTrace: judgeResult.agentTrace }
+                  : {}),
               },
-              ...(judgeResult.agentTrace?.length
-                ? { agentTrace: judgeResult.agentTrace }
+            ];
+
+            const screenshotArtifactKeys = (judgeResult.agentTrace ?? [])
+              .map((t) => t.artifactKey)
+              .filter((k): k is string => Boolean(k));
+
+            cases.push({
+              checkText,
+              checkIndex,
+              verdict: judgeResult.verdict,
+              evidence,
+              artifacts: screenshotArtifactKeys,
+              ...(browserSession
+                ? { isolation: "fresh_browser_context" as const }
                 : {}),
-            },
-          ];
+            });
 
-          const screenshotArtifactKeys = (judgeResult.agentTrace ?? [])
-            .map((t) => t.artifactKey)
-            .filter((k): k is string => Boolean(k));
-
-          cases.push({
-            checkText,
-            verdict: judgeResult.verdict,
-            evidence,
-            artifacts: screenshotArtifactKeys,
-          });
-
-          behavioralInfo("judge_check_done", {
-            index: i + 1,
-            verdict: judgeResult.verdict,
-            ms: Date.now() - t0,
-          });
+            behavioralInfo("judge_check_done", {
+              index: ord + 1,
+              checkIndex,
+              verdict: judgeResult.verdict,
+              ms: Date.now() - t0,
+            });
+          }
+        } finally {
+          await browserSession?.close();
         }
+
+        cases.sort((a, b) => a.checkIndex - b.checkIndex);
 
         const completedAt = new Date().toISOString();
         behavioralInfo("sandbox_inner_done", { ms: Date.now() - t0 });
@@ -380,6 +440,8 @@ export async function gradeSubmissionBehavioral(
             baseUrl: effectiveBaseUrl,
             executionProfile,
           },
+          setup,
+          failureCategory: setup.status === "failed" ? "setup" : null,
           cases,
           startedAt,
           completedAt,
