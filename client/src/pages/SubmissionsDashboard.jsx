@@ -32,6 +32,7 @@ import {
   Camera,
   Pencil,
   MoreHorizontal,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -427,6 +428,7 @@ export default function SubmissionsDashboard() {
   const [submissions, setSubmissions] = useState([]);
   const [assessment, setAssessment] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [exportingEvidence, setExportingEvidence] = useState(false);
   const [error, setError] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
@@ -462,6 +464,7 @@ export default function SubmissionsDashboard() {
   const behavioralArtifactsLoadedForIdRef = React.useRef(null);
   const recordingVideoObjectUrlRef = React.useRef(null);
   const recordingMergePollRef = React.useRef(null);
+  const pendingRefetchedRef = React.useRef(false);
   const { toast } = useToast();
 
   const handleOpenRunProjectModal = (githubUrl) => {
@@ -843,6 +846,21 @@ export default function SubmissionsDashboard() {
     loadSubmissions();
   }, [loadSubmissions]);
 
+  // Silent refetch for the manual reload button (no full-page loading state)
+  const handleManualRefresh = React.useCallback(async () => {
+    if (!assessmentId || !currentUser || isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      const token = await currentUser.getIdToken();
+      const result = await getSubmissionsForAssessment(assessmentId, token);
+      if (result.success) setSubmissions(result.data || []);
+    } catch {
+      // best-effort refresh; keep existing data on failure
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [assessmentId, currentUser, isRefreshing]);
+
   // Keep candidate detail panel in sync when list refreshes (e.g. behavioral poll)
   useEffect(() => {
     if (!selectedEvaluationSubmission?._id) return;
@@ -852,7 +870,10 @@ export default function SubmissionsDashboard() {
     if (fresh) setSelectedEvaluationSubmission(fresh);
   }, [submissions, selectedEvaluationSubmission?._id]);
 
-  // Poll submissions while any are waiting for automatic evaluation (transcript + score)
+  // When any submission is waiting for automatic evaluation, do a single
+  // delayed refetch instead of polling. The effect re-runs on every
+  // setSubmissions, so a ref latch guarantees exactly one scheduled refetch
+  // per pending episode (avoids the runaway interval that never hit its cap).
   useEffect(() => {
     const submittedRecently = (s) =>
       s.submittedAt &&
@@ -868,21 +889,23 @@ export default function SubmissionsDashboard() {
             (s.evaluationStatus !== "failed" && submittedRecently(s)))) ||
         hasPendingBehavioral
     );
-    if (!hasPending || !assessmentId || !currentUser) return;
 
-    const POLL_MS = hasPendingBehavioral ? 1200 : 5000;
-    const MAX_POLLS = 180; // 15 min
-    let polls = 0;
-    const interval = setInterval(async () => {
-      polls++;
+    if (!hasPending || !assessmentId || !currentUser) {
+      pendingRefetchedRef.current = false; // reset when nothing pending
+      return;
+    }
+    if (pendingRefetchedRef.current) return; // one-shot already scheduled
+    pendingRefetchedRef.current = true;
+
+    const timer = setTimeout(async () => {
       try {
         const token = await currentUser.getIdToken();
         const result = await getSubmissionsForAssessment(assessmentId, token);
         if (result.success) setSubmissions(result.data || []);
       } catch {}
-      if (polls >= MAX_POLLS) clearInterval(interval);
-    }, POLL_MS);
-    return () => clearInterval(interval);
+    }, 8000);
+
+    return () => clearTimeout(timer);
   }, [submissions, assessmentId, currentUser]);
 
   // Calculate stats from real data
@@ -1600,9 +1623,25 @@ export default function SubmissionsDashboard() {
               </>
             ) : null}
           </div>
-          <h1 className="text-2xl font-bold text-[#1E3A8A]">
-            {assessment ? assessment.title : "Submissions Dashboard"}
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold text-[#1E3A8A]">
+              {assessment ? assessment.title : "Submissions Dashboard"}
+            </h1>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={handleManualRefresh}
+              disabled={isRefreshing}
+              title="Refresh submissions"
+              aria-label="Refresh submissions"
+              className="h-7 w-7 text-gray-400 hover:text-[#1E3A8A]"
+            >
+              <RefreshCw
+                className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`}
+              />
+            </Button>
+          </div>
           <p className="text-gray-500 text-sm">
             {assessment
               ? `Track candidate progress and review submissions for "${assessment.title}"`
