@@ -261,6 +261,33 @@ export async function getSubmissionByToken(
 }
 
 /**
+ * Get a single submission by ID with its full document (heavy nested fields
+ * like trace events, transcript, and evidence). Used to lazily hydrate detail
+ * panels in the employer dashboard, since the list endpoint returns a slim
+ * summary-only payload.
+ */
+export async function getSubmissionById(
+  id: string
+): Promise<APIResult<Submission>> {
+  try {
+    const response = await get(`/submissions/${id}`);
+
+    const result = await response.json();
+
+    if (result && result._id) {
+      return { success: true, data: result as Submission };
+    }
+
+    return {
+      success: false,
+      error: result.error || "Failed to load submission",
+    };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
  * Start assessment (update status to "in-progress")
  */
 export async function startAssessment(

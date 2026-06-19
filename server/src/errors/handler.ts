@@ -39,5 +39,6 @@ export const errorHandler = (
     return;
   }
   console.log("Internal Error", err);
+  if (res.headersSent) return;
   res.status(500).json({ error: "Unknown Error. Try Again" });
 };

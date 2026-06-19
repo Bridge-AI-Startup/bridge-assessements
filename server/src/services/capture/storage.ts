@@ -17,8 +17,13 @@ export interface IFrameStorage {
   getTranscript(key: string): Promise<string>;
   storeVideoChunk(key: string, buffer: Buffer): Promise<void>;
   getVideoChunk(key: string): Promise<Buffer>;
+  /** Total byte size of a stored object (for Range requests). */
+  getObjectSize(key: string): Promise<number>;
   /** Stream large blobs (e.g. merged playback.webm) without loading fully into RAM. */
-  openReadStream(key: string): Promise<Readable>;
+  openReadStream(
+    key: string,
+    range?: { start?: number; end?: number }
+  ): Promise<Readable>;
   listKeys(prefix: string): Promise<string[]>;
   exists(key: string): Promise<boolean>;
   delete(key: string): Promise<void>;
@@ -72,8 +77,19 @@ export class LocalFrameStorage implements IFrameStorage {
     return fs.readFile(this.resolvePath(key));
   }
 
-  async openReadStream(key: string): Promise<Readable> {
-    return createReadStream(this.resolvePath(key));
+  async getObjectSize(key: string): Promise<number> {
+    const st = await fs.stat(this.resolvePath(key));
+    return st.size;
+  }
+
+  async openReadStream(
+    key: string,
+    range?: { start?: number; end?: number }
+  ): Promise<Readable> {
+    const opts: { start?: number; end?: number } = {};
+    if (range?.start != null) opts.start = range.start;
+    if (range?.end != null) opts.end = range.end;
+    return createReadStream(this.resolvePath(key), opts);
   }
 
   async listKeys(prefix: string): Promise<string[]> {

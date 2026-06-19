@@ -125,9 +125,34 @@ export class S3FrameStorage implements IFrameStorage {
     return bodyToBuffer(out.Body);
   }
 
-  async openReadStream(key: string): Promise<Readable> {
+  async getObjectSize(key: string): Promise<number> {
     const out = await this.client.send(
-      new GetObjectCommand({ Bucket: this.bucket, Key: key })
+      new HeadObjectCommand({ Bucket: this.bucket, Key: key })
+    );
+    const size = out.ContentLength;
+    if (size == null || size < 0) {
+      throw new Error(`S3 HeadObject: missing ContentLength for ${key}`);
+    }
+    return size;
+  }
+
+  async openReadStream(
+    key: string,
+    range?: { start?: number; end?: number }
+  ): Promise<Readable> {
+    let rangeHeader: string | undefined;
+    if (range?.start != null || range?.end != null) {
+      const start = range.start ?? 0;
+      const end = range.end != null ? range.end : "";
+      rangeHeader = `bytes=${start}-${end}`;
+    }
+
+    const out = await this.client.send(
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Range: rangeHeader,
+      })
     );
     const body = out.Body;
     if (!body) throw new Error("S3 GetObject: empty body");

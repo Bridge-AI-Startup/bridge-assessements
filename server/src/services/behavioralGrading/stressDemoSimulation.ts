@@ -4,6 +4,7 @@
  */
 
 import crypto from "crypto";
+import AssessmentModel from "../../models/assessment.js";
 import SubmissionModel from "../../models/submission.js";
 import { getGradingEvidenceStorage } from "../gradingEvidence/storage.js";
 import type { BehavioralGradingReport } from "./index.js";
@@ -164,6 +165,94 @@ export function getStressDemoAssessmentId(): string {
 
 export function isStressDemoAssessment(assessmentId: string): boolean {
   return assessmentId === getStressDemoAssessmentId();
+}
+
+export type StressDemoAssessmentLike = {
+  _id: { toString(): string } | string;
+  title?: string | null;
+  behavioralChecks?: unknown[] | null;
+};
+
+function assessmentIdString(assessment: StressDemoAssessmentLike): string {
+  const id = assessment._id;
+  return typeof id === "string" ? id : id.toString();
+}
+
+export type StressDemoSimulationContext = {
+  candidateName?: string | null;
+  candidateEmail?: string | null;
+};
+
+/** True when manual Run should use the fake E2B simulation (not just the hardcoded id). */
+export function shouldUseStressDemoBehavioralSimulation(
+  assessment: StressDemoAssessmentLike | null | undefined,
+  context: StressDemoSimulationContext = {},
+): boolean {
+  const candidateName = context.candidateName?.trim();
+  if (candidateName && candidateName in VARIANT_PROFILES) return true;
+
+  const email = (context.candidateEmail || "").trim().toLowerCase();
+  if (email.endsWith("@stress.bridgeai-demo.com")) return true;
+
+  if (!assessment) return false;
+  if (isStressDemoAssessment(assessmentIdString(assessment))) return true;
+
+  const title = (assessment.title || "").toLowerCase();
+  if (title.includes("webhook dispatcher")) return true;
+
+  const checks = Array.isArray(assessment.behavioralChecks)
+    ? assessment.behavioralChecks.filter(
+        (c): c is string => typeof c === "string" && c.trim().length > 0,
+      )
+    : [];
+  if (checks.length === 0) return false;
+
+  const canonical = WEBHOOK_DISPATCHER_BEHAVIORAL_CHECKS;
+  if (
+    checks.length === canonical.length &&
+    checks.every((c, i) => c === canonical[i])
+  ) {
+    return true;
+  }
+
+  const overlap = checks.filter((c) => canonical.includes(c)).length;
+  return overlap >= Math.min(6, canonical.length);
+}
+
+async function loadAssessmentForSubmission(submission: {
+  assessmentId: unknown;
+}): Promise<StressDemoAssessmentLike | null> {
+  const raw = submission.assessmentId as
+    | StressDemoAssessmentLike
+    | { toString(): string }
+    | string
+    | null
+    | undefined;
+  if (
+    raw &&
+    typeof raw === "object" &&
+    "title" in raw &&
+    typeof (raw as StressDemoAssessmentLike).title === "string"
+  ) {
+    return raw as StressDemoAssessmentLike;
+  }
+  const assessmentId =
+    raw && typeof raw === "object" && "_id" in raw
+      ? assessmentIdString(raw as StressDemoAssessmentLike)
+      : raw != null
+        ? String(raw)
+        : null;
+  if (!assessmentId) return null;
+  return AssessmentModel.findById(assessmentId).lean();
+}
+
+function assertStressDemoSimulationAssessment(
+  assessment: StressDemoAssessmentLike | null | undefined,
+  context: StressDemoSimulationContext = {},
+): void {
+  if (!shouldUseStressDemoBehavioralSimulation(assessment, context)) {
+    throw new Error("Not a stress demo assessment submission");
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -482,12 +571,14 @@ export async function runStressDemoBehavioralSimulation(
     throw new Error("Submission not found");
   }
 
-  const assessment: any = submission.assessmentId;
-  if (!assessment || !isStressDemoAssessment(assessment._id.toString())) {
-    throw new Error("Not a stress demo assessment submission");
-  }
+  const simContext: StressDemoSimulationContext = {
+    candidateName: submission.candidateName,
+    candidateEmail: submission.candidateEmail,
+  };
+  const assessment = await loadAssessmentForSubmission(submission);
+  assertStressDemoSimulationAssessment(assessment, simContext);
 
-  const checks: string[] = Array.isArray(assessment.behavioralChecks)
+  const checks: string[] = Array.isArray(assessment?.behavioralChecks)
     ? assessment.behavioralChecks.filter((c: unknown): c is string => typeof c === "string")
     : WEBHOOK_DISPATCHER_BEHAVIORAL_CHECKS;
 
@@ -648,11 +739,13 @@ export async function beginStressDemoBehavioralSimulation(
   if (!submission) {
     throw new Error("Submission not found");
   }
-  const assessment: any = submission.assessmentId;
-  if (!assessment || !isStressDemoAssessment(assessment._id.toString())) {
-    throw new Error("Not a stress demo assessment submission");
-  }
-  const checks: string[] = Array.isArray(assessment.behavioralChecks)
+  const simContext: StressDemoSimulationContext = {
+    candidateName: submission.candidateName,
+    candidateEmail: submission.candidateEmail,
+  };
+  const assessment = await loadAssessmentForSubmission(submission);
+  assertStressDemoSimulationAssessment(assessment, simContext);
+  const checks: string[] = Array.isArray(assessment?.behavioralChecks)
     ? assessment.behavioralChecks.filter((c: unknown): c is string => typeof c === "string")
     : WEBHOOK_DISPATCHER_BEHAVIORAL_CHECKS;
 
@@ -695,6 +788,22 @@ function failStressDemoSimulation(submissionId: string, message: string) {
     },
     $unset: { behavioralGradingProgress: "" },
   });
+}
+
+/** Run full simulated grading inline (writes live progress, then completed report). */
+export async function executeStressDemoBehavioralGrading(
+  submissionId: string,
+): Promise<BehavioralGradingReport> {
+  await beginStressDemoBehavioralSimulation(submissionId);
+  try {
+    const report = await runStressDemoBehavioralSimulation(submissionId);
+    await finishStressDemoSimulation(submissionId, report);
+    return report;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err ?? "unknown error");
+    await failStressDemoSimulation(submissionId, message);
+    throw err;
+  }
 }
 
 /** Fire-and-forget simulated run (matches real E2B background pattern). */

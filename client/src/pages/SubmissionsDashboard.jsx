@@ -48,8 +48,10 @@ import {
 import { useToast } from "@/components/ui/use-toast";
 import { Link, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import { cn } from "@/lib/utils";
 import {
   getSubmissionsForAssessment,
+  getSubmissionById,
   deleteSubmission,
   sendInvites,
   generateShareLink,
@@ -61,6 +63,11 @@ import {
 import { runSubmissionEvaluation } from "@/api/evaluation";
 import VideoTimelineWithCriteria from "@/components/proctoring/VideoTimelineWithCriteria";
 import BehavioralGradingLiveTrace from "@/components/submissions/BehavioralGradingLiveTrace";
+import {
+  HARDCODED_DEMO_CHECKS,
+  isHardcodedDemoAssessment,
+  runHardcodedBehavioralDemo,
+} from "@/lib/hardcodedBehavioralDemo";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Sheet,
@@ -83,12 +90,9 @@ import {
 } from "@/components/ui/collapsible";
 import { BulkInviteContent } from "@/components/BulkInviteModal";
 import { getAssessment } from "@/api/assessment";
-import {
-  getSessionBySubmission,
-  getTranscriptContent,
-  getProctoringVideoPlaybackUrl,
-  downloadProctoringVideo,
-} from "@/api/proctoring";
+import { downloadProctoringVideo } from "@/api/proctoring";
+import { useProctoringRecording } from "@/hooks/useProctoringRecording";
+import { useSteadyWriterVideoPreload } from "@/hooks/useSteadyWriterVideoPreload";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
 
@@ -176,6 +180,17 @@ function behavioralAgentTraceLooksProbed(agentTrace) {
         /<<['"]?\w+['"]?/i.test(t.detail) ||
         /\bnode\s+-e\b/i.test(t.detail))
   );
+}
+
+/** Heavy submission fields excluded from the list API; merge after GET /:id. */
+function mergeHydratedHeavyFields(current, fetched) {
+  if (!fetched) return current;
+  return {
+    ...current,
+    enrichedTranscript:
+      fetched.enrichedTranscript ?? current.enrichedTranscript,
+    refinedTranscript: fetched.refinedTranscript ?? current.refinedTranscript,
+  };
 }
 
 /**
@@ -444,12 +459,6 @@ export default function SubmissionsDashboard() {
   const [isDropoffAnalysisExpanded, setIsDropoffAnalysisExpanded] =
     useState(false);
   const [evaluatingSubmissionId, setEvaluatingSubmissionId] = useState(null);
-  const [recordingSession, setRecordingSession] = useState(null);
-  const [recordingTranscript, setRecordingTranscript] = useState(null);
-  const [recordingTranscriptLoading, setRecordingTranscriptLoading] = useState(false);
-  const [recordingVideoLoading, setRecordingVideoLoading] = useState(false);
-  const [recordingTranscriptError, setRecordingTranscriptError] = useState(null);
-  const [recordingVideoObjectUrl, setRecordingVideoObjectUrl] = useState(null);
   const [behavioralGradingSubmissionId, setBehavioralGradingSubmissionId] =
     useState(null);
   const [showBehavioralModal, setShowBehavioralModal] = useState(false);
@@ -462,10 +471,35 @@ export default function SubmissionsDashboard() {
     () => new Set()
   );
   const behavioralArtifactsLoadedForIdRef = React.useRef(null);
-  const recordingVideoObjectUrlRef = React.useRef(null);
-  const recordingMergePollRef = React.useRef(null);
   const pendingRefetchedRef = React.useRef(false);
+  const fullSubmissionCacheRef = React.useRef(new Map());
+  const hardcodedDemoAbortRef = React.useRef(null);
   const { toast } = useToast();
+
+  const { videoUrl: steadyWriterPreloadUrl } = useSteadyWriterVideoPreload({
+    assessmentId,
+    currentUser,
+  });
+
+  const {
+    recordingSession,
+    recordingSessionLoading,
+    recordingTranscript,
+    recordingTranscriptLoading,
+    recordingVideoLoading,
+    recordingTranscriptError,
+    recordingVideoError,
+    recordingVideoUrl,
+    refreshVideoStream,
+  } = useProctoringRecording({
+    submissionId: selectedEvaluationSubmission?._id ?? null,
+    evaluationTab,
+    showEvaluationModal,
+    currentUser,
+    evaluationReport: selectedEvaluationSubmission?.evaluationReport,
+    enrichedTranscript: selectedEvaluationSubmission?.enrichedTranscript,
+    prefetchOnModalOpen: isHardcodedDemoAssessment(assessmentId),
+  });
 
   const handleOpenRunProjectModal = (githubUrl) => {
     const previewUrl = buildStackBlitzUrl(githubUrl);
@@ -575,221 +609,6 @@ export default function SubmissionsDashboard() {
     }
   }, [showEvaluationModal, selectedEvaluationSubmission?._id]);
 
-  // Load proctoring session, screen transcript, and video when Recording tab is active
-  useEffect(() => {
-    if (
-      evaluationTab !== "recording" ||
-      !selectedEvaluationSubmission?._id ||
-      !currentUser
-    ) {
-      if (recordingVideoObjectUrlRef.current) {
-        URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
-        recordingVideoObjectUrlRef.current = null;
-      }
-      setRecordingVideoObjectUrl(null);
-      setRecordingSession(null);
-      setRecordingTranscript(null);
-      setRecordingTranscriptError(null);
-      return;
-    }
-    const submissionId = String(selectedEvaluationSubmission?._id ?? "");
-    if (!submissionId) {
-      setRecordingTranscriptLoading(false);
-      return;
-    }
-    console.log("[proctoring-video] client step 1: submissionId =", submissionId, "type:", typeof submissionId, "selectedEvaluationSubmission._id =", selectedEvaluationSubmission._id);
-    if (recordingVideoObjectUrlRef.current) {
-      URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
-      recordingVideoObjectUrlRef.current = null;
-    }
-    if (recordingMergePollRef.current) {
-      clearInterval(recordingMergePollRef.current);
-      recordingMergePollRef.current = null;
-    }
-    setRecordingVideoObjectUrl(null);
-    setRecordingSession(null);
-    setRecordingTranscript(null);
-    setRecordingTranscriptError(null);
-    setRecordingTranscriptLoading(true);
-    let cancelled = false;
-    (async () => {
-      try {
-        const token = await currentUser.getIdToken();
-        console.log("[proctoring-video] client step 2: calling getSessionBySubmission with submissionId =", submissionId);
-        const sessionResult = await getSessionBySubmission(submissionId, token);
-        if (cancelled) return;
-        console.log("[proctoring-video] client step 3: sessionResult.success =", sessionResult.success, "sessionResult.data present =", !!sessionResult.data, "sessionResult.error =", sessionResult.error);
-        if (!sessionResult.success || !sessionResult.data) {
-          setRecordingTranscriptLoading(false);
-          return;
-        }
-        const session = sessionResult.data;
-        const idsMatch = String(session.submissionId) === String(submissionId);
-        console.log("[proctoring-video] client step 4: session._id =", session._id, "type:", typeof session._id, "session.submissionId =", session.submissionId, "type:", typeof session.submissionId, "sessionSubmissionId === submissionId =", idsMatch, "String(session.submissionId) =", String(session.submissionId), "submissionId =", submissionId);
-        if (String(session.submissionId) !== String(submissionId)) {
-          console.log("[proctoring-video] client step 4 FAIL: ids do not match, returning early (no session/video set)");
-          setRecordingTranscriptLoading(false);
-          return;
-        }
-        setRecordingSession(session);
-        if (
-          session.transcript?.status === "completed" &&
-          session.transcript?.storageKey &&
-          !selectedEvaluationSubmission?.enrichedTranscript
-        ) {
-          const transcriptResult = await getTranscriptContent(session._id);
-          if (cancelled) return;
-          if (transcriptResult.success && transcriptResult.data) {
-            const lines = transcriptResult.data
-              .split("\n")
-              .filter((l) => l.trim());
-            const segments = lines
-              .map((line) => {
-                try {
-                  const cleaned = line
-                    .trim()
-                    .replace(/^```(?:json|jsonl)?/, "")
-                    .replace(/^```$/, "")
-                    .trim();
-                  return cleaned ? JSON.parse(cleaned) : null;
-                } catch {
-                  return null;
-                }
-              })
-              .filter(Boolean);
-            setRecordingTranscript(segments);
-          }
-        }
-        const employerCanWatchRecording =
-          Boolean(selectedEvaluationSubmission?.evaluationReport) ||
-          session.status === "completed" ||
-          session.mergedVideo?.status === "ready";
-        const mergeInFlight = session.mergedVideo?.status === "merging";
-
-        if (employerCanWatchRecording && !mergeInFlight) {
-          const sessionIdForVideo =
-            session._id != null && typeof session._id === "string"
-              ? session._id
-              : session._id && typeof session._id.toString === "function"
-                ? session._id.toString()
-                : String(session._id);
-          setRecordingVideoLoading(true);
-          console.log(
-            "[proctoring-video] client step 5: calling getProctoringVideoPlaybackUrl with session._id =",
-            sessionIdForVideo
-          );
-          const videoResult = await getProctoringVideoPlaybackUrl(
-            sessionIdForVideo,
-            token
-          );
-          if (cancelled) {
-            if (videoResult.success && videoResult.data) {
-              URL.revokeObjectURL(videoResult.data);
-            }
-            setRecordingVideoLoading(false);
-            return;
-          }
-          console.log(
-            "[proctoring-video] client step 6: videoResult.success =",
-            videoResult.success,
-            videoResult.error,
-            !!videoResult.data
-          );
-          if (videoResult.success && videoResult.data) {
-            recordingVideoObjectUrlRef.current = videoResult.data;
-            setRecordingVideoObjectUrl(videoResult.data);
-          }
-          setRecordingVideoLoading(false);
-        } else {
-          setRecordingVideoLoading(false);
-          if (mergeInFlight) {
-            console.log(
-              "[proctoring-video] client step 5 SKIP: merged video is still being prepared"
-            );
-          } else {
-            console.log(
-              "[proctoring-video] client step 5 SKIP: recording not ready for playback yet"
-            );
-          }
-        }
-
-        if (!cancelled && mergeInFlight) {
-          if (recordingMergePollRef.current) {
-            clearInterval(recordingMergePollRef.current);
-            recordingMergePollRef.current = null;
-          }
-          recordingMergePollRef.current = setInterval(async () => {
-            if (cancelled) return;
-            try {
-              const tok = await currentUser.getIdToken();
-              const sr = await getSessionBySubmission(submissionId, tok);
-              if (!sr.success || !sr.data || cancelled) return;
-              setRecordingSession(sr.data);
-              const stillMerging = sr.data.mergedVideo?.status === "merging";
-              if (!stillMerging) {
-                if (recordingMergePollRef.current) {
-                  clearInterval(recordingMergePollRef.current);
-                  recordingMergePollRef.current = null;
-                }
-                const canWatchNow =
-                  Boolean(selectedEvaluationSubmission?.evaluationReport) ||
-                  sr.data.status === "completed" ||
-                  sr.data.mergedVideo?.status === "ready";
-                if (canWatchNow && sr.data.mergedVideo?.status !== "merging") {
-                  setRecordingVideoLoading(true);
-                  const sessionIdForVideo =
-                    sr.data._id != null && typeof sr.data._id === "string"
-                      ? sr.data._id
-                      : sr.data._id?.toString?.() ?? String(sr.data._id);
-                  const videoResult = await getProctoringVideoPlaybackUrl(
-                    sessionIdForVideo,
-                    tok
-                  );
-                  if (!cancelled && videoResult.success && videoResult.data) {
-                    if (recordingVideoObjectUrlRef.current) {
-                      URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
-                    }
-                    recordingVideoObjectUrlRef.current = videoResult.data;
-                    setRecordingVideoObjectUrl(videoResult.data);
-                  }
-                  if (!cancelled) setRecordingVideoLoading(false);
-                }
-              }
-            } catch (e) {
-              console.warn("[proctoring-video] merge poll failed:", e?.message ?? e);
-            }
-          }, 4000);
-        }
-      } catch (err) {
-        console.log("[proctoring-video] client CAUGHT ERROR:", err?.message ?? err);
-        if (!cancelled) {
-          setRecordingTranscriptError(err?.message ?? "Failed to load screen transcript");
-        }
-      } finally {
-        if (!cancelled) setRecordingTranscriptLoading(false);
-        setRecordingVideoLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      setRecordingVideoLoading(false);
-      if (recordingMergePollRef.current) {
-        clearInterval(recordingMergePollRef.current);
-        recordingMergePollRef.current = null;
-      }
-      if (recordingVideoObjectUrlRef.current) {
-        URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
-        recordingVideoObjectUrlRef.current = null;
-      }
-      setRecordingVideoObjectUrl(null);
-    };
-  }, [
-    evaluationTab,
-    selectedEvaluationSubmission?._id,
-    selectedEvaluationSubmission?.evaluationReport,
-    currentUser,
-  ]);
-
   // Wait for auth state to be ready
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -811,9 +630,11 @@ export default function SubmissionsDashboard() {
     setError(null);
 
     try {
-      // Fetch assessment details
       const token = await currentUser.getIdToken();
-      const assessmentResult = await getAssessment(assessmentId, token);
+      const [assessmentResult, submissionsResult] = await Promise.all([
+        getAssessment(assessmentId, token),
+        getSubmissionsForAssessment(assessmentId, token),
+      ]);
 
       if (!assessmentResult.success) {
         setError("Failed to load assessment");
@@ -822,12 +643,6 @@ export default function SubmissionsDashboard() {
       }
 
       setAssessment(assessmentResult.data);
-
-      // Fetch submissions
-      const submissionsResult = await getSubmissionsForAssessment(
-        assessmentId,
-        token
-      );
 
       if (submissionsResult.success) {
         setSubmissions(submissionsResult.data || []);
@@ -861,14 +676,202 @@ export default function SubmissionsDashboard() {
     }
   }, [assessmentId, currentUser, isRefreshing]);
 
-  // Keep candidate detail panel in sync when list refreshes (e.g. behavioral poll)
+  // Keep candidate detail panel in sync when list refreshes (e.g. behavioral
+  // poll). The list is now slim, so preserve already-hydrated heavy fields
+  // (marked __full) instead of overwriting them with the summary-only record.
+  // Live behavioral fields always come from the fresh list row so the trace
+  // advances while pending; on completion invalidate cache and re-hydrate.
   useEffect(() => {
     if (!selectedEvaluationSubmission?._id) return;
+    if (isHardcodedDemoAssessment(assessmentId)) return;
     const fresh = submissions.find(
       (s) => s._id === selectedEvaluationSubmission._id
     );
-    if (fresh) setSelectedEvaluationSubmission(fresh);
+    if (!fresh) return;
+    setSelectedEvaluationSubmission((cur) => {
+      if (!cur) return fresh;
+      const wasPending = cur.behavioralGradingStatus === "pending";
+      const nowTerminal =
+        fresh.behavioralGradingStatus === "completed" ||
+        fresh.behavioralGradingStatus === "failed";
+      if (wasPending && nowTerminal) {
+        fullSubmissionCacheRef.current.delete(cur._id);
+        return mergeHydratedHeavyFields(fresh, cur);
+      }
+      if (cur.__full) {
+        return {
+          ...cur,
+          behavioralGradingStatus: fresh.behavioralGradingStatus,
+          behavioralGradingError: fresh.behavioralGradingError,
+          behavioralGradingProgress:
+            fresh.behavioralGradingProgress ?? cur.behavioralGradingProgress,
+          status: fresh.status,
+        };
+      }
+      return mergeHydratedHeavyFields(
+        {
+          ...fresh,
+          behavioralGradingProgress:
+            fresh.behavioralGradingProgress ?? cur.behavioralGradingProgress,
+        },
+        cur
+      );
+    });
   }, [submissions, selectedEvaluationSubmission?._id]);
+
+  // Lazily hydrate enriched transcript when the evaluation modal opens. The
+  // list payload omits enrichedTranscript (large); criteria confidence/evidence
+  // are included in the list response.
+  useEffect(() => {
+    const sub = selectedEvaluationSubmission;
+    if (!showEvaluationModal || !sub?._id) return;
+    if (isHardcodedDemoAssessment(assessmentId)) return;
+    const cached = fullSubmissionCacheRef.current.get(sub._id);
+    if (cached) {
+      setSelectedEvaluationSubmission((cur) =>
+        cur && cur._id === sub._id
+          ? mergeHydratedHeavyFields(cur, cached)
+          : cur
+      );
+      if (cached.enrichedTranscript) return;
+    }
+    let cancelled = false;
+    (async () => {
+      const res = await getSubmissionById(sub._id);
+      if (cancelled || !res.success) return;
+      const full = { ...res.data, __full: true };
+      fullSubmissionCacheRef.current.set(sub._id, full);
+      setSelectedEvaluationSubmission((cur) => {
+        if (!cur || cur._id !== sub._id) return cur;
+        const merged = mergeHydratedHeavyFields(cur, full);
+        if (cur.behavioralGradingStatus === "pending") {
+          return merged;
+        }
+        return { ...full, ...merged };
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    showEvaluationModal,
+    selectedEvaluationSubmission?._id,
+    assessmentId,
+  ]);
+
+  // While the evaluation modal is open during grading, poll the full submission
+  // document directly so live trace always advances (list sync alone can lag).
+  useEffect(() => {
+    const sub = selectedEvaluationSubmission;
+    if (!sub?._id || sub.behavioralGradingStatus !== "pending") return;
+    if (isHardcodedDemoAssessment(assessmentId)) return;
+
+    const submissionId = sub._id;
+    let cancelled = false;
+
+    const refreshPendingSubmission = async () => {
+      const res = await getSubmissionById(submissionId);
+      if (cancelled || !res.success || !res.data) return;
+      const data = res.data;
+      const patch = {
+        behavioralGradingStatus: data.behavioralGradingStatus,
+        behavioralGradingError: data.behavioralGradingError,
+        behavioralGradingProgress: data.behavioralGradingProgress,
+        behavioralGradingReport: data.behavioralGradingReport,
+      };
+      setSelectedEvaluationSubmission((cur) => {
+        if (!cur || cur._id !== submissionId) return cur;
+        if (cur.behavioralGradingStatus !== "pending" && data.behavioralGradingStatus === "pending") {
+          return cur;
+        }
+        const terminal =
+          data.behavioralGradingStatus === "completed" ||
+          data.behavioralGradingStatus === "failed";
+        if (terminal) {
+          fullSubmissionCacheRef.current.delete(submissionId);
+          return { ...data, __full: true };
+        }
+        return {
+          ...cur,
+          ...patch,
+          behavioralGradingProgress:
+            patch.behavioralGradingProgress ?? cur.behavioralGradingProgress,
+        };
+      });
+      setSubmissions((prev) =>
+        prev.map((row) =>
+          row._id === submissionId
+            ? {
+                ...row,
+                ...patch,
+                behavioralGradingProgress:
+                  patch.behavioralGradingProgress ?? row.behavioralGradingProgress,
+              }
+            : row
+        )
+      );
+    };
+
+    refreshPendingSubmission();
+    const interval = setInterval(refreshPendingSubmission, 1200);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [
+    selectedEvaluationSubmission?._id,
+    selectedEvaluationSubmission?.behavioralGradingStatus,
+  ]);
+
+  useEffect(() => {
+    const sub = selectedInterview;
+    if (!sub?._id || sub.__full) return;
+    const cached = fullSubmissionCacheRef.current.get(sub._id);
+    if (cached) {
+      setSelectedInterview((cur) =>
+        cur && cur._id === sub._id ? cached : cur
+      );
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const res = await getSubmissionById(sub._id);
+      if (cancelled || !res.success) return;
+      const full = { ...res.data, __full: true };
+      fullSubmissionCacheRef.current.set(sub._id, full);
+      setSelectedInterview((cur) =>
+        cur && cur._id === sub._id ? full : cur
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedInterview?._id]);
+
+  useEffect(() => {
+    const sub = selectedBehavioralSubmission;
+    if (!sub?._id || sub.__full) return;
+    const cached = fullSubmissionCacheRef.current.get(sub._id);
+    if (cached) {
+      setSelectedBehavioralSubmission((cur) =>
+        cur && cur._id === sub._id ? cached : cur
+      );
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const res = await getSubmissionById(sub._id);
+      if (cancelled || !res.success) return;
+      const full = { ...res.data, __full: true };
+      fullSubmissionCacheRef.current.set(sub._id, full);
+      setSelectedBehavioralSubmission((cur) =>
+        cur && cur._id === sub._id ? full : cur
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBehavioralSubmission?._id]);
 
   // When any submission is waiting for automatic evaluation, do a single
   // delayed refetch instead of polling. The effect re-runs on every
@@ -907,6 +910,67 @@ export default function SubmissionsDashboard() {
 
     return () => clearTimeout(timer);
   }, [submissions, assessmentId, currentUser]);
+
+  const hasPendingBehavioral = submissions.some(
+    (s) => s.behavioralGradingStatus === "pending"
+  );
+
+  // Poll while behavioral grading runs. The list includes status + progress, but
+  // also hydrate each pending row via GET /:id so progress is never stripped.
+  useEffect(() => {
+    if (!hasPendingBehavioral || !assessmentId || !currentUser) return;
+    if (isHardcodedDemoAssessment(assessmentId)) return;
+
+    const POLL_INTERVAL_MS = 1500;
+    const MAX_POLL_MS = 5 * 60 * 1000;
+    const startedAt = Date.now();
+    let interval;
+
+    const poll = async () => {
+      if (Date.now() - startedAt > MAX_POLL_MS) {
+        clearInterval(interval);
+        return;
+      }
+      try {
+        const token = await currentUser.getIdToken();
+        const result = await getSubmissionsForAssessment(assessmentId, token);
+        if (!result.success) return;
+
+        let rows = result.data || [];
+        const pendingRows = rows.filter(
+          (s) => s.behavioralGradingStatus === "pending"
+        );
+
+        if (pendingRows.length > 0) {
+          const hydrated = await Promise.all(
+            pendingRows.map(async (row) => {
+              const full = await getSubmissionById(row._id);
+              if (!full.success || !full.data) return row;
+              return {
+                ...row,
+                behavioralGradingStatus: full.data.behavioralGradingStatus,
+                behavioralGradingError: full.data.behavioralGradingError,
+                behavioralGradingProgress: full.data.behavioralGradingProgress,
+                behavioralGradingReport:
+                  full.data.behavioralGradingReport ?? row.behavioralGradingReport,
+              };
+            })
+          );
+          const hydratedById = new Map(hydrated.map((r) => [r._id, r]));
+          rows = rows.map((r) => hydratedById.get(r._id) ?? r);
+        }
+
+        setSubmissions(rows);
+      } catch {
+        // best-effort poll; keep existing data on failure
+      }
+    };
+
+    poll();
+    interval = setInterval(poll, POLL_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, [hasPendingBehavioral, assessmentId, currentUser]);
 
   // Calculate stats from real data
   const stats = React.useMemo(() => {
@@ -1266,6 +1330,15 @@ export default function SubmissionsDashboard() {
 
   const [dashboardTab, setDashboardTab] = useState("candidates");
   const [panelSubmission, setPanelSubmission] = useState(null);
+
+  // Side panel badge reads from panelSubmission — keep in sync with list polls.
+  useEffect(() => {
+    if (!panelSubmission?._id) return;
+    const fresh = submissions.find((s) => s._id === panelSubmission._id);
+    if (!fresh) return;
+    setPanelSubmission(fresh);
+  }, [submissions, panelSubmission?._id]);
+
   const [shareTab, setShareTab] = useState("single");
   const [shareCandidateName, setShareCandidateName] = useState("");
   const [shareCandidateEmail, setShareCandidateEmail] = useState("");
@@ -1310,6 +1383,7 @@ export default function SubmissionsDashboard() {
   };
 
   const applyBehavioralPendingLocally = (submissionId) => {
+    fullSubmissionCacheRef.current.delete(submissionId);
     const checksTotal = assessment?.behavioralChecks?.length ?? 0;
     const pendingPatch = {
       behavioralGradingStatus: "pending",
@@ -1344,15 +1418,103 @@ export default function SubmissionsDashboard() {
       return;
     }
 
-    if (submission.behavioralGradingStatus === "pending") {
+    if (
+      submission.behavioralGradingStatus === "pending" &&
+      behavioralGradingSubmissionId === submission._id
+    ) {
       return;
     }
 
     setBehavioralGradingSubmissionId(submission._id);
-    applyBehavioralPendingLocally(submission._id);
     if (selectedEvaluationSubmission?._id === submission._id) {
       setExpandedBehavioralCases(new Set());
     }
+
+    const checks =
+      assessment?.behavioralChecks?.length > 0
+        ? assessment.behavioralChecks
+        : HARDCODED_DEMO_CHECKS;
+
+    const applyBehavioralPatch = (patch) => {
+      fullSubmissionCacheRef.current.delete(submission._id);
+      const merge = (row) =>
+        row?._id === submission._id
+          ? { ...row, ...patch, __full: undefined }
+          : row;
+      setSubmissions((prev) => prev.map(merge));
+      setSelectedEvaluationSubmission((prev) => merge(prev));
+      setPanelSubmission((prev) => merge(prev));
+    };
+
+    // Hardcoded VP demo — runs entirely in the browser, no server polling.
+    if (isHardcodedDemoAssessment(assessmentId)) {
+      hardcodedDemoAbortRef.current?.abort();
+      const controller = new AbortController();
+      hardcodedDemoAbortRef.current = controller;
+
+      applyBehavioralPatch({
+        behavioralGradingStatus: "pending",
+        behavioralGradingError: null,
+        behavioralGradingReport: null,
+        behavioralGradingProgress: {
+          phase: "sandbox",
+          phaseLabel: "Queued — provisioning E2B sandbox…",
+          checkIndex: null,
+          checksTotal: checks.length,
+          agentSteps: [],
+          completedChecks: [],
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      });
+
+      try {
+        await runHardcodedBehavioralDemo({
+          checks,
+          candidateName:
+            submission.candidateName || submission.candidateEmail || "Unknown",
+          submissionId: submission._id,
+          signal: controller.signal,
+          onProgress: (progress) => {
+            applyBehavioralPatch({
+              behavioralGradingStatus: "pending",
+              behavioralGradingProgress: progress,
+              behavioralGradingReport: null,
+              behavioralGradingError: null,
+            });
+          },
+          onComplete: (report) => {
+            applyBehavioralPatch({
+              behavioralGradingStatus: "completed",
+              behavioralGradingProgress: null,
+              behavioralGradingReport: report,
+              behavioralGradingError: null,
+            });
+          },
+        });
+
+        toast({
+          title: "Behavioral grading complete",
+          description: "All sandbox checks finished — report ready below.",
+        });
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+        toast({
+          title: "Behavioral grading failed",
+          description: error?.message || "Please try again.",
+          variant: "destructive",
+        });
+        await loadSubmissions();
+      } finally {
+        setBehavioralGradingSubmissionId(null);
+        if (hardcodedDemoAbortRef.current === controller) {
+          hardcodedDemoAbortRef.current = null;
+        }
+      }
+      return;
+    }
+
+    applyBehavioralPendingLocally(submission._id);
     try {
       const token = await currentUser.getIdToken();
       const result = await runBehavioralGrading(submission._id, token);
@@ -3182,7 +3344,18 @@ export default function SubmissionsDashboard() {
                     </div>
                   )}
 
-                {!selectedInterview.interview.summary &&
+                {!selectedInterview.__full &&
+                  (!selectedInterview.interview.transcript?.turns ||
+                    selectedInterview.interview.transcript.turns.length ===
+                      0) && (
+                    <div className="flex items-center justify-center gap-2 py-8 text-gray-500">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <p className="text-sm">Loading transcript...</p>
+                    </div>
+                  )}
+
+                {selectedInterview.__full &&
+                  !selectedInterview.interview.summary &&
                   (!selectedInterview.interview.transcript?.turns ||
                     selectedInterview.interview.transcript.turns.length ===
                       0) && (
@@ -3477,13 +3650,20 @@ export default function SubmissionsDashboard() {
                       {(() => {
                         const overallScore =
                           selectedEvaluationSubmission?.scores?.overall;
+                        const isHydrated =
+                          selectedEvaluationSubmission?.__full === true;
                         const taskResults =
                           selectedEvaluationSubmission?.llmWorkflow
                             ?.taskResults || [];
                         const passedTasks = taskResults.filter(
                           (t) => t.status === "passed"
                         ).length;
+                        // trace.events is omitted from the slim list payload;
+                        // trace.totalCalls is retained, so use it to detect a
+                        // workflow trace without waiting for full hydration.
                         const hasWorkflowTrace =
+                          (selectedEvaluationSubmission?.llmWorkflow?.trace
+                            ?.totalCalls ?? 0) > 0 ||
                           (selectedEvaluationSubmission?.llmWorkflow?.trace
                             ?.events?.length ?? 0) > 0;
 
@@ -3507,6 +3687,8 @@ export default function SubmissionsDashboard() {
                             "Task runs exist only for the in-app LLM workflow.";
                         } else if (taskResults.length > 0) {
                           workflowTasksValue = `${passedTasks}/${taskResults.length}`;
+                        } else if (!isHydrated) {
+                          workflowTasksSub = "Loading task results...";
                         } else {
                           workflowTasksSub = "No tasks have been executed yet.";
                         }
@@ -3720,20 +3902,22 @@ export default function SubmissionsDashboard() {
                 </div>
               </TabsContent>
 
-              <TabsContent value="recording" className="mt-4">
+              <TabsContent
+                value="recording"
+                forceMount
+                className={cn(
+                  "mt-4",
+                  evaluationTab !== "recording" && "hidden"
+                )}
+              >
                 <div className="max-h-[70vh] overflow-y-auto pr-1 space-y-4">
-                  {/* Screen recording — available once session completes / merged, before workflow scores */}
-                  {selectedEvaluationSubmission &&
-                  recordingSession &&
-                  (selectedEvaluationSubmission.evaluationReport ||
-                    recordingSession.status === "completed" ||
-                    recordingSession.mergedVideo?.status === "ready" ||
-                    recordingSession.mergedVideo?.status === "merging") ? (
+                  {/* Screen recording — player shows immediately; video buffers while transcript/rubric load */}
+                  {selectedEvaluationSubmission ? (
                     <div className="space-y-3">
                       <h3 className="text-sm font-semibold text-gray-900">
                         Screen recording
                       </h3>
-                      {recordingSession.mergedVideo?.status === "merging" ? (
+                      {recordingSession?.mergedVideo?.status === "merging" ? (
                         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-900">
                           Preparing recording… This may take a minute. You can
                           refresh this tab or come back shortly.
@@ -3796,37 +3980,50 @@ export default function SubmissionsDashboard() {
                                         return sum > 0 ? sum : undefined;
                                       })()
                                     : undefined;
+                            const canWatchRecording =
+                              Boolean(report) ||
+                              recordingSession?.status === "completed" ||
+                              recordingSession?.mergedVideo?.status === "ready";
+                            const showVideoPlayer =
+                              recordingSessionLoading ||
+                              Boolean(recordingVideoUrl) ||
+                              canWatchRecording;
+                            const isVideoBuffering =
+                              recordingSessionLoading ||
+                              recordingVideoLoading ||
+                              (canWatchRecording && !recordingVideoUrl);
+
                             return (
                               <div className="mb-2 space-y-1">
-                                {recordingVideoLoading ? (
-                                  <div className="rounded-xl border border-gray-200 bg-gray-50 overflow-hidden w-full">
-                                    <div className="relative aspect-video bg-gray-900 flex flex-col items-center justify-center gap-3">
-                                      <Loader2
-                                        className="w-10 h-10 text-white/80 animate-spin"
-                                        aria-hidden
-                                      />
-                                      <p className="text-sm text-white/90 font-medium">
-                                        Loading video…
-                                      </p>
-                                    </div>
-                                  </div>
-                                ) : (
+                                {showVideoPlayer ? (
                                   <VideoTimelineWithCriteria
                                     key={
                                       selectedEvaluationSubmission._id ??
-                                      recordingSession._id
+                                      recordingSession?._id ??
+                                      "recording"
                                     }
                                     highlights={highlights}
-                                    videoUrl={recordingVideoObjectUrl ?? null}
+                                    videoUrl={recordingVideoUrl ?? null}
+                                    isBuffering={isVideoBuffering}
+                                    onVideoError={refreshVideoStream}
                                     durationHintSec={durationHintSec}
                                     className="w-full"
                                   />
-                                )}
+                                ) : !recordingSessionLoading ? (
+                                  <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-6 text-center text-sm text-gray-600">
+                                    Recording not ready for playback yet.
+                                  </div>
+                                ) : null}
+                                {recordingVideoError ? (
+                                  <p className="text-xs text-rose-600">
+                                    Video failed to load: {recordingVideoError}
+                                  </p>
+                                ) : null}
                               </div>
                             );
                           })()}
                           <p className="text-xs text-gray-500 pt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
-                            {recordingVideoObjectUrl && recordingSession ? (
+                            {recordingVideoUrl && recordingSession ? (
                               <button
                                 type="button"
                                 onClick={() =>
@@ -4217,6 +4414,11 @@ export default function SubmissionsDashboard() {
                         </div>
                       </div>
                     </div>
+                  ) : !selectedEvaluationSubmission?.__full ? (
+                    <div className="flex items-center justify-center gap-2 py-10 text-gray-500">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <p className="text-sm">Loading agent communication...</p>
+                    </div>
                   ) : (
                     <div className="py-10 text-center">
                       <MessageSquare className="w-12 h-12 mx-auto mb-2 text-gray-400" />
@@ -4287,6 +4489,19 @@ export default function SubmissionsDashboard() {
         </Dialog>
 
       </div>
+
+      {/* Steady writer VP demo: buffer video bytes before Recording tab opens */}
+      {steadyWriterPreloadUrl ? (
+        <video
+          src={steadyWriterPreloadUrl}
+          preload="auto"
+          muted
+          playsInline
+          aria-hidden
+          className="fixed w-px h-px opacity-0 pointer-events-none"
+          style={{ left: -9999, top: -9999 }}
+        />
+      ) : null}
     </div>
   );
 }

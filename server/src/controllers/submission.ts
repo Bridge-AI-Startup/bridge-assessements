@@ -40,14 +40,14 @@ import {
   isBehavioralGradingEnabled,
 } from "../services/behavioralGrading/index.js";
 import {
-  isStressDemoAssessment,
-  beginStressDemoBehavioralSimulation,
-  triggerStressDemoBehavioralSimulationInBackground,
+  shouldUseStressDemoBehavioralSimulation,
+  executeStressDemoBehavioralGrading,
 } from "../services/behavioralGrading/stressDemoSimulation.js";
 import { getGradingEvidenceStorage } from "../services/gradingEvidence/storage.js";
 import { calculateAndSaveScores } from "../services/scoring.js";
 import { getSubmissionCodeStorage } from "../services/submissionCode/storage.js";
 import { collectBehavioralArtifactKeys } from "../utils/behavioralEvidenceKeys.js";
+import { buildSubmissionListAggregationPipeline } from "../utils/submissionListProjection.js";
 
 const TRANSCRIPT_POLL_INTERVAL_MS = 15000;
 const TRANSCRIPT_POLL_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
@@ -1224,13 +1224,11 @@ export const getSubmissionsForAssessment: RequestHandler = async (
       throw AuthError.INVALID_AUTH_TOKEN; // Don't reveal if assessment exists
     }
 
-    // Get all submissions for this assessment (lean = plain objects so nested llmWorkflow.trace.events serialize correctly)
-    const submissions = await SubmissionModel.find({ assessmentId })
-      .sort({
-        submittedAt: -1,
-        createdAt: -1,
-      })
-      .lean();
+    // Aggregate with server-side projection so heavy blobs never leave MongoDB.
+    // Mixed fields (reports, transcripts) are not trimmable via Mongoose .select().
+    const submissions = await SubmissionModel.aggregate(
+      buildSubmissionListAggregationPipeline(assessmentId)
+    );
 
     // Backfill workflow scores when an LLM trace exists but scores were not saved yet
     const MAX_SCORE_BACKFILL = 8;
@@ -1239,7 +1237,9 @@ export const getSubmissionsForAssessment: RequestHandler = async (
       if (scheduled >= MAX_SCORE_BACKFILL) break;
       if (sub.status !== "submitted" && sub.status !== "expired") continue;
       const wf = (sub as any).llmWorkflow;
-      if (!wf?.trace?.events?.length) continue;
+      // trace.events is excluded from this list query; use the retained
+      // summary count to detect a trace that still needs scoring.
+      if (!wf?.trace?.totalCalls) continue;
       if (wf?.scores?.overall?.score != null) continue;
 
       scheduled++;
@@ -2307,12 +2307,17 @@ export const gradeBehavioralHandler: RequestHandler = async (
     const assessmentId = assessment._id.toString();
 
     // VP stress demo: simulate E2B (pending → staged delay → canned report). No sandbox.
-    if (isStressDemoAssessment(assessmentId)) {
-      await beginStressDemoBehavioralSimulation(submissionId);
-      triggerStressDemoBehavioralSimulationInBackground(submissionId);
-      return res.status(202).json({
-        message: "Behavioral grading queued.",
+    if (
+      shouldUseStressDemoBehavioralSimulation(assessment, {
+        candidateName: submission.candidateName,
+        candidateEmail: submission.candidateEmail,
+      })
+    ) {
+      await executeStressDemoBehavioralGrading(submissionId);
+      return res.status(200).json({
+        message: "Behavioral grading completed.",
         submissionId,
+        status: "completed",
       });
     }
 

@@ -90,6 +90,7 @@ app.use(
       }
     },
     credentials: true,
+    exposedHeaders: ["Content-Range", "Accept-Ranges", "Content-Length"],
   }),
 );
 console.log("✅ CORS configured with origin validation");
@@ -362,6 +363,18 @@ const startServer = async () => {
     console.log("   🔄 Connecting to MongoDB (Mongoose)...");
     await connectMongoose();
     console.log("   ✅ MongoDB (Mongoose) connected");
+
+    // Warm proctoring storage (S3 client / local dir) so first playback-video
+    // range request is not blocked on a cold dynamic import.
+    try {
+      const { getFrameStorage } = await import(
+        "./services/capture/storage.js"
+      );
+      getFrameStorage();
+      console.log("   ✅ Proctoring storage initialized");
+    } catch (err) {
+      console.warn("   ⚠️ Proctoring storage warmup failed:", err);
+    }
 
     // Start Express server
     console.log("\n🚀 Starting Express server...");

@@ -25,6 +25,8 @@ export const HIGHLIGHT_CATEGORY_COLORS = {
  * @param {number} [placeholderDurationSec] - Duration when no video (placeholder mode); default 1
  * @param {number} [durationHintSec] - Fallback duration from API when video element does not report valid duration (e.g. re-mux failed)
  * @param {Array<{ regionType: string, x: number, y: number, width: number, height: number, confidence?: number }>} [regions]
+ * @param {boolean} [isBuffering] - Show buffering overlay while URL is resolving or first frames load
+ * @param {() => void} [onVideoError] - Called once when playback fails (e.g. expired token)
  * @param {string} [className]
  */
 export default function VideoTimelineWithCriteria({
@@ -34,19 +36,38 @@ export default function VideoTimelineWithCriteria({
   placeholderDurationSec = 1,
   durationHintSec,
   regions = null,
+  isBuffering = false,
+  onVideoError,
   className,
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentSec, setCurrentSec] = useState(0);
   const [selectedHighlight, setSelectedHighlight] = useState(null);
   const [videoDurationSec, setVideoDurationSec] = useState(null);
+  const [videoReady, setVideoReady] = useState(false);
   const videoRef = useRef(null);
   const timelineRef = useRef(null);
+  const videoErrorRetriedRef = useRef(false);
 
   // Reset duration when video source changes
   useEffect(() => {
-    if (!videoUrl) setVideoDurationSec(null);
+    if (!videoUrl) {
+      setVideoDurationSec(null);
+      setVideoReady(false);
+    }
+    videoErrorRetriedRef.current = false;
   }, [videoUrl]);
+
+  const showBufferOverlay =
+    isBuffering || Boolean(videoUrl && !videoReady);
+
+  const markVideoReady = (target) => {
+    setVideoReady(true);
+    const d = target?.duration;
+    if (d != null && Number.isFinite(d) && d > 0) {
+      setVideoDurationSec(d);
+    }
+  };
 
   const hasVideoDuration =
     videoUrl && videoDurationSec != null && Number.isFinite(videoDurationSec) && videoDurationSec > 0;
@@ -113,17 +134,24 @@ export default function VideoTimelineWithCriteria({
             ref={videoRef}
             src={videoUrl}
             preload="metadata"
+            playsInline
             className="w-full h-full object-contain"
-            onLoadedMetadata={(e) => {
-              const d = e.target.duration;
-              if (Number.isFinite(d) && d > 0) setVideoDurationSec(d);
-            }}
+            onLoadedMetadata={(e) => markVideoReady(e.target)}
+            onLoadedData={(e) => markVideoReady(e.target)}
+            onCanPlay={(e) => markVideoReady(e.target)}
             onDurationChange={(e) => {
               const d = e.target.duration;
               if (Number.isFinite(d) && d > 0) setVideoDurationSec(d);
             }}
             onTimeUpdate={(e) => setCurrentSec(e.target.currentTime)}
             onEnded={() => setIsPlaying(false)}
+            onError={() => {
+              setVideoReady(false);
+              if (!videoErrorRetriedRef.current && onVideoError) {
+                videoErrorRetriedRef.current = true;
+                onVideoError();
+              }
+            }}
           />
         ) : placeholderImageUrl ? (
           <img
@@ -132,8 +160,16 @@ export default function VideoTimelineWithCriteria({
             className="w-full h-full object-contain"
           />
         ) : (
-          <div className="absolute inset-0 bg-gray-900/50" aria-hidden />
+          <div className="absolute inset-0 bg-gray-900" aria-hidden />
         )}
+        {showBufferOverlay ? (
+          <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-gray-900/55">
+            <div className="h-9 w-9 animate-spin rounded-full border-2 border-white/25 border-t-white/90" />
+            <p className="text-xs font-medium text-white/90">
+              {videoUrl ? "Buffering video…" : "Loading video…"}
+            </p>
+          </div>
+        ) : null}
         {/* Transparent bounding box overlay (e.g. region detection demo) */}
         {regions && regions.length > 0 && (
           <BoundingBoxOverlay regions={regions} className="z-[5]" />

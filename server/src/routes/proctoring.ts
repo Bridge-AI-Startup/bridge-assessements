@@ -4,6 +4,7 @@ import multer from "multer";
 import * as ProctoringController from "../controllers/proctoring.js";
 import * as ProctoringValidator from "../validators/proctoringValidation.js";
 import { verifyAuthToken } from "../validators/auth.js";
+import { verifyPlaybackAccess } from "../middleware/verifyPlaybackAccess.js";
 
 const router = express.Router();
 
@@ -127,8 +128,15 @@ router.get(
 );
 
 router.get(
-  "/sessions/:sessionId/playback-video",
+  "/sessions/:sessionId/playback-url",
   verifyAuthToken,
+  ...ProctoringValidator.getPlaybackVideoValidation,
+  ProctoringController.getPlaybackUrl
+);
+
+router.get(
+  "/sessions/:sessionId/playback-video",
+  verifyPlaybackAccess,
   ...ProctoringValidator.getPlaybackVideoValidation,
   ProctoringController.getPlaybackVideo
 );

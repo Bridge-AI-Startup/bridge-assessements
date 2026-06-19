@@ -345,17 +345,20 @@ export async function getRefinedTranscriptContent(
 }
 
 /**
- * Fetch re-muxed WebM video for in-page playback (correct duration). Returns an object URL;
- * caller must call URL.revokeObjectURL(objectUrl) when done to avoid leaks.
+ * Fetch a tokenized HTTP stream URL for in-page video playback (Range requests).
+ * Returns a direct URL suitable for <video src> — not a blob: object URL.
  */
-export async function getProctoringVideoPlaybackUrl(
+export async function getProctoringVideoStreamUrl(
   sessionId: string,
   authToken: string
 ): Promise<APIResult<string>> {
   try {
     const response = await fetch(
-      `${API_BASE_URL}/proctoring/sessions/${sessionId}/playback-video`,
-      { headers: { Authorization: `Bearer ${authToken}` } }
+      `${API_BASE_URL}/proctoring/sessions/${sessionId}/playback-url`,
+      {
+        headers: { Authorization: `Bearer ${authToken}` },
+        cache: "no-store",
+      }
     );
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
@@ -364,12 +367,24 @@ export async function getProctoringVideoPlaybackUrl(
         error: data.error || `Video unavailable (${response.status})`,
       };
     }
-    const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    return { success: true, data: objectUrl };
+    const data = await response.json();
+    if (!data.url || typeof data.url !== "string") {
+      return { success: false, error: "Invalid playback URL response" };
+    }
+    return { success: true, data: data.url };
   } catch (error) {
     return handleAPIError(error);
   }
+}
+
+/**
+ * @deprecated Use getProctoringVideoStreamUrl for buffered Range streaming.
+ */
+export async function getProctoringVideoPlaybackUrl(
+  sessionId: string,
+  authToken: string
+): Promise<APIResult<string>> {
+  return getProctoringVideoStreamUrl(sessionId, authToken);
 }
 
 /**

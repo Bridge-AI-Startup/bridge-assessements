@@ -148,6 +148,8 @@ See `server/config.env.example` for the full list. Key variables:
 
 **Voice Interviews:**
 - `AGENT_SECRET` -- Authenticates ElevenLabs agent tool requests
+- `PLAYBACK_TOKEN_SECRET` -- HMAC secret for proctoring video playback tokens (falls back to `AGENT_SECRET`)
+- `PLAYBACK_TOKEN_TTL_SEC` -- Playback token lifetime in seconds (default: `3600`)
 - `ELEVENLABS_WEBHOOK_SECRET` -- Verifies ElevenLabs webhook signatures
 
 **Email:**
@@ -268,7 +270,8 @@ server/src/
 ├── types/
 │   └── assessmentGeneration.ts  # TypeScript types for assessment generation
 ├── middleware/
-│   └── requireSubscription.ts  # Returns 402 if user lacks active subscription
+│   ├── requireSubscription.ts  # Returns 402 if user lacks active subscription
+│   └── verifyPlaybackAccess.ts # Proctoring playback: Firebase Bearer OR ?pt= playback token
 ├── validators/
 │   ├── auth.ts            # Firebase token verification middleware (verifyAuthToken)
 │   ├── submissionAuth.ts  # Submission access: verifySubmissionAccess (auth OR token), verifySubmissionToken
@@ -412,6 +415,9 @@ server/src/
 *Employer endpoints (auth required):*
 - `POST /sessions/:sessionId/generate-transcript` -- Trigger AI transcript generation
 - `GET /sessions/by-submission/:submissionId` -- Get session by submission ID
+- `GET /sessions/:sessionId/playback-url` -- Returns short-lived tokenized URL for in-page video streaming (Firebase auth)
+- `GET /sessions/:sessionId/playback-video` -- Stream merged `playback.webm` with HTTP Range support (`206 Partial Content`); auth via Firebase Bearer **or** `?pt=` playback token (required for native `<video>` elements)
+- `GET /sessions/:sessionId/download-video` -- Download merged WebM (full file, no auth middleware)
 
 **Agent tools** (`/api/agent-tools`):
 - `POST /get-context` -- ElevenLabs agent retrieves code context from Pinecone (X-Agent-Secret header, max 6 chunks / 16000 chars)
@@ -506,6 +512,7 @@ client/src/
 │   └── firebase.js        # Firebase client init (auth, analytics)
 ├── hooks/
 │   ├── use-mobile.jsx          # useIsMobile(): viewport < 768px detection
+│   ├── useProctoringRecording.js # Buffered proctoring video + transcript loader for SubmissionsDashboard
 │   ├── useScreenCapture.js     # getDisplayMedia stream lifecycle (single + multi-monitor)
 │   ├── useScreenshotCapture.js # Canvas-based PNG frame extraction at intervals
 │   ├── useFrameDedup.js        # Client-side pixel-diff dedup
@@ -513,6 +520,7 @@ client/src/
 ├── lib/
 │   ├── query-client.js    # TanStack Query client (refetchOnWindowFocus=false, retry=1)
 │   ├── captureUtils.js    # Pure capture utils: captureFrame, pixelDiff, enforceMaxSize, createVideoRecorder
+│   ├── proctoringRecordingLoader.js # Pure load-plan helpers for buffered video + parallel transcript fetch
 │   ├── NavigationTracker.jsx
 │   ├── VisualEditAgent.jsx
 │   ├── PageNotFound.jsx

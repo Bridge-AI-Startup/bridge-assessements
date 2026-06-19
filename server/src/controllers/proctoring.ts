@@ -16,7 +16,16 @@ import {
   buildSessionWebmForPlayback,
   mergeSessionVideoInBackground,
 } from "../services/capture/sessionVideoMerge.js";
+import { resolvePlaybackSource } from "../services/capture/playbackFileCache.js";
+import { isClientStreamAbortError } from "../utils/streamErrors.js";
 import { getUserIdFromFirebaseUid } from "../utils/auth.js";
+import { streamVideoResponse } from "../utils/streamVideoResponse.js";
+import type { ByteRange } from "../utils/httpRange.js";
+import {
+  createPlaybackToken,
+  getPlaybackTokenTtlSec,
+} from "../utils/playbackToken.js";
+import type { IFrameStorage } from "../services/capture/storage.js";
 
 // POST /api/proctoring/sessions
 export const createSession: RequestHandler = async (req, res, next) => {
@@ -395,83 +404,157 @@ export const uploadVideoChunk: RequestHandler = async (req, res, next) => {
   }
 };
 
+async function resolveEmployerUserId(req: {
+  user?: { uid?: string };
+  playbackUserId?: string;
+}): Promise<string | null> {
+  if (req.playbackUserId) return req.playbackUserId;
+  const uid = req.user?.uid;
+  if (!uid) return null;
+  return getUserIdFromFirebaseUid(uid);
+}
+
+async function assertEmployerOwnsSession(
+  session: { submissionId: unknown },
+  employerUserId: string
+): Promise<boolean> {
+  const submission = await SubmissionModel.findById(session.submissionId);
+  if (!submission) return false;
+  const assessment = await AssessmentModel.findById(submission.assessmentId);
+  if (!assessment) return false;
+  const assessmentOwnerId =
+    assessment.userId?.toString?.() ?? String(assessment.userId);
+  return assessmentOwnerId === employerUserId.toString();
+}
+
+async function streamPlaybackFromStorage(
+  req: Parameters<RequestHandler>[0],
+  res: Parameters<RequestHandler>[1],
+  storage: IFrameStorage,
+  storageKey: string,
+  totalSize?: number
+): Promise<void> {
+  const size = totalSize ?? (await storage.getObjectSize(storageKey));
+  await streamVideoResponse(req, res, {
+    totalSize: size,
+    openStream: async (range: ByteRange | null) => {
+      if (range) {
+        return storage.openReadStream(storageKey, {
+          start: range.start,
+          end: range.end,
+        });
+      }
+      return storage.openReadStream(storageKey);
+    },
+  });
+}
+
+async function streamPlaybackFromFile(
+  req: Parameters<RequestHandler>[0],
+  res: Parameters<RequestHandler>[1],
+  filePath: string,
+  totalSize?: number
+): Promise<void> {
+  const size = totalSize ?? (await fs.stat(filePath)).size;
+  await streamVideoResponse(req, res, {
+    totalSize: size,
+    openStream: async (range: ByteRange | null) => {
+      if (range) {
+        return createReadStream(filePath, {
+          start: range.start,
+          end: range.end,
+        });
+      }
+      return createReadStream(filePath);
+    },
+  });
+}
+
+// GET /api/proctoring/sessions/:sessionId/playback-url
+// Returns a short-lived tokenized URL for native <video> streaming (Range requests).
+export const getPlaybackUrl: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+
+    const { sessionId } = req.params;
+    const employerUserId = await resolveEmployerUserId(req as any);
+    if (!employerUserId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const session = await ProctoringSessionModel.findById(sessionId);
+    if (!session) throw ProctoringError.SESSION_NOT_FOUND;
+
+    const allowed = await assertEmployerOwnsSession(session, employerUserId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied to this session" });
+    }
+
+    const ttlSec = getPlaybackTokenTtlSec();
+    const { token, expiresAt } = createPlaybackToken(
+      sessionId,
+      employerUserId,
+      ttlSec
+    );
+
+    const apiBase =
+      process.env.API_PUBLIC_URL?.replace(/\/$/, "") ||
+      `${req.protocol}://${req.get("host")}/api`;
+    const url = `${apiBase}/proctoring/sessions/${sessionId}/playback-video?pt=${encodeURIComponent(token)}`;
+
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ url, expiresAt: expiresAt.toISOString() });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // GET /api/proctoring/sessions/:sessionId/playback-video
-// Returns re-muxed WebM for in-page playback (correct duration). Auth required; employer must own the submission.
+// Returns re-muxed WebM for in-page playback with HTTP Range support.
 export const getPlaybackVideo: RequestHandler = async (req, res, next) => {
   const errors = validationResult(req);
   try {
     validationErrorParser(errors);
 
     const { sessionId } = req.params;
-    dv("[getPlaybackVideo] step 1: param sessionId =", sessionId, "type:", typeof sessionId);
-    const uid = (req as any).user?.uid;
-    if (!uid) {
-      dv("[getPlaybackVideo] step 2: no uid, returning 401");
+    const employerUserId = await resolveEmployerUserId(req as any);
+    if (!employerUserId) {
       return res.status(401).json({ error: "Authentication required" });
     }
 
     const session = await ProctoringSessionModel.findById(sessionId);
-    if (!session) {
-      dv("[getPlaybackVideo] step 3: session NOT FOUND for sessionId:", sessionId);
-      throw ProctoringError.SESSION_NOT_FOUND;
-    }
-    dv("[getPlaybackVideo] step 3: session FOUND. session.submissionId =", session.submissionId, "type:", typeof session.submissionId);
+    if (!session) throw ProctoringError.SESSION_NOT_FOUND;
 
-    const submission = await SubmissionModel.findById(session.submissionId);
-    if (!submission) {
-      dv("[getPlaybackVideo] step 4: submission NOT FOUND for session.submissionId:", session.submissionId);
-      throw ProctoringError.SESSION_NOT_FOUND;
-    }
-    const assessment = await AssessmentModel.findById(submission.assessmentId);
-    if (!assessment) {
-      dv("[getPlaybackVideo] step 4: assessment NOT FOUND for submission.assessmentId:", submission.assessmentId);
-      return res.status(403).json({ error: "Access denied to this session" });
-    }
-    const userId = await getUserIdFromFirebaseUid(uid);
-    const assessmentOwnerId = assessment.userId?.toString?.() ?? assessment.userId;
-    dv("[getPlaybackVideo] step 4: assessment.userId =", assessment.userId, "current userId =", userId, "match =", assessmentOwnerId === userId?.toString());
-    if (!userId || assessmentOwnerId !== userId.toString()) {
-      dv("[getPlaybackVideo] step 4: access DENIED (userId mismatch), returning 403");
+    const allowed = await assertEmployerOwnsSession(session, employerUserId);
+    if (!allowed) {
       return res.status(403).json({ error: "Access denied to this session" });
     }
 
     const { getFrameStorage } = await import("../services/capture/storage.js");
     const storage = getFrameStorage();
 
-    const merged = session.mergedVideo as
-      | { status?: string; storageKey?: string | null }
-      | undefined;
-    if (
-      merged?.status === "ready" &&
-      merged.storageKey &&
-      (await storage.exists(merged.storageKey))
-    ) {
-      dv("[getPlaybackVideo] step 5: streaming merged file key =", merged.storageKey);
-      res.setHeader("Content-Type", "video/webm");
-      res.setHeader("Content-Disposition", "inline");
-      const stream = await storage.openReadStream(merged.storageKey);
-      await pipeline(stream, res);
+    const source = await resolvePlaybackSource(sessionId, session, storage);
+    if (!source) {
+      return res
+        .status(404)
+        .json({ error: "No video chunks found for this session" });
+    }
+
+    if (source.type === "storage") {
+      await streamPlaybackFromStorage(
+        req,
+        res,
+        source.storage,
+        source.key,
+        source.size
+      );
       return;
     }
 
-    dv("[getPlaybackVideo] step 5: calling buildSessionWebmForPlayback");
-    const result = await buildSessionWebmForPlayback(sessionId, session, storage);
-    if (!result) {
-      dv("[getPlaybackVideo] step 6: buildSessionWebmForPlayback returned null, returning 404");
-      return res.status(404).json({ error: "No video chunks found for this session" });
-    }
-    try {
-      const st = await fs.stat(result.filePath);
-      dv("[getPlaybackVideo] step 6: streaming file bytes =", st.size, "remuxed =", result.remuxed);
-      res.setHeader("Content-Type", "video/webm");
-      res.setHeader("Content-Disposition", "inline");
-      res.setHeader("Content-Length", String(st.size));
-      await pipeline(createReadStream(result.filePath), res);
-    } finally {
-      await result.cleanup();
-    }
+    await streamPlaybackFromFile(req, res, source.filePath, source.size);
   } catch (error) {
-    dv("[getPlaybackVideo] CAUGHT ERROR:", (error as Error)?.message ?? error);
+    if (res.headersSent || isClientStreamAbortError(error)) return;
     next(error);
   }
 };
