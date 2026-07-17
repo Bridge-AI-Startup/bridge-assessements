@@ -7,6 +7,7 @@ import express from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import connectMongoose from "./db/mongooseConnection.js";
+import connectPlayMongoose from "./db/playConnection.js";
 import "./config/firebaseAdmin.js"; // Initialize Firebase Admin
 import userRoutes from "./routes/user.js";
 import assessmentRoutes from "./routes/assessment.js";
@@ -18,6 +19,8 @@ import llmProxyRoutes from "./routes/llmProxy.js";
 import evaluationRoutes from "./routes/evaluation.js";
 import proctoringRoutes from "./routes/proctoring.js";
 import competitionRoutes from "./routes/competition.js";
+import playRoutes from "./routes/play.js";
+import { health as playHealth } from "./controllers/play/index.js";
 import { errorHandler } from "./errors/handler.js";
 import { startIncrementalScheduler } from "./ai/transcript/incrementalScheduler.js";
 
@@ -60,14 +63,16 @@ console.log("🔌 Setting up CORS middleware...");
 const allowedOrigins = [
   // Production domains
   process.env.FRONTEND_URL,
+  process.env.PLAY_FRONTEND_URL,
   "https://app.bridge-jobs.com", // React app (app subdomain)
   "https://www.bridge-jobs.com",
   "https://bridge-jobs.com", // Framer marketing (root domain)
+  "https://play.bridge-jobs.com", // Play consumer app
   "https://bridge-landing-saazms-projects.vercel.app",
   "https://bridge-landing-7dg0wxh94-saazms-projects.vercel.app",
   // Development
   ...(process.env.NODE_ENV === "development"
-    ? ["http://localhost:5173", "http://localhost:3000"]
+    ? ["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"]
     : []),
 ].filter(Boolean); // Remove any undefined/null values
 
@@ -323,6 +328,43 @@ app.use("/api/llm-proxy", llmProxyRoutes);
 console.log("  ✅ /api/llm-proxy routes registered");
 console.log("     - POST /api/llm-proxy/chat");
 
+app.use("/api/play", apiLimiter);
+app.get("/api/play/health", playHealth);
+console.log("  ✅ /api/play/health registered (always on)");
+
+if (process.env.PLAY_ENABLED === "true") {
+  app.use("/api/play", playRoutes);
+  console.log("  ✅ /api/play routes registered (PLAY_ENABLED=true)");
+  console.log("     - GET /api/play/today");
+  console.log("     - GET /api/play/models");
+  console.log("     - GET /api/play/admin/challenges");
+  console.log("     - GET /api/play/admin/challenges/:slug");
+  console.log("     - POST /api/play/admin/challenges");
+  console.log("     - PATCH /api/play/admin/challenges/:slug");
+  console.log("     - POST /api/play/session");
+  console.log("     - GET /api/play/session/:id");
+  console.log("     - POST /api/play/session/:id/pause");
+  console.log("     - POST /api/play/session/:id/resume");
+  console.log("     - GET /api/play/session/:id/usage");
+  console.log("     - GET /api/play/session/:id/files");
+  console.log("     - GET|PUT /api/play/session/:id/file");
+  console.log("     - POST /api/play/session/:id/llm/v1/messages");
+  console.log("     - POST /api/play/session/:id/claude/message");
+  console.log("     - POST /api/play/session/:id/terminal");
+  console.log("     - GET /api/play/session/:id/terminal/stream");
+  console.log("     - POST /api/play/session/:id/terminal/input");
+  console.log("     - POST /api/play/session/:id/terminal/resize");
+  console.log("     - POST /api/play/session/:id/llm");
+  console.log("     - POST /api/play/submit");
+  console.log("     - GET /api/play/admin/submissions");
+  console.log("     - GET /api/play/admin/submissions/:id");
+  console.log("     - GET /api/play/vote/next");
+  console.log("     - POST /api/play/vote");
+  console.log("     - GET /api/play/leaderboard");
+} else {
+  console.log("  ⏸️  /api/play feature routes disabled (set PLAY_ENABLED=true)");
+}
+
 // Register before `app.use("/api", apiLimiter)` so frame/video traffic does not consume the general 100/15min bucket.
 app.use("/api/proctoring", proctoringLimiter);
 app.use("/api/proctoring", proctoringRoutes);
@@ -362,6 +404,10 @@ const startServer = async () => {
     console.log("   🔄 Connecting to MongoDB (Mongoose)...");
     await connectMongoose();
     console.log("   ✅ MongoDB (Mongoose) connected");
+
+    console.log("   🔄 Connecting to MongoDB Play database...");
+    await connectPlayMongoose();
+    console.log("   ✅ MongoDB Play connected");
 
     // Start Express server
     console.log("\n🚀 Starting Express server...");

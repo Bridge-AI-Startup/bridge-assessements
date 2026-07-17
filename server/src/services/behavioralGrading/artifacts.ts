@@ -24,6 +24,29 @@ export function bashLc(cmd: string): string {
   return `bash -lc '${escaped}'`;
 }
 
+export async function curlInsideSandbox(
+  ctx: GradingSandboxContext,
+  url: string,
+  opts?: { method?: string; body?: string }
+): Promise<{ ok: boolean; statusLine: string; body: string; exitCode: number }> {
+  const method = opts?.method ?? "GET";
+  const bodyArg = opts?.body
+    ? ` -H 'Content-Type: application/json' -d ${JSON.stringify(opts.body)}`
+    : "";
+  const cmd = `curl -sS -i -m 12 -X ${method} ${JSON.stringify(url)}${bodyArg}`;
+  const r = await ctx.run(bashLc(cmd), { cwd: "/", timeoutMs: 20_000 });
+  const combined = `${r.stdout || ""}${r.stderr ? `\n[stderr]\n${r.stderr}` : ""}`;
+  const statusMatch = combined.match(/^HTTP\/[\d.]+ (\d+)/m);
+  const status = statusMatch ? Number(statusMatch[1]) : 0;
+  const ok = r.exitCode === 0 && status > 0 && status < 500;
+  return {
+    ok,
+    statusLine: statusMatch?.[0] ?? (r.exitCode === 0 ? "HTTP/1.1 200" : "curl failed"),
+    body: combined.slice(0, 8000),
+    exitCode: r.exitCode,
+  };
+}
+
 export function inferEntryCommand(runbook: RunbookPlan): string | null {
   const start = runbook.steps.find((s) => s.purpose === "start");
   if (start?.command?.trim()) return start.command.trim();
@@ -54,15 +77,15 @@ function isLongRunningDevServerCommand(cmd: string): boolean {
 
 /**
  * Run the inferred entry command once (CLI) and read the main source file for LLM review.
- * For web apps: README runbook already started the server in the sandbox; we use the public
- * sandbox URL (not literal localhost) — see baseUrl fetch below. We avoid re-running `npm start`
+ * For web apps: README runbook already started the server in the sandbox; HTTP seed uses
+ * in-sandbox curl to 127.0.0.1 (human-style grading). We avoid re-running `npm start`
  * which would block or fight for the port.
  */
 export async function collectJudgeArtifacts(
   ctx: GradingSandboxContext,
   repoPath: string,
   runbook: RunbookPlan,
-  baseUrl: string | undefined,
+  sandboxAppOrigin: string | undefined,
   sandbox: Sandbox
 ): Promise<JudgeArtifacts> {
   behavioralInfo("artifacts_layout_start");
@@ -112,9 +135,9 @@ export async function collectJudgeArtifacts(
     });
     stdout = runbookRanStart
       ? "[Start step(s) already ran in the README runbook — see runbook command evidence; not re-run here to avoid blocking the sandbox.]"
-      : baseUrl
-        ? "[Dev server pattern skipped; runbook HTTP context below when URL exists.]"
-        : "[Long-running dev command skipped (no public sandbox URL); use read_file / run_command curl against 127.0.0.1 if the runbook started a local server.]";
+      : sandboxAppOrigin
+        ? "[Dev server pattern skipped; runbook HTTP context below when in-sandbox origin exists.]"
+        : "[Long-running dev command skipped; use read_file / run_command curl against 127.0.0.1 if the runbook started a local server.]";
     stderr = "";
   } else {
     behavioralInfo("artifacts_entry_run", {
@@ -151,13 +174,13 @@ export async function collectJudgeArtifacts(
   }
 
   let httpBodyExcerpt = "";
-  if (baseUrl) {
+  if (sandboxAppOrigin) {
     try {
-      const res = await fetch(baseUrl, { signal: AbortSignal.timeout(25_000) });
-      const text = await res.text();
-      httpBodyExcerpt = text.slice(0, MAX_HTTP);
+      const res = await curlInsideSandbox(ctx, `${sandboxAppOrigin}/health`);
+      const probe = res.ok ? res : await curlInsideSandbox(ctx, sandboxAppOrigin);
+      httpBodyExcerpt = probe.body.slice(0, MAX_HTTP);
     } catch (e) {
-      httpBodyExcerpt = `Fetch failed: ${e instanceof Error ? e.message : String(e)}`;
+      httpBodyExcerpt = `In-sandbox curl failed: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 

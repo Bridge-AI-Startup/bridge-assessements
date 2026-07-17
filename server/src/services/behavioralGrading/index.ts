@@ -19,9 +19,11 @@ import {
   buildCliSetupStatus,
   orderChecksForIsolation,
   waitForAppReady,
+  waitForAppReadyInsideSandbox,
   type GradingFailureCategory,
   type RunbookSetupStatus,
 } from "./setupHealth.js";
+import { discoverSandboxAppAccess } from "./sandboxAppUrl.js";
 
 export type BehavioralCaseResult = {
   checkText: string;
@@ -45,6 +47,9 @@ export type BehavioralGradingReport = {
     readmeRequirementDetail: ReadmeRequirementDetail;
     evidence: StepEvidence[];
     baseUrl?: string;
+    /** In-sandbox origin discovered after runbook (e.g. http://127.0.0.1:5070). */
+    sandboxAppOrigin?: string;
+    sandboxAppDiscovery?: string;
     executionProfile?: "cli_stdout" | "web_server" | "unclear";
   };
   setup: RunbookSetupStatus;
@@ -266,11 +271,15 @@ export async function gradeSubmissionBehavioral(
         });
         const repoSummary = getRepoSummary(submission);
 
-        const runbook = await extractRunbook({
+        const runbookRaw = await extractRunbook({
           readmeText,
           repoSummary,
           repoLayoutProbe,
         });
+        const runbook = {
+          ...runbookRaw,
+          steps: runbookRaw.steps.filter((s) => s.purpose !== "test"),
+        };
         behavioralInfo("runbook_llm_ok", {
           steps: runbook.steps.length,
           profile: runbook.executionProfile,
@@ -284,14 +293,30 @@ export async function gradeSubmissionBehavioral(
         });
 
         const executionProfile = runbook.executionProfile ?? "unclear";
-        let effectiveBaseUrl =
-          executionProfile === "cli_stdout" ? undefined : runbookResult.baseUrl;
+        const appAccess = await discoverSandboxAppAccess(
+          ctx,
+          repoPath,
+          readmeText,
+          runbook,
+          executionProfile === "cli_stdout" ? undefined : runbookResult.baseUrl
+        );
+        const sandboxAppOrigin = appAccess.internalOrigin;
+        const browserBaseUrl = appAccess.externalOrigin;
 
         let setup: RunbookSetupStatus;
-        if (effectiveBaseUrl?.trim()) {
+        if (executionProfile !== "cli_stdout" && sandboxAppOrigin) {
+          setup = await waitForAppReadyInsideSandbox(
+            ctx,
+            sandboxAppOrigin,
+            runbookResult.evidence
+          );
+          if (setup.status === "failed") {
+            behavioralInfo("setup_failed", { summary: setup.summary });
+          }
+        } else if (browserBaseUrl?.trim()) {
           setup = await waitForAppReady(
             ctx,
-            effectiveBaseUrl,
+            browserBaseUrl,
             runbookResult.evidence
           );
           if (setup.status === "failed") {
@@ -300,6 +325,12 @@ export async function gradeSubmissionBehavioral(
         } else {
           setup = buildCliSetupStatus(runbookResult.evidence);
         }
+
+        behavioralInfo("sandbox_app_access", {
+          sandboxAppOrigin: sandboxAppOrigin ?? null,
+          browserBaseUrl: browserBaseUrl ?? null,
+          discoverySource: appAccess.discoverySource ?? null,
+        });
 
         const assessmentTitle =
           typeof assessment?.title === "string" ? assessment.title : "Assessment";
@@ -310,22 +341,22 @@ export async function gradeSubmissionBehavioral(
           ctx,
           repoPath,
           runbook,
-          effectiveBaseUrl,
+          sandboxAppOrigin,
           ctx.sandbox
         );
         const httpEx = judgeArtifacts.httpBodyExcerpt || "";
+        const appReachable =
+          setup.status !== "failed" &&
+          (setup.healthWait?.ready ?? setup.status === "ready");
         const runtimeHints = {
-          baseUrlAvailable:
-            Boolean(effectiveBaseUrl?.trim()) &&
-            setup.status !== "failed" &&
-            (setup.healthWait?.ready ?? setup.status === "ready"),
+          baseUrlAvailable: Boolean(sandboxAppOrigin?.trim()) && appReachable,
           anyRunbookCommandFailed: runbookResult.evidence.some(
             (e) => e.type === "command" && !e.success
           ),
           httpSeedFetchOk:
-            Boolean(effectiveBaseUrl?.trim()) &&
+            Boolean(sandboxAppOrigin?.trim()) &&
             Boolean(httpEx) &&
-            !httpEx.startsWith("Fetch failed"),
+            !httpEx.startsWith("In-sandbox curl failed"),
         };
         behavioralInfo("artifacts_collected", {
           entryCommand: judgeArtifacts.entryCommand,
@@ -335,7 +366,7 @@ export async function gradeSubmissionBehavioral(
 
         const cases: BehavioralCaseResult[] = [];
         const orderedChecks = orderChecksForIsolation(behavioralChecks);
-        const browserSession = effectiveBaseUrl?.trim()
+        const browserSession = browserBaseUrl?.trim()
           ? new BehavioralBrowserSession()
           : null;
 
@@ -369,7 +400,8 @@ export async function gradeSubmissionBehavioral(
               runtimeHints,
               repoPath,
               ctx,
-              baseUrl: effectiveBaseUrl,
+              sandboxAppOrigin,
+              baseUrl: browserBaseUrl,
               submissionId,
               otherBehavioralChecks,
               browserSession: browserSession ?? undefined,
@@ -437,7 +469,9 @@ export async function gradeSubmissionBehavioral(
             readmeRequirementPassed: runbookResult.readmeRequirementPassed,
             readmeRequirementDetail: runbookResult.readmeRequirementDetail,
             evidence: runbookResult.evidence,
-            baseUrl: effectiveBaseUrl,
+            baseUrl: browserBaseUrl,
+            sandboxAppOrigin,
+            sandboxAppDiscovery: appAccess.discoverySource,
             executionProfile,
           },
           setup,

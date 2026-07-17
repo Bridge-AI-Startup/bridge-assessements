@@ -52,4 +52,4 @@ ticketflow/
 
 - Link this repo as **Starter Files GitHub Link** on the assessment.
 - Suggested time limit: **90 minutes**.
-- Behavioral grading can run `npm test` in `server/` after install.
+- Behavioral grading starts the API and verifies each check with in-sandbox HTTP probes (no candidate test suite).

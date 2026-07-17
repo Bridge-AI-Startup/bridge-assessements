@@ -132,6 +132,8 @@ export type Submission = {
         summary: string;
         notes?: string;
       };
+      sandboxAppOrigin?: string;
+      sandboxAppDiscovery?: string;
       baseUrl?: string;
       /** cli_stdout | web_server | unclear — README/runbook classification */
       executionProfile?: string;

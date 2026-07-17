@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, sans-serif;
+  color: #21201c;
+  background: #ffffff;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@layer components {
+  .btn-pill {
+    @apply inline-flex items-center justify-center rounded-full bg-ink px-4 py-2 font-mono text-[11px] font-medium uppercase tracking-label text-white transition-colors hover:bg-ink-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:opacity-50;
+  }
+
+  .btn-pill-secondary {
+    @apply inline-flex items-center justify-center rounded-full bg-mist px-4 py-2 font-mono text-[11px] font-medium uppercase tracking-label text-ink transition-colors hover:bg-line focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:opacity-50;
+  }
+
+  .label-mono {
+    @apply font-mono text-[11px] font-medium uppercase tracking-label text-fog;
+  }
+}

@@ -21,11 +21,8 @@ function filterByPriority(tickets: Ticket[], priority: TicketPriority): Ticket[]
 function filterBySearch(tickets: Ticket[], query: string): Ticket[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return tickets;
-  return tickets.filter(
-    (ticket) =>
-      ticket.title.toLowerCase().includes(needle) ||
-      ticket.description.toLowerCase().includes(needle),
-  );
+  // Intentionally broken for E2B demo: title only (description not searched).
+  return tickets.filter((ticket) => ticket.title.toLowerCase().includes(needle));
 }
 
 function sortTickets(tickets: Ticket[]): Ticket[] {

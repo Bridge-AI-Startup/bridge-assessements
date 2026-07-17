@@ -56,14 +56,11 @@ function buildReadmeRequirementSummary(
   passed: boolean
 ): string {
   if (passed) {
-    return "Passed: the README explicitly lists install, test, and start commands, and the runbook did not rely on inferred commands (all steps are marked as coming from the README).";
+    return "Passed: the README explicitly lists install and start commands, and the runbook did not rely on inferred commands (all steps are marked as coming from the README).";
   }
   const parts: string[] = [];
   if (!readmeCoverage.hasInstallCommand) {
     parts.push("the planner did not find a clear install command in the README");
-  }
-  if (!readmeCoverage.hasTestCommand) {
-    parts.push("the planner did not find a clear test command in the README");
   }
   if (!readmeCoverage.hasStartCommand) {
     parts.push(
@@ -301,8 +298,14 @@ export async function executeRunbook(
 
   const readmePathCache = new Map<string, string>();
 
-  for (let si = 0; si < runbook.steps.length; si += 1) {
-    const step = runbook.steps[si];
+  const runnableSteps = runbook.steps.filter((s) => s.purpose !== "test");
+  const skippedTestCount = runbook.steps.length - runnableSteps.length;
+  if (skippedTestCount > 0) {
+    behavioralInfo("runbook_skip_test_steps", { skippedTestCount });
+  }
+
+  for (let si = 0; si < runnableSteps.length; si += 1) {
+    const step = runnableSteps[si];
     const startedAt = new Date().toISOString();
     const tStep = Date.now();
 
@@ -341,7 +344,7 @@ export async function executeRunbook(
         : commandForStep;
     behavioralInfo("runbook_step_start", {
       stepIndex: si + 1,
-      stepTotal: runbook.steps.length,
+      stepTotal: runnableSteps.length,
       purpose: step.purpose,
       origin: step.origin,
       cwd,
@@ -389,9 +392,7 @@ export async function executeRunbook(
 
   const readmeCoverage = runbook.readmeCoverage;
   const hasRequiredCoverage =
-    readmeCoverage.hasInstallCommand &&
-    readmeCoverage.hasTestCommand &&
-    readmeCoverage.hasStartCommand;
+    readmeCoverage.hasInstallCommand && readmeCoverage.hasStartCommand;
 
   const passed = hasRequiredCoverage && inferredCount === 0;
   const readmeRequirementDetail: ReadmeRequirementDetail = {

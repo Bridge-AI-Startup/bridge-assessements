@@ -1,5 +1,5 @@
 import type { GradingSandboxContext } from "../e2b/graderSandbox.js";
-import { bashLc } from "./artifacts.js";
+import { bashLc, curlInsideSandbox } from "./artifacts.js";
 import type { StepEvidence } from "./executor.js";
 import { behavioralInfo } from "./log.js";
 
@@ -98,6 +98,102 @@ async function tailStartLog(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Poll localhost inside the E2B VM until the app responds (Bridge server does not fetch).
+ */
+export async function waitForAppReadyInsideSandbox(
+  ctx: GradingSandboxContext,
+  internalOrigin: string,
+  evidence: StepEvidence[]
+): Promise<RunbookSetupStatus> {
+  const failedSteps = summarizeFailedRunbookSteps(evidence);
+  const maxWaitMs = getHealthMaxWaitMs();
+  const t0 = Date.now();
+  let attempts = 0;
+  let lastError: string | undefined;
+  let ready = false;
+
+  behavioralInfo("health_wait_internal_start", { internalOrigin, maxWaitMs });
+
+  while (Date.now() - t0 < maxWaitMs) {
+    attempts += 1;
+    const res = await curlInsideSandbox(ctx, `${internalOrigin}/health`);
+    if (res.ok) {
+      ready = true;
+      lastError = undefined;
+      break;
+    }
+    const root = await curlInsideSandbox(ctx, internalOrigin);
+    if (root.ok) {
+      ready = true;
+      lastError = undefined;
+      break;
+    }
+    lastError = res.body.slice(0, 200) || `exit ${res.exitCode}`;
+    await new Promise((r) => setTimeout(r, DEFAULT_HEALTH_POLL_MS));
+  }
+
+  const elapsedMs = Date.now() - t0;
+  const logTail = ready ? undefined : await tailStartLog(ctx);
+
+  behavioralInfo("health_wait_internal_done", {
+    ready,
+    attempts,
+    elapsedMs,
+    lastError: lastError ?? null,
+  });
+
+  const healthWait = {
+    attempted: true,
+    ready,
+    attempts,
+    elapsedMs,
+    lastError,
+    logTail,
+  };
+
+  if (ready && failedSteps.length === 0) {
+    return {
+      status: "ready",
+      phase: "complete",
+      summary: `App responded at ${internalOrigin} (in-sandbox) after ${attempts} attempt(s) (${Math.round(elapsedMs / 1000)}s).`,
+      failedSteps,
+      healthWait,
+    };
+  }
+
+  if (ready && failedSteps.length > 0) {
+    const first = failedSteps[0];
+    return {
+      status: "degraded",
+      phase: "complete",
+      summary: `App is reachable at ${internalOrigin} (in-sandbox), but ${failedSteps.length} runbook step(s) failed (first: [${first.purpose}] exit ${first.exitCode ?? "?"}).`,
+      failedSteps,
+      healthWait,
+    };
+  }
+
+  if (!ready && failedSteps.length > 0) {
+    const first = failedSteps[0];
+    const logHint = logTail ? ` Start log tail:\n${logTail.slice(0, 800)}` : "";
+    return {
+      status: "failed",
+      phase: "health_wait",
+      summary: `Runbook failed and app never became reachable at ${internalOrigin}. First failed step: [${first.purpose}] "${first.command.slice(0, 80)}" (exit ${first.exitCode ?? "?"}).${logHint}`,
+      failedSteps,
+      healthWait,
+    };
+  }
+
+  return {
+    status: "failed",
+    phase: "health_wait",
+    summary: `App did not respond at ${internalOrigin} within ${Math.round(maxWaitMs / 1000)}s (${attempts} attempts).${logTail ? ` Start log:\n${logTail.slice(0, 800)}` : ""}`,
+    failedSteps,
+    healthWait,
+  };
 }
 
 /**

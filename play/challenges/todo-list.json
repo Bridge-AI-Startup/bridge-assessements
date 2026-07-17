@@ -1,0 +1,9 @@
+{
+  "slug": "todo-list",
+  "title": "Build a Todo List",
+  "prompt": "Build a simple todo list in this project's existing files.\n\n**Entry:** Preview opens `index.html` first — put the main UI there (and `style.css` / `main.js`). Extra HTML pages are fine if you link to them from the home page.\n\nRequirements:\n\n- Lets you add a new todo from a text input\n- Shows all todos in a list\n- Lets you mark a todo as done / not done\n- Lets you delete a todo\n- Persists todos in localStorage so they survive a refresh\n\nVanilla JS or CDN only — no Vite/npm. You're done when you can add, toggle, and delete todos, and they still appear after refreshing Preview.",
+  "tokenBudget": 50000,
+  "timeLimitMinutes": 10,
+  "category": "widget",
+  "status": "published"
+}

@@ -14,6 +14,9 @@ const challenge = fs.readFileSync(path.join(root, "CHALLENGE.md"), "utf8");
 const starterCodeFiles = JSON.parse(
   fs.readFileSync(path.join(__dirname, "starter-files.embedded.json"), "utf8"),
 );
+const behavioralChecks = JSON.parse(
+  fs.readFileSync(path.join(root, "behavioral-checks.json"), "utf8"),
+);
 
 const description = [
   "Work in the **starter code** package below. Copy files into a workspace, then run `server` + `client` per `README.md`.",
@@ -38,14 +41,7 @@ const doc = {
   starterCodeFiles,
   interviewerCustomInstructions: null,
   isSmartInterviewerEnabled: false,
-  behavioralChecks: [
-    "Invalid status transitions (open → resolved) are rejected with a clear 400 error.",
-    "Priority filter returns only exact priority matches (high does not include low).",
-    "Ticket list is sorted oldest-first by createdAt.",
-    "Search filters tickets by title or description case-insensitively.",
-    "Stats endpoint returns accurate counts grouped by status.",
-    "All server tests pass after fixes (`npm test` in server/).",
-  ],
+  behavioralChecks,
   evaluationCriteria: [
     "Runs the test suite before and after each bug fix.",
     "Investigates root cause of failures instead of blindly patching symptoms.",

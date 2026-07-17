@@ -74,6 +74,47 @@ describe("TicketFlow API", () => {
     });
   });
 
+  describe("Feature 1 — search", () => {
+    it("filters tickets by description case-insensitively", async () => {
+      createTicket({
+        title: "Unrelated title",
+        description: "Payment form fails on submit",
+        priority: "medium",
+      });
+      createTicket({
+        title: "Other",
+        description: "No match here",
+        priority: "low",
+      });
+
+      const response = await request(app).get("/api/tickets?search=payment");
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.tickets.length, 1);
+      assert.match(
+        response.body.tickets[0].description.toLowerCase(),
+        /payment/,
+      );
+    });
+  });
+
+  describe("Feature 2 — stats", () => {
+    it("returns counts grouped by status", async () => {
+      seedTickets();
+
+      const listResponse = await request(app).get("/api/tickets");
+      const statsResponse = await request(app).get("/api/stats");
+
+      assert.equal(statsResponse.status, 200);
+      assert.ok(statsResponse.body.stats);
+      const statusSum = Object.values(statsResponse.body.stats).reduce(
+        (sum: number, n) => sum + (typeof n === "number" ? n : 0),
+        0,
+      );
+      assert.equal(statusSum, listResponse.body.tickets.length);
+    });
+  });
+
   describe("Baseline behavior", () => {
     it("creates and fetches tickets", async () => {
       seedTickets();

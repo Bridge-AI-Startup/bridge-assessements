@@ -42,6 +42,11 @@ export default function BehavioralGradingLiveTrace({ progress, behavioralChecks 
   const phaseLabel = progress?.phaseLabel ?? "Starting behavioral grading…";
   const doneCount = completed.length;
   const pct = checksTotal > 0 ? Math.round((doneCount / checksTotal) * 100) : 0;
+  const isRealE2bWaiting =
+    agentSteps.length === 0 &&
+    completed.length === 0 &&
+    (progress?.phaseLabel?.includes("Queued") ||
+      phaseLabel === "Starting behavioral grading…");
 
   return (
     <div className="rounded-lg border border-amber-200 bg-gradient-to-b from-amber-50/80 to-white p-3 space-y-3">
@@ -59,6 +64,14 @@ export default function BehavioralGradingLiveTrace({ progress, behavioralChecks 
           </span>
         )}
       </div>
+
+      {isRealE2bWaiting && (
+        <p className="text-xs text-amber-900/80 leading-relaxed">
+          Real E2B grading is running in the background. Step-by-step animation
+          only appears on the Webhook VP demo — this can take 5–15 minutes with
+          no live progress until checks finish.
+        </p>
+      )}
 
       {checksTotal > 0 && (
         <div className="h-1.5 w-full rounded-full bg-amber-100 overflow-hidden">

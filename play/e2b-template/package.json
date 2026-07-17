@@ -1,0 +1,17 @@
+{
+  "name": "bridge-play-e2b-template",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build:dev": "tsx build.dev.ts",
+    "build:prod": "tsx build.prod.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "e2b": "^2.19.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  }
+}

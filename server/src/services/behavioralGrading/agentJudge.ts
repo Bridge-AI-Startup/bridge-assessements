@@ -167,6 +167,39 @@ function isSafeShellCommand(cmd: string): boolean {
   return !dangerous.test(cmd);
 }
 
+/** Candidate test runners are not used for behavioral grading — probe the running app instead. */
+function isCandidateTestCommand(cmd: string): boolean {
+  return /\b(npm\s+test|npm\s+run\s+test|pnpm\s+test|pnpm\s+run\s+test|yarn\s+test|yarn\s+run\s+test|pytest\b|jest\b|vitest\b|mocha\b|cargo\s+test|go\s+test\b|dotnet\s+test|phpunit|rspec\b|ava\b|tap\b.*\btest\b)/i.test(
+    cmd
+  );
+}
+
+function behavioralCheckNeedsHttpProbe(
+  check: string,
+  executionProfile: string
+): boolean {
+  if (executionProfile === "cli_stdout") return false;
+  return /\b(GET|POST|PATCH|PUT|DELETE|HTTP|endpoint|\/api\/|\/tickets|\/stats|\?priority|\?search|returns?\s+(HTTP\s+)?\d{3})\b/i.test(
+    check
+  );
+}
+
+function agentTraceHasCurlProbe(
+  trace: AgentToolTraceEntry[],
+  sandboxAppOrigin?: string
+): boolean {
+  const origin = sandboxAppOrigin?.trim();
+  return trace.some((t) => {
+    if (t.tool !== "run_command" || !/\bcurl\b/i.test(t.detail)) return false;
+    if (!origin) return true;
+    return (
+      t.detail.includes(origin) ||
+      /\b127\.0\.0\.1:\d+/.test(t.detail) ||
+      /\blocalhost:\d+/.test(t.detail)
+    );
+  });
+}
+
 /**
  * Build absolute paths to try for read_file. Handles:
  * - LLM repeating the repo root folder name (e.g. `assessment/server/...` when cwd is already `.../assessment`)
@@ -348,7 +381,9 @@ function runBrowserExpect(
 export type AgentJudgeContext = BehavioralJudgeInput & {
   repoPath: string;
   ctx: GradingSandboxContext;
-  /** Public HTTPS URL of the app in the sandbox (when README started a server). Enables browser_* tools. */
+  /** In-sandbox origin for run_command curl (http://127.0.0.1:PORT). */
+  sandboxAppOrigin?: string;
+  /** Optional E2B public HTTPS URL — only for browser_* tools on the Bridge host. */
   baseUrl?: string;
   /** Required for browser_screenshot artifact keys (`submissions/<id>/…`). */
   submissionId?: string;
@@ -436,7 +471,7 @@ export async function runAgentBehavioralJudge(
   const systemPrompt = `You are a grading agent with access to the candidate's repository inside an isolated Linux sandbox (current working directory for run_command is the repo root).
 
 Tools (respond with exactly ONE structured action per turn):
-- step=run_command: run a shell command (bash -lc). Use for: running tests, python -c snippets, grepping, small one-off checks. Prefer short commands.
+- step=run_command: run a shell command (bash -lc). Use for: **curl** against the running app, **rg**/**grep**, small one-off probes. **Never** run the candidate's test suite (\`npm test\`, \`pytest\`, \`jest\`, etc.) — grading does not use their tests.
 - step=read_file: read a file path relative to repo root (e.g. order_processing.py, src/app.ts). Use to inspect logic the excerpt might have truncated.
 ${browserHint}
 - step=finish: verdict (pass/fail/inconclusive), rationale, and \`citations\` (verbatim quotes). **JSON safety:** \`citations\` must be valid JSON strings: each item one line in the JSON (use \`\\n\` for line breaks inside a string). Escape internal \`"\` as \`\\"\`. Prefer **short** snippets (≤200 chars each, ideally ≤8 items; at most ${MAX_BEHAVIORAL_CITATIONS} items are kept) so the response is not truncated mid-JSON.
@@ -444,15 +479,15 @@ ${browserHint}
 Rules:
 - You MUST eventually use step=finish before iterations run out.
 - **Mandatory \`run_command\` before finish (critical):** Read \`--- Grading runtime (automated — use for honesty) ---\` in the first user message.
-  - If **App base URL available** is **yes**: you **must** use **at least one** \`step=run_command\` **in this agent session** before \`finish\`. Use it to hit the running app (e.g. \`curl -sS -i\` against paths you infer from \`read_file\` on routes; use **only** the **BASE_URL_FOR_CURL** origin from the user message — see **curl origin** below) and/or run a project test script (\`npm test\`, \`pytest\`, etc.) if the check concerns test results. **Do not** \`finish\` after **only** \`read_file\` / \`browser_*\` — always include a shell probe when the server URL exists. If every curl fails, you may still \`finish\` with **fail** or **inconclusive** and cite the failing command output.
-  - If **App base URL available** is **no**: still **prefer** at least one \`run_command\` (\`rg\`, \`grep\`, or the README’s test command) when the check is about **behavior** or **repo-wide** logic; **only** for a narrow “this exact file contains X” style check may you \`finish\` from \`read_file\` alone.
+  - If **In-sandbox app origin available** is **yes** and this check mentions HTTP/API/endpoints: you **must** use **at least one** \`step=run_command\` with \`curl\` to \`SANDBOX_APP_ORIGIN\` before \`finish\` (infer paths from \`read_file\` on routes). **Do not** \`finish\` with **pass** after **only** \`read_file\` / \`browser_*\`. If curls fail, \`finish\` **fail** or **inconclusive** and cite output.
+  - If **In-sandbox app origin available** is **no**: use \`read_file\` / \`rg\` for code-only checks; \`run_command\` for inspection only — **not** candidate test commands.
 - **Runtime vs static (critical):** Read \`--- Grading runtime (automated — use for honesty) ---\` in the first user message.
-  - If the check concerns **HTTP/API behavior** — e.g. response JSON shape, **non-leakage** of ids, **status codes**, **rejecting** bad input, honeypot/bot rejection — and **App base URL available** is **yes** with a **successful** warmup GET: you **must** obtain **runtime** proof before \`finish\` with **pass**: use \`run_command\` to \`curl -s\` the relevant API paths (infer paths from \`read_file\` on routes; include needed headers if the app is behind /api). **Do not** pass such checks from \`read_file\` alone.
-  - If **App base URL available** is **no**, or warmup GET **failed**, or **README runbook had a failed shell step** and the check **requires live HTTP** proof: you may use **inconclusive** (explain) — but if the check is **purely about source** (routes, auth, validators) and you **can** read the repo, still decide pass/fail from code. Do **not** use inconclusive just because relevant **files were not found**; see **Missing code** below.
+  - If the check concerns **HTTP/API behavior** — response shape, status codes, filters, sorting — and **In-sandbox app origin available** is **yes**: you **must** obtain **runtime** proof via \`curl\` before \`finish\` with **pass**. **Do not** pass from \`read_file\` alone. **Do not** use candidate \`npm test\` / \`pytest\` output as proof.
+  - If **In-sandbox app origin available** is **no**, or warmup GET **failed**, or **README runbook had a failed shell step** and the check **requires live HTTP** proof: you may use **inconclusive** (explain) — but if the check is **purely about source** (routes, auth, validators) and you **can** read the repo, still decide pass/fail from code. Do **not** use inconclusive just because relevant **files were not found**; see **Missing code** below.
   - For **purely static** checks (middleware on a route, file exists, validator chain present): \`read_file\` is enough — but see **Ownership** next; “static” does not mean “router only.”
 - **Ownership / authorization (critical):** If the behavioral check asks that employers **cannot** access **another user’s** assessments/submissions, or that access is **scoped to the owner**, **do not pass** from **route + middleware alone** (e.g. \`verifyEmployerToken\` only proves an authenticated employer). You **must** \`read_file\` the **controller (or service) handler** for that route and confirm the code **binds the resource to the current employer/user** (e.g. lookup by assessment id **and** owner id, or 404 when not owned). If the handler loads by id **without** comparing to the authenticated owner, **fail** — even if middleware is present.
-- **curl origin (critical):** If the user message includes \`--- BASE_URL_FOR_CURL ---\`, you **must** use **that exact URL** (scheme + host + port if present) as the origin for **every** \`curl\` to the candidate app. **Never** use \`http://127.0.0.1\`, \`http://localhost\`, or a port from the README/package.json for those probes — in the grading sandbox the app is reached via the **exposed** URL only; localhost curls usually **fail** or hit nothing even when the app is up. **browser_*** tools already use the same origin internally.
-- **Reachability vs wrong URL:** If a \`curl\` prints a JSON body or \`-i\` shows an HTTP status line, the server **was** reachable for that request — do **not** claim “application could not be reached” unless \`curl\` shows connection refused / timeout. Distinguish **wrong origin** (fix: use BASE_URL_FOR_CURL) from **endpoint returned 404** (valid response for testing).
+- **curl origin (critical):** If the user message includes \`--- SANDBOX_APP_ORIGIN ---\`, you **must** use **that exact URL** (typically \`http://127.0.0.1:<port>\`) as the origin for **every** \`run_command\` \`curl\` to the candidate app. The app runs **inside the same Linux VM** as your shell — localhost curls are correct here. **browser_*** tools (when enabled) use a separate external URL; do not mix them into curl commands.
+- **Reachability vs wrong URL:** If a \`curl\` prints a JSON body or \`-i\` shows an HTTP status line, the server **was** reachable for that request — do **not** claim “application could not be reached” unless \`curl\` shows connection refused / timeout. Distinguish **wrong path** (try routes from \`read_file\`) from **endpoint returned 404** (valid response for testing).
 - **Honeypot / invite:** Endpoints named “invite” in the employer’s check often map to **share-link** or \`generate-link\` routes in code. Search with \`run_command\` \`rg -n "website|honeypot|generate-link|generateLink" server client\` and open validators — do **not** assume a file named \`invite.ts\` exists.
 - **Missing code (critical):** After reasonable probing (repository layout, \`routes/index.ts\`, \`rg\`/grep for symbols from the behavioral check), if **no relevant implementation** exists in the clone (wrong paths resolved, still nothing; or no route/handler/validator to evaluate), finish with **fail** — the submission does not demonstrate the required code. **Do not** choose **inconclusive** only because files were missing or paths were guessed wrong.
 - **Single-check scope (critical):** You grade **only** the one sentence in \`Behavioral check to evaluate\` below. The full assessment description is context; **other behavioral checks** (if listed) are scored in **separate** agent runs. Do **not** fail this check because the submission would fail a **different** check, unless the **current** sentence explicitly requires that behavior. **Do not double-penalize:** e.g. a wrong discount threshold belongs in the check that mentions that threshold—not in a check that only asks whether output **includes** fields such as item, quantity, cost, and discount **lines** (pass those on presence/readability of those fields; ignore whether the discount **amount** matches the spec unless this sentence says so).
@@ -463,7 +498,7 @@ Rules:
 - **When THIS check is only** about presence, labels, or format (e.g. "output includes …", "displays each …"): pass if those elements appear in the relevant output; do **not** import failures from unrelated requirements (e.g. wrong dollar threshold) unless THIS sentence ties pass/fail to that value.
 - **Citation integrity (critical):** \`citations\` must be verbatim text from (1) **seed evidence**, OR (2) \`read_file\` from the repo, OR (3) **browser_*** visible text for UI checks, OR (4) **curl / HTTP** output from \`run_command\` when the check is about **actual API responses** (status/body/leaks). **Never** cite generic \`run_command\` stdout as proof of **source file** content unless that output is clearly a **file read** (e.g. \`cat\`) from the repo.
 - For "source contains guard X": use **read_file** and **fail** if absent. For "page shows Y": use **browser_*** when baseUrl exists; **browser_expect** gives a deterministic pass/fail for substrings/regex on visible text.
-- **run_command** is for the **declared entry command**, tests (\`pytest\`, \`npm test\`), or read-only inspection (\`rg\`, \`grep\`). Prefer **read_file** over shell-printed fake code for source claims.
+- **run_command** is for **curl** probes, \`rg\`/\`grep\`, or small snippets — **not** \`npm test\`, \`pytest\`, \`jest\`, or other candidate test runners (those commands are blocked). Prefer **read_file** over shell for source claims.
 - **Paths:** The **Repository layout** section shows real directories in this clone. Paths for \`read_file\` are **relative to the repository root** (the folder that contains the layout). **Do not** prefix with the root folder name again (e.g. if layout shows \`server/\` at the top, use \`server/src/routes/…\` not \`assessment/server/…\`). Prefer \`.ts\` / \`src/routes/\` when the repo is TypeScript—check the layout for \`package.json\` and actual file paths.
 - **Routes layout:** APIs may live in one file (e.g. \`server/src/routes/index.ts\`) rather than \`routes/assessments.ts\` or \`routes/submissions.ts\`. If a guessed path is missing, open \`routes/index.ts\` (or \`server.ts\`) or run \`run_command\` \`rg 'listSubmissions|generate-link' server\` before concluding files are missing.
 - **Verdict choice:** **fail** if the requirement is unmet in evidence, or **no locatable code** supports it after probing. **inconclusive** only when **code exists** but the correct pass/fail is **ambiguous**, or **runtime-only** proof is mandatory and the environment **cannot** provide it (e.g. app never reachable) — not for “could not find the file.”
@@ -490,13 +525,17 @@ Safety: only standard dev commands; no destructive patterns.`;
 
 The sections above are from the real grading pipeline (clone + entry run + main file excerpt). Later messages labeled \`run_command result:\` may be **sandbox probes** you run yourself — that stdout is **not** the candidate's source tree unless it is clearly output from their **entry command** or a **file read** from the repo.
 ${
+        input.sandboxAppOrigin
+          ? `\n--- SANDBOX_APP_ORIGIN (mandatory origin for run_command curl — app runs in this VM) ---\n${input.sandboxAppOrigin}\n--- end SANDBOX_APP_ORIGIN ---\n`
+          : "\n(No SANDBOX_APP_ORIGIN — in-sandbox app URL was not discovered. For HTTP checks you may try curl to a port from the README **if** the runbook started a server, or use read_file for code-only proof; see Rules.)\n"
+      }${
         input.baseUrl
-          ? `\n--- BASE_URL_FOR_CURL (mandatory origin for curl and API probes — do not use localhost or README ports) ---\n${input.baseUrl}\n--- end BASE_URL ---\n\nSame URL applies to browser_* tools (path-only steps use this origin).\n`
-          : "\n(No BASE_URL_FOR_CURL — App base URL was not available for this run. For HTTP checks you may try curl to a port shown in the runbook seed **if** the server was started in this sandbox, or use read_file for code-only proof; see Rules.)\n"
+          ? `\n--- BROWSER_BASE_URL (external — browser_* tools only, not for curl) ---\n${input.baseUrl}\n--- end BROWSER_BASE_URL ---\n`
+          : ""
       }
 You may use tools to gather more evidence for THIS behavioral check only. Start from the seed; use read_file to confirm anything claimed about code on disk.${
-        input.baseUrl
-          ? " The app is running — you **must** also use run_command (e.g. `curl -sS -i \"<BASE_URL_FOR_CURL>/…\"`) at least once before finish; see Rules → Mandatory run_command and curl origin. Use browser tools when the check is user-visible."
+        input.sandboxAppOrigin
+          ? ` The app is running in-sandbox — you **must** also use run_command (e.g. \`curl -sS -i \"${input.sandboxAppOrigin}/…\"\`) at least once before finish; see Rules → Mandatory run_command and curl origin.${input.baseUrl ? " Use browser tools when the check is user-visible." : ""}`
           : " Prefer run_command (tests, rg) when evaluating behavior; see Rules → Mandatory run_command."
       }`,
     },
@@ -510,17 +549,56 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
         maxIterations: MAX_AGENT_ITERATIONS,
       });
 
-      const { result } = await createChatCompletionWithStructuredOutput(
-        "workflow_evaluation",
-        messages,
-        agentTurnSchema,
-        {
-          temperature: 0,
-          maxTokens: 4600,
-        }
-      );
+      let result: AgentTurn;
+      try {
+        ({ result } = await createChatCompletionWithStructuredOutput(
+          "workflow_evaluation",
+          messages,
+          agentTurnSchema,
+          {
+            temperature: 0,
+            maxTokens: 4600,
+          }
+        ));
+      } catch (e) {
+        const parseMsg = e instanceof Error ? e.message : String(e);
+        behavioralInfo("agent_llm_parse_error", {
+          submissionId: input.submissionId,
+          iteration: iter,
+          error: parseMsg.slice(0, 400),
+        });
+        messages.push({
+          role: "user",
+          content: `Your last response could not be parsed or validated (${parseMsg.slice(0, 600)}). Reply with valid JSON for one tool step. Keep each citation under 200 characters (short verbatim snippets only).`,
+        });
+        continue;
+      }
 
       if (result.step === "finish") {
+        const needsCurl =
+          result.verdict === "pass" &&
+          Boolean(input.sandboxAppOrigin?.trim()) &&
+          behavioralCheckNeedsHttpProbe(
+            input.behavioralCheck,
+            input.executionProfile
+          );
+        if (needsCurl && !agentTraceHasCurlProbe(trace, input.sandboxAppOrigin)) {
+          behavioralInfo("agent_finish_blocked_no_curl", {
+            submissionId: input.submissionId,
+            iteration: iter,
+          });
+          messages.push({
+            role: "assistant",
+            content: JSON.stringify(result),
+          });
+          messages.push({
+            role: "user",
+            content:
+              "finish rejected: this check requires runtime HTTP proof. Run at least one `curl` against SANDBOX_APP_ORIGIN (e.g. curl -sS -i with the path from the behavioral check) before finish with pass. Do not use npm test or pytest.",
+          });
+          continue;
+        }
+
         behavioralInfo("agent_finish", {
           submissionId: input.submissionId,
           iteration: iter,
@@ -552,6 +630,9 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
         if (!isSafeShellCommand(result.cmd)) {
           outputPreview =
             "[blocked] Command rejected by safety policy. Try a narrower dev command.";
+        } else if (isCandidateTestCommand(result.cmd)) {
+          outputPreview =
+            "[blocked] Candidate test commands (npm test, pytest, jest, etc.) are not used for behavioral grading. Use curl against SANDBOX_APP_ORIGIN to verify API behavior, or read_file for static code review.";
         } else {
           const tCmd = Date.now();
           const r = await input.ctx.run(bashLc(result.cmd), {

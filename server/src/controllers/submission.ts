@@ -109,16 +109,20 @@ async function setBehavioralGradingFailed(
   message: string
 ): Promise<void> {
   const failureCategory = inferFailureCategory(message);
+  const summary =
+    message.length > 2000
+      ? `${message.slice(0, 1997)}…`
+      : message;
   await SubmissionModel.findByIdAndUpdate(submissionId, {
     $set: {
       behavioralGradingStatus: "failed",
-      behavioralGradingError: message,
+      behavioralGradingError: summary,
       behavioralGradingReport: {
         failureCategory,
         setup: {
           status: "failed",
           phase: failureCategory === "timeout" ? "health_wait" : "runbook",
-          summary: message,
+          summary: `Behavioral grading failed: ${summary}`,
           failedSteps: [],
         },
         cases: [],

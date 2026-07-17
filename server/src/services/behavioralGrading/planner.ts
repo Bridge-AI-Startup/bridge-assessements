@@ -36,7 +36,7 @@ You MUST set executionProfile:
 - unclear: not enough information.
 
 Rules:
-- Return only commands needed for setup/install/test/start.
+- Behavioral grading only runs setup to install dependencies and start the app. Return install and start commands only (plus setup if needed, e.g. env copy). Do NOT include test steps (no npm test, pytest, jest, cargo test, etc.) even if the README mentions them.
 - Prefer commands explicitly present in README with origin="readme".
 - You may infer missing commands from repo summary with origin="inferred".
 - Keep commands shell-ready and short.

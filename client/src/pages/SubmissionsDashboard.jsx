@@ -393,6 +393,285 @@ function BehavioralSetupPanel({ report }) {
   );
 }
 
+/** Plain-text export for debugging / sharing with support or AI. */
+function formatBehavioralGradingDebugExport(submission, assessment) {
+  const lines = [];
+  const push = (line = "") => lines.push(line);
+  const report = submission?.behavioralGradingReport;
+  const runbook = report?.runbook;
+
+  push("=== BridgeAI Behavioral Grading Export ===");
+  push(`Exported: ${new Date().toISOString()}`);
+  push("");
+
+  push("--- Submission ---");
+  push(`Submission ID: ${submission?._id ?? "?"}`);
+  push(`Candidate: ${submission?.candidateName || "(none)"}`);
+  push(`Email: ${submission?.candidateEmail || "(none)"}`);
+  push(`Status: ${submission?.status ?? "?"}`);
+  push(`Code source: ${submission?.codeSource ?? "?"}`);
+  if (submission?.githubLink) push(`GitHub: ${submission.githubLink}`);
+  push(`Behavioral grading: ${submission?.behavioralGradingStatus ?? "not run"}`);
+  if (submission?.behavioralGradingError) {
+    push(`Grading error: ${submission.behavioralGradingError}`);
+  }
+  if (
+    submission?.behavioralGradingStatus === "pending" &&
+    submission?.behavioralGradingProgress
+  ) {
+    push("");
+    push("--- Live progress (in flight) ---");
+    const p = submission.behavioralGradingProgress;
+    if (p.phaseLabel) push(`Phase: ${p.phaseLabel}`);
+    if (p.checkText) push(`Current check: ${p.checkText}`);
+    if (Array.isArray(p.agentSteps) && p.agentSteps.length > 0) {
+      push("Agent steps so far:");
+      p.agentSteps.forEach((s) => {
+        push(
+          `  #${s.iteration} ${s.tool} [${s.status}] ${s.detail ?? ""}`,
+        );
+        if (s.outputPreview) {
+          push(
+            s.outputPreview
+              .split("\n")
+              .map((l) => `    ${l}`)
+              .join("\n"),
+          );
+        }
+      });
+    }
+    if (Array.isArray(p.completedChecks) && p.completedChecks.length > 0) {
+      push("Completed checks:");
+      p.completedChecks.forEach((c) => {
+        push(`  [${c.verdict}] ${c.checkText}`);
+      });
+    }
+  }
+  push("");
+
+  if (assessment) {
+    push("--- Assessment ---");
+    push(`Title: ${assessment.title ?? "?"}`);
+    push(`Assessment ID: ${assessment._id ?? assessment.id ?? "?"}`);
+    if (Array.isArray(assessment.behavioralChecks)) {
+      push("Configured checks:");
+      assessment.behavioralChecks.forEach((c, i) => push(`  ${i + 1}. ${c}`));
+    }
+    push("");
+  }
+
+  if (report?.sandbox) {
+    push("--- Sandbox ---");
+    push(`Sandbox ID: ${report.sandbox.sandboxId ?? "?"}`);
+    push(`Timeout (ms): ${report.sandbox.timeoutMs ?? "?"}`);
+    push("");
+  }
+
+  if (report?.startedAt || report?.completedAt) {
+    push("--- Timing ---");
+    if (report.startedAt) push(`Started: ${report.startedAt}`);
+    if (report.completedAt) push(`Completed: ${report.completedAt}`);
+    push("");
+  }
+
+  if (runbook) {
+    push("--- Runbook ---");
+    push(`Execution profile: ${runbook.executionProfile ?? "?"}`);
+    push(`README requirement: ${runbook.readmeRequirementPassed ? "pass" : "fail"}`);
+    if (runbook.readmeRequirementDetail?.summary) {
+      push(`README detail: ${runbook.readmeRequirementDetail.summary}`);
+    }
+    if (runbook.sandboxAppOrigin) {
+      push(`In-sandbox origin: ${runbook.sandboxAppOrigin}`);
+      if (runbook.sandboxAppDiscovery) {
+        push(`Port discovery: ${runbook.sandboxAppDiscovery}`);
+      }
+    }
+    if (runbook.baseUrl) push(`Browser base URL: ${runbook.baseUrl}`);
+    if (runbook.summary) {
+      push("Steps:");
+      runbook.summary.split("\n").forEach((line) => push(`  ${line}`));
+    }
+    push("");
+  }
+
+  if (report?.setup) {
+    const setup = report.setup;
+    push("--- Environment setup ---");
+    push(`Status: ${setup.status ?? "?"}`);
+    if (setup.summary) push(setup.summary);
+    if (Array.isArray(setup.failedSteps) && setup.failedSteps.length > 0) {
+      push("Failed runbook steps:");
+      setup.failedSteps.forEach((step) => {
+        push(
+          `  [${step.purpose}] exit ${step.exitCode ?? "?"} — ${step.command ?? ""}`,
+        );
+        if (step.stderrSnippet) push(`    stderr: ${step.stderrSnippet}`);
+      });
+    }
+    if (setup.healthWait) {
+      const hw = setup.healthWait;
+      push(
+        `Health wait: ready=${hw.ready} attempts=${hw.attempts ?? "?"} elapsedMs=${hw.elapsedMs ?? "?"}`,
+      );
+      if (hw.lastError) push(`  lastError: ${hw.lastError}`);
+      if (hw.logTail) {
+        push("  start log tail:");
+        push(hw.logTail);
+      }
+    }
+    push("");
+  }
+
+  if (Array.isArray(runbook?.evidence) && runbook.evidence.length > 0) {
+    push("--- Runbook command evidence ---");
+    runbook.evidence.forEach((entry, i) => {
+      if (entry?.type !== "command") return;
+      const input = entry.input || {};
+      push(
+        `[${i + 1}] [${input.purpose ?? "?"}] ${entry.success ? "OK" : "FAIL"} exit ${entry.exitCode ?? "?"}`,
+      );
+      const cmd = input.executedCommand || input.command;
+      if (cmd) push(`  $ ${cmd}`);
+      if (entry.stdoutSnippet) push(`  stdout:\n${entry.stdoutSnippet}`);
+      if (entry.stderrSnippet) push(`  stderr:\n${entry.stderrSnippet}`);
+      push("");
+    });
+  }
+
+  const cases = report?.cases;
+  if (Array.isArray(cases) && cases.length > 0) {
+    push("--- Behavioral checks ---");
+    cases.forEach((caseResult, idx) => {
+      push("");
+      push(`### Check ${idx + 1}: ${(caseResult.verdict || "?").toUpperCase()}`);
+      push(caseResult.checkText || "(no text)");
+      if (caseResult.checkIndex != null) {
+        push(`(assessment index: ${caseResult.checkIndex})`);
+      }
+
+      (caseResult.evidence || []).forEach((entry) => {
+        if (entry?.type !== "judge") return;
+        push("");
+        push("Rationale:");
+        push(entry.rationale || "(none)");
+        if (Array.isArray(entry.citations) && entry.citations.length > 0) {
+          push("");
+          push("Citations:");
+          entry.citations.forEach((c, ci) => push(`  ${ci + 1}. ${c}`));
+        }
+        if (Array.isArray(entry.agentTrace) && entry.agentTrace.length > 0) {
+          push("");
+          push(`Agent tool trace (${entry.agentTrace.length} steps):`);
+          entry.agentTrace.forEach((step) => {
+            push("");
+            push(
+              `#${step.iteration} ${step.tool} ${step.success ? "OK" : "FAIL"}`,
+            );
+            if (step.detail) push(`  command/detail: ${step.detail}`);
+            if (step.outputPreview) {
+              push("  output:");
+              push(
+                step.outputPreview
+                  .split("\n")
+                  .map((l) => `    ${l}`)
+                  .join("\n"),
+              );
+            }
+          });
+        }
+        if (entry.input?.entryCommand) {
+          push("");
+          push(`Seed entry: ${entry.input.entryCommand}`);
+          if (entry.input.mainSourcePath) {
+            push(`Seed source: ${entry.input.mainSourcePath}`);
+          }
+        }
+      });
+
+      if (caseResult.artifacts?.length > 0) {
+        push("");
+        push(`Screenshot artifact keys: ${caseResult.artifacts.join(", ")}`);
+      }
+    });
+  } else if (!submission?.behavioralGradingError) {
+    push("--- Behavioral checks ---");
+    push("(no case results)");
+  }
+
+  if (report?.failureCategory) {
+    push("");
+    push(`Failure category: ${report.failureCategory}`);
+  }
+  if (report?.reportArtifactKey) {
+    push(`Report artifact: ${report.reportArtifactKey}`);
+  }
+
+  push("");
+  push("=== end export ===");
+  return lines.join("\n");
+}
+
+function CopyBehavioralReportButton({
+  submission,
+  assessment,
+  variant = "outline",
+  size = "sm",
+  className = "",
+  label = "Copy report",
+}) {
+  const [copied, setCopied] = React.useState(false);
+  const { toast } = useToast();
+
+  const hasExportable =
+    submission?.behavioralGradingReport ||
+    submission?.behavioralGradingError ||
+    submission?.behavioralGradingStatus === "pending";
+
+  if (!submission || !hasExportable) return null;
+
+  const handleCopy = async () => {
+    const text = formatBehavioralGradingDebugExport(submission, assessment);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      toast({
+        title: "Copied",
+        description: "Behavioral grading report copied to clipboard.",
+      });
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Copy failed",
+        description: "Could not copy to clipboard.",
+      });
+    }
+  };
+
+  return (
+    <Button
+      type="button"
+      variant={variant}
+      size={size}
+      className={className}
+      onClick={() => void handleCopy()}
+    >
+      {copied ? (
+        <>
+          <Check className="w-4 h-4 mr-2" />
+          Copied
+        </>
+      ) : (
+        <>
+          <Copy className="w-4 h-4 mr-2" />
+          {label}
+        </>
+      )}
+    </Button>
+  );
+}
+
 export default function SubmissionsDashboard() {
   const buildStackBlitzUrl = (githubUrl) => {
     try {
@@ -1386,14 +1665,30 @@ export default function SubmissionsDashboard() {
   useEffect(() => {
     if (!behavioralGradingSubmissionId) return;
     const sub = submissions.find((s) => s._id === behavioralGradingSubmissionId);
-    if (
-      sub &&
-      sub.behavioralGradingStatus !== "pending" &&
-      sub.behavioralGradingStatus != null
-    ) {
+    if (sub && sub.behavioralGradingStatus !== "pending") {
       setBehavioralGradingSubmissionId(null);
     }
   }, [submissions, behavioralGradingSubmissionId]);
+
+  const hasPendingBehavioralGrading = submissions.some(
+    (s) => s.behavioralGradingStatus === "pending"
+  );
+
+  useEffect(() => {
+    if (!hasPendingBehavioralGrading || !assessmentId || !currentUser) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const token = await currentUser.getIdToken();
+        const result = await getSubmissionsForAssessment(assessmentId, token);
+        if (result.success) setSubmissions(result.data || []);
+      } catch {
+        /* ignore poll errors */
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [hasPendingBehavioralGrading, assessmentId, currentUser]);
 
   const loadBehavioralArtifacts = async (submission) => {
     if (!currentUser) return;
@@ -2803,10 +3098,20 @@ export default function SubmissionsDashboard() {
         >
           <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Behavioral Grading Evidence</DialogTitle>
-              <DialogDescription>
-                Case-by-case evidence captured in sandbox execution.
-              </DialogDescription>
+              <div className="flex items-start justify-between gap-3 pr-8">
+                <div>
+                  <DialogTitle>Behavioral Grading Evidence</DialogTitle>
+                  <DialogDescription>
+                    Case-by-case evidence captured in sandbox execution.
+                  </DialogDescription>
+                </div>
+                <CopyBehavioralReportButton
+                  submission={selectedBehavioralSubmission}
+                  assessment={assessment}
+                  className="shrink-0"
+                  label="Copy all"
+                />
+              </div>
             </DialogHeader>
             {!selectedBehavioralSubmission ? null : (
               <div className="space-y-4">
@@ -3361,6 +3666,11 @@ export default function SubmissionsDashboard() {
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
+                            <CopyBehavioralReportButton
+                              submission={selectedEvaluationSubmission}
+                              assessment={assessment}
+                              label="Copy report"
+                            />
                             <Button
                               variant="outline"
                               size="sm"

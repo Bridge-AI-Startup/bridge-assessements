@@ -1,0 +1,7 @@
+[
+  "PATCH cannot change ticket status from open directly to resolved (must return HTTP 400).",
+  "GET /api/tickets?priority=high returns only high-priority tickets.",
+  "GET /api/tickets returns tickets oldest-first by createdAt.",
+  "GET /api/tickets?search= matches tickets when the query appears in the description.",
+  "GET /api/stats returns counts that match how many tickets are in each status."
+]

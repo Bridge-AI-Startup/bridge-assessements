@@ -7,10 +7,22 @@ import type { JudgeArtifacts } from "./artifacts.js";
 
 /** Stored cap; longer model output is truncated so grading does not fail Zod validation. */
 export const MAX_BEHAVIORAL_CITATIONS = 40;
+export const MAX_BEHAVIORAL_CITATION_CHARS = 800;
+
+/** Truncate citation strings before Zod max() — agents often paste whole curl/file output. */
+export function normalizeBehavioralCitations(val: unknown): unknown {
+  if (!Array.isArray(val)) return val;
+  return val.slice(0, MAX_BEHAVIORAL_CITATIONS).map((item) => {
+    const s = typeof item === "string" ? item : String(item ?? "");
+    const trimmed = s.trim();
+    if (trimmed.length <= MAX_BEHAVIORAL_CITATION_CHARS) return trimmed;
+    return `${trimmed.slice(0, MAX_BEHAVIORAL_CITATION_CHARS - 1)}…`;
+  });
+}
 
 export const behavioralCitationsFieldSchema = z.preprocess(
-  (val) => (Array.isArray(val) ? val.slice(0, MAX_BEHAVIORAL_CITATIONS) : val),
-  z.array(z.string().max(800)).max(MAX_BEHAVIORAL_CITATIONS)
+  normalizeBehavioralCitations,
+  z.array(z.string().max(MAX_BEHAVIORAL_CITATION_CHARS)).max(MAX_BEHAVIORAL_CITATIONS)
 );
 
 export const behavioralJudgeResultSchema = z.object({
@@ -23,7 +35,7 @@ export type BehavioralJudgeResult = z.infer<typeof behavioralJudgeResultSchema>;
 
 /** Derived in the orchestrator so the agent knows whether “runtime” proof is possible. */
 export type BehavioralRuntimeHints = {
-  /** Sandbox exposed a URL for fetch / browser / curl to same origin. */
+  /** In-sandbox origin discovered for curl (http://127.0.0.1:PORT). */
   baseUrlAvailable: boolean;
   /** At least one runbook shell step exited non-zero (install/start may be broken). */
   anyRunbookCommandFailed: boolean;
@@ -89,9 +101,10 @@ function formatRuntimeHintsSection(
   const { baseUrlAvailable, anyRunbookCommandFailed, httpSeedFetchOk } = hints;
   return `
 --- Grading runtime (automated — use for honesty) ---
-- App base URL available for curl/browser (same origin as seed HTTP): ${baseUrlAvailable ? "yes" : "NO"}
+- In-sandbox app origin available for curl (127.0.0.1): ${baseUrlAvailable ? "yes" : "NO"}
 - README runbook had a failed shell step: ${anyRunbookCommandFailed ? "YES (install/start may be broken)" : "no"}
-- Warmup GET to app base URL: ${!baseUrlAvailable ? "skipped (no URL)" : httpSeedFetchOk ? "succeeded" : "FAILED or empty — do not trust seed HTTP alone; probe with run_command curl if you need API proof"}
+- Warmup in-sandbox GET to app: ${!baseUrlAvailable ? "skipped (no origin)" : httpSeedFetchOk ? "succeeded" : "FAILED or empty — probe with run_command curl before pass"}
+- Candidate test suites: not used (use curl + read_file only)
 `;
 }
 

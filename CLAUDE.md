@@ -8,29 +8,53 @@ BridgeAI is a technical hiring assessment platform. Employers create take-home c
 
 ```
 bridge-assessements/
-├── client/          # React frontend (Vite + JSX/TS)
-├── server/          # Express.js backend (TypeScript, run via tsx)
+├── client/          # React frontend (Vite + JSX/TS) — assessments product
+├── play/client/     # React frontend — Play consumer app (separate Vercel deploy)
+├── play/e2b-template/ # Custom E2B image for Play (Claude Code + static preview)
+├── server/          # Express.js backend (TypeScript, run via tsx) — assessments + /api/play
 ├── notebooks/       # Jupyter notebooks (test-assessment-generation.ipynb)
 ├── package.json     # Root-level shared deps (firebase-admin, express-validator, @vercel/analytics)
 └── *.md             # Documentation files
 ```
 
-The client and server each have their own `package.json` and `node_modules`. They are NOT managed by a workspace tool -- you must install dependencies and run dev commands independently in each directory.
+The client, play/client, play/e2b-template, and server each have their own `package.json` and `node_modules` where applicable. They are NOT managed by a workspace tool -- you must install dependencies and run commands independently in each directory.
 
+## Play product (consumer daily challenge)
+
+Separate promotional product — **not** part of hiring assessments. See [`play/README.md`](play/README.md).
+
+| Piece | Location | Deploy |
+|-------|----------|--------|
+| Frontend | `play/client/` | Vercel project #2 (root `play/client`), e.g. `play.bridge-jobs.com` |
+| API | `server/src/routes/play.ts` | Same Render service as assessments (`/api/play/*`) |
+| Database | `bridge-play` on same Atlas cluster | `PLAY_DB_NAME` env var |
+| Models | `server/src/models/play/` | Registered on Play Mongoose connection |
+| E2B template | `play/e2b-template/` | Custom image `bridge-play-dev` / `bridge-play-v1` (preview :8080, Claude Code CLI; no code-server) |
+
+- `PLAY_ENABLED=false` by default — gates feature routes; `GET /api/play/health` is always on.
+- Phase A (implemented): daily challenges, `GET /today`, Firebase-gated admin CRUD at `/admin/challenges/*`, Play client `Home` + `/Admin` page, build sessions (`POST/GET /session`) with E2B iframes on `/Build`, submit snapshot (`POST /submit`) + Admin Submissions tab (files + blob preview).
+- Claude Code + token budget: Anthropic-compatible Messages proxy at `/session/:id/llm/v1/messages` (Bearer `llmProxyToken`, meters `tokensUsed` / `tokenBudget`); sandbox provisioned with `ANTHROPIC_BASE_URL` + session token (no user Anthropic login). Build page: desktop defaults to **Chat** mode (chat stream + live preview; toggle to **Studio** for Monaco + chat + preview); mobile (<768px) is always chat-first with change-triggered preview cards and a fullscreen interactive preview. Preference stored in `localStorage` (`playBuildLayout.v1`). Chat relay `POST /session/:id/claude/message` → `claude -p` in E2B. Chat + workspace files persist on the session (refresh/resume within the build window; snapshot restore if sandbox dies). **Wall-clock build limit:** `expiresAt = min(startedAt + limit, end of challenge period)` — challenge `timeLimitMinutes` or `PLAY_BUILD_TIME_LIMIT_MINUTES` (default 10). Leaving Build pauses the sandbox; paused sessions do **not** count toward `PLAY_MAX_CONCURRENT_SESSIONS`. Requires `PLAY_LLM_PROXY_PUBLIC_URL` (E2B cannot reach localhost). Server still exposes `/session/:id/terminal*` PTY routes (unused by Build UI). code-server is **removed** from the Play E2B template.
+- Admin auth: Firebase + `PLAY_ADMIN_EMAIL` allowlist (default `saaz.m@icloud.com`); looks up assessments `User` by `firebaseUid`.
+- No shared models with assessments `Submission`; admin reuses Bridge Firebase accounts.
+- Play E2B: build via `cd play/e2b-template && npx tsx build.dev.ts`; smoke with `npx tsx src/scripts/play-sandbox-smoke.ts` from `server/`. Set `PLAY_E2B_TEMPLATE_ID`. Grading still uses the default E2B image.
+- **Vote / browse / leaderboard:** public gallery + pairwise five-vote rounds with recap; Bayesian (TrueSkill-style) ranking; date-scoped leaderboard. Must submit same UTC day to vote.
 ## Ports and URLs
 
 | Service         | Dev URL                          | Production URL                                           |
 |-----------------|----------------------------------|----------------------------------------------------------|
 | Frontend (Vite) | `http://localhost:5173`          | `https://www.bridge-jobs.com` (Vercel)                   |
+| Play (Vite)     | `http://localhost:5174`          | `https://play.bridge-jobs.com` (Vercel, root `play/client`) |
 | Backend (Express)| `http://localhost:5050`         | `https://bridge-assessements-1.onrender.com` (Render)    |
 | Health check    | `http://localhost:5050/health`   | `https://bridge-assessements-1.onrender.com/health`      |
 | API base        | `http://localhost:5050/api`      | `https://bridge-assessements-1.onrender.com/api`         |
+| Play API        | `http://localhost:5050/api/play` | `https://bridge-assessements-1.onrender.com/api/play`    |
 
 - The backend port is configured via `PORT` env var (defaults to `5050`).
-- The frontend Vite dev server runs on port `5173` by default.
+- The frontend Vite dev server runs on port `5173` by default; Play runs on `5174`.
 - The client resolves its API base URL in `client/src/config/api.js`: uses `VITE_API_URL` env var if set, otherwise `localhost:5050` in dev mode and the Render URL in production.
+- Play client uses `play/client/src/config/api.js` with base `${VITE_API_URL}/api/play`.
 - CORS allowed origins are hardcoded in `server/src/server.ts` -- if you add a new frontend domain, update the `allowedOrigins` array there.
-- Current allowed CORS origins: `FRONTEND_URL` env var, `https://www.bridge-jobs.com`, two Vercel preview domains, plus `localhost:5173` and `localhost:3000` in dev.
+- Current allowed CORS origins: `FRONTEND_URL`, `PLAY_FRONTEND_URL`, `https://play.bridge-jobs.com`, `https://www.bridge-jobs.com`, two Vercel preview domains, plus `localhost:5173`, `localhost:5174`, and `localhost:3000` in dev.
 
 ## How to Run Locally
 
@@ -143,6 +167,19 @@ See `server/config.env.example` for the full list. Key variables:
 - `BEHAVIORAL_GRADING_MAX_CONCURRENT` -- Max concurrent behavioral grading jobs (default: `2`)
 - `BEHAVIORAL_GRADING_UPLOAD_ENABLED` -- Enable behavioral grading for uploaded archives (default: `true`)
 
+**Play (consumer daily challenge):**
+- `PLAY_ENABLED` -- Gate `/api/play` feature routes (default: disabled); `GET /api/play/health` always on
+- `PLAY_DB_NAME` -- Mongo database for Play product (default: `bridge-play`, same Atlas cluster)
+- `PLAY_FRONTEND_URL` -- CORS origin for Play Vercel app (e.g. `https://play.bridge-jobs.com`)
+- `PLAY_ADMIN_EMAIL` -- Email allowed to manage challenges via `/api/play/admin/*` (default: `saaz.m@icloud.com`)
+- `PLAY_E2B_TEMPLATE_ID` -- Custom E2B template for Play sandboxes (default `bridge-play-dev`; build from `play/e2b-template/`)
+- `PLAY_MAX_CONCURRENT_SESSIONS` -- Soft cap on **running** (non-paused) Play sessions (default: `5`)
+- `PLAY_BUILD_TIME_LIMIT_MINUTES` -- Wall-clock build window from start (default: `10`); overridden by challenge `timeLimitMinutes`; always capped by challenge period end
+- `PLAY_CHALLENGE_CADENCE` -- `weekly` (default) or `daily`. Weekly: one published challenge per Mon–Sun UTC week; `challengeDate` = Monday. Daily: one per UTC calendar day. Swap with this env var only.
+- `PLAY_LLM_PROXY_PUBLIC_URL` -- Public base URL for the Play LLM proxy that E2B sandboxes can reach (e.g. Render or a tunnel). Required for Claude Code; sandboxes cannot call `localhost`
+- `PLAY_ANTHROPIC_MODEL` -- Optional default model for Claude Code in Play sandboxes
+- `ANTHROPIC_API_KEY` -- Org Anthropic key used by the Play Messages proxy (never written into the sandbox)
+
 **Billing:**
 - `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_PRICE_ID` / `APP_URL` -- Stripe billing
 
@@ -254,6 +291,22 @@ server/src/
 │   │   ├── judge.ts           # One-shot LLM judge (stdout/source/HTTP seed)
 │   │   ├── agentJudge.ts      # Tool-using judge (run_command/read_file in sandbox, then finish)
 │   │   └── artifacts.ts       # collectJudgeArtifacts + bashLc helpers
+│   ├── play/
+│   │   ├── challenges.ts      # Play daily challenge CRUD + UTC today lookup
+│   │   ├── sandbox.ts         # Play E2B create/getUrls/kill (custom template)
+│   │   ├── sessions.ts        # Create/resume build sessions + response shaping
+│   │   ├── submissions.ts     # Snapshot workspace → PlaySubmission (rejects starter-only)
+│   │   ├── starterDetection.ts # Heuristics for unchanged / near-empty Play starter
+│   │   ├── voting.ts          # Public gallery, pairwise votes, Bayesian ranking, leaderboard
+│   │   ├── bayesianRating.ts  # TrueSkill-style 1v1 updates + matchmaking heuristic
+│   │   ├── ratingConstants.ts # Shared μ/σ defaults + round size caps
+│   │   ├── llmProxy.ts        # Anthropic Messages proxy + token budget + claude -p relay
+│   │   ├── claudeProvision.ts # Write Claude settings + ANTHROPIC_BASE_URL/AUTH_TOKEN in sandbox
+│   │   ├── workspaceFiles.ts  # List/read/write E2B project files for Monaco sync
+│   │   ├── models.ts          # Allowed Claude models / aliases for Play
+│   │   ├── terminal.ts        # Multi-PTY bridge (shell/preview; unused by Play Build UI)
+│   │   ├── sessionPersist.ts  # Claude chat + workspace snapshot save/restore for resume
+│   │   └── index.ts
 │   ├── gradingEvidence/
 │   │   └── storage.ts         # Artifact storage abstraction for behavioral grading reports/screenshots
 │   ├── capture/
@@ -311,6 +364,8 @@ server/src/
     ├── generateDummyConversation.ts
     ├── listSubmissions.ts
     ├── seedCompetition.ts   # Link Mongo Competition slug → assessment (hackathon dashboard)
+    ├── seedPlayChallenge.ts # Upsert Play daily challenge from play/challenges/*.json
+    ├── play-sandbox-smoke.ts # Create Play E2B template sandbox; print preview URL + Claude check
     ├── replaceSubmissionWithGeneratedMarkdown.ts
     ├── replaceTraceWithMarkdown.ts
     ├── seedDummyInterview.ts
@@ -341,6 +396,38 @@ server/src/
 - `GET /:slug` -- Competition + assessment summary for hackathon dashboard (metadata, rules, dates)
 - `POST /:slug/join` -- Self-serve registration: creates a **pending** submission (same as employer generate-link) and returns `token` + `shareLink`; does **not** apply employer free-tier submission limits; stricter rate limit in production (30/hour/IP); duplicate email per assessment returns 409
 - `GET /:slug/leaderboard` -- Public leaderboard for submitted candidates (rank by `scores.overall`, then completeness, then workflow overall score); top 50 default, `?limit=` max 100; respects `leaderboardPublic` on the competition document
+
+**Play routes** (`/api/play`, consumer product — requires `PLAY_ENABLED=true` except health):
+- `GET /health` -- Always on; smoke check `{ ok: true, product: "play" }`
+- `GET /today` -- Published challenge for the current period (`PLAY_CHALLENGE_CADENCE`); includes `cadence` + `periodEndsAt`; 404 `{ error: "no_challenge_today" }` if none
+- `GET /period` -- `{ cadence, periodKey, periodEndsAt, label }` for clients
+- `GET /admin/challenges` -- List challenges (Firebase + `PLAY_ADMIN_EMAIL`; query: `limit`, `from`, `to`, `status`)
+- `GET /admin/challenges/:slug` -- Single challenge (admin)
+- `POST /admin/challenges` -- Create challenge (admin)
+- `PATCH /admin/challenges/:slug` -- Update challenge (admin)
+- `POST /session` -- Create or resume E2B build session (`{ anonymousId }`); returns `previewUrl`, `chatMessages`, `expiresAt` (wall-clock build limit); reconnects sandbox or restores `workspaceSnapshot` if box died; provisions Claude `ANTHROPIC_*` + `llmProxyToken`. When running seats are full: **503** `{ code: "session_queue", activeCount, maxConcurrent, estimatedWaitSeconds }` (client waitlist polls)
+- `POST /session/:id/pause` -- Pause E2B sandbox while user leaves Build (`{ anonymousId }`); session stays active until end of UTC day
+- `POST /session/:id/resume` -- Resume paused sandbox / keep-alive running box; refresh `previewUrl`
+- `GET /session/:id/usage` -- Token meter (`?anonymousId=`) → `{ tokensUsed, tokenBudget, remaining, exhausted }`
+- `GET /session/:id/files` -- List workspace files for Monaco (`?anonymousId=`)
+- `GET /session/:id/file` -- Read one file (`?anonymousId=&path=`)
+- `PUT /session/:id/file` -- Write one file (`{ anonymousId, path, content }`) into E2B; upserts session `workspaceSnapshot`
+- `GET /session/:id/workspace-revision` -- Workspace fingerprint for preview refresh (`?anonymousId=`)
+- `POST /session/:id/llm/v1/messages` -- Anthropic-compatible Messages proxy for Claude Code in E2B (Bearer `llmProxyToken`); streams; increments `tokensUsed`; **429** when over `tokenBudget`
+- `POST /session/:id/claude/message` -- Chat relay: run `claude -p` in sandbox (`{ anonymousId, prompt }`); appends `chatMessages` + refreshes `workspaceSnapshot`; returns stdout text
+- `POST /session/:id/terminal` -- Create/resume named E2B PTY (unused by Build UI; kept for possible future use)
+- `GET /session/:id/terminals` -- List terminal tabs (`?anonymousId=`)
+- `GET /session/:id/terminal/stream` -- SSE PTY output (`?anonymousId=&terminalId=&pid=`)
+- `POST /session/:id/terminal/input` -- Send keystrokes to PTY
+- `POST /session/:id/terminal/resize` -- Resize PTY
+- `POST /submit` -- Snapshot workspace files into `PlaySubmission` (`{ sessionId, anonymousId, displayName }`), mark session submitted, kill sandbox; **400** `{ code: "starter_only" }` if snapshot is still the unchanged / near-empty starter
+- `GET /submissions` -- Public gallery list (`challengeDate`, `limit`, `anonymousId`); metadata only (no `files`)
+- `GET /submissions/:id` -- Public submission detail including `files` for blob `index.html` preview
+- `GET /admin/submissions` -- List submissions (admin; query `challengeDate`, `limit`; omits `files`)
+- `GET /admin/submissions/:id` -- Full submission including `files` (admin)
+- `GET /vote/next` -- Next pairwise pair (`anonymousId`, optional `challengeDate`, `preferId`); requires same-day submit; returns round counter (`n/5`)
+- `POST /vote` -- Cast pairwise vote (Bayesian rating update); every 5th vote returns round ranking recap; max 25 votes/day
+- `GET /leaderboard` -- Rankings by conservative Bayesian score `μ−3σ` (`challengeDate`, `limit`, `anonymousId`)
 
 **Submission routes** (`/api/submissions`):
 
@@ -596,6 +683,33 @@ LLM Workflow: `llmWorkflow` { trace { sessionId (sparse indexed), events[] { tim
 Behavioral grading: `behavioralGradingStatus` (`pending`/`completed`/`failed`), `behavioralGradingError`, `behavioralGradingReport` (runbook summary, per-check verdict/evidence, artifact keys, timings, sandbox metadata)
 
 Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`, `{ "interview.conversationId": 1 }` (sparse), `{ "llmWorkflow.trace.sessionId": 1 }` (sparse)
+
+### PlayChallenge (bridge-play DB)
+Fields: `slug` (unique, lowercase `a-z0-9-`), `challengeDate` (unique, `YYYY-MM-DD` UTC), `title` (max 120), `prompt`, `tokenBudget`, `timeLimitMinutes` (optional), `category` (`widget`/`game`/`tool`/`other`), `status` (`draft`/`published`)
+
+Indexes: unique on `slug`, unique on `challengeDate`, `{ status: 1, challengeDate: -1 }`
+
+### PlayBuildSession (bridge-play DB)
+Fields: `anonymousId` (indexed), `challengeSlug`, `challengeDate` (`YYYY-MM-DD`), `status` (`provisioning`/`active`/`failed`/`expired`/`submitted`), `e2bSandboxId`, `previewUrl`, `vscodeUrl` (legacy; unused by Monaco Build UI), `tokenBudget`, `tokensUsed` (default 0), `llmProxyToken` (Bearer for Messages proxy; never returned to browser), `llmCalls` (optional counter), `startedAt`, `expiresAt` (wall-clock build limit: `min(startedAt + timeLimit, end of UTC day)`), `chatMessages[]` `{ role, text, createdAt }` (persisted Claude chat), `workspaceSnapshot[]` `{ path, content }` + `workspaceSnapshotAt` (file backup for sandbox recreate), `sandboxPaused` (bool; paused sessions excluded from concurrent cap), `error` (optional)
+
+Indexes: `{ anonymousId: 1, challengeDate: 1, status: 1 }`
+
+**Resume:** same `anonymousId` + challenge day reconnects the E2B sandbox when alive (or **paused** — connect resumes it); if the box is gone, a new sandbox is provisioned on the **same** session document and `workspaceSnapshot` is restored. Leaving Build pauses the sandbox after a short idle (`POST …/pause`); returning resumes it (`POST …/resume`). Auto-timeout also pauses (not kills) via E2B `lifecycle.onTimeout=pause`. Claude chat survives refresh via `chatMessages`. Wall-clock build countdown until `expiresAt`; after that the session is expired and the sandbox is killed.
+
+### PlaySubmission (bridge-play DB)
+Fields: `anonymousId` (indexed), `displayName` (max 40), `challengeSlug`, `challengeDate`, `sessionId`, `files[]` `{ path, content }`, `fileCount`, `totalBytes`, `submittedAt`, Bayesian rating: `ratingMean` (μ, default 25), `ratingDeviation` (σ, default 25/3), `rankingScore` (μ−3σ), `wins`, `losses`, `matches`
+
+Indexes: unique `{ anonymousId: 1, challengeDate: 1 }`, `{ challengeDate: -1, submittedAt: -1 }`, `{ challengeDate: 1, rankingScore: -1 }`
+
+### PlayVote (bridge-play DB)
+Fields: `anonymousId`, `challengeDate`, `winnerId`, `loserId` (refs PlaySubmission), `pairKey` (`minId:maxId`), timestamps
+
+Indexes: unique `{ anonymousId: 1, challengeDate: 1, pairKey: 1 }`, `{ challengeDate: 1, createdAt: -1 }`
+
+### PlayVoteRound (bridge-play DB)
+Fields: `anonymousId`, `challengeDate`, `roundIndex`, `rankSnapshot` (Map of submissionId → `{ rank, score, displayName }` at round start), `seenSubmissionIds[]`, `votesInRound`, `completed`
+
+Indexes: unique `{ anonymousId: 1, challengeDate: 1, roundIndex: 1 }`
 
 ### TaskConfig
 Fields: `taskId` (unique, indexed), `taskName`, `description`, `files[]` { path, content (base64), isHidden }, `tests` { command, timeout (default 30000), hiddenTests[] { name, test code } }, `weights` { correctness (40), efficiency (20), promptQuality (15), structure (20), reliability (5) }, `language`, `difficulty` (easy/medium/hard), `estimatedTime`
