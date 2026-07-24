@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { fetchLeaderboard } from "@/api/vote";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
 import { fetchChallengePeriod } from "@/lib/challengePeriod";
-import PlayHeader from "@/components/PlayHeader";
+import ShortsHeader from "@/components/ShortsHeader";
 
 const TOP_DOT = {
   1: "bg-accent-amber",
@@ -79,7 +79,7 @@ export default function Leaderboard() {
 
   return (
     <div className="min-h-screen bg-paper">
-      <PlayHeader active="leaderboard" cta={{ label: "Vote", to: "/Vote" }} />
+      <ShortsHeader active="leaderboard" cta={{ label: "Vote", to: "/Vote" }} />
 
       <main className="mx-auto max-w-3xl px-6 py-8">
         <div className="mb-8 flex flex-wrap items-end justify-between gap-4">

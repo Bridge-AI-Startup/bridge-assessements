@@ -8,7 +8,7 @@ import {
   fetchChallengePeriod,
   periodNoun,
 } from "@/lib/challengePeriod";
-import PlayHeader from "@/components/PlayHeader";
+import ShortsHeader from "@/components/ShortsHeader";
 
 function PreviewPane({ card, side, onPick, disabled }) {
   const preview = useSubmissionPreview({
@@ -211,9 +211,9 @@ export default function Vote() {
 
   return (
     <div className="flex min-h-screen flex-col bg-paper">
-      <PlayHeader active="vote">
+      <ShortsHeader active="vote">
         <RoundMeter round={round} periodLabel={periodLabel} />
-      </PlayHeader>
+      </ShortsHeader>
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-6 py-6">
         {error && (

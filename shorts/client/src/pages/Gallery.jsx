@@ -6,7 +6,7 @@ import {
   fetchChallengePeriod,
   periodPossessive,
 } from "@/lib/challengePeriod";
-import PlayHeader from "@/components/PlayHeader";
+import ShortsHeader from "@/components/ShortsHeader";
 import SubmissionCard from "@/components/gallery/SubmissionCard";
 
 export default function Gallery() {
@@ -82,7 +82,7 @@ export default function Gallery() {
 
   return (
     <div className="min-h-screen bg-paper">
-      <PlayHeader
+      <ShortsHeader
         active="browse"
         cta={{ label: "Start voting", to: "/Vote" }}
       />

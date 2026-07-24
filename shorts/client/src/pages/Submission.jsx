@@ -4,7 +4,7 @@ import { getSubmission } from "@/api/submissions";
 import { shouldFetchSubmissionFiles } from "@/config/submissionPreview";
 import { useSubmissionPreview } from "@/lib/useSubmissionPreview";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
-import PlayHeader from "@/components/PlayHeader";
+import ShortsHeader from "@/components/ShortsHeader";
 
 export default function Submission() {
   const [searchParams] = useSearchParams();
@@ -60,7 +60,7 @@ export default function Submission() {
 
   return (
     <div className="min-h-screen bg-paper">
-      <PlayHeader active="browse" cta={cta} />
+      <ShortsHeader active="browse" cta={cta} />
 
       <main className="mx-auto max-w-5xl px-6 py-8">
         <Link to="/Gallery" className="label-mono hover:text-ink">

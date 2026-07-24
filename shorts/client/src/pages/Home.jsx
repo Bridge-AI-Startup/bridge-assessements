@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { fetchTodayChallenge } from "@/api/challenge";
 import { listSubmissions } from "@/api/submissions";
-import PlayHeader from "@/components/PlayHeader";
+import ShortsHeader from "@/components/ShortsHeader";
 import SubmissionCard from "@/components/gallery/SubmissionCard";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
 import {
@@ -124,7 +124,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-paper">
-      <PlayHeader active={null} />
+      <ShortsHeader active={null} />
 
       <main className="mx-auto max-w-6xl px-6 py-12 lg:py-16">
         {state.kind === "loading" && (

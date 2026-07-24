@@ -7,10 +7,10 @@ const NAV = [
 ];
 
 /**
- * Shared Play nav — matches bridge-jobs.com mono uppercase labels + pill CTA.
+ * Shared Shorts nav — matches bridge-jobs.com mono uppercase labels + pill CTA.
  * @param {{ active?: "browse"|"vote"|"leaderboard"|null, cta?: { label: string, to: string }|null, children?: import("react").ReactNode }} props
  */
-export default function PlayHeader({ active = null, cta = null, children = null }) {
+export default function ShortsHeader({ active = null, cta = null, children = null }) {
   return (
     <header className="border-b border-line bg-paper">
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-4">
@@ -20,7 +20,7 @@ export default function PlayHeader({ active = null, cta = null, children = null 
             className="shrink-0 text-[15px] font-semibold tracking-tight"
           >
             <span className="text-ink">Bridge</span>{" "}
-            <span className="text-fog-light">Play</span>
+            <span className="text-fog-light">Shorts</span>
           </Link>
           <nav className="hidden items-center gap-5 sm:flex">
             {NAV.map((item) => (
