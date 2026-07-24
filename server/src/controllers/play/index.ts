@@ -572,8 +572,11 @@ function parseIncludeFilesFlag(
 
 function buildPlayPreviewFrameAncestors(): string {
   const candidates = [
+    process.env.SHORTS_FRONTEND_URL,
     process.env.PLAY_FRONTEND_URL,
+    "https://shorts.bridge-jobs.com",
     "https://play.bridge-jobs.com",
+    "https://bridge-play.vercel.app",
     "http://localhost:5174",
   ];
   const origins = new Set<string>();

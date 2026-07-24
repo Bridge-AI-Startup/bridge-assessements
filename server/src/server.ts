@@ -63,11 +63,14 @@ console.log("🔌 Setting up CORS middleware...");
 const allowedOrigins = [
   // Production domains
   process.env.FRONTEND_URL,
-  process.env.PLAY_FRONTEND_URL,
+  process.env.SHORTS_FRONTEND_URL,
+  process.env.PLAY_FRONTEND_URL, // legacy alias
   "https://app.bridge-jobs.com", // React app (app subdomain)
   "https://www.bridge-jobs.com",
   "https://bridge-jobs.com", // Framer marketing (root domain)
-  "https://play.bridge-jobs.com", // Play consumer app
+  "https://shorts.bridge-jobs.com", // Shorts consumer app
+  "https://play.bridge-jobs.com", // legacy Shorts subdomain
+  "https://bridge-play.vercel.app", // Shorts Vercel default host
   "https://bridge-landing-saazms-projects.vercel.app",
   "https://bridge-landing-7dg0wxh94-saazms-projects.vercel.app",
   // Development
