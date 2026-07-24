@@ -291,6 +291,24 @@ export const publicGetSubmissionValidation = [
     .trim()
     .isLength({ min: 8, max: 128 })
     .withMessage("anonymousId must be 8–128 characters"),
+  query("includeFiles")
+    .optional()
+    .isBoolean()
+    .withMessage("includeFiles must be a boolean")
+    .toBoolean(),
+];
+
+export const previewSubmissionFileValidation = [
+  param("id")
+    .trim()
+    .notEmpty()
+    .isMongoId()
+    .withMessage("invalid submission id"),
+  param("revision")
+    .trim()
+    .notEmpty()
+    .matches(/^\d{10,16}$/)
+    .withMessage("revision must be a 10–16 digit integer string"),
 ];
 
 export const voteNextValidation = [
@@ -307,6 +325,11 @@ export const voteNextValidation = [
     .optional()
     .isMongoId()
     .withMessage("preferId must be a valid submission id"),
+  query("includeFiles")
+    .optional()
+    .isBoolean()
+    .withMessage("includeFiles must be a boolean")
+    .toBoolean(),
 ];
 
 export const castVoteValidation = [
@@ -330,6 +353,11 @@ export const castVoteValidation = [
     .notEmpty()
     .isMongoId()
     .withMessage("loserId must be a valid submission id"),
+  body("includeFiles")
+    .optional()
+    .isBoolean()
+    .withMessage("includeFiles must be a boolean")
+    .toBoolean(),
 ];
 
 export const leaderboardValidation = [

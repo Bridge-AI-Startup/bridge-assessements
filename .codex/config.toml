@@ -1,0 +1,6 @@
+[mcp_servers.mongodb-mcp-server]
+command = "npx"
+args = ["mongodb-mcp-server"]
+
+[mcp_servers.mongodb-mcp-server.env]
+MDB_MCP_CONNECTION_STRING = "mongodb+srv://Saaz:aLYPqISmCkhoKNPc@cluster0.aafx9z6.mongodb.net/?appName=Cluster0"

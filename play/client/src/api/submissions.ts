@@ -1,4 +1,5 @@
 import { get } from "@/api/requests";
+import { shouldFetchSubmissionFiles } from "@/config/submissionPreview";
 
 export type PublicSubmissionSummary = {
   id: string;
@@ -8,6 +9,7 @@ export type PublicSubmissionSummary = {
   fileCount: number;
   totalBytes: number;
   submittedAt: string;
+  previewRevision: string;
   score: number;
   wins: number;
   losses: number;
@@ -18,7 +20,7 @@ export type PublicSubmissionSummary = {
 };
 
 export type PublicSubmissionDetail = PublicSubmissionSummary & {
-  files: Array<{ path: string; content: string }>;
+  files?: Array<{ path: string; content: string }>;
 };
 
 export async function listSubmissions(options: {
@@ -43,10 +45,23 @@ export async function listSubmissions(options: {
 
 export async function getSubmission(
   id: string,
-  anonymousId?: string,
+  options:
+    | string
+    | {
+        anonymousId?: string;
+        includeFiles?: boolean;
+      } = {},
 ): Promise<PublicSubmissionDetail> {
+  // Backward-compatible: second arg used to be anonymousId string.
+  const normalized =
+    typeof options === "string"
+      ? { anonymousId: options }
+      : options || {};
+  const includeFiles =
+    normalized.includeFiles ?? shouldFetchSubmissionFiles;
   const qs = new URLSearchParams();
-  if (anonymousId) qs.set("anonymousId", anonymousId);
+  if (normalized.anonymousId) qs.set("anonymousId", normalized.anonymousId);
+  qs.set("includeFiles", includeFiles ? "true" : "false");
   const suffix = qs.toString() ? `?${qs}` : "";
   const res = await get(`/submissions/${id}${suffix}`);
   if (res.status === 404) {

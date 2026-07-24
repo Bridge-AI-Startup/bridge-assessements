@@ -20,6 +20,7 @@ import {
 import WorkspaceEditor from "@/components/workspace/WorkspaceEditor";
 import ModelEffortPicker from "@/components/workspace/ModelEffortPicker";
 import ChatFirstBuild from "@/components/workspace/ChatFirstBuild";
+import SessionWaitlist from "@/components/SessionWaitlist";
 
 const DEFAULT_LEFT_STACK = ["editor", "chat"];
 const DEFAULT_LEFT_SIZES = { editor: 55, chat: 45 };
@@ -842,39 +843,12 @@ export default function Build() {
 
   if (state.kind === "queued") {
     const q = state.queue;
-    const seatsFull =
-      q.maxConcurrent > 0
-        ? `${q.activeCount} / ${q.maxConcurrent} seats in use`
-        : "All build seats are busy";
-    const waitHint =
-      q.estimatedWaitSeconds >= 60
-        ? `~${Math.ceil(q.estimatedWaitSeconds / 60)} min`
-        : `~${q.estimatedWaitSeconds}s`;
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-paper p-6">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-line border-t-ink" />
-        <p className="mt-4 text-[22px] font-medium tracking-tight text-ink">
-          You&apos;re on the waitlist
-        </p>
-        <p className="mt-2 max-w-md text-center text-sm text-fog">
-          {seatsFull}. A seat frees when someone leaves, submits, or their time
-          runs out — we&apos;ll start your workspace automatically.
-        </p>
-        <p className="label-mono mt-4">Typical wait {waitHint}</p>
-        <button
-          type="button"
-          onClick={() => {
-            setState({ kind: "provisioning" });
-            void loadSession();
-          }}
-          className="btn-pill-secondary mt-6"
-        >
-          Check now
-        </button>
-        <Link to="/" className="mt-4 text-sm text-fog-light hover:underline">
-          Back to Home
-        </Link>
-      </div>
+      <SessionWaitlist
+        activeCount={q.activeCount}
+        maxConcurrent={q.maxConcurrent}
+        estimatedWaitSeconds={q.estimatedWaitSeconds}
+      />
     );
   }
 

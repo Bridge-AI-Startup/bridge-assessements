@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { castVote, fetchVoteNext } from "@/api/vote";
-import { buildPreviewBlobUrl } from "@/lib/previewBlob";
+import { shouldFetchSubmissionFiles } from "@/config/submissionPreview";
+import { useSubmissionPreview } from "@/lib/useSubmissionPreview";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
 import {
   fetchChallengePeriod,
@@ -10,16 +11,11 @@ import {
 import PlayHeader from "@/components/PlayHeader";
 
 function PreviewPane({ card, side, onPick, disabled }) {
-  const preview = useMemo(() => {
-    if (!card?.files?.length) return null;
-    return buildPreviewBlobUrl(card.files);
-  }, [card]);
-
-  useEffect(() => {
-    return () => {
-      preview?.revoke?.();
-    };
-  }, [preview]);
+  const preview = useSubmissionPreview({
+    submissionId: card?.id,
+    previewRevision: card?.previewRevision ?? card?.submittedAt,
+    files: card?.files,
+  });
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-line bg-paper shadow-card">
@@ -45,7 +41,7 @@ function PreviewPane({ card, side, onPick, disabled }) {
           title={`${side} preview`}
           src={preview.url}
           className="min-h-[280px] w-full flex-1 bg-paper"
-          sandbox="allow-scripts allow-same-origin"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
         />
       ) : (
         <div className="flex flex-1 items-center justify-center px-4 py-10 text-sm text-fog-light">
@@ -132,6 +128,7 @@ export default function Vote() {
         anonymousId,
         challengeDate,
         preferId,
+        includeFiles: shouldFetchSubmissionFiles,
       });
       if (result.pairAvailable) {
         setState({ kind: "pair", data: result });
@@ -163,6 +160,7 @@ export default function Vote() {
         challengeDate: date,
         winnerId: winner.id,
         loserId: loser.id,
+        includeFiles: shouldFetchSubmissionFiles,
       });
       if (result.recap) {
         setState({ kind: "recap", data: result });

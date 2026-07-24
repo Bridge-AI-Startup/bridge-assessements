@@ -4,6 +4,7 @@ import {
   post,
   readJsonBody,
 } from "@/api/requests";
+import { shouldFetchSubmissionFiles } from "@/config/submissionPreview";
 
 export type RoundProgress = {
   votesInRound: number;
@@ -22,7 +23,8 @@ export type VoteCard = {
   losses: number;
   matches: number;
   provisional: boolean;
-  files: Array<{ path: string; content: string }>;
+  previewRevision: string;
+  files?: Array<{ path: string; content: string }>;
 };
 
 export type VoteNextResponse =
@@ -122,10 +124,13 @@ export async function fetchVoteNext(options: {
   anonymousId: string;
   challengeDate?: string;
   preferId?: string;
+  includeFiles?: boolean;
 }): Promise<VoteNextResponse> {
+  const includeFiles = options.includeFiles ?? shouldFetchSubmissionFiles;
   const qs = new URLSearchParams({ anonymousId: options.anonymousId });
   if (options.challengeDate) qs.set("challengeDate", options.challengeDate);
   if (options.preferId) qs.set("preferId", options.preferId);
+  qs.set("includeFiles", includeFiles ? "true" : "false");
   const res = await get(`/vote/next?${qs}`);
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}`);
@@ -138,8 +143,13 @@ export async function castVote(body: {
   challengeDate?: string;
   winnerId: string;
   loserId: string;
+  includeFiles?: boolean;
 }): Promise<CastVoteResponse> {
-  const res = await post("/vote", body);
+  const payload = {
+    ...body,
+    includeFiles: body.includeFiles ?? shouldFetchSubmissionFiles,
+  };
+  const res = await post("/vote", payload);
   if (!res.ok) {
     const errorBody = await readJsonBody(res);
     throw new Error(getResponseErrorMessage(errorBody, res.status));

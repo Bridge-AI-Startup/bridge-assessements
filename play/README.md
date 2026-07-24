@@ -109,17 +109,22 @@ curl http://localhost:5050/api/play/today
 | POST | `/api/play/session/:id/terminal*` | — | PTY APIs still on server; **not used** by current Build UI |
 | GET | `/api/play/session/:id/workspace-revision` | — | Workspace fingerprint for preview refresh |
 | POST | `/api/play/submit` | — | Snapshot project files + kill sandbox (`{ sessionId, anonymousId, displayName }`). Rejects starter-only / near-empty snapshots with **400** `{ code: "starter_only" }` |
-| GET | `/api/play/submissions` | — | Public gallery list (`challengeDate`, `limit`, `anonymousId`); omit `files` |
-| GET | `/api/play/submissions/:id` | — | Public submission detail including `files` for blob preview |
-| GET | `/api/play/vote/next` | — | Next pairwise pair (`anonymousId`, optional `challengeDate`, `preferId`); requires same-day submit |
-| POST | `/api/play/vote` | — | Cast pairwise vote; Bayesian rating update; every 5th vote returns round recap |
+| GET | `/api/play/submissions` | — | Public gallery list (`challengeDate`, `limit`, `anonymousId`); omit `files`; includes `previewRevision` |
+| GET | `/api/play/submissions/:id` | — | Public submission detail (`previewRevision`; `includeFiles` default true) |
+| GET | `/api/play/preview/:id/:revision` | — | Serve stored `index.html` (immutable revision = `submittedAt` ms) |
+| GET | `/api/play/preview/:id/:revision/*` | — | Serve stored snapshot asset by exact relative path |
+| GET | `/api/play/vote/next` | — | Next pairwise pair (`anonymousId`, optional `challengeDate`, `preferId`, `includeFiles`); requires same-day submit |
+| POST | `/api/play/vote` | — | Cast pairwise vote; Bayesian rating update; optional `includeFiles`; every 5th vote returns round recap |
 | GET | `/api/play/leaderboard` | — | Rankings by conservative Bayesian score (`challengeDate`, `limit`, `anonymousId`) |
 | GET | `/api/play/admin/submissions` | Firebase + admin | List submissions (omit files; filter `challengeDate`) |
 | GET | `/api/play/admin/submissions/:id` | Firebase + admin | Full submission including `files[]` |
 
 ### Voting + leaderboard
 
-- **Browse** (`/Gallery`): date-scoped gallery; detail (`/Submission?id=`) previews `index.html` via client blob URLs.
+- **Browse** (`/Gallery`): date-scoped gallery; detail (`/Submission?id=`) previews via API-origin iframes by default (`GET /api/play/preview/:id/:revision/*`). Build-time live previews still use E2B.
+- **Preview mode toggle:** one hard-coded line in `play/client/src/config/submissionPreview.js` — `SUBMISSION_PREVIEW_MODE = "api"` (shipped) or `"blob"` (legacy client blob URLs; rollback = flip that line + redeploy Play client only). Shared hook: `play/client/src/lib/useSubmissionPreview.js`. Keep `previewBlob.js` intact for blob mode.
+- **Rate limit:** Play preview routes use a dedicated **3000 req / 15 min / IP** bucket (not the general 100/15 Play API limit).
+- **Known limitations:** API-mode localStorage is on the API origin (shared across submissions; blank on first switch from blob); relative asset paths only (root-absolute `/main.js` hits the API host root); text-only snapshots (no binary images/fonts/wasm).
 - **Vote** (`/Vote`): pairwise A/B (must have submitted that day). Visible **`n / 5` round counter**; fifth vote shows ranking-impact recap. Up to **25 weighted votes/day** (5 rounds). Swiss-style matchmaking (similar skill + exposure).
 - **Ranking**: TrueSkill-style Bayesian 1v1 (`ratingMean` μ, `ratingDeviation` σ); sort by `μ − 3σ`; public `score ≈ 1000 + 40·(μ−3σ)`; provisional until 5 matches.
 - No self-votes; one vote per unordered pair per voter per day.
@@ -143,7 +148,9 @@ On session create, Bridge provisions:
 
 **Build page:** Left stack (drag-reorder + resize): **Monaco editor** | **Claude Code** chat; **Preview** iframe on the right. Manual edits save to E2B (debounced) and into a session `workspaceSnapshot`; Claude edits refresh that snapshot. Chat turns are stored on the session and restored on reload. Session lasts until **submit** or the **wall-clock build limit** (`timeLimitMinutes` / `PLAY_BUILD_TIME_LIMIT_MINUTES`, default 10, never past period end). Build UI shows a **Time left** meter. Leaving Build **pauses** the E2B sandbox (after ~45s hidden / on navigate away); paused sessions don’t consume concurrent seats; returning **resumes** it. If the box is gone mid-window, resume recreates it and restores the snapshot. No user-facing terminal — Claude runs shell commands inside the sandbox. code-server is **not** in the Play template.
 
-**Local build flow:** Home → Start building → `/Build` provisions an E2B sandbox, opens editor + Claude + preview. **Submit** asks for a display name, snapshots `/home/user/project` into Mongo (`PlaySubmission`), and kills the sandbox. Admin → **Submissions** tab lists entries with file viewer + client-side blob preview.
+**Local build flow:** Home → Start building → `/Build` provisions an E2B sandbox, opens editor + Claude + preview. **Submit** asks for a display name, snapshots `/home/user/project` into Mongo (`PlaySubmission`), and kills the sandbox. Admin → **Submissions** tab lists entries with file viewer + iframe preview (API URL by default; still loads `files` for the inspector).
+
+**Deploy / rollback for saved previews:** Deploy backend (additive `/preview` route) first, then Play client with `SUBMISSION_PREVIEW_MODE = "api"`. Rollback never requires reverting API/Mongo — set the constant to `"blob"` and redeploy the Play client only (`includeFiles` defaults true for old clients).
 
 Requires `PLAY_ENABLED=true`, `E2B_API_KEY`, `ANTHROPIC_API_KEY`, `PLAY_LLM_PROXY_PUBLIC_URL`, and a built `PLAY_E2B_TEMPLATE_ID`. One active session per `localStorage` anonymous id + UTC challenge date.
 
@@ -161,7 +168,7 @@ curl -X POST http://localhost:5050/api/play/submit \
 
 ## E2B Play sandbox (template spike)
 
-Custom template with **static preview** (:8080) and **Claude Code CLI** (code-server removed). Grading still uses the default E2B image; Play uses `PLAY_E2B_TEMPLATE_ID`.
+Custom template with a **static preview** (:8080) and **Claude Code CLI** (code-server removed). The preview server sends `Cache-Control: no-store` so rebuilt JavaScript and CSS are never replaced by stale browser-cached starter assets. Grading still uses the default E2B image; Play uses `PLAY_E2B_TEMPLATE_ID`.
 
 ```bash
 # Build template (once, or when start.sh / starter changes)

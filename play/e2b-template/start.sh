@@ -9,7 +9,7 @@ cd "$WORKSPACE"
 
 # Preview stdout/stderr → log file for ops / smoke debugging.
 : > /tmp/preview.log
-python3 -m http.server 8080 --bind 0.0.0.0 >>/tmp/preview.log 2>&1 &
+python3 /home/user/preview-server.py 8080 >>/tmp/preview.log 2>&1 &
 PREVIEW_PID=$!
 
 # Ready when preview answers.

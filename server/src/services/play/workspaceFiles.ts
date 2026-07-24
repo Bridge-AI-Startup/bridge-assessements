@@ -7,6 +7,7 @@ import { Types } from "mongoose";
 import { getPlayBuildSessionModel } from "../../models/play/buildSession.js";
 import {
   PLAY_WORKSPACE,
+  PLAY_SNAPSHOT_SKIP_DIR_PATTERN,
   runPlayCommand,
   connectPlaySandbox,
 } from "./sandbox.js";
@@ -19,7 +20,7 @@ const LIST_MAX_FILES = 200;
 const READ_MAX_FILE_BYTES = 512 * 1024; // 512 KB
 const WRITE_MAX_FILE_BYTES = 512 * 1024;
 
-const SKIP_DIR_PATTERN = /(^|\/)(node_modules|\.git)(\/|$)/;
+const SKIP_DIR_PATTERN = PLAY_SNAPSHOT_SKIP_DIR_PATTERN;
 
 export type ProjectFileEntry = {
   path: string;
@@ -71,6 +72,7 @@ export async function listProjectFiles(
     `&& find . -maxdepth 8 -type f`,
     `! -path '*/node_modules/*'`,
     `! -path '*/.git/*'`,
+    `! -path '*/.claude/*'`,
     `| head -n ${LIST_MAX_FILES + 20}`,
   ].join(" ");
 

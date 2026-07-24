@@ -320,6 +320,7 @@ export async function getWorkspaceRevision(
     `&& find . -type f`,
     `! -path '*/node_modules/*'`,
     `! -path '*/.git/*'`,
+    `! -path '*/.claude/*'`,
     `| sort`,
     `| xargs -r stat -c '%n %Y %s' 2>/dev/null`,
     `| md5sum`,
@@ -345,7 +346,18 @@ const SNAPSHOT_MAX_FILES = 100;
 const SNAPSHOT_MAX_TOTAL_BYTES = 1.5 * 1024 * 1024; // 1.5 MB
 const SNAPSHOT_MAX_FILE_BYTES = 200 * 1024; // 200 KB
 
-const SKIP_DIR_PATTERN = /(^|\/)(node_modules|\.git)(\/|$)/;
+/** Never persist sandbox secrets / Claude session config into snapshots. */
+export const PLAY_SNAPSHOT_SKIP_DIR_PATTERN =
+  /(^|\/)(node_modules|\.git|\.claude)(\/|$)/;
+
+/** Strip paths that must never leave the sandbox (e.g. public submission APIs). */
+export function filterPlayPublicFiles<T extends { path: string }>(
+  files: T[] | null | undefined,
+): T[] {
+  return (files || []).filter(
+    (f) => f?.path && !PLAY_SNAPSHOT_SKIP_DIR_PATTERN.test(f.path),
+  );
+}
 
 function looksBinary(content: string): boolean {
   if (content.includes("\0")) return true;
@@ -369,6 +381,7 @@ export async function snapshotProjectFiles(
     `&& find . -maxdepth 8 -type f`,
     `! -path '*/node_modules/*'`,
     `! -path '*/.git/*'`,
+    `! -path '*/.claude/*'`,
     `| head -n ${SNAPSHOT_MAX_FILES + 20}`,
   ].join(" ");
 
@@ -386,7 +399,7 @@ export async function snapshotProjectFiles(
     .map((line) => line.trim())
     .filter(Boolean)
     .map((p) => (p.startsWith("./") ? p.slice(2) : p.replace(/^\.\//, "")))
-    .filter((p) => p && !SKIP_DIR_PATTERN.test(p));
+    .filter((p) => p && !PLAY_SNAPSHOT_SKIP_DIR_PATTERN.test(p));
 
   if (relativePaths.length === 0) {
     throw new Error("Project snapshot is empty");

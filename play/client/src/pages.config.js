@@ -5,6 +5,7 @@ import Leaderboard from "./pages/Leaderboard";
 import Gallery from "./pages/Gallery";
 import Submission from "./pages/Submission";
 import Admin from "./pages/Admin";
+import QueuePreview from "./pages/QueuePreview";
 
 export const PAGES = {
   Home,
@@ -14,6 +15,7 @@ export const PAGES = {
   Gallery,
   Submission,
   Admin,
+  QueuePreview,
 };
 
 export const pagesConfig = {

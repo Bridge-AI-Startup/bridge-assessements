@@ -3,7 +3,7 @@ import { Template, waitForPort } from "e2b";
 /**
  * Play sandbox golden image:
  * - Node 22 base
- * - static preview (python http.server) on :8080
+ * - static no-cache preview (Python ThreadingHTTPServer) on :8080
  * - Claude Code CLI on PATH
  * - starter project at `/home/user/project`
  *
@@ -29,6 +29,10 @@ export const template = Template()
   )
   .makeDir("/home/user/project", { mode: 0o755 })
   .copy("starter-project/", "/home/user/project/")
+  .copy("preview-server.py", "/home/user/preview-server.py", {
+    mode: 0o755,
+    user: "root",
+  })
   .copy("start.sh", "/home/user/start.sh", { mode: 0o755, user: "root" })
   // Claude Code CLI — native installer (Anthropic recommended as of 2026).
   // Fallback if native fails: npm install -g @anthropic-ai/claude-code

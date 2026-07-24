@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { authGet } from "@/api/requests";
-import { buildPreviewBlobUrl } from "@/lib/previewBlob";
+import { useSubmissionPreview } from "@/lib/useSubmissionPreview";
 import { fetchChallengePeriod } from "@/lib/challengePeriod";
 
 function formatBytes(n) {
@@ -100,16 +100,11 @@ export default function AdminSubmissions() {
     };
   }, [selectedId]);
 
-  const preview = useMemo(() => {
-    if (!detail?.files?.length) return null;
-    return buildPreviewBlobUrl(detail.files);
-  }, [detail]);
-
-  useEffect(() => {
-    return () => {
-      preview?.revoke?.();
-    };
-  }, [preview]);
+  const preview = useSubmissionPreview({
+    submissionId: detail?.id,
+    previewRevision: detail?.previewRevision ?? detail?.submittedAt,
+    files: detail?.files,
+  });
 
   const selectedFile = detail?.files?.find((f) => f.path === selectedPath);
 
@@ -239,7 +234,7 @@ export default function AdminSubmissions() {
                   <iframe
                     title="Submission preview"
                     src={preview.url}
-                    sandbox="allow-scripts"
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
                     className="h-64 w-full border-0 bg-paper"
                   />
                 ) : (

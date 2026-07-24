@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { getSubmission } from "@/api/submissions";
-import { buildPreviewBlobUrl } from "@/lib/previewBlob";
+import { shouldFetchSubmissionFiles } from "@/config/submissionPreview";
+import { useSubmissionPreview } from "@/lib/useSubmissionPreview";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
 import PlayHeader from "@/components/PlayHeader";
 
@@ -24,7 +25,10 @@ export default function Submission() {
       setLoading(true);
       setError(null);
       try {
-        const result = await getSubmission(id, anonymousId);
+        const result = await getSubmission(id, {
+          anonymousId,
+          includeFiles: shouldFetchSubmissionFiles,
+        });
         if (!cancelled) setDetail(result);
       } catch (err) {
         if (!cancelled) {
@@ -40,16 +44,11 @@ export default function Submission() {
     };
   }, [id, anonymousId]);
 
-  const preview = useMemo(() => {
-    if (!detail?.files?.length) return null;
-    return buildPreviewBlobUrl(detail.files);
-  }, [detail]);
-
-  useEffect(() => {
-    return () => {
-      preview?.revoke?.();
-    };
-  }, [preview]);
+  const preview = useSubmissionPreview({
+    submissionId: detail?.id,
+    previewRevision: detail?.previewRevision ?? detail?.submittedAt,
+    files: detail?.files,
+  });
 
   const cta =
     detail && !detail.isMine
@@ -105,7 +104,7 @@ export default function Submission() {
                     title="Submission preview"
                     src={preview.url}
                     className="h-[70vh] w-full bg-paper"
-                    sandbox="allow-scripts allow-same-origin"
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
                   />
                 ) : (
                   <div className="px-4 py-16 text-center text-sm text-fog-light">

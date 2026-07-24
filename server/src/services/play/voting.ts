@@ -19,6 +19,8 @@ import {
   getCurrentPeriodKey,
   getPlayChallengeCadence,
 } from "./challengePeriod.js";
+import { getPlayPreviewRevision } from "./preview.js";
+import { filterPlayPublicFiles } from "./sandbox.js";
 
 type LeanSubmission = {
   _id: Types.ObjectId;
@@ -46,6 +48,7 @@ export type PublicSubmissionSummary = {
   fileCount: number;
   totalBytes: number;
   submittedAt: string;
+  previewRevision: string;
   score: number;
   wins: number;
   losses: number;
@@ -56,7 +59,7 @@ export type PublicSubmissionSummary = {
 };
 
 export type PublicSubmissionDetail = PublicSubmissionSummary & {
-  files: Array<{ path: string; content: string }>;
+  files?: Array<{ path: string; content: string }>;
 };
 
 export type RoundProgress = {
@@ -76,7 +79,8 @@ export type VoteCard = {
   losses: number;
   matches: number;
   provisional: boolean;
-  files: Array<{ path: string; content: string }>;
+  previewRevision: string;
+  files?: Array<{ path: string; content: string }>;
 };
 
 export type VoteNextResult =
@@ -166,6 +170,7 @@ function toPublicSummary(
     fileCount: doc.fileCount,
     totalBytes: doc.totalBytes,
     submittedAt: new Date(doc.submittedAt).toISOString(),
+    previewRevision: getPlayPreviewRevision(doc.submittedAt),
     score: publicScoreFrom(r.rankingScore),
     wins: r.wins,
     losses: r.losses,
@@ -178,9 +183,12 @@ function toPublicSummary(
   };
 }
 
-function toVoteCard(doc: LeanSubmission): VoteCard {
+function toVoteCard(
+  doc: LeanSubmission,
+  includeFiles = true,
+): VoteCard {
   const r = ensureRating(doc);
-  return {
+  const card: VoteCard = {
     id: String(doc._id),
     displayName: doc.displayName,
     score: publicScoreFrom(r.rankingScore),
@@ -188,8 +196,15 @@ function toVoteCard(doc: LeanSubmission): VoteCard {
     losses: r.losses,
     matches: r.matches,
     provisional: isProvisional(r.matches),
-    files: (doc.files || []).map((f) => ({ path: f.path, content: f.content })),
+    previewRevision: getPlayPreviewRevision(doc.submittedAt),
   };
+  if (includeFiles) {
+    card.files = filterPlayPublicFiles(doc.files || []).map((f) => ({
+      path: f.path,
+      content: f.content,
+    }));
+  }
+  return card;
 }
 
 async function countVotesToday(
@@ -359,17 +374,21 @@ async function selectPair(input: {
   anonymousId: string;
   challengeDate: string;
   preferId?: string;
+  includeFiles?: boolean;
 }): Promise<[LeanSubmission, LeanSubmission] | null> {
   const Submission = getPlaySubmissionModel();
   const Vote = getPlayVoteModel();
+  const includeFiles = input.includeFiles !== false;
+
+  const selectFields = includeFiles
+    ? "anonymousId displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches files"
+    : "anonymousId displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches";
 
   const candidates = (await Submission.find({
     challengeDate: input.challengeDate,
     anonymousId: { $ne: input.anonymousId },
   })
-    .select(
-      "anonymousId displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches files",
-    )
+    .select(selectFields)
     .lean()) as LeanSubmission[];
 
   if (candidates.length < 2) return null;
@@ -488,12 +507,20 @@ export async function listPublicSubmissions(options: {
 export async function getPublicSubmissionById(
   id: string,
   anonymousId?: string,
+  options: { includeFiles?: boolean } = {},
 ): Promise<PublicSubmissionDetail> {
   if (!Types.ObjectId.isValid(id)) {
     throw createHttpError(400, "invalid submission id");
   }
+  const includeFiles = options.includeFiles !== false;
   const Submission = getPlaySubmissionModel();
-  const doc = (await Submission.findById(id).lean()) as LeanSubmission | null;
+  const selectFields = includeFiles
+    ? undefined
+    : "anonymousId displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches";
+  const doc = (await (includeFiles
+    ? Submission.findById(id)
+    : Submission.findById(id).select(selectFields!)
+  ).lean()) as LeanSubmission | null;
   if (!doc) {
     throw createHttpError(404, "submission_not_found");
   }
@@ -502,13 +529,16 @@ export async function getPublicSubmissionById(
   const rank =
     ranked.findIndex((d) => String(d._id) === String(doc._id)) + 1 || undefined;
 
-  return {
+  const detail: PublicSubmissionDetail = {
     ...toPublicSummary(doc, { rank, anonymousId }),
-    files: (doc.files || []).map((f) => ({
+  };
+  if (includeFiles) {
+    detail.files = filterPlayPublicFiles(doc.files || []).map((f) => ({
       path: f.path,
       content: f.content,
-    })),
-  };
+    }));
+  }
+  return detail;
 }
 
 export async function getLeaderboard(options: {
@@ -556,11 +586,13 @@ export async function getNextVotePair(input: {
   anonymousId: string;
   challengeDate?: string;
   preferId?: string;
+  includeFiles?: boolean;
 }): Promise<VoteNextResult> {
   const anonymousId = input.anonymousId.trim();
   if (!anonymousId) {
     throw createHttpError(400, "anonymousId is required");
   }
+  const includeFiles = input.includeFiles !== false;
   const challengeDate = input.challengeDate || getCurrentPeriodKey();
   const votesToday = await countVotesToday(anonymousId, challengeDate);
   const round = buildRoundProgress(votesToday);
@@ -630,6 +662,7 @@ export async function getNextVotePair(input: {
     anonymousId,
     challengeDate,
     preferId: input.preferId,
+    includeFiles,
   });
 
   if (!pair) {
@@ -653,8 +686,8 @@ export async function getNextVotePair(input: {
   return {
     pairAvailable: true,
     challengeDate,
-    left: toVoteCard(pair[0]),
-    right: toVoteCard(pair[1]),
+    left: toVoteCard(pair[0], includeFiles),
+    right: toVoteCard(pair[1], includeFiles),
     round: displayRound,
     canVote: true,
     // After this vote is served, remaining includes this pair until cast.
@@ -783,10 +816,12 @@ export async function castVote(input: {
   challengeDate?: string;
   winnerId: string;
   loserId: string;
+  includeFiles?: boolean;
 }): Promise<CastVoteResult> {
   const anonymousId = input.anonymousId.trim();
   const winnerId = input.winnerId.trim();
   const loserId = input.loserId.trim();
+  const includeFiles = input.includeFiles !== false;
   if (!anonymousId) {
     throw createHttpError(400, "anonymousId is required");
   }
@@ -951,7 +986,11 @@ export async function castVote(input: {
     };
   }
 
-  const next = await getNextVotePair({ anonymousId, challengeDate });
+  const next = await getNextVotePair({
+    anonymousId,
+    challengeDate,
+    includeFiles,
+  });
   if (next.pairAvailable) {
     return {
       recorded: true,

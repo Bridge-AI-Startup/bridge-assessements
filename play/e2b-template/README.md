@@ -10,7 +10,7 @@ Workspace path: `/home/user/project` (E2B default user cannot write `/workspace`
 
 | Port | Service |
 |------|---------|
-| 8080 | `python3 -m http.server` serving `/home/user/project` (stdout/stderr → `/tmp/preview.log`) |
+| 8080 | `preview-server.py` serving `/home/user/project` with `Cache-Control: no-store` (stdout/stderr → `/tmp/preview.log`) |
 
 Also installed: Node 22, Python 3, Claude Code CLI (`claude` on PATH).
 

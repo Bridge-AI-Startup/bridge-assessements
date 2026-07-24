@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { getSubmission } from "@/api/submissions";
-import { buildPreviewBlobUrl } from "@/lib/previewBlob";
+import {
+  shouldFetchSubmissionFiles,
+  usesApiSubmissionPreviews,
+} from "@/config/submissionPreview";
+import { useSubmissionPreview } from "@/lib/useSubmissionPreview";
 
 /**
  * Lazy-load a scaled live preview of index.html for a gallery card.
  */
-export default function CardPreview({ submissionId }) {
+export default function CardPreview({ submissionId, previewRevision }) {
   const hostRef = useRef(null);
   const [visible, setVisible] = useState(false);
   const [status, setStatus] = useState("idle");
-  const [preview, setPreview] = useState(null);
+  const [blobFiles, setBlobFiles] = useState(null);
 
   useEffect(() => {
     const el = hostRef.current;
@@ -29,33 +33,55 @@ export default function CardPreview({ submissionId }) {
 
   useEffect(() => {
     if (!visible) return undefined;
+
+    if (usesApiSubmissionPreviews) {
+      setStatus(
+        submissionId && previewRevision != null && previewRevision !== ""
+          ? "ready"
+          : "empty",
+      );
+      return undefined;
+    }
+
     let cancelled = false;
     setStatus("loading");
     (async () => {
       try {
-        const detail = await getSubmission(submissionId);
+        const detail = await getSubmission(submissionId, {
+          includeFiles: true,
+        });
         if (cancelled) return;
-        const built = buildPreviewBlobUrl(detail.files || []);
-        if (!built?.url) {
+        const files = detail.files || [];
+        if (!files.length) {
+          setBlobFiles(null);
           setStatus("empty");
           return;
         }
-        setPreview(built);
+        setBlobFiles(files);
         setStatus("ready");
       } catch {
-        if (!cancelled) setStatus("error");
+        if (!cancelled) {
+          setBlobFiles(null);
+          setStatus("error");
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [visible, submissionId]);
+  }, [visible, submissionId, previewRevision]);
 
-  useEffect(() => {
-    return () => {
-      preview?.revoke?.();
-    };
-  }, [preview]);
+  const preview = useSubmissionPreview({
+    submissionId: visible ? submissionId : null,
+    previewRevision: visible ? previewRevision : null,
+    files: shouldFetchSubmissionFiles ? blobFiles : null,
+  });
+
+  const showIframe = status === "ready" && Boolean(preview?.url);
+  const showEmpty =
+    status === "empty" ||
+    status === "error" ||
+    (status === "ready" && !preview?.url);
 
   return (
     <div
@@ -65,12 +91,12 @@ export default function CardPreview({ submissionId }) {
       {status === "loading" || status === "idle" ? (
         <div className="absolute inset-0 animate-pulse bg-gradient-to-br from-mist to-line" />
       ) : null}
-      {status === "empty" || status === "error" ? (
+      {showEmpty ? (
         <div className="absolute inset-0 flex items-center justify-center px-3 text-center font-mono text-[11px] text-fog-light">
           {status === "error" ? "Preview unavailable" : "No index.html"}
         </div>
       ) : null}
-      {preview?.url ? (
+      {showIframe ? (
         <iframe
           title="Build preview"
           src={preview.url}

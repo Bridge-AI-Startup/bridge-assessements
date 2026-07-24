@@ -15,6 +15,7 @@ import {
   postClaudeMessageValidation,
   publicGetSubmissionValidation,
   publicListSubmissionsValidation,
+  previewSubmissionFileValidation,
   readSessionFileValidation,
   slugParamValidation,
   submissionIdParamValidation,
@@ -35,6 +36,17 @@ const router = express.Router();
 router.get("/today", PlayController.getToday);
 router.get("/period", PlayController.getPeriod);
 router.get("/models", PlayController.listModels);
+// Immutable submission previews (before other parameterized routes).
+router.get(
+  "/preview/:id/:revision",
+  previewSubmissionFileValidation,
+  PlayController.getSubmissionPreviewFile,
+);
+router.get(
+  "/preview/:id/:revision/*",
+  previewSubmissionFileValidation,
+  PlayController.getSubmissionPreviewFile,
+);
 router.post(
   "/session",
   createSessionValidation,

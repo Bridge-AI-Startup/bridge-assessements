@@ -34,6 +34,7 @@ import {
   getPublicSubmissionById,
   listPublicSubmissions as listPlayPublicSubmissions,
 } from "../../services/play/voting.js";
+import { getPlaySubmissionPreviewFile } from "../../services/play/preview.js";
 import {
   getSessionUsage as getPlaySessionUsage,
   handlePlayMessagesProxy,
@@ -545,12 +546,94 @@ export const getPublicSubmission: RequestHandler = async (req, res, next) => {
     const anonymousId = req.query.anonymousId
       ? String(req.query.anonymousId)
       : undefined;
+    const includeFiles = parseIncludeFilesFlag(req.query.includeFiles, true);
     const submission = await getPublicSubmissionById(
       String(req.params.id),
       anonymousId,
+      { includeFiles },
     );
     res.status(200).json(submission);
   } catch (error) {
+    next(error);
+  }
+};
+
+function parseIncludeFilesFlag(
+  value: unknown,
+  defaultValue = true,
+): boolean {
+  if (value === undefined || value === null || value === "") {
+    return defaultValue;
+  }
+  if (value === true || value === "true" || value === "1") return true;
+  if (value === false || value === "false" || value === "0") return false;
+  return defaultValue;
+}
+
+function buildPlayPreviewFrameAncestors(): string {
+  const candidates = [
+    process.env.PLAY_FRONTEND_URL,
+    "https://play.bridge-jobs.com",
+    "http://localhost:5174",
+  ];
+  const origins = new Set<string>();
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const url = new URL(candidate);
+      if (url.protocol === "http:" || url.protocol === "https:") {
+        origins.add(url.origin);
+      }
+    } catch {
+      // Ignore invalid configured URLs to prevent header injection.
+    }
+  }
+  return `frame-ancestors ${[...origins].join(" ")}`;
+}
+
+export const getSubmissionPreviewFile: RequestHandler = async (
+  req,
+  res,
+  next,
+) => {
+  // Default to no-store so validation/404 paths never get cached.
+  res.setHeader("Cache-Control", "no-store");
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const splat =
+      typeof req.params[0] === "string" ? req.params[0] : undefined;
+    const file = await getPlaySubmissionPreviewFile({
+      submissionId: String(req.params.id),
+      revision: String(req.params.revision),
+      path: splat,
+    });
+
+    // Prefer Express MIME lookup from the stored path extension.
+    res.type(file.path);
+    const contentType = String(res.getHeader("Content-Type") || "");
+    if (
+      !contentType ||
+      contentType.includes("application/octet-stream")
+    ) {
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    }
+
+    res.setHeader(
+      "Cache-Control",
+      "public, max-age=31536000, immutable",
+    );
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader(
+      "Content-Security-Policy",
+      buildPlayPreviewFrameAncestors(),
+    );
+    // Do not set X-Frame-Options: SAMEORIGIN — blocks cross-origin Play iframes.
+    res.status(200).send(file.content);
+  } catch (error) {
+    res.setHeader("Cache-Control", "no-store");
     next(error);
   }
 };
@@ -565,6 +648,7 @@ export const getVoteNext: RequestHandler = async (req, res, next) => {
         ? String(req.query.challengeDate)
         : undefined,
       preferId: req.query.preferId ? String(req.query.preferId) : undefined,
+      includeFiles: parseIncludeFilesFlag(req.query.includeFiles, true),
     });
     res.status(200).json(result);
   } catch (error) {
@@ -583,6 +667,7 @@ export const postVote: RequestHandler = async (req, res, next) => {
         : undefined,
       winnerId: String(req.body.winnerId),
       loserId: String(req.body.loserId),
+      includeFiles: parseIncludeFilesFlag(req.body.includeFiles, true),
     });
     res.status(200).json(result);
   } catch (error) {

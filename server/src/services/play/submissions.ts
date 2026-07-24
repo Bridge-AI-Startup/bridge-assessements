@@ -4,6 +4,7 @@ import { getPlayBuildSessionModel } from "../../models/play/buildSession.js";
 import { getPlaySubmissionModel } from "../../models/play/submission.js";
 import {
   connectPlaySandbox,
+  filterPlayPublicFiles,
   killPlaySandbox,
   snapshotProjectFiles,
 } from "./sandbox.js";
@@ -202,9 +203,11 @@ export async function getSubmissionById(
     submittedAt: new Date(doc.submittedAt).toISOString(),
     anonymousId: doc.anonymousId,
     sessionId: String(doc.sessionId),
-    files: (doc.files || []).map((f: { path: string; content: string }) => ({
-      path: f.path,
-      content: f.content,
-    })),
+    files: filterPlayPublicFiles(doc.files || []).map(
+      (f: { path: string; content: string }) => ({
+        path: f.path,
+        content: f.content,
+      }),
+    ),
   };
 }

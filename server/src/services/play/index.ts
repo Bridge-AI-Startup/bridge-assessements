@@ -12,3 +12,4 @@ export * from "./terminal.js";
 export * from "./sessionPersist.js";
 export * from "./bayesianRating.js";
 export * from "./voting.js";
+export * from "./preview.js";

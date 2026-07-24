@@ -8,7 +8,10 @@ export default function SubmissionCard({ item }) {
       className="overflow-hidden rounded-2xl border border-line bg-paper shadow-card transition-colors hover:border-fog-light"
     >
       <div className="p-2">
-        <CardPreview submissionId={item.id} />
+        <CardPreview
+          submissionId={item.id}
+          previewRevision={item.previewRevision}
+        />
       </div>
       <div className="px-4 pb-4 pt-2">
         <div className="mb-2">

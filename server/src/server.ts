@@ -116,7 +116,15 @@ const apiLimiter = rateLimit({
     if (process.env.NODE_ENV === "development") return true;
     // Proctoring uses its own limiter (many frame/video posts per minute).
     const path = req.originalUrl?.split("?")[0] || "";
-    return path.startsWith("/api/proctoring");
+    if (path.startsWith("/api/proctoring")) return true;
+    // Play preview assets use a dedicated high ceiling (gallery iframes).
+    if (
+      path === "/api/play/preview" ||
+      path.startsWith("/api/play/preview/")
+    ) {
+      return true;
+    }
+    return false;
   },
 });
 
@@ -129,6 +137,19 @@ const proctoringLimiter = rateLimit({
   legacyHeaders: false,
   message: {
     error: "Too many proctoring requests from this IP, please try again later.",
+  },
+  skip: (req) => process.env.NODE_ENV === "development",
+});
+
+// Play submission previews: many assets per gallery page; dedicated bucket.
+const playPreviewLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 3000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error:
+      "Too many Play preview requests from this IP, please try again later.",
   },
   skip: (req) => process.env.NODE_ENV === "development",
 });
@@ -161,6 +182,9 @@ const webhookLimiter = rateLimit({
 console.log("✅ Rate limiting configured");
 console.log("   - General API: 100 requests per 15 minutes");
 console.log("   - Proctoring uploads: 8000 requests per 15 minutes (separate cap)");
+console.log(
+  "   - Play preview assets: 3000 requests per 15 minutes (separate cap)",
+);
 console.log("   - Authentication: 5 requests per 15 minutes");
 console.log("   - Webhooks: 50 requests per 15 minutes");
 console.log("   - Rate limiting disabled in development mode");
@@ -211,8 +235,15 @@ console.log("✅ Body parsing configured");
 function shouldSkipVerboseRequestLog(
   req: express.Request,
 ): boolean {
-  if (req.method !== "GET") return false;
+  const method = req.method;
   const p = req.path || "";
+  if (
+    (method === "GET" || method === "HEAD") &&
+    (p === "/api/play/preview" || p.startsWith("/api/play/preview/"))
+  ) {
+    return true;
+  }
+  if (method !== "GET") return false;
   if (/^\/api\/submissions\/assessments\/[^/]+\/submissions\/?$/.test(p)) {
     return true;
   }
@@ -328,6 +359,7 @@ app.use("/api/llm-proxy", llmProxyRoutes);
 console.log("  ✅ /api/llm-proxy routes registered");
 console.log("     - POST /api/llm-proxy/chat");
 
+app.use("/api/play/preview", playPreviewLimiter);
 app.use("/api/play", apiLimiter);
 app.get("/api/play/health", playHealth);
 console.log("  ✅ /api/play/health registered (always on)");
@@ -337,6 +369,7 @@ if (process.env.PLAY_ENABLED === "true") {
   console.log("  ✅ /api/play routes registered (PLAY_ENABLED=true)");
   console.log("     - GET /api/play/today");
   console.log("     - GET /api/play/models");
+  console.log("     - GET /api/play/preview/:id/:revision/*");
   console.log("     - GET /api/play/admin/challenges");
   console.log("     - GET /api/play/admin/challenges/:slug");
   console.log("     - POST /api/play/admin/challenges");
