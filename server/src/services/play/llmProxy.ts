@@ -84,6 +84,37 @@ export function buildSessionLlmBaseUrl(sessionId: string): string {
 
 let proxyHealthCache: { baseUrl: string; checkedAt: number } | null = null;
 
+/** In-flight `claude -p` runs — pause must not kill these (E2B "terminated"). */
+const claudeRunsInFlight = new Set<string>();
+
+export function isPlayClaudeRunInFlight(sessionId: string): boolean {
+  return claudeRunsInFlight.has(sessionId);
+}
+
+function beginPlayClaudeRun(sessionId: string): void {
+  claudeRunsInFlight.add(sessionId);
+}
+
+function endPlayClaudeRun(sessionId: string): void {
+  claudeRunsInFlight.delete(sessionId);
+}
+
+function formatClaudeRunFailure(err: unknown): string {
+  const message =
+    err instanceof Error ? err.message : "claude command failed in sandbox";
+  // E2B SandboxError when the box is paused/killed mid-stream.
+  if (
+    /terminated/i.test(message) ||
+    /sandbox.*(kill|pause|end of life)/i.test(message)
+  ) {
+    return (
+      "Claude was interrupted because the sandbox paused or disconnected mid-run. " +
+      "Keep this tab open while Claude works, then try again."
+    );
+  }
+  return `Claude run failed: ${message}`;
+}
+
 async function assertPlayLlmProxyReachable(): Promise<void> {
   const baseUrl = getPlayLlmProxyPublicBase();
   if (isPlayLlmProxyLikelyUnreachableFromE2b(baseUrl)) {
@@ -384,91 +415,102 @@ export async function runClaudePrintPrompt(input: {
 
   await assertPlayLlmProxyReachable();
 
-  let sandbox: Sandbox;
-  try {
-    sandbox = await connectPlaySandbox(doc.e2bSandboxId, {
-      timeoutMs: 60 * 60 * 1000,
-    });
-  } catch {
-    throw createHttpError(502, "Sandbox no longer reachable");
+  if (isPlayClaudeRunInFlight(input.sessionId)) {
+    throw createHttpError(409, "Claude is already running for this session");
   }
 
-  // Write under /home/user — E2B envd often cannot write /tmp (permission denied).
-  const promptDir = "/home/user/.claude";
-  const promptPath = `${promptDir}/play-claude-prompt.txt`;
-  const errPath = `${promptDir}/play-claude.err`;
+  beginPlayClaudeRun(input.sessionId);
   try {
-    await runPlayCommand(sandbox, `mkdir -p ${promptDir}`, { timeoutMs: 10_000 });
-    await sandbox.files.write(promptPath, wrapPlayClaudePrompt(prompt));
-  } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "failed to write prompt into sandbox";
-    throw createHttpError(502, `Sandbox write failed: ${message}`);
+    let sandbox: Sandbox;
+    try {
+      sandbox = await connectPlaySandbox(doc.e2bSandboxId, {
+        timeoutMs: 60 * 60 * 1000,
+      });
+    } catch {
+      throw createHttpError(502, "Sandbox no longer reachable");
+    }
+
+    // Write under /home/user — E2B envd often cannot write /tmp (permission denied).
+    const promptDir = "/home/user/.claude";
+    const promptPath = `${promptDir}/play-claude-prompt.txt`;
+    const errPath = `${promptDir}/play-claude.err`;
+    try {
+      await runPlayCommand(sandbox, `mkdir -p ${promptDir}`, {
+        timeoutMs: 10_000,
+      });
+      await sandbox.files.write(promptPath, wrapPlayClaudePrompt(prompt));
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "failed to write prompt into sandbox";
+      throw createHttpError(502, `Sandbox write failed: ${message}`);
+    }
+
+    const model = resolvePlayModel(input.model);
+    const cliModel = resolvePlayCliModel(model);
+    const effort = resolvePlayEffort(model, input.effort);
+    const modelQ = JSON.stringify(cliModel);
+    const apiModelQ = JSON.stringify(model);
+    const effortFlags =
+      effort && effort !== "auto"
+        ? ` --effort ${JSON.stringify(effort)}`
+        : "";
+    const effortEnv =
+      effort && effort !== "auto"
+        ? `export CLAUDE_CODE_EFFORT_LEVEL=${JSON.stringify(effort)}`
+        : "unset CLAUDE_CODE_EFFORT_LEVEL 2>/dev/null || true";
+
+    const cmd = [
+      "set -e",
+      'CLAUDE="$(command -v claude 2>/dev/null || true)"',
+      'if [ -z "$CLAUDE" ] && [ -x "$HOME/.local/bin/claude" ]; then CLAUDE="$HOME/.local/bin/claude"; fi',
+      'if [ -z "$CLAUDE" ]; then echo "claude CLI not found" >&2; exit 127; fi',
+      // API-facing id for anything that reads ANTHROPIC_MODEL from the gateway path
+      `export ANTHROPIC_MODEL=${apiModelQ}`,
+      effortEnv,
+      "cd /home/user/project",
+      // One invocation only. The old three-command fallback repeated every real
+      // upstream failure three times, hiding the actual error behind noisy output.
+      `"$CLAUDE" -p "$(cat ${promptPath})" --model ${modelQ}${effortFlags} --output-format text --permission-mode acceptEdits 2>${errPath}`,
+      `cat ${errPath} 2>/dev/null || true`,
+    ].join("\n");
+
+    let result: Awaited<ReturnType<typeof runPlayCommand>>;
+    try {
+      result = await runPlayCommand(sandbox, cmd, {
+        timeoutMs: 10 * 60 * 1000,
+      });
+    } catch (err) {
+      throw createHttpError(502, formatClaudeRunFailure(err));
+    }
+
+    const output = (result.stdout || result.stderr || "").trim();
+
+    try {
+      await appendSessionChatMessages(input.sessionId, [
+        { role: "user", text: prompt, createdAt: new Date() },
+        {
+          role: "assistant",
+          text: output || "(No output)",
+          createdAt: new Date(),
+        },
+      ]);
+      await refreshSessionWorkspaceSnapshot(input.sessionId, sandbox);
+    } catch (err) {
+      console.warn(
+        "[play/llmProxy] chat/snapshot persist failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+
+    return {
+      output,
+      exitCode: result.exitCode ?? 1,
+      model,
+      effort,
+    };
+  } finally {
+    endPlayClaudeRun(input.sessionId);
   }
-
-  const model = resolvePlayModel(input.model);
-  const cliModel = resolvePlayCliModel(model);
-  const effort = resolvePlayEffort(model, input.effort);
-  const modelQ = JSON.stringify(cliModel);
-  const apiModelQ = JSON.stringify(model);
-  const effortFlags =
-    effort && effort !== "auto"
-      ? ` --effort ${JSON.stringify(effort)}`
-      : "";
-  const effortEnv =
-    effort && effort !== "auto"
-      ? `export CLAUDE_CODE_EFFORT_LEVEL=${JSON.stringify(effort)}`
-      : "unset CLAUDE_CODE_EFFORT_LEVEL 2>/dev/null || true";
-
-  const cmd = [
-    "set -e",
-    'CLAUDE="$(command -v claude 2>/dev/null || true)"',
-    'if [ -z "$CLAUDE" ] && [ -x "$HOME/.local/bin/claude" ]; then CLAUDE="$HOME/.local/bin/claude"; fi',
-    'if [ -z "$CLAUDE" ]; then echo "claude CLI not found" >&2; exit 127; fi',
-    // API-facing id for anything that reads ANTHROPIC_MODEL from the gateway path
-    `export ANTHROPIC_MODEL=${apiModelQ}`,
-    effortEnv,
-    "cd /home/user/project",
-    // One invocation only. The old three-command fallback repeated every real
-    // upstream failure three times, hiding the actual error behind noisy output.
-    `"$CLAUDE" -p "$(cat ${promptPath})" --model ${modelQ}${effortFlags} --output-format text --permission-mode acceptEdits 2>${errPath}`,
-    `cat ${errPath} 2>/dev/null || true`,
-  ].join("\n");
-
-  let result: Awaited<ReturnType<typeof runPlayCommand>>;
-  try {
-    result = await runPlayCommand(sandbox, cmd, {
-      timeoutMs: 10 * 60 * 1000,
-    });
-  } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "claude command failed in sandbox";
-    throw createHttpError(502, `Claude run failed: ${message}`);
-  }
-
-  const output = (result.stdout || result.stderr || "").trim();
-
-  try {
-    await appendSessionChatMessages(input.sessionId, [
-      { role: "user", text: prompt, createdAt: new Date() },
-      {
-        role: "assistant",
-        text: output || "(No output)",
-        createdAt: new Date(),
-      },
-    ]);
-    await refreshSessionWorkspaceSnapshot(input.sessionId, sandbox);
-  } catch (err) {
-    console.warn(
-      "[play/llmProxy] chat/snapshot persist failed:",
-      err instanceof Error ? err.message : err,
-    );
-  }
-
-  return {
-    output,
-    exitCode: result.exitCode ?? 1,
-    model,
-    effort,
-  };
 }

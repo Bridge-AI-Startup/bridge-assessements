@@ -457,6 +457,8 @@ export default function Build() {
   ]);
 
   // Pause E2B when leaving Build; resume when returning.
+  // Never pause while Claude is mid-run — that kills the E2B stream
+  // (`2: [unknown] terminated`) and is the main prod-vs-local failure mode.
   useEffect(() => {
     if (state.kind !== "ready") return undefined;
     const sessionId = state.session.sessionId;
@@ -465,9 +467,12 @@ export default function Build() {
     const PAUSE_AFTER_MS = 45_000;
     const KEEP_ALIVE_MS = 4 * 60 * 1000;
 
+    const canPauseSandbox = () => !chatBusyRef.current;
+
     const schedulePause = () => {
       if (pauseTimer) clearTimeout(pauseTimer);
       pauseTimer = setTimeout(() => {
+        if (!canPauseSandbox()) return;
         void pauseSession(sessionId);
       }, PAUSE_AFTER_MS);
     };
@@ -500,6 +505,7 @@ export default function Build() {
 
     const onPageHide = () => {
       cancelPause();
+      if (!canPauseSandbox()) return;
       pauseSessionBeacon(sessionId);
     };
 
@@ -508,6 +514,8 @@ export default function Build() {
 
     const keepAlive = setInterval(() => {
       if (document.visibilityState !== "visible") return;
+      // Avoid reconnect churn while Claude holds the command stream.
+      if (chatBusyRef.current) return;
       void resumeSession(sessionId).then((result) => {
         if (disposed || result.status !== "ok") return;
         if (result.session.previewUrl) {
@@ -529,7 +537,9 @@ export default function Build() {
       clearInterval(keepAlive);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", onPageHide);
-      pauseSessionBeacon(sessionId);
+      if (canPauseSandbox()) {
+        pauseSessionBeacon(sessionId);
+      }
     };
   }, [state.kind === "ready" ? state.session.sessionId : null]);
 

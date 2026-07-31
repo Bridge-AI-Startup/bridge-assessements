@@ -672,6 +672,15 @@ export async function pausePlayBuildSession(
     return { paused: true, sandboxPaused: true };
   }
 
+  // Pausing mid-`claude -p` kills the E2B command stream → "2: [unknown] terminated".
+  const { isPlayClaudeRunInFlight } = await import("./llmProxy.js");
+  if (isPlayClaudeRunInFlight(sessionId)) {
+    console.warn(
+      `[play/sessions] skip pause while Claude is running session=${sessionId}`,
+    );
+    return { paused: false, sandboxPaused: false };
+  }
+
   await closeSessionTerminal(sessionId, { killPty: false });
   const ok = await pausePlaySandbox(doc.e2bSandboxId!);
   if (ok) {
