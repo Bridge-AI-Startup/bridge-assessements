@@ -3,7 +3,7 @@ import createHttpError from "http-errors";
 
 const findOneMock = vi.fn();
 
-vi.mock("../../src/models/play/submission.js", () => ({
+vi.mock("../../src/models/shorts/submission.js", () => ({
   getPlaySubmissionModel: () => ({
     findOne: (...args: unknown[]) => {
       const result = findOneMock(...args);
@@ -14,11 +14,20 @@ vi.mock("../../src/models/play/submission.js", () => ({
   }),
 }));
 
+// preview.ts also pulls in buildSession (session previews for serverless make),
+// which opens the Shorts Mongo connection at import time. Mocked so these pure
+// path/revision tests do not require ATLAS_URI.
+vi.mock("../../src/models/shorts/buildSession.js", () => ({
+  getPlayBuildSessionModel: () => ({
+    findById: () => ({ lean: () => null }),
+  }),
+}));
+
 import {
   getPlayPreviewRevision,
   getPlaySubmissionPreviewFile,
   normalizePlayPreviewPath,
-} from "../../src/services/play/preview.js";
+} from "../../src/services/shorts/preview.js";
 
 describe("normalizePlayPreviewPath", () => {
   it("maps empty path to index.html", () => {

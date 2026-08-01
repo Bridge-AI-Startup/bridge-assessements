@@ -10,7 +10,6 @@ import {
 } from "./sandbox.js";
 import { snapshotServerlessSubmission } from "./serverlessMake.js";
 import { assertNotStarterOnly } from "./starterDetection.js";
-import { closeSessionTerminal } from "./terminal.js";
 import type { Sandbox } from "e2b";
 
 export type SubmitResult = {
@@ -120,32 +119,27 @@ export async function submitSession(input: {
 
   const Submission = getPlaySubmissionModel();
   const submittedAt = new Date();
-  const doc = await Submission.findOneAndUpdate(
-    { anonymousId, challengeDate: session.challengeDate },
-    {
-      $set: {
-        anonymousId,
-        displayName,
-        challengeSlug: session.challengeSlug,
-        challengeDate: session.challengeDate,
-        sessionId: session._id,
-        files: snapshot.files,
-        fileCount: snapshot.files.length,
-        totalBytes: snapshot.totalBytes,
-        submittedAt,
-      },
-    },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
-  );
+  // Each submit is its own entry — never overwrite an earlier build. A fresh
+  // document also means fresh rating defaults, so a new build cannot inherit
+  // votes an earlier one earned.
+  const doc = await Submission.create({
+    anonymousId,
+    displayName,
+    challengeSlug: session.challengeSlug,
+    challengeDate: session.challengeDate,
+    sessionId: session._id,
+    files: snapshot.files,
+    fileCount: snapshot.files.length,
+    totalBytes: snapshot.totalBytes,
+    submittedAt,
+  });
 
   session.status = "submitted";
-  session.vscodeUrl = undefined;
   session.previewUrl = undefined;
   await session.save();
 
-  // Only E2B sessions have a sandbox/terminal to tear down.
+  // Only E2B sessions have a sandbox to tear down.
   if (sandbox) {
-    await closeSessionTerminal(input.sessionId, { killPty: true });
     await killPlaySandbox(sandbox);
   }
 

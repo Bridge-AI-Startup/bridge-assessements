@@ -11,17 +11,28 @@ function createUuidV4() {
   });
 }
 
+// Held in memory so that when localStorage is unavailable (Safari private
+// mode, blocked storage, some webviews) every caller in a page load still
+// shares one id. Without this each call minted a new UUID, so a session
+// created as one identity was rejected (403) by the next request.
+let cachedId = null;
+
 /** Get or create a stable anonymous id in localStorage. */
 export function getOrCreateAnonymousId() {
+  if (cachedId) return cachedId;
   try {
     const existing = localStorage.getItem(STORAGE_KEY);
     if (existing && existing.length >= 8) {
-      return existing;
+      cachedId = existing;
+      return cachedId;
     }
     const id = createUuidV4();
     localStorage.setItem(STORAGE_KEY, id);
-    return id;
+    cachedId = id;
+    return cachedId;
   } catch {
-    return createUuidV4();
+    // Stable for this page load only — the build will not survive a refresh.
+    cachedId = createUuidV4();
+    return cachedId;
   }
 }

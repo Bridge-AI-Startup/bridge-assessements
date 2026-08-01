@@ -38,7 +38,6 @@ export function wrapPlayClaudePrompt(userPrompt: string): string {
 }
 
 import {
-  getPlayAnthropicModel,
   resolvePlayCliModel,
   resolvePlayEffort,
   resolvePlayModel,
@@ -72,8 +71,6 @@ export function isPlayLlmProxyLikelyUnreachableFromE2b(baseUrl?: string): boolea
     base.includes("0.0.0.0")
   );
 }
-
-export { getPlayAnthropicModel } from "./models.js";
 
 export function generateLlmProxyToken(): string {
   return crypto.randomBytes(32).toString("hex");

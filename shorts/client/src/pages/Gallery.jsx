@@ -15,6 +15,7 @@ export default function Gallery() {
   const [period, setPeriod] = useState(null);
   const [challengeDate, setChallengeDate] = useState(urlDate || "");
   const [items, setItems] = useState([]);
+  const [mine, setMine] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -55,11 +56,13 @@ export default function Gallery() {
         });
         if (cancelled) return;
         setItems(result.submissions || []);
+        setMine(result.mine || []);
         setTotal(result.total || 0);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "Failed to load");
           setItems([]);
+          setMine([]);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -134,6 +137,30 @@ export default function Gallery() {
               .
             </p>
           </div>
+        )}
+
+        {mine.length > 0 && (
+          <section className="mb-10">
+            <div className="mb-3 flex items-baseline justify-between gap-3">
+              <h2 className="text-[18px] font-medium tracking-tight text-ink">
+                Your submissions
+              </h2>
+              <span className="font-mono text-xs text-fog-light">
+                {mine.length} build{mine.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {mine.map((item) => (
+                <SubmissionCard key={item.id} item={item} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {mine.length > 0 && !loading && items.length > 0 && (
+          <h2 className="mb-3 text-[18px] font-medium tracking-tight text-ink">
+            All builds
+          </h2>
         )}
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

@@ -8,7 +8,6 @@ export * from "./llmProxy.js";
 export * from "./claudeProvision.js";
 export * from "./workspaceFiles.js";
 export * from "./models.js";
-export * from "./terminal.js";
 export * from "./sessionPersist.js";
 export * from "./bayesianRating.js";
 export * from "./voting.js";

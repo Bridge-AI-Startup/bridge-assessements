@@ -29,9 +29,4 @@ export function setDisplayName(name) {
   }
 }
 
-export function isValidDisplayName(name) {
-  const trimmed = String(name ?? "").trim();
-  return trimmed.length >= MIN_LEN && trimmed.length <= MAX_LEN;
-}
-
 export const DISPLAY_NAME_MAX = MAX_LEN;

@@ -88,7 +88,10 @@ const SubmissionSchema = new Schema(
   { timestamps: true },
 );
 
-SubmissionSchema.index({ anonymousId: 1, challengeDate: 1 }, { unique: true });
+// Submissions are independent entries: one builder may submit many builds for
+// the same challenge, each rated on its own. Non-unique lookup index backs the
+// "my submissions" view.
+SubmissionSchema.index({ anonymousId: 1, challengeDate: 1, submittedAt: -1 });
 SubmissionSchema.index({ challengeDate: -1, submittedAt: -1 });
 SubmissionSchema.index({ challengeDate: 1, rankingScore: -1 });
 

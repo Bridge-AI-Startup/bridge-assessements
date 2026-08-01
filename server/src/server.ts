@@ -406,11 +406,6 @@ if (SHORTS_ENABLED) {
   console.log("     - GET|PUT /api/shorts/session/:id/file");
   console.log("     - POST /api/shorts/session/:id/llm/v1/messages");
   console.log("     - POST /api/shorts/session/:id/claude/message");
-  console.log("     - POST /api/shorts/session/:id/terminal");
-  console.log("     - GET  /api/shorts/session/:id/terminal/stream");
-  console.log("     - POST /api/shorts/session/:id/terminal/input");
-  console.log("     - POST /api/shorts/session/:id/terminal/resize");
-  console.log("     - POST /api/shorts/session/:id/llm");
   console.log("     - POST /api/shorts/submit");
   console.log("     - GET  /api/shorts/admin/submissions");
   console.log("     - GET  /api/shorts/admin/submissions/:id");

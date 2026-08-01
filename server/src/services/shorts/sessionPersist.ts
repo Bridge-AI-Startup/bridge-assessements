@@ -10,6 +10,7 @@ import {
   snapshotProjectFiles,
   writeChallengeMarkdown,
   writePlayProjectClaudeMd,
+  type SnapshotFile,
 } from "./sandbox.js";
 import { writeProjectFile } from "./workspaceFiles.js";
 
@@ -22,7 +23,7 @@ export type ChatMessage = {
   createdAt?: Date;
 };
 
-export type SnapshotFile = { path: string; content: string };
+export type { SnapshotFile };
 
 /** End of the challenge period for a stored period key (day or week). */
 export function endOfUtcChallengeDay(challengeDate: string): Date {

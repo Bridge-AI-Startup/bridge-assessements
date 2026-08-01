@@ -9,8 +9,6 @@ import {
   listChallengesValidation,
   listSessionFilesValidation,
   listSubmissionsValidation,
-  listTerminalsValidation,
-  openTerminalValidation,
   pauseResumeSessionValidation,
   postClaudeMessageValidation,
   publicGetSubmissionValidation,
@@ -21,9 +19,6 @@ import {
   slugParamValidation,
   submissionIdParamValidation,
   submitSessionValidation,
-  terminalInputValidation,
-  terminalResizeValidation,
-  terminalStreamValidation,
   updateChallengeValidation,
   castVoteValidation,
   voteNextValidation,
@@ -121,38 +116,11 @@ router.post(
   postClaudeMessageValidation,
   PlayController.postClaudeMessage,
 );
-router.get(
-  "/session/:id/terminals",
-  listTerminalsValidation,
-  PlayController.listTerminals,
-);
-router.post(
-  "/session/:id/terminal",
-  openTerminalValidation,
-  PlayController.openTerminal,
-);
-router.get(
-  "/session/:id/terminal/stream",
-  terminalStreamValidation,
-  PlayController.streamTerminal,
-);
-router.post(
-  "/session/:id/terminal/input",
-  terminalInputValidation,
-  PlayController.terminalInput,
-);
-router.post(
-  "/session/:id/terminal/resize",
-  terminalResizeValidation,
-  PlayController.terminalResize,
-);
 // Anthropic-compatible Messages API for Claude Code in the sandbox
 router.post(
   "/session/:id/llm/v1/messages",
   PlayController.proxySessionMessages,
 );
-// Legacy stub path (kept for discovery; prefer /llm/v1/messages)
-router.post("/session/:id/llm", PlayController.sessionLlm);
 router.post("/submit", submitSessionValidation, PlayController.submit);
 router.get(
   "/submissions",

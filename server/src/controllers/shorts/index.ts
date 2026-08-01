@@ -53,13 +53,6 @@ import {
   writeSessionProjectFile,
 } from "../../services/shorts/workspaceFiles.js";
 import { listPlayModelsPublic } from "../../services/shorts/models.js";
-import {
-  attachTerminalStream,
-  listSessionTerminals,
-  openSessionTerminal,
-  resizeSessionTerminal,
-  sendTerminalInput,
-} from "../../services/shorts/terminal.js";
 
 export const health: RequestHandler = (_req, res) => {
   res.status(200).json({ ok: true, product: "shorts" });
@@ -152,10 +145,6 @@ export const adminUpdateChallenge: RequestHandler = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-};
-
-const notImplemented: RequestHandler = (_req, res) => {
-  res.status(501).json({ status: "not_implemented" });
 };
 
 export const createSession: RequestHandler = async (req, res, next) => {
@@ -308,8 +297,6 @@ export const writeSessionFile: RequestHandler = async (req, res, next) => {
   }
 };
 
-export const sessionLlm = notImplemented;
-
 export const proxySessionMessages: RequestHandler = async (req, res, next) => {
   try {
     await handlePlayMessagesProxy(req, res);
@@ -373,107 +360,6 @@ export const postClaudeMessage: RequestHandler = async (req, res, next) => {
       effort: result.effort,
       usage,
     });
-  } catch (error) {
-    next(error);
-  }
-};
-
-export const listTerminals: RequestHandler = async (req, res, next) => {
-  const errors = validationResult(req);
-  try {
-    validationErrorParser(errors);
-    const result = await listSessionTerminals({
-      sessionId: String(req.params.id),
-      anonymousId: String(req.query.anonymousId),
-    });
-    res.status(200).json(result);
-  } catch (error) {
-    next(error);
-  }
-};
-
-export const openTerminal: RequestHandler = async (req, res, next) => {
-  const errors = validationResult(req);
-  try {
-    validationErrorParser(errors);
-    const result = await openSessionTerminal({
-      sessionId: String(req.params.id),
-      anonymousId: String(req.body.anonymousId),
-      terminalId:
-        req.body.terminalId != null ? String(req.body.terminalId) : undefined,
-      cols:
-        req.body.cols != null ? parseInt(String(req.body.cols), 10) : undefined,
-      rows:
-        req.body.rows != null ? parseInt(String(req.body.rows), 10) : undefined,
-    });
-    res.status(200).json(result);
-  } catch (error) {
-    next(error);
-  }
-};
-
-export const streamTerminal: RequestHandler = async (req, res, next) => {
-  const errors = validationResult(req);
-  try {
-    validationErrorParser(errors);
-    const pidRaw = req.query.pid;
-    const pid =
-      pidRaw != null && String(pidRaw).trim() !== ""
-        ? parseInt(String(pidRaw), 10)
-        : undefined;
-    await attachTerminalStream({
-      sessionId: String(req.params.id),
-      anonymousId: String(req.query.anonymousId),
-      terminalId:
-        req.query.terminalId != null
-          ? String(req.query.terminalId)
-          : undefined,
-      pid: Number.isFinite(pid) ? pid : undefined,
-      res,
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-export const terminalInput: RequestHandler = async (req, res, next) => {
-  const errors = validationResult(req);
-  try {
-    validationErrorParser(errors);
-    const data = String(req.body.data ?? "");
-    if (!data) {
-      res.status(400).json({ error: "data is required" });
-      return;
-    }
-    await sendTerminalInput({
-      sessionId: String(req.params.id),
-      anonymousId: String(req.body.anonymousId),
-      terminalId:
-        req.body.terminalId != null ? String(req.body.terminalId) : undefined,
-      pid: parseInt(String(req.body.pid), 10),
-      data,
-      encoding: req.body.encoding === "base64" ? "base64" : "utf8",
-    });
-    res.status(204).end();
-  } catch (error) {
-    next(error);
-  }
-};
-
-export const terminalResize: RequestHandler = async (req, res, next) => {
-  const errors = validationResult(req);
-  try {
-    validationErrorParser(errors);
-    const result = await resizeSessionTerminal({
-      sessionId: String(req.params.id),
-      anonymousId: String(req.body.anonymousId),
-      terminalId:
-        req.body.terminalId != null ? String(req.body.terminalId) : undefined,
-      pid: parseInt(String(req.body.pid), 10),
-      cols: parseInt(String(req.body.cols), 10),
-      rows: parseInt(String(req.body.rows), 10),
-    });
-    res.status(200).json(result);
   } catch (error) {
     next(error);
   }

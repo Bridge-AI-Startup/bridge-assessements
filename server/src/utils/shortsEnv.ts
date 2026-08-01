@@ -23,10 +23,6 @@ export function shortsEnv(
   return v;
 }
 
-export function getShortsFrontendUrl(): string {
-  return shortsEnv("SHORTS_FRONTEND_URL", "PLAY_FRONTEND_URL");
-}
-
 export function getShortsAdminEmail(): string {
   return shortsEnv(
     "SHORTS_ADMIN_EMAIL",
@@ -38,14 +34,6 @@ export function getShortsAdminEmail(): string {
 export function getShortsDbName(): string {
   // Keep default DB name `bridge-play` so existing Atlas data stays wired.
   return shortsEnv("SHORTS_DB_NAME", "PLAY_DB_NAME", "bridge-play");
-}
-
-export function getShortsE2bTemplateId(): string {
-  return shortsEnv(
-    "SHORTS_E2B_TEMPLATE_ID",
-    "PLAY_E2B_TEMPLATE_ID",
-    "bridge-play-dev",
-  );
 }
 
 export function getShortsLlmProxyPublicUrl(): string {

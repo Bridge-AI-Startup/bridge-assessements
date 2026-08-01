@@ -117,10 +117,6 @@ export function resolvePlayEffort(
   return opt.defaultEffort;
 }
 
-export function isPlayModelAllowed(modelId: string): boolean {
-  return canonicalizePlayModel(modelId) != null;
-}
-
 export function listPlayModelsPublic() {
   return {
     defaultModel: getPlayAnthropicModel(),

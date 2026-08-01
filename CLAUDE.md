@@ -40,7 +40,7 @@ Separate promotional product — **not** part of hiring assessments. See [`short
 - Admin auth: Firebase + `SHORTS_ADMIN_EMAIL` allowlist (default `saaz.m@icloud.com`); looks up assessments `User` by `firebaseUid`.
 - No shared models with assessments `Submission`; admin reuses Bridge Firebase accounts.
 - Shorts E2B: build via `cd shorts/e2b-template && npx tsx build.dev.ts`; smoke with `npx tsx src/scripts/shorts-sandbox-smoke.ts` from `server/`. The Python preview server sends `Cache-Control: no-store` so live JS/CSS edits cannot be replaced by cached starter assets. Set `SHORTS_E2B_TEMPLATE_ID`. Grading still uses the default E2B image.
-- **Vote / browse / leaderboard:** public gallery + pairwise five-vote rounds with recap; Bayesian (TrueSkill-style) ranking; date-scoped leaderboard. Must submit same UTC day to vote. Saved submission previews are served by `GET /api/shorts/preview/:id/:revision/*` (API-origin iframes by default); Build live previews still use E2B. Client toggle: `shorts/client/src/config/submissionPreview.js` `SUBMISSION_PREVIEW_MODE` (`"api"` | `"blob"`).
+- **Vote / browse / leaderboard:** public gallery + pairwise five-vote rounds with recap; Bayesian (TrueSkill-style) ranking; date-scoped leaderboard. Must have submitted at least one build the same UTC day to vote; all of a voter's own entries are excluded from their pairs. Leaderboard and gallery both list every build as its own ranked row; the gallery adds a "Your submissions" section. Saved submission previews are served by `GET /api/shorts/preview/:id/:revision/*` (API-origin iframes by default); Build live previews still use E2B. Client toggle: `shorts/client/src/config/submissionPreview.js` `SUBMISSION_PREVIEW_MODE` (`"api"` | `"blob"`).
 ## Ports and URLs
 
 | Service         | Dev URL                          | Production URL                                           |
@@ -371,6 +371,7 @@ server/src/
     ├── listSubmissions.ts
     ├── seedCompetition.ts   # Link Mongo Competition slug → assessment (hackathon dashboard)
     ├── seedShortsChallenge.ts # Upsert Shorts daily challenge from shorts/challenges/*.json
+    ├── dropShortsSubmissionUniqueIndex.ts # One-time: drop legacy unique {anonymousId, challengeDate} on PlaySubmission
     ├── shorts-sandbox-smoke.ts # Create Shorts E2B template sandbox; print preview URL + Claude check
     ├── replaceSubmissionWithGeneratedMarkdown.ts
     ├── replaceTraceWithMarkdown.ts
@@ -427,8 +428,8 @@ server/src/
 - `GET /session/:id/terminal/stream` -- SSE PTY output (`?anonymousId=&terminalId=&pid=`)
 - `POST /session/:id/terminal/input` -- Send keystrokes to PTY
 - `POST /session/:id/terminal/resize` -- Resize PTY
-- `POST /submit` -- Snapshot workspace files into `PlaySubmission` (`{ sessionId, anonymousId, displayName }`), mark session submitted, kill sandbox; **400** `{ code: "starter_only" }` if snapshot is still the unchanged / near-empty starter
-- `GET /submissions` -- Public gallery list (`challengeDate`, `limit`, `anonymousId`); metadata only (no `files`); includes `previewRevision`
+- `POST /submit` -- Snapshot workspace files into a **new** `PlaySubmission` (`{ sessionId, anonymousId, displayName }`), mark session submitted, kill sandbox; **400** `{ code: "starter_only" }` if snapshot is still the unchanged / near-empty starter. Never overwrites an earlier build — repeat submits create additional independent entries, each starting at default μ/σ
+- `GET /submissions` -- Public gallery list (`challengeDate`, `limit`, `anonymousId`); metadata only (no `files`); includes `previewRevision` and `isMine`. Also returns `mine[]` — every entry belonging to `anonymousId`, independent of `limit`, so a builder always finds their own work
 - `GET /submissions/:id` -- Public submission detail (`previewRevision`; optional `includeFiles`, default true; omit `files` when false)
 - `GET /preview/:id/:revision` -- Serve stored `index.html` for a submission at immutable `submittedAt` revision (security headers + long cache)
 - `GET /preview/:id/:revision/*` -- Serve a stored snapshot asset by exact relative path (same headers); path-safe, skips `.claude`/`.git`/`node_modules`
@@ -436,7 +437,7 @@ server/src/
 - `GET /admin/submissions/:id` -- Full submission including `files` (admin)
 - `GET /vote/next` -- Next pairwise pair (`anonymousId`, optional `challengeDate`, `preferId`, `includeFiles` default true); requires same-day submit; returns round counter (`n/5`) + `previewRevision`
 - `POST /vote` -- Cast pairwise vote (Bayesian rating update); optional body `includeFiles` (default true); every 5th vote returns round ranking recap; max 25 votes/day
-- `GET /leaderboard` -- Rankings by conservative Bayesian score `μ−3σ` (`challengeDate`, `limit`, `anonymousId`)
+- `GET /leaderboard` -- Rankings by conservative Bayesian score `μ−3σ` (`challengeDate`, `limit`, `anonymousId`). **One row per submission** — every build ranks independently, so a builder with several entries occupies several rows (each flagged `isMine`); `total` is the submission count. `you` is that builder's highest-ranked entry. Ranks match the gallery's, which uses the same all-submissions ordering
 
 **Submission routes** (`/api/submissions`):
 
@@ -709,7 +710,9 @@ Indexes: `{ anonymousId: 1, challengeDate: 1, status: 1 }`
 ### PlaySubmission (bridge-play DB)
 Fields: `anonymousId` (indexed), `displayName` (max 40), `challengeSlug`, `challengeDate`, `sessionId`, `files[]` `{ path, content }`, `fileCount`, `totalBytes`, `submittedAt`, Bayesian rating: `ratingMean` (μ, default 25), `ratingDeviation` (σ, default 25/3), `rankingScore` (μ−3σ), `wins`, `losses`, `matches`
 
-Indexes: unique `{ anonymousId: 1, challengeDate: 1 }`, `{ challengeDate: -1, submittedAt: -1 }`, `{ challengeDate: 1, rankingScore: -1 }`
+Indexes: `{ anonymousId: 1, challengeDate: 1, submittedAt: -1 }`, `{ challengeDate: -1, submittedAt: -1 }`, `{ challengeDate: 1, rankingScore: -1 }`
+
+**Submissions are independent entries.** A builder may submit any number of builds for the same challenge; each is its own document with its own rating. There is **no** uniqueness on `{ anonymousId, challengeDate }` — that unique index was removed (submitting used to overwrite the previous build, and the replacement inherited the old build's votes). `anonymousId` remains as a non-unique owner tag powering `isMine`, self-vote exclusion, and the "Your submissions" gallery section. `displayName` is a free-form label — duplicates are allowed and it is not an identity. Existing deployments must drop the legacy unique index once: `npx tsx --env-file=config.env src/scripts/dropShortsSubmissionUniqueIndex.ts` (Mongoose does not drop indexes removed from a schema).
 
 ### PlayVote (bridge-play DB)
 Fields: `anonymousId`, `challengeDate`, `winnerId`, `loserId` (refs PlaySubmission), `pairKey` (`minId:maxId`), timestamps

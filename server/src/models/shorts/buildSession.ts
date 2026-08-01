@@ -45,10 +45,6 @@ const BuildSessionSchema = new Schema(
       type: String,
       trim: true,
     },
-    vscodeUrl: {
-      type: String,
-      trim: true,
-    },
     previewUrl: {
       type: String,
       trim: true,

@@ -75,10 +75,6 @@ export async function put(path: string, body?: unknown): Promise<Response> {
   return fetchRequest("PUT", path, body);
 }
 
-export async function patch(path: string, body?: unknown): Promise<Response> {
-  return fetchRequest("PATCH", path, body);
-}
-
 export async function authGet(path: string): Promise<Response> {
   return fetchRequest("GET", path, undefined, true);
 }

@@ -31,6 +31,8 @@ export async function listSubmissions(options: {
   challengeDate: string;
   submissions: PublicSubmissionSummary[];
   total: number;
+  /** Every entry belonging to `anonymousId`, regardless of `limit`. */
+  mine: PublicSubmissionSummary[];
 }> {
   const qs = new URLSearchParams();
   if (options.challengeDate) qs.set("challengeDate", options.challengeDate);

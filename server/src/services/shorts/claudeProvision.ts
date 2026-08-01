@@ -5,10 +5,10 @@ import type { Sandbox } from "e2b";
 import { runPlayCommand, writePlayProjectClaudeMd } from "./sandbox.js";
 import {
   buildSessionLlmBaseUrl,
-  getPlayAnthropicModel,
   getPlayLlmProxyPublicBase,
   isPlayLlmProxyLikelyUnreachableFromE2b,
 } from "./llmProxy.js";
+import { getPlayAnthropicModel } from "./models.js";
 
 export async function provisionClaudeForSession(
   sandbox: Sandbox,

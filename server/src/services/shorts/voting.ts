@@ -215,14 +215,16 @@ async function countVotesToday(
   return Vote.countDocuments({ anonymousId, challengeDate });
 }
 
-async function findOwnSubmission(
+/**
+ * Has this builder entered at least one build for the challenge? Gates voting.
+ * Deliberately not "which submission is theirs" — a builder may have several.
+ */
+async function hasSubmitted(
   anonymousId: string,
   challengeDate: string,
-): Promise<LeanSubmission | null> {
+): Promise<boolean> {
   const Submission = getPlaySubmissionModel();
-  return (await Submission.findOne({ anonymousId, challengeDate }).lean()) as
-    | LeanSubmission
-    | null;
+  return (await Submission.exists({ anonymousId, challengeDate })) !== null;
 }
 
 async function loadRankedForDate(
@@ -380,15 +382,15 @@ async function selectPair(input: {
   const Vote = getPlayVoteModel();
   const includeFiles = input.includeFiles !== false;
 
-  const selectFields = includeFiles
-    ? "anonymousId displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches files"
-    : "anonymousId displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches";
-
+  // The pair scan is O(n²) over every candidate, so it never loads file
+  // contents — only the two entries actually shown fetch their files, below.
   const candidates = (await Submission.find({
     challengeDate: input.challengeDate,
     anonymousId: { $ne: input.anonymousId },
   })
-    .select(selectFields)
+    .select(
+      "anonymousId displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches",
+    )
     .lean()) as LeanSubmission[];
 
   if (candidates.length < 2) return null;
@@ -438,10 +440,27 @@ async function selectPair(input: {
   if (!best) return null;
 
   // Randomize left/right presentation.
-  if (Math.random() < 0.5) {
-    return [best.a, best.b];
-  }
-  return [best.b, best.a];
+  const ordered: [LeanSubmission, LeanSubmission] =
+    Math.random() < 0.5 ? [best.a, best.b] : [best.b, best.a];
+
+  if (!includeFiles) return ordered;
+
+  const withFiles = await Submission.find({
+    _id: { $in: ordered.map((c) => c._id) },
+  })
+    .select("files")
+    .lean();
+  const filesById = new Map<string, Array<{ path: string; content: string }>>(
+    withFiles.map((d) => [
+      String(d._id),
+      (d.files || []) as Array<{ path: string; content: string }>,
+    ]),
+  );
+
+  return ordered.map((c) => ({
+    ...c,
+    files: filesById.get(String(c._id)) || [],
+  })) as [LeanSubmission, LeanSubmission];
 }
 
 /** Count unique opponent pairs this voter has not yet compared. */
@@ -487,10 +506,22 @@ export async function listPublicSubmissions(options: {
   challengeDate: string;
   submissions: PublicSubmissionSummary[];
   total: number;
+  mine: PublicSubmissionSummary[];
 }> {
   const challengeDate = options.challengeDate || getCurrentPeriodKey();
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
   const ranked = await loadRankedForDate(challengeDate);
+
+  // Returned separately from the (limited) page so a builder always finds all
+  // of their own entries, even when they fall outside the first `limit` rows.
+  const mine = options.anonymousId
+    ? ranked
+        .map((doc, i) => ({ doc, rank: i + 1 }))
+        .filter(({ doc }) => doc.anonymousId === options.anonymousId)
+        .map(({ doc, rank }) =>
+          toPublicSummary(doc, { rank, anonymousId: options.anonymousId }),
+        )
+    : [];
 
   return {
     challengeDate,
@@ -501,6 +532,7 @@ export async function listPublicSubmissions(options: {
         anonymousId: options.anonymousId,
       }),
     ),
+    mine,
   };
 }
 
@@ -553,6 +585,8 @@ export async function getLeaderboard(options: {
 }> {
   const challengeDate = options.challengeDate || getCurrentPeriodKey();
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 100);
+  // One row per submission — every build ranks independently, including
+  // multiple entries from the same builder.
   const ranked = await loadRankedForDate(challengeDate);
   const entries = ranked.slice(0, limit).map((doc, i) =>
     toPublicSummary(doc, {
@@ -561,11 +595,11 @@ export async function getLeaderboard(options: {
     }),
   );
 
+  // `ranked` is rank-sorted, so the first match is this builder's best entry.
+  // Their other entries still appear as their own rows, flagged `isMine`.
   let you: PublicSubmissionSummary | null = null;
   if (options.anonymousId) {
-    const idx = ranked.findIndex(
-      (d) => d.anonymousId === options.anonymousId,
-    );
+    const idx = ranked.findIndex((d) => d.anonymousId === options.anonymousId);
     if (idx >= 0) {
       you = toPublicSummary(ranked[idx], {
         rank: idx + 1,
@@ -597,8 +631,7 @@ export async function getNextVotePair(input: {
   const votesToday = await countVotesToday(anonymousId, challengeDate);
   const round = buildRoundProgress(votesToday);
 
-  const own = await findOwnSubmission(anonymousId, challengeDate);
-  if (!own) {
+  if (!(await hasSubmitted(anonymousId, challengeDate))) {
     const weekly = getPlayChallengeCadence() === "weekly";
     return unavailableVotePair({
       challengeDate,
@@ -836,18 +869,11 @@ export async function castVote(input: {
   const challengeDate = input.challengeDate || getCurrentPeriodKey();
   const votesToday = await countVotesToday(anonymousId, challengeDate);
 
-  const own = await findOwnSubmission(anonymousId, challengeDate);
-  if (!own) {
+  if (!(await hasSubmitted(anonymousId, challengeDate))) {
     throw createHttpError(403, "must_submit");
   }
   if (votesToday >= MAX_WEIGHTED_VOTES_PER_DAY) {
     throw createHttpError(429, "vote_cap_reached");
-  }
-  if (
-    String(own._id) === winnerId ||
-    String(own._id) === loserId
-  ) {
-    throw createHttpError(400, "cannot_vote_own");
   }
 
   const Submission = getPlaySubmissionModel();
@@ -865,6 +891,14 @@ export async function castVote(input: {
     loser.challengeDate !== challengeDate
   ) {
     throw createHttpError(400, "challenge_date_mismatch");
+  }
+  // Checked against the entries themselves, not a single "own" submission, so
+  // every build this voter entered is excluded — not just one of them.
+  if (
+    winner.anonymousId === anonymousId ||
+    loser.anonymousId === anonymousId
+  ) {
+    throw createHttpError(400, "cannot_vote_own");
   }
 
   const key = pairKeyFor(winnerId, loserId);

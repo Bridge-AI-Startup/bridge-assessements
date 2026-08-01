@@ -33,11 +33,6 @@ export async function fetchChallengePeriod() {
   return inflight;
 }
 
-/** Clear cache (e.g. after midnight boundary in a long-lived tab). */
-export function clearChallengePeriodCache() {
-  cached = null;
-}
-
 export function periodPossessive(cadence) {
   return cadence === "weekly" ? "this week's" : "today's";
 }

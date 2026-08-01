@@ -111,6 +111,10 @@ export default function Leaderboard() {
               -{data.you.losses}
               {data.you.provisional ? " · provisional" : ""}
             </p>
+            <p className="mt-1 text-xs text-fog-light">
+              Your highest-ranked build. Every build you submitted is ranked
+              separately below.
+            </p>
           </div>
         )}
 

@@ -69,7 +69,6 @@ async function main() {
     console.log("\nSandbox ready");
     console.log("  sandboxId:", sandbox.sandboxId);
     console.log("  previewUrl:", urls.previewUrl);
-    console.log("  vscodeUrl (legacy, unused):", urls.vscodeUrl);
 
     const claudeCheck = await runPlayCommand(
       sandbox,

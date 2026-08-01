@@ -13,7 +13,6 @@ export type SessionChallenge = {
   title: string;
   challengeDate: string;
   tokenBudget: number;
-  timeLimitMinutes?: number;
 };
 
 export type SessionChatMessage = {
@@ -27,7 +26,6 @@ export type PlaySession = {
   status: string;
   /** "serverless" = single-file HTML generation (no sandbox); default "e2b". */
   makeMode?: "e2b" | "serverless";
-  vscodeUrl?: string;
   previewUrl?: string;
   expiresAt?: string;
   startedAt?: string;
@@ -53,15 +51,7 @@ export type SessionResult =
 
 const SESSION_STORAGE_KEY = "playSessionId";
 
-export function getStoredSessionId(): string | null {
-  try {
-    return sessionStorage.getItem(SESSION_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function storeSessionId(sessionId: string) {
+function storeSessionId(sessionId: string) {
   try {
     sessionStorage.setItem(SESSION_STORAGE_KEY, sessionId);
   } catch {
@@ -143,7 +133,7 @@ async function persistSuccessfulSession(
   }
 }
 
-export async function createSession(): Promise<SessionResult> {
+async function createSession(): Promise<SessionResult> {
   const anonymousId = getOrCreateAnonymousId();
   return persistSuccessfulSession(post("/session", { anonymousId }));
 }

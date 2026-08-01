@@ -33,7 +33,6 @@ import {
   serializeChatMessages,
   type SnapshotFile,
 } from "./sessionPersist.js";
-import { closeSessionTerminal } from "./terminal.js";
 import { createKeyedAsyncLock } from "./keyedAsyncLock.js";
 
 export type SessionChallengeSummary = {
@@ -41,7 +40,6 @@ export type SessionChallengeSummary = {
   title: string;
   challengeDate: string;
   tokenBudget: number;
-  timeLimitMinutes?: number;
 };
 
 export type SessionChatMessage = {
@@ -54,7 +52,6 @@ export type SessionResponse = {
   sessionId: string;
   status: string;
   makeMode: "e2b" | "serverless";
-  vscodeUrl?: string;
   previewUrl?: string;
   expiresAt?: string;
   startedAt?: string;
@@ -137,7 +134,6 @@ function toSessionResponse(
     _id: { toString(): string };
     status: string;
     makeMode?: "e2b" | "serverless";
-    vscodeUrl?: string;
     previewUrl?: string;
     expiresAt?: Date;
     startedAt?: Date;
@@ -186,7 +182,6 @@ function toChallengeSummary(
     title: challenge.title,
     challengeDate: challenge.challengeDate,
     tokenBudget: challenge.tokenBudget,
-    timeLimitMinutes: challenge.timeLimitMinutes,
   };
 }
 
@@ -221,20 +216,11 @@ async function expireSession(
     status: string;
     error?: string;
     e2bSandboxId?: string;
-    _id?: { toString(): string };
     sandboxPaused?: boolean;
     save: () => Promise<unknown>;
   },
   reason: string,
 ): Promise<void> {
-  const sessionId = doc._id?.toString();
-  if (sessionId) {
-    try {
-      await closeSessionTerminal(sessionId);
-    } catch {
-      /* ignore */
-    }
-  }
   if (doc.e2bSandboxId) {
     try {
       const sandbox = await connectPlaySandbox(doc.e2bSandboxId, {
@@ -282,7 +268,6 @@ async function reprovisionSandboxOnSession(
     challengeDate: string;
     status: string;
     previewUrl?: string;
-    vscodeUrl?: string;
     error?: string;
     expiresAt?: Date;
     workspaceSnapshot?: SnapshotFile[];
@@ -341,7 +326,6 @@ async function reprovisionSandboxOnSession(
   doc.status = "active";
   doc.e2bSandboxId = sandbox.sandboxId;
   doc.previewUrl = urls.previewUrl;
-  doc.vscodeUrl = undefined;
   doc.error = undefined;
   (doc as { sandboxPaused?: boolean }).sandboxPaused = false;
   await doc.save();
@@ -453,7 +437,6 @@ async function createOrResumeSessionUnlocked(
           });
           const urls = getPlaySandboxUrls(sandbox);
           existing.previewUrl = urls.previewUrl;
-          existing.vscodeUrl = undefined;
           existing.sandboxPaused = false;
           existing.error = undefined;
           await existing.save();
@@ -588,7 +571,6 @@ async function createOrResumeSessionUnlocked(
     doc.status = "active";
     doc.e2bSandboxId = sandbox.sandboxId;
     doc.previewUrl = urls.previewUrl;
-    doc.vscodeUrl = undefined;
     doc.error = undefined;
     doc.sandboxPaused = false;
     await doc.save();
@@ -738,7 +720,6 @@ export async function pausePlayBuildSession(
     return { paused: false, sandboxPaused: false };
   }
 
-  await closeSessionTerminal(sessionId, { killPty: false });
   const ok = await pausePlaySandbox(doc.e2bSandboxId!);
   if (ok) {
     doc.sandboxPaused = true;
@@ -789,7 +770,6 @@ export async function resumePlayBuildSession(
 
   const urls = getPlaySandboxUrls(sandbox);
   doc.previewUrl = urls.previewUrl;
-  doc.vscodeUrl = undefined;
   doc.sandboxPaused = false;
   doc.error = undefined;
   await doc.save();

@@ -23,7 +23,7 @@ const EXT_LANG = {
   txt: "plaintext",
 };
 
-export function languageFromPath(path) {
+function languageFromPath(path) {
   if (!path) return "plaintext";
   const base = path.split("/").pop() || "";
   const ext = base.includes(".") ? base.split(".").pop().toLowerCase() : "";

@@ -9,7 +9,6 @@ import {
 } from "../e2b/graderSandbox.js";
 import { shortsEnv } from "../../utils/shortsEnv.js";
 
-export const PLAY_CODE_SERVER_PORT = 8081;
 export const PLAY_PREVIEW_PORT = 8080;
 export const PLAY_WORKSPACE = "/home/user/project";
 
@@ -17,7 +16,6 @@ const DEFAULT_PLAY_TEMPLATE = "bridge-play-dev";
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 export type PlaySandboxUrls = {
-  vscodeUrl: string;
   previewUrl: string;
 };
 
@@ -59,14 +57,8 @@ export async function createPlaySandbox(
 }
 
 export function getPlaySandboxUrls(sandbox: Sandbox): PlaySandboxUrls {
-  const vscodeHost = sandbox.getHost(PLAY_CODE_SERVER_PORT);
   const previewHost = sandbox.getHost(PLAY_PREVIEW_PORT);
-  const folderQ = encodeURIComponent(PLAY_WORKSPACE);
-  return {
-    // Legacy: template no longer runs code-server; field kept for older callers.
-    vscodeUrl: `https://${vscodeHost}/?folder=${folderQ}`,
-    previewUrl: `https://${previewHost}/`,
-  };
+  return { previewUrl: `https://${previewHost}/` };
 }
 
 export async function killPlaySandbox(sandbox: Sandbox): Promise<void> {
@@ -172,132 +164,6 @@ export async function writePlayProjectClaudeMd(
     `${PLAY_WORKSPACE}/CLAUDE.md`,
     PLAY_PROJECT_CLAUDE_MD,
   );
-}
-
-/**
- * Disable VS Code Restricted Mode for this sandbox user.
- */
-export async function ensureCodeServerTrusted(
-  sandbox: Sandbox,
-): Promise<void> {
-  const userDir = "/home/user/.local/share/code-server/User";
-  await runPlayCommand(sandbox, `mkdir -p "${userDir}"`, { timeoutMs: 10_000 });
-  const settings = {
-    "security.workspace.trust.enabled": false,
-    "security.workspace.trust.startupPrompt": "never",
-    "security.workspace.trust.banner": "never",
-    "security.workspace.trust.emptyWindow": true,
-  };
-  await sandbox.files.write(
-    `${userDir}/settings.json`,
-    `${JSON.stringify(settings, null, 2)}\n`,
-  );
-}
-
-/**
- * Start code-server pointing at `target`, trying --disable-workspace-trust first.
- * If the process dies within 2s (flag unsupported), retries without the flag.
- * Returns whether port 8081 came up successfully.
- */
-async function startCodeServerAt(
-  sandbox: Sandbox,
-  target: string,
-  logFile = "/tmp/code-server-play.log",
-): Promise<boolean> {
-  const cmd = [
-    'CODE_SERVER="$(command -v code-server 2>/dev/null || true)"',
-    'if [ -z "$CODE_SERVER" ] && [ -x "$HOME/.local/bin/code-server" ]; then CODE_SERVER="$HOME/.local/bin/code-server"; fi',
-    'if [ -z "$CODE_SERVER" ]; then echo "code-server not found" >&2; exit 1; fi',
-    `nohup "$CODE_SERVER" --bind-addr 0.0.0.0:8081 --auth none --disable-workspace-trust "${target}" >>"${logFile}" 2>&1 &`,
-    "CS_PID=$!",
-    // Wait 2s — if the process exited immediately, the flag is unsupported
-    "sleep 2",
-    'if ! kill -0 "$CS_PID" 2>/dev/null; then',
-    `  echo "[warn] --disable-workspace-trust caused early exit, retrying without flag" >>"${logFile}"`,
-    `  nohup "$CODE_SERVER" --bind-addr 0.0.0.0:8081 --auth none "${target}" >>"${logFile}" 2>&1 &`,
-    "fi",
-    "for i in $(seq 1 38); do",
-    "  if curl -sf http://127.0.0.1:8081/ >/dev/null 2>&1; then exit 0; fi",
-    "  sleep 0.5",
-    "done",
-    'echo "code-server did not come up in time" >&2',
-    "exit 1",
-  ].join("\n");
-
-  const result = await runPlayCommand(sandbox, cmd, { timeoutMs: 60_000 });
-  return result.exitCode === 0;
-}
-
-/**
- * Ensure code-server on port 8081 is running. No-op if already up.
- * If down, restarts it (focused on CHALLENGE.md if present, else workspace folder).
- */
-export async function ensureCodeServerRunning(sandbox: Sandbox): Promise<void> {
-  const check = await runPlayCommand(
-    sandbox,
-    "curl -sf http://127.0.0.1:8081/ >/dev/null 2>&1 && echo UP || echo DOWN",
-    { timeoutMs: 10_000 },
-  );
-  if ((check.stdout || "").trim() === "UP") return;
-
-  const file = `${PLAY_WORKSPACE}/CHALLENGE.md`;
-  const targetResult = await runPlayCommand(
-    sandbox,
-    `[ -f "${file}" ] && echo "${file}" || echo "${PLAY_WORKSPACE}"`,
-    { timeoutMs: 5_000 },
-  );
-  const target = (targetResult.stdout || "").trim() || PLAY_WORKSPACE;
-
-  console.log(`[play/sandbox] code-server is down — restarting (target: ${target})`);
-
-  const ok = await startCodeServerAt(sandbox, target);
-  if (!ok) {
-    const logResult = await runPlayCommand(
-      sandbox,
-      "tail -20 /tmp/code-server-play.log 2>/dev/null || echo '(no log)'",
-      { timeoutMs: 5_000 },
-    );
-    console.warn(
-      "[play/sandbox] ensureCodeServerRunning: restart failed. Log:",
-      logResult.stdout,
-    );
-  }
-}
-
-/**
- * Restart code-server focused on CHALLENGE.md so the editor opens that file.
- * Used on new session creation; use ensureCodeServerRunning on resume.
- */
-export async function reopenCodeServerOnChallenge(
-  sandbox: Sandbox,
-): Promise<void> {
-  const file = `${PLAY_WORKSPACE}/CHALLENGE.md`;
-
-  // Kill any running instance before a fresh restart
-  await runPlayCommand(sandbox, "pkill -f code-server 2>/dev/null || true", {
-    timeoutMs: 10_000,
-  });
-  await runPlayCommand(sandbox, "sleep 1", { timeoutMs: 5_000 });
-
-  // Truncate the log so failures are easy to read
-  await runPlayCommand(
-    sandbox,
-    "truncate -s 0 /tmp/code-server-play.log 2>/dev/null || true",
-    { timeoutMs: 5_000 },
-  );
-
-  const ok = await startCodeServerAt(sandbox, file);
-  if (!ok) {
-    const logResult = await runPlayCommand(
-      sandbox,
-      "tail -20 /tmp/code-server-play.log 2>/dev/null || echo '(no log)'",
-      { timeoutMs: 5_000 },
-    );
-    console.warn(
-      "[play/sandbox] reopenCodeServerOnChallenge failed. Log:",
-      logResult.stdout,
-    );
-  }
 }
 
 /**
