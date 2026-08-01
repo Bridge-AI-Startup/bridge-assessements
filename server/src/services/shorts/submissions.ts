@@ -1,13 +1,14 @@
 import createHttpError from "http-errors";
 import { Types } from "mongoose";
-import { getPlayBuildSessionModel } from "../../models/play/buildSession.js";
-import { getPlaySubmissionModel } from "../../models/play/submission.js";
+import { getPlayBuildSessionModel } from "../../models/shorts/buildSession.js";
+import { getPlaySubmissionModel } from "../../models/shorts/submission.js";
 import {
   connectPlaySandbox,
   filterPlayPublicFiles,
   killPlaySandbox,
   snapshotProjectFiles,
 } from "./sandbox.js";
+import { snapshotServerlessSubmission } from "./serverlessMake.js";
 import { assertNotStarterOnly } from "./starterDetection.js";
 import { closeSessionTerminal } from "./terminal.js";
 import type { Sandbox } from "e2b";
@@ -78,33 +79,40 @@ export async function submitSession(input: {
     await session.save();
     throw createHttpError(400, "session_expired");
   }
-  if (!session.e2bSandboxId) {
-    throw createHttpError(502, "session has no sandbox");
-  }
+  const isServerless = session.makeMode === "serverless";
 
-  let sandbox: Sandbox;
-  try {
-    sandbox = await connectPlaySandbox(session.e2bSandboxId, {
-      timeoutMs: 60 * 60 * 1000,
-    });
-  } catch {
-    session.status = "expired";
-    session.error = "Sandbox no longer reachable";
-    await session.save();
-    throw createHttpError(502, "Sandbox no longer reachable");
-  }
+  let snapshot: { files: Array<{ path: string; content: string }>; totalBytes: number };
+  let sandbox: Sandbox | null = null;
 
-  let snapshot;
-  try {
-    snapshot = await snapshotProjectFiles(sandbox);
-  } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "Failed to snapshot project";
-    const status =
-      message.includes("exceeds") || message.includes("too many")
-        ? 413
-        : 502;
-    throw createHttpError(status, message);
+  if (isServerless) {
+    // Serverless: the generated file(s) already live on the session snapshot.
+    snapshot = snapshotServerlessSubmission(session);
+  } else {
+    if (!session.e2bSandboxId) {
+      throw createHttpError(502, "session has no sandbox");
+    }
+    try {
+      sandbox = await connectPlaySandbox(session.e2bSandboxId, {
+        timeoutMs: 60 * 60 * 1000,
+      });
+    } catch {
+      session.status = "expired";
+      session.error = "Sandbox no longer reachable";
+      await session.save();
+      throw createHttpError(502, "Sandbox no longer reachable");
+    }
+
+    try {
+      snapshot = await snapshotProjectFiles(sandbox);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to snapshot project";
+      const status =
+        message.includes("exceeds") || message.includes("too many")
+          ? 413
+          : 502;
+      throw createHttpError(status, message);
+    }
   }
 
   // Reject unchanged / near-empty starter before persisting or killing the sandbox
@@ -135,8 +143,11 @@ export async function submitSession(input: {
   session.previewUrl = undefined;
   await session.save();
 
-  await closeSessionTerminal(input.sessionId, { killPty: true });
-  await killPlaySandbox(sandbox);
+  // Only E2B sessions have a sandbox/terminal to tear down.
+  if (sandbox) {
+    await closeSessionTerminal(input.sessionId, { killPty: true });
+    await killPlaySandbox(sandbox);
+  }
 
   return {
     submissionId: doc._id.toString(),

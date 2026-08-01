@@ -1,6 +1,7 @@
 import createHttpError from "http-errors";
 import { Types } from "mongoose";
-import { getPlaySubmissionModel } from "../../models/play/submission.js";
+import { getPlaySubmissionModel } from "../../models/shorts/submission.js";
+import { getPlayBuildSessionModel } from "../../models/shorts/buildSession.js";
 import {
   filterPlayPublicFiles,
   PLAY_SNAPSHOT_SKIP_DIR_PATTERN,
@@ -137,6 +138,47 @@ export async function getPlaySubmissionPreviewFile(input: {
   }
 
   const publicFiles = filterPlayPublicFiles(doc.files || []);
+  const file = publicFiles.find((f) => f.path === normalizedPath);
+  if (!file || typeof file.content !== "string") {
+    throw createHttpError(404, "preview_not_found");
+  }
+
+  return { path: file.path, content: file.content };
+}
+
+/**
+ * Serve one file from a live build session's workspaceSnapshot (serverless make
+ * mode). Unlike submission previews this mutates each turn, so the caller must
+ * respond with `Cache-Control: no-store`. Ownership is enforced by anonymousId.
+ */
+export async function getPlaySessionPreviewFile(input: {
+  sessionId: string;
+  anonymousId: string;
+  path?: string | null;
+}): Promise<PlayPreviewFile> {
+  const sessionId = String(input.sessionId || "").trim();
+  if (!Types.ObjectId.isValid(sessionId)) {
+    throw createHttpError(400, "invalid session id");
+  }
+  const anonymousId = String(input.anonymousId || "").trim();
+  const normalizedPath = normalizePlayPreviewPath(input.path);
+
+  const BuildSession = getPlayBuildSessionModel();
+  const doc = (await BuildSession.findById(sessionId)
+    .select("anonymousId workspaceSnapshot")
+    .lean()) as {
+    anonymousId?: string;
+    workspaceSnapshot?: Array<{ path: string; content: string }>;
+  } | null;
+
+  if (!doc) {
+    throw createHttpError(404, "preview_not_found");
+  }
+  if (doc.anonymousId !== anonymousId) {
+    throw createHttpError(403, "session_forbidden");
+  }
+
+  const publicFiles = filterPlayPublicFiles(doc.workspaceSnapshot || []);
   const file = publicFiles.find((f) => f.path === normalizedPath);
   if (!file || typeof file.content !== "string") {
     throw createHttpError(404, "preview_not_found");

@@ -1,10 +1,10 @@
 import { Schema, Types } from "mongoose";
-import { getPlayConnection } from "../../db/playConnection.js";
+import { getPlayConnection } from "../../db/shortsConnection.js";
 import {
   INITIAL_RANKING_SCORE,
   INITIAL_RATING_DEVIATION,
   INITIAL_RATING_MEAN,
-} from "../../services/play/ratingConstants.js";
+} from "../../services/shorts/ratingConstants.js";
 
 const SubmissionFileSchema = new Schema(
   {

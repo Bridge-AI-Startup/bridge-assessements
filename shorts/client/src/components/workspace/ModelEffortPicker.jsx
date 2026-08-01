@@ -23,8 +23,15 @@ function saveStored(model, effort) {
 
 /**
  * Claude Code–style /model picker: model list + conditional effort slider.
+ * `hideEffort` drops the effort control entirely — used in serverless make mode,
+ * where the direct Messages API has no effort parameter.
  */
-export default function ModelEffortPicker({ value, onChange }) {
+export default function ModelEffortPicker({
+  value,
+  onChange,
+  hideEffort = false,
+  engineLabel = "Claude Code",
+}) {
   const [models, setModels] = useState([]);
   const [defaultModel, setDefaultModel] = useState(null);
   const [open, setOpen] = useState(false);
@@ -124,10 +131,10 @@ export default function ModelEffortPicker({ value, onChange }) {
         title="Claude Code model and effort"
       >
         <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-          Claude Code
+          {engineLabel}
         </span>
         <span className="truncate font-medium">{selected.label}</span>
-        {value?.effort && efforts.length > 0 && (
+        {!hideEffort && value?.effort && efforts.length > 0 && (
           <span className="truncate text-slate-400">· {value.effort}</span>
         )}
         <span className="text-slate-400" aria-hidden>
@@ -138,7 +145,7 @@ export default function ModelEffortPicker({ value, onChange }) {
       {open && (
         <div className="absolute bottom-full left-0 z-30 mb-1 w-72 rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
           <p className="px-1 pb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">
-            Claude Code · Model
+            {engineLabel} · Model
           </p>
           <ul className="mb-2 space-y-0.5">
             {models.map((m) => {
@@ -168,7 +175,7 @@ export default function ModelEffortPicker({ value, onChange }) {
             })}
           </ul>
 
-          {efforts.length > 0 ? (
+          {hideEffort ? null : efforts.length > 0 ? (
             <div className="border-t border-slate-100 px-1 pt-2">
               <div className="mb-1 flex items-center justify-between">
                 <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">

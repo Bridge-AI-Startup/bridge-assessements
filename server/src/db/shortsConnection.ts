@@ -1,4 +1,5 @@
 import mongoose, { type Connection } from "mongoose";
+import { getShortsDbName } from "../utils/shortsEnv.js";
 
 const MONGODB_URI = process.env.ATLAS_URI;
 
@@ -25,7 +26,9 @@ if (!cached) {
   cached = global.playMongoose = { conn: null, promise: null };
 }
 
-const playDbName = () => process.env.PLAY_DB_NAME || "bridge-play";
+// Reads SHORTS_DB_NAME, then legacy PLAY_DB_NAME, defaulting to `bridge-play`
+// so existing Atlas data stays wired.
+const playDbName = () => getShortsDbName();
 
 /**
  * Connect to the Play product MongoDB database (separate from assessments).

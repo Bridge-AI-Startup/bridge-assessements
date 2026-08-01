@@ -8,8 +8,8 @@ import {
   listChallenges,
   updateChallenge,
   type ChallengeStatus,
-} from "../../services/play/challenges.js";
-import { getChallengePeriodInfo } from "../../services/play/challengePeriod.js";
+} from "../../services/shorts/challenges.js";
+import { getChallengePeriodInfo } from "../../services/shorts/challengePeriod.js";
 import {
   createOrResumeSession,
   getSession as getPlaySession,
@@ -17,45 +17,52 @@ import {
   isSessionQueueError,
   pausePlayBuildSession,
   resumePlayBuildSession,
-} from "../../services/play/sessions.js";
+} from "../../services/shorts/sessions.js";
 import {
   getSubmissionById,
   listSubmissions,
   submitSession,
-} from "../../services/play/submissions.js";
+} from "../../services/shorts/submissions.js";
 import {
   isStarterOnlyError,
   STARTER_ONLY_CODE,
-} from "../../services/play/starterDetection.js";
+} from "../../services/shorts/starterDetection.js";
 import {
   castVote,
   getLeaderboard as getPlayLeaderboard,
   getNextVotePair,
   getPublicSubmissionById,
   listPublicSubmissions as listPlayPublicSubmissions,
-} from "../../services/play/voting.js";
-import { getPlaySubmissionPreviewFile } from "../../services/play/preview.js";
+} from "../../services/shorts/voting.js";
+import {
+  getPlaySessionPreviewFile,
+  getPlaySubmissionPreviewFile,
+} from "../../services/shorts/preview.js";
 import {
   getSessionUsage as getPlaySessionUsage,
   handlePlayMessagesProxy,
   runClaudePrintPrompt,
-} from "../../services/play/llmProxy.js";
+} from "../../services/shorts/llmProxy.js";
+import {
+  getSessionMakeMode,
+  runServerlessMakeTurn,
+} from "../../services/shorts/serverlessMake.js";
 import {
   listSessionProjectFiles,
   readSessionProjectFile,
   writeSessionProjectFile,
-} from "../../services/play/workspaceFiles.js";
-import { listPlayModelsPublic } from "../../services/play/models.js";
+} from "../../services/shorts/workspaceFiles.js";
+import { listPlayModelsPublic } from "../../services/shorts/models.js";
 import {
   attachTerminalStream,
   listSessionTerminals,
   openSessionTerminal,
   resizeSessionTerminal,
   sendTerminalInput,
-} from "../../services/play/terminal.js";
+} from "../../services/shorts/terminal.js";
 
 export const health: RequestHandler = (_req, res) => {
-  res.status(200).json({ ok: true, product: "play" });
+  res.status(200).json({ ok: true, product: "shorts" });
 };
 
 export const getPeriod: RequestHandler = (_req, res) => {
@@ -334,7 +341,7 @@ export const postClaudeMessage: RequestHandler = async (req, res, next) => {
       res.status(400).json({ error: "prompt is required" });
       return;
     }
-    const result = await runClaudePrintPrompt({
+    const turnInput = {
       sessionId: String(req.params.id),
       anonymousId: String(req.body.anonymousId),
       prompt,
@@ -342,7 +349,14 @@ export const postClaudeMessage: RequestHandler = async (req, res, next) => {
         typeof req.body.model === "string" ? req.body.model : undefined,
       effort:
         typeof req.body.effort === "string" ? req.body.effort : undefined,
-    });
+    };
+    // Per-session make mode picks the path: serverless (direct Anthropic call)
+    // vs E2B (claude -p in the sandbox). E2B path is unchanged.
+    const makeMode = await getSessionMakeMode(turnInput.sessionId);
+    const result =
+      makeMode === "serverless"
+        ? await runServerlessMakeTurn(turnInput)
+        : await runClaudePrintPrompt(turnInput);
     let usage = null;
     try {
       usage = await getPlaySessionUsage(
@@ -634,6 +648,38 @@ export const getSubmissionPreviewFile: RequestHandler = async (
       buildPlayPreviewFrameAncestors(),
     );
     // Do not set X-Frame-Options: SAMEORIGIN — blocks cross-origin Play iframes.
+    res.status(200).send(file.content);
+  } catch (error) {
+    res.setHeader("Cache-Control", "no-store");
+    next(error);
+  }
+};
+
+export const getSessionPreviewFile: RequestHandler = async (req, res, next) => {
+  // Live session preview mutates every turn — never cache.
+  res.setHeader("Cache-Control", "no-store");
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const splat =
+      typeof req.params[0] === "string" ? req.params[0] : undefined;
+    const file = await getPlaySessionPreviewFile({
+      sessionId: String(req.params.id),
+      anonymousId: String(req.query.anonymousId),
+      path: splat,
+    });
+
+    res.type(file.path);
+    const contentType = String(res.getHeader("Content-Type") || "");
+    if (!contentType || contentType.includes("application/octet-stream")) {
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    }
+
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("Content-Security-Policy", buildPlayPreviewFrameAncestors());
     res.status(200).send(file.content);
   } catch (error) {
     res.setHeader("Cache-Control", "no-store");

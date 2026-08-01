@@ -2,7 +2,7 @@
  * Upsert a Play challenge from a JSON file.
  *
  * Usage (from server/):
- *   npx tsx src/scripts/seedPlayChallenge.ts [path-to-json]
+ *   npx tsx src/scripts/seedShortsChallenge.ts [path-to-json]
  *
  * Defaults to ../play/challenges/counter-widget.json relative to server/.
  * If challengeDate is omitted, uses the current period key from
@@ -13,13 +13,13 @@ import "../config/loadEnv.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import connectPlayMongoose from "../db/playConnection.js";
+import connectPlayMongoose from "../db/shortsConnection.js";
 import {
   getUtcChallengeDate,
   createChallenge,
   updateChallenge,
   getChallengeBySlug,
-} from "../services/play/challenges.js";
+} from "../services/shorts/challenges.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -44,7 +44,7 @@ async function main() {
   if (!fs.existsSync(jsonPath)) {
     console.error("File not found:", jsonPath);
     console.error(
-      "Usage: npx tsx src/scripts/seedPlayChallenge.ts [path-to-json]",
+      "Usage: npx tsx src/scripts/seedShortsChallenge.ts [path-to-json]",
     );
     process.exit(1);
   }

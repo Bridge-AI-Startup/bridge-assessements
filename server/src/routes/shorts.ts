@@ -1,7 +1,7 @@
 import express from "express";
-import * as PlayController from "../controllers/play/index.js";
+import * as PlayController from "../controllers/shorts/index.js";
 import { verifyAuthToken } from "../validators/auth.js";
-import { requirePlayAdmin } from "../middleware/requirePlayAdmin.js";
+import { requirePlayAdmin } from "../middleware/requireShortsAdmin.js";
 import {
   createChallengeValidation,
   createSessionValidation,
@@ -17,6 +17,7 @@ import {
   publicListSubmissionsValidation,
   previewSubmissionFileValidation,
   readSessionFileValidation,
+  sessionPreviewFileValidation,
   slugParamValidation,
   submissionIdParamValidation,
   submitSessionValidation,
@@ -28,7 +29,7 @@ import {
   voteNextValidation,
   leaderboardValidation,
   writeSessionFileValidation,
-} from "../validators/playValidation.js";
+} from "../validators/shortsValidation.js";
 
 const router = express.Router();
 
@@ -71,6 +72,17 @@ router.get(
   "/session/:id/workspace-revision",
   getSessionValidation,
   PlayController.getWorkspaceRevision,
+);
+// Serverless make mode: serve the live session's generated file(s) for the iframe.
+router.get(
+  "/session/:id/preview",
+  sessionPreviewFileValidation,
+  PlayController.getSessionPreviewFile,
+);
+router.get(
+  "/session/:id/preview/*",
+  sessionPreviewFileValidation,
+  PlayController.getSessionPreviewFile,
 );
 router.get(
   "/session/:id/files",

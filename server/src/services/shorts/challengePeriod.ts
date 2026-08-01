@@ -1,21 +1,20 @@
 /**
- * Play challenge cadence: one published challenge per period.
+ * Shorts challenge cadence: one published challenge per period.
  *
  * Switch with env (no code change):
- *   PLAY_CHALLENGE_CADENCE=weekly  (default)
- *   PLAY_CHALLENGE_CADENCE=daily
+ *   SHORTS_CHALLENGE_CADENCE=weekly  (default; legacy: PLAY_CHALLENGE_CADENCE)
+ *   SHORTS_CHALLENGE_CADENCE=daily
  *
  * Period key is still stored as `challengeDate` (YYYY-MM-DD):
  *   daily  → that UTC calendar day
  *   weekly → Monday UTC of the ISO-style week (Mon–Sun)
  */
+import { getShortsChallengeCadence } from "../../utils/shortsEnv.js";
 
 export type PlayChallengeCadence = "daily" | "weekly";
 
 export function getPlayChallengeCadence(): PlayChallengeCadence {
-  const raw = (process.env.PLAY_CHALLENGE_CADENCE || "weekly")
-    .trim()
-    .toLowerCase();
+  const raw = getShortsChallengeCadence().toLowerCase();
   return raw === "daily" ? "daily" : "weekly";
 }
 

@@ -1,8 +1,8 @@
 /**
- * Toggleable saved-submission preview mode for Bridge Play.
+ * Toggleable saved-submission preview mode for Bridge Shorts.
  *
  * Change this single constant to roll the client between implementations:
- *   - "api"  → iframe loads GET /api/play/preview/:id/:revision/*
+ *   - "api"  → iframe loads GET /api/shorts/preview/:id/:revision/*
  *   - "blob" → legacy client-built blob: URLs (requires files in JSON payloads)
  *
  * No env var, localStorage, or UI toggle. Redeploy / restart Vite after flipping.

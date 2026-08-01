@@ -51,6 +51,10 @@ export const createChallengeValidation = [
     .optional()
     .isIn(["draft", "published"])
     .withMessage("status must be draft or published"),
+  body("makeMode")
+    .optional()
+    .isIn(["e2b", "serverless"])
+    .withMessage("makeMode must be e2b or serverless"),
 ];
 
 export const updateChallengeValidation = [
@@ -76,6 +80,10 @@ export const updateChallengeValidation = [
   body("status")
     .optional()
     .isIn(["draft", "published"]),
+  body("makeMode")
+    .optional()
+    .isIn(["e2b", "serverless"])
+    .withMessage("makeMode must be e2b or serverless"),
 ];
 
 export const createSessionValidation = [
@@ -87,6 +95,15 @@ export const createSessionValidation = [
 ];
 
 export const getSessionValidation = [
+  param("id").trim().notEmpty().isMongoId().withMessage("invalid session id"),
+  query("anonymousId")
+    .trim()
+    .notEmpty()
+    .isLength({ min: 8, max: 128 })
+    .withMessage("anonymousId is required"),
+];
+
+export const sessionPreviewFileValidation = [
   param("id").trim().notEmpty().isMongoId().withMessage("invalid session id"),
   query("anonymousId")
     .trim()

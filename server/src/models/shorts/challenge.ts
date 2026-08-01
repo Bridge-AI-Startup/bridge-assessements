@@ -1,8 +1,9 @@
 import { Schema } from "mongoose";
-import { getPlayConnection } from "../../db/playConnection.js";
+import { getPlayConnection } from "../../db/shortsConnection.js";
 
 const CHALLENGE_CATEGORIES = ["widget", "game", "tool", "other"] as const;
 const CHALLENGE_STATUSES = ["draft", "published"] as const;
+const CHALLENGE_MAKE_MODES = ["e2b", "serverless"] as const;
 
 const ChallengeSchema = new Schema(
   {
@@ -50,13 +51,18 @@ const ChallengeSchema = new Schema(
       enum: CHALLENGE_STATUSES,
       default: "draft",
     },
+    // Which build path this challenge uses. Unset → fall back to SHORTS_MAKE_MODE.
+    makeMode: {
+      type: String,
+      enum: CHALLENGE_MAKE_MODES,
+    },
   },
   { timestamps: true },
 );
 
 ChallengeSchema.index({ status: 1, challengeDate: -1 });
 
-export { CHALLENGE_CATEGORIES, CHALLENGE_STATUSES };
+export { CHALLENGE_CATEGORIES, CHALLENGE_STATUSES, CHALLENGE_MAKE_MODES };
 
 export function getPlayChallengeModel() {
   const conn = getPlayConnection();

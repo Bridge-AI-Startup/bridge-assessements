@@ -3,7 +3,7 @@ import {
   CHALLENGE_CATEGORIES,
   CHALLENGE_STATUSES,
   getPlayChallengeModel,
-} from "../../models/play/challenge.js";
+} from "../../models/shorts/challenge.js";
 
 import {
   endOfChallengePeriod,
@@ -13,6 +13,7 @@ import {
 
 export type ChallengeCategory = (typeof CHALLENGE_CATEGORIES)[number];
 export type ChallengeStatus = (typeof CHALLENGE_STATUSES)[number];
+export type ChallengeMakeMode = "e2b" | "serverless";
 
 export type PublicChallenge = {
   challengeDate: string;
@@ -22,6 +23,8 @@ export type PublicChallenge = {
   tokenBudget: number;
   timeLimitMinutes?: number;
   category: ChallengeCategory;
+  /** Build path override; unset → server SHORTS_MAKE_MODE default. */
+  makeMode?: ChallengeMakeMode;
   /** Present on GET /today — mirrors PLAY_CHALLENGE_CADENCE */
   cadence?: "daily" | "weekly";
   periodEndsAt?: string;
@@ -41,6 +44,7 @@ export type ChallengeInput = {
   timeLimitMinutes?: number;
   category: ChallengeCategory;
   status?: ChallengeStatus;
+  makeMode?: ChallengeMakeMode;
 };
 
 export type ChallengePatch = Partial<ChallengeInput>;
@@ -60,6 +64,7 @@ function toPublicChallenge(doc: {
   tokenBudget: number;
   timeLimitMinutes?: number;
   category: ChallengeCategory;
+  makeMode?: ChallengeMakeMode;
 }): PublicChallenge {
   const result: PublicChallenge = {
     challengeDate: doc.challengeDate,
@@ -71,6 +76,9 @@ function toPublicChallenge(doc: {
   };
   if (doc.timeLimitMinutes != null) {
     result.timeLimitMinutes = doc.timeLimitMinutes;
+  }
+  if (doc.makeMode === "e2b" || doc.makeMode === "serverless") {
+    result.makeMode = doc.makeMode;
   }
   return result;
 }
@@ -156,6 +164,8 @@ export async function createChallenge(input: ChallengeInput) {
     ...input,
     slug,
     status: input.status ?? "draft",
+    // Empty string means "use env default" — store nothing rather than fail the enum.
+    makeMode: input.makeMode || undefined,
   });
 
   return doc.toObject();
@@ -200,6 +210,10 @@ export async function updateChallenge(slug: string, patch: ChallengePatch) {
   }
   if (patch.status !== undefined) {
     existing.status = patch.status;
+  }
+  if (patch.makeMode !== undefined) {
+    // Empty string from the form clears the override (back to env default).
+    existing.makeMode = patch.makeMode || undefined;
   }
 
   await existing.save();

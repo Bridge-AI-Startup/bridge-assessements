@@ -20,6 +20,10 @@ import {
 import WorkspaceEditor from "@/components/workspace/WorkspaceEditor";
 import ModelEffortPicker from "@/components/workspace/ModelEffortPicker";
 import ChatFirstBuild from "@/components/workspace/ChatFirstBuild";
+import {
+  compactTokens,
+  useTokenDelta,
+} from "@/components/workspace/TokenGauge";
 import SessionWaitlist from "@/components/SessionWaitlist";
 
 const DEFAULT_LEFT_STACK = ["editor", "chat"];
@@ -86,7 +90,7 @@ function meterTone(pct, { warnAt, dangerAt } = {}) {
   return "ok";
 }
 
-function ProgressMeter({ label, valueLabel, pct, tone = "ok" }) {
+function ProgressMeter({ label, valueLabel, pct, tone = "ok", delta = 0, pulse = false }) {
   const fill =
     tone === "danger"
       ? "bg-red-600"
@@ -107,7 +111,7 @@ function ProgressMeter({ label, valueLabel, pct, tone = "ok" }) {
         : "text-fog-light";
 
   return (
-    <div className="min-w-[7.5rem] max-w-[11rem] flex-1 sm:flex-none">
+    <div className="relative min-w-[7.5rem] max-w-[11rem] flex-1 sm:flex-none">
       <div
         className={`mb-0.5 flex items-baseline justify-between gap-2 font-mono text-[10px] font-medium uppercase tracking-label ${text}`}
       >
@@ -117,7 +121,9 @@ function ProgressMeter({ label, valueLabel, pct, tone = "ok" }) {
         </span>
       </div>
       <div
-        className={`h-1.5 w-full overflow-hidden rounded-full ${track}`}
+        className={`h-1.5 w-full overflow-hidden rounded-full ${track} ${
+          pulse ? "token-gauge-pulse" : ""
+        }`}
         role="progressbar"
         aria-label={label}
         aria-valuenow={Math.round(pct)}
@@ -129,7 +135,34 @@ function ProgressMeter({ label, valueLabel, pct, tone = "ok" }) {
           style={{ width: `${clampPct(pct)}%` }}
         />
       </div>
+      {delta > 0 ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute right-0 top-full"
+        >
+          <span
+            className={`token-gauge-delta block whitespace-nowrap font-mono text-[10px] font-semibold tabular-nums ${text}`}
+          >
+            +{compactTokens(delta)}
+          </span>
+        </span>
+      ) : null}
     </div>
+  );
+}
+
+/** Token budget meter with a "+N" flash whenever Claude spends tokens. */
+function TokenMeter({ used, budget, pct, tone, exhausted }) {
+  const delta = useTokenDelta(used);
+  return (
+    <ProgressMeter
+      label="Tokens"
+      valueLabel={`${formatTokens(used)} / ${formatTokens(budget)}`}
+      pct={pct}
+      tone={tone}
+      delta={delta}
+      pulse={exhausted || tone === "danger"}
+    />
   );
 }
 
@@ -461,6 +494,8 @@ export default function Build() {
   // (`2: [unknown] terminated`) and is the main prod-vs-local failure mode.
   useEffect(() => {
     if (state.kind !== "ready") return undefined;
+    // Serverless sessions have no sandbox to pause/resume/keep-alive.
+    if (state.session.makeMode === "serverless") return undefined;
     const sessionId = state.session.sessionId;
     let pauseTimer = null;
     let disposed = false;
@@ -596,6 +631,9 @@ export default function Build() {
 
   useEffect(() => {
     if (state.kind !== "ready") return undefined;
+    // Serverless has no live sandbox to fingerprint — the preview is refreshed
+    // explicitly after each make turn instead of by polling.
+    if (state.session.makeMode === "serverless") return undefined;
     const sessionId = state.session.sessionId;
     let lastRevision = null;
     let cancelled = false;
@@ -758,7 +796,12 @@ export default function Build() {
     setChatMessages((prev) => [...prev, { role: "user", text: prompt }]);
     chatBusyRef.current = true;
     setChatBusy(true);
-    const revisionBefore = await getWorkspaceRevision(state.session.sessionId);
+    // Serverless regenerates the file every successful turn — no sandbox to
+    // fingerprint, so skip the revision probes and always refresh the preview.
+    const serverless = state.session.makeMode === "serverless";
+    const revisionBefore = serverless
+      ? null
+      : await getWorkspaceRevision(state.session.sessionId);
     const result = await sendClaudeMessage(state.session.sessionId, prompt, {
       model: modelEffort?.model,
       effort: modelEffort?.effort,
@@ -773,8 +816,11 @@ export default function Build() {
       ]);
       return;
     }
-    const revisionAfter = await getWorkspaceRevision(state.session.sessionId);
+    const revisionAfter = serverless
+      ? null
+      : await getWorkspaceRevision(state.session.sessionId);
     const workspaceChanged =
+      serverless ||
       revisionBefore.status !== "ok" ||
       revisionAfter.status !== "ok" ||
       revisionBefore.revision !== revisionAfter.revision;
@@ -925,6 +971,9 @@ export default function Build() {
   }
 
   const { session } = state;
+  // Serverless mode has no sandbox files, so the Studio editor can't mount —
+  // force the chat-first layout and hide the layout toggle.
+  const serverless = session.makeMode === "serverless";
   const chatFullscreen = fullscreen === "chat";
   const editorFullscreen = fullscreen === "editor";
   const previewFullscreen = fullscreen === "preview";
@@ -1107,6 +1156,8 @@ export default function Build() {
               <ModelEffortPicker
                 value={modelEffort}
                 onChange={setModelEffort}
+                hideEffort={serverless}
+                engineLabel={serverless ? "Serverless" : "Claude Code"}
               />
             </div>
             <textarea
@@ -1225,7 +1276,8 @@ export default function Build() {
     chatError,
     onSendMessage: sendPrompt,
     exhausted,
-    tokensLabel: `${formatTokens(tokensUsed)} / ${formatTokens(tokenBudget)} tokens`,
+    tokensUsed,
+    tokenBudget,
     tokenTone,
     timeLabel:
       remainingMs != null ? formatCountdown(remainingMs) : "Build session",
@@ -1234,6 +1286,8 @@ export default function Build() {
     onRefreshPreview: () => setPreviewTick((tick) => tick + 1),
     modelEffort,
     setModelEffort,
+    hideEffort: serverless,
+    engineLabel: serverless ? "Serverless" : "Claude Code",
     onSubmitClick: openSubmitModal,
     chatEndRef,
     submitModal,
@@ -1243,11 +1297,11 @@ export default function Build() {
     return <ChatFirstBuild variant="mobile" {...chatFirstProps} />;
   }
 
-  if (layoutMode === "chat") {
+  if (serverless || layoutMode === "chat") {
     return (
       <ChatFirstBuild
         variant="desktop"
-        headerActions={layoutToggle}
+        headerActions={serverless ? undefined : layoutToggle}
         {...chatFirstProps}
       />
     );
@@ -1263,11 +1317,12 @@ export default function Build() {
           </p>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-2">
             {tokenBudget > 0 ? (
-              <ProgressMeter
-                label="Tokens"
-                valueLabel={`${formatTokens(tokensUsed)} / ${formatTokens(tokenBudget)}`}
+              <TokenMeter
+                used={tokensUsed}
+                budget={tokenBudget}
                 pct={tokenPct}
                 tone={tokenTone}
+                exhausted={exhausted}
               />
             ) : null}
             {remainingMs != null ? (

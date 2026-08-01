@@ -3,7 +3,8 @@
  */
 import type { Sandbox } from "e2b";
 import { Types } from "mongoose";
-import { getPlayBuildSessionModel } from "../../models/play/buildSession.js";
+import { getShortsBuildTimeLimitMinutes } from "../../utils/shortsEnv.js";
+import { getPlayBuildSessionModel } from "../../models/shorts/buildSession.js";
 import { endOfChallengePeriod } from "./challengePeriod.js";
 import {
   snapshotProjectFiles,
@@ -45,7 +46,7 @@ export function getBuildTimeLimitMinutes(
   ) {
     return Math.floor(challengeTimeLimitMinutes);
   }
-  const raw = process.env.PLAY_BUILD_TIME_LIMIT_MINUTES;
+  const raw = getShortsBuildTimeLimitMinutes();
   const n = raw ? parseInt(raw, 10) : DEFAULT_BUILD_TIME_LIMIT_MINUTES;
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_BUILD_TIME_LIMIT_MINUTES;
 }

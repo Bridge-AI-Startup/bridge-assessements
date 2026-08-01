@@ -7,7 +7,7 @@ import express from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import connectMongoose from "./db/mongooseConnection.js";
-import connectPlayMongoose from "./db/playConnection.js";
+import connectPlayMongoose from "./db/shortsConnection.js";
 import "./config/firebaseAdmin.js"; // Initialize Firebase Admin
 import userRoutes from "./routes/user.js";
 import assessmentRoutes from "./routes/assessment.js";
@@ -19,8 +19,9 @@ import llmProxyRoutes from "./routes/llmProxy.js";
 import evaluationRoutes from "./routes/evaluation.js";
 import proctoringRoutes from "./routes/proctoring.js";
 import competitionRoutes from "./routes/competition.js";
-import playRoutes from "./routes/play.js";
-import { health as playHealth } from "./controllers/play/index.js";
+import playRoutes from "./routes/shorts.js";
+import { health as playHealth } from "./controllers/shorts/index.js";
+import { shortsEnabled } from "./utils/shortsEnv.js";
 import { errorHandler } from "./errors/handler.js";
 import { startIncrementalScheduler } from "./ai/transcript/incrementalScheduler.js";
 
@@ -120,8 +121,11 @@ const apiLimiter = rateLimit({
     // Proctoring uses its own limiter (many frame/video posts per minute).
     const path = req.originalUrl?.split("?")[0] || "";
     if (path.startsWith("/api/proctoring")) return true;
-    // Play preview assets use a dedicated high ceiling (gallery iframes).
+    // Shorts preview assets use a dedicated high ceiling (gallery iframes).
+    // Accept both the current `/api/shorts` namespace and legacy `/api/play`.
     if (
+      path === "/api/shorts/preview" ||
+      path.startsWith("/api/shorts/preview/") ||
       path === "/api/play/preview" ||
       path.startsWith("/api/play/preview/")
     ) {
@@ -242,7 +246,10 @@ function shouldSkipVerboseRequestLog(
   const p = req.path || "";
   if (
     (method === "GET" || method === "HEAD") &&
-    (p === "/api/play/preview" || p.startsWith("/api/play/preview/"))
+    (p === "/api/shorts/preview" ||
+      p.startsWith("/api/shorts/preview/") ||
+      p === "/api/play/preview" ||
+      p.startsWith("/api/play/preview/"))
   ) {
     return true;
   }
@@ -362,43 +369,58 @@ app.use("/api/llm-proxy", llmProxyRoutes);
 console.log("  ✅ /api/llm-proxy routes registered");
 console.log("     - POST /api/llm-proxy/chat");
 
-app.use("/api/play/preview", playPreviewLimiter);
-app.use("/api/play", apiLimiter);
-app.get("/api/play/health", playHealth);
-console.log("  ✅ /api/play/health registered (always on)");
+// Shorts (formerly "Play") is served under `/api/shorts`. `/api/play` is kept
+// as a legacy alias so already-deployed clients and in-flight E2B sandboxes
+// (whose ANTHROPIC_BASE_URL may still point at `/api/play`) keep working.
+const SHORTS_PREFIXES = ["/api/shorts", "/api/play"] as const;
+const SHORTS_ENABLED = shortsEnabled();
 
-if (process.env.PLAY_ENABLED === "true") {
-  app.use("/api/play", playRoutes);
-  console.log("  ✅ /api/play routes registered (PLAY_ENABLED=true)");
-  console.log("     - GET /api/play/today");
-  console.log("     - GET /api/play/models");
-  console.log("     - GET /api/play/preview/:id/:revision/*");
-  console.log("     - GET /api/play/admin/challenges");
-  console.log("     - GET /api/play/admin/challenges/:slug");
-  console.log("     - POST /api/play/admin/challenges");
-  console.log("     - PATCH /api/play/admin/challenges/:slug");
-  console.log("     - POST /api/play/session");
-  console.log("     - GET /api/play/session/:id");
-  console.log("     - POST /api/play/session/:id/pause");
-  console.log("     - POST /api/play/session/:id/resume");
-  console.log("     - GET /api/play/session/:id/usage");
-  console.log("     - GET /api/play/session/:id/files");
-  console.log("     - GET|PUT /api/play/session/:id/file");
-  console.log("     - POST /api/play/session/:id/llm/v1/messages");
-  console.log("     - POST /api/play/session/:id/claude/message");
-  console.log("     - POST /api/play/session/:id/terminal");
-  console.log("     - GET /api/play/session/:id/terminal/stream");
-  console.log("     - POST /api/play/session/:id/terminal/input");
-  console.log("     - POST /api/play/session/:id/terminal/resize");
-  console.log("     - POST /api/play/session/:id/llm");
-  console.log("     - POST /api/play/submit");
-  console.log("     - GET /api/play/admin/submissions");
-  console.log("     - GET /api/play/admin/submissions/:id");
-  console.log("     - GET /api/play/vote/next");
-  console.log("     - POST /api/play/vote");
-  console.log("     - GET /api/play/leaderboard");
+for (const prefix of SHORTS_PREFIXES) {
+  app.use(`${prefix}/preview`, playPreviewLimiter);
+  app.use(prefix, apiLimiter);
+  app.get(`${prefix}/health`, playHealth);
+
+  if (SHORTS_ENABLED) {
+    app.use(prefix, playRoutes);
+  }
+}
+
+console.log("  ✅ /api/shorts/health registered (always on; alias /api/play/health)");
+if (SHORTS_ENABLED) {
+  console.log(
+    "  ✅ /api/shorts routes registered (SHORTS_ENABLED/PLAY_ENABLED=true; alias /api/play)",
+  );
+  console.log("     - GET  /api/shorts/today");
+  console.log("     - GET  /api/shorts/models");
+  console.log("     - GET  /api/shorts/preview/:id/:revision/*");
+  console.log("     - GET  /api/shorts/admin/challenges");
+  console.log("     - GET  /api/shorts/admin/challenges/:slug");
+  console.log("     - POST /api/shorts/admin/challenges");
+  console.log("     - PATCH /api/shorts/admin/challenges/:slug");
+  console.log("     - POST /api/shorts/session");
+  console.log("     - GET  /api/shorts/session/:id");
+  console.log("     - POST /api/shorts/session/:id/pause");
+  console.log("     - POST /api/shorts/session/:id/resume");
+  console.log("     - GET  /api/shorts/session/:id/usage");
+  console.log("     - GET  /api/shorts/session/:id/files");
+  console.log("     - GET|PUT /api/shorts/session/:id/file");
+  console.log("     - POST /api/shorts/session/:id/llm/v1/messages");
+  console.log("     - POST /api/shorts/session/:id/claude/message");
+  console.log("     - POST /api/shorts/session/:id/terminal");
+  console.log("     - GET  /api/shorts/session/:id/terminal/stream");
+  console.log("     - POST /api/shorts/session/:id/terminal/input");
+  console.log("     - POST /api/shorts/session/:id/terminal/resize");
+  console.log("     - POST /api/shorts/session/:id/llm");
+  console.log("     - POST /api/shorts/submit");
+  console.log("     - GET  /api/shorts/admin/submissions");
+  console.log("     - GET  /api/shorts/admin/submissions/:id");
+  console.log("     - GET  /api/shorts/vote/next");
+  console.log("     - POST /api/shorts/vote");
+  console.log("     - GET  /api/shorts/leaderboard");
 } else {
-  console.log("  ⏸️  /api/play feature routes disabled (set PLAY_ENABLED=true)");
+  console.log(
+    "  ⏸️  /api/shorts feature routes disabled (set SHORTS_ENABLED=true)",
+  );
 }
 
 // Register before `app.use("/api", apiLimiter)` so frame/video traffic does not consume the general 100/15min bucket.

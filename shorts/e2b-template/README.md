@@ -1,6 +1,7 @@
-# Bridge Play E2B template
+# Bridge Shorts E2B template
 
-Custom E2B sandbox image for Play: **Claude Code CLI** + **static preview**.
+Custom E2B sandbox image for Shorts: **Claude Code CLI** + **static preview**.
+(Template names stay `bridge-play-dev` / `bridge-play-v1`.)
 
 Build UI is **Monaco** + **Claude chat** + **preview iframe** — code-server is not installed.
 
@@ -19,12 +20,12 @@ Starter files live in `starter-project/` and are copied to `/home/user/project` 
 ## Prerequisites
 
 - E2B account with template-build quota
-- `E2B_API_KEY` in `server/config.env` (same key as grading) or `play/e2b-template/.env`
+- `E2B_API_KEY` in `server/config.env` (same key as grading) or `shorts/e2b-template/.env`
 
 ## Build
 
 ```bash
-cd play/e2b-template
+cd shorts/e2b-template
 npm install
 
 # Dev template (use this while iterating)
@@ -39,7 +40,7 @@ npx tsx build.prod.ts
 Build can take several minutes. After success, set on the server:
 
 ```env
-PLAY_E2B_TEMPLATE_ID=bridge-play-dev
+SHORTS_E2B_TEMPLATE_ID=bridge-play-dev
 ```
 
 ## Smoke test
@@ -47,9 +48,9 @@ PLAY_E2B_TEMPLATE_ID=bridge-play-dev
 From `server/`:
 
 ```bash
-npx tsx src/scripts/play-sandbox-smoke.ts
+npx tsx src/scripts/shorts-sandbox-smoke.ts
 # Leave sandbox up for manual browser checks:
-npx tsx src/scripts/play-sandbox-smoke.ts --keep
+npx tsx src/scripts/shorts-sandbox-smoke.ts --keep
 ```
 
 The script prints `previewUrl` (and a legacy `vscodeUrl` field that is unused). Open preview in a browser:

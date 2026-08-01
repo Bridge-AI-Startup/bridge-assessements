@@ -2,22 +2,22 @@
  * Seed dummy PlaySubmissions for testing gallery / vote / leaderboard.
  *
  * Usage (from server/):
- *   npx tsx src/scripts/seedPlayDummySubmissions.ts
- *   npx tsx src/scripts/seedPlayDummySubmissions.ts --count=15
- *   npx tsx src/scripts/seedPlayDummySubmissions.ts --date=2026-07-14
- *   npx tsx src/scripts/seedPlayDummySubmissions.ts --clear   # delete prior dummy-* rows for that date first
+ *   npx tsx src/scripts/seedShortsDummySubmissions.ts
+ *   npx tsx src/scripts/seedShortsDummySubmissions.ts --count=15
+ *   npx tsx src/scripts/seedShortsDummySubmissions.ts --date=2026-07-14
+ *   npx tsx src/scripts/seedShortsDummySubmissions.ts --clear   # delete prior dummy-* rows for that date first
  */
 
 import "../config/loadEnv.js";
 import { Types } from "mongoose";
-import connectPlayMongoose from "../db/playConnection.js";
-import { getPlaySubmissionModel } from "../models/play/submission.js";
-import { getUtcChallengeDate } from "../services/play/challenges.js";
+import connectPlayMongoose from "../db/shortsConnection.js";
+import { getPlaySubmissionModel } from "../models/shorts/submission.js";
+import { getUtcChallengeDate } from "../services/shorts/challenges.js";
 import {
   INITIAL_RANKING_SCORE,
   INITIAL_RATING_DEVIATION,
   INITIAL_RATING_MEAN,
-} from "../services/play/ratingConstants.js";
+} from "../services/shorts/ratingConstants.js";
 
 const NAMES = [
   "Ava",
@@ -237,7 +237,7 @@ async function main() {
   let challengeSlug = "todo-list";
   try {
     const { getTodayChallenge } = await import(
-      "../services/play/challenges.js"
+      "../services/shorts/challenges.js"
     );
     const today = await getTodayChallenge();
     if (today?.slug) challengeSlug = today.slug;

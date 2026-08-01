@@ -4,6 +4,8 @@
  * Anthropic Messages API both accept them. (Dateless 4.6 IDs fail on older
  * CLI builds in the Play template with "may not exist or you may not have access".)
  */
+import { getShortsAnthropicModel } from "../../utils/shortsEnv.js";
+
 export type PlayEffortLevel =
   | "auto"
   | "low"
@@ -80,7 +82,7 @@ export function canonicalizePlayModel(raw?: string | null): string | null {
 
 export function getPlayAnthropicModel(): string {
   const fromEnv =
-    process.env.PLAY_ANTHROPIC_MODEL?.trim() ||
+    getShortsAnthropicModel() ||
     process.env.ANTHROPIC_MODEL?.trim();
   const canonical = canonicalizePlayModel(fromEnv);
   if (canonical) return canonical;

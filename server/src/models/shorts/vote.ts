@@ -1,5 +1,5 @@
 import { Schema, Types } from "mongoose";
-import { getPlayConnection } from "../../db/playConnection.js";
+import { getPlayConnection } from "../../db/shortsConnection.js";
 
 const VoteSchema = new Schema(
   {

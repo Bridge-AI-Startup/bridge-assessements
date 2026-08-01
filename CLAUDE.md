@@ -9,52 +9,55 @@ BridgeAI is a technical hiring assessment platform. Employers create take-home c
 ```
 bridge-assessements/
 ├── client/          # React frontend (Vite + JSX/TS) — assessments product
-├── play/client/     # React frontend — Play consumer app (separate Vercel deploy)
-├── play/e2b-template/ # Custom E2B image for Play (Claude Code + static preview)
-├── server/          # Express.js backend (TypeScript, run via tsx) — assessments + /api/play
+├── shorts/client/     # React frontend — Shorts consumer app (separate Vercel deploy)
+├── shorts/e2b-template/ # Custom E2B image for Shorts (Claude Code + static preview)
+├── server/          # Express.js backend (TypeScript, run via tsx) — assessments + /api/shorts
 ├── notebooks/       # Jupyter notebooks (test-assessment-generation.ipynb)
 ├── package.json     # Root-level shared deps (firebase-admin, express-validator, @vercel/analytics)
 └── *.md             # Documentation files
 ```
 
-The client, play/client, play/e2b-template, and server each have their own `package.json` and `node_modules` where applicable. They are NOT managed by a workspace tool -- you must install dependencies and run commands independently in each directory.
+The client, shorts/client, shorts/e2b-template, and server each have their own `package.json` and `node_modules` where applicable. They are NOT managed by a workspace tool -- you must install dependencies and run commands independently in each directory.
 
-## Play product (consumer daily challenge)
+## Shorts product (consumer daily challenge)
 
-Separate promotional product — **not** part of hiring assessments. See [`play/README.md`](play/README.md).
+Separate promotional product — **not** part of hiring assessments. See [`shorts/README.md`](shorts/README.md).
+
+> **Naming (Play → Shorts):** the product is **Shorts**. Frontend tree (`shorts/`), server dirs (`routes/shorts.ts`, `services/shorts/`, `models/shorts/`, `controllers/shorts/`), API namespace (`/api/shorts`), and env keys (`SHORTS_*`) all use `shorts`. For gradual migration the server still serves the legacy `/api/play` route alias and reads legacy `PLAY_*` env keys as a fallback via `server/src/utils/shortsEnv.ts`. **Deliberately unchanged** (bound to live data): the Mongo database `bridge-play` (`SHORTS_DB_NAME` default), Mongoose model names (`PlaySubmission`, `PlayChallenge`, `PlayBuildSession`, `PlayVote`, `PlayVoteRound`), the E2B template names `bridge-play-dev` / `bridge-play-v1`, and the legacy `play.bridge-jobs.com` CORS origin.
 
 | Piece | Location | Deploy |
 |-------|----------|--------|
-| Frontend | `play/client/` | Vercel project #2 (root `play/client`), e.g. `play.bridge-jobs.com` |
-| API | `server/src/routes/play.ts` | Same Render service as assessments (`/api/play/*`) |
-| Database | `bridge-play` on same Atlas cluster | `PLAY_DB_NAME` env var |
-| Models | `server/src/models/play/` | Registered on Play Mongoose connection |
-| E2B template | `play/e2b-template/` | Custom image `bridge-play-dev` / `bridge-play-v1` (no-cache preview :8080, Claude Code CLI; no code-server) |
+| Frontend | `shorts/client/` | Vercel project #2 (root `shorts/client`), e.g. `play.bridge-jobs.com` |
+| API | `server/src/routes/shorts.ts` | Same Render service as assessments (`/api/shorts/*`) |
+| Database | `bridge-play` on same Atlas cluster | `SHORTS_DB_NAME` env var |
+| Models | `server/src/models/shorts/` | Registered on Shorts Mongoose connection |
+| E2B template | `shorts/e2b-template/` | Custom image `bridge-play-dev` / `bridge-play-v1` (no-cache preview :8080, Claude Code CLI; no code-server) |
 
-- `PLAY_ENABLED=false` by default — gates feature routes; `GET /api/play/health` is always on.
-- Phase A (implemented): daily challenges, `GET /today`, Firebase-gated admin CRUD at `/admin/challenges/*`, Play client `Home` + `/Admin` page, build sessions (`POST/GET /session`) with E2B iframes on `/Build`, submit snapshot (`POST /submit`) + Admin Submissions tab (files + blob preview).
-- Claude Code + token budget: Anthropic-compatible Messages proxy at `/session/:id/llm/v1/messages` (Bearer `llmProxyToken`, meters `tokensUsed` / `tokenBudget`); sandbox provisioned with `ANTHROPIC_BASE_URL` + session token (no user Anthropic login). Build page: desktop defaults to **Chat** mode (chat stream + live preview; toggle to **Studio** for Monaco + chat + preview); mobile (<768px) is always chat-first with change-triggered preview cards and a fullscreen interactive preview. Preference stored in `localStorage` (`playBuildLayout.v1`). Chat relay `POST /session/:id/claude/message` → `claude -p` in E2B. Chat + workspace files persist on the session (refresh/resume within the build window; snapshot restore if sandbox dies). **Wall-clock build limit:** `expiresAt = min(startedAt + limit, end of challenge period)` — challenge `timeLimitMinutes` or `PLAY_BUILD_TIME_LIMIT_MINUTES` (default 10). Leaving Build pauses the sandbox; paused sessions do **not** count toward `PLAY_MAX_CONCURRENT_SESSIONS`. Requires `PLAY_LLM_PROXY_PUBLIC_URL` (E2B cannot reach localhost). Server still exposes `/session/:id/terminal*` PTY routes (unused by Build UI). code-server is **removed** from the Play E2B template.
-- Admin auth: Firebase + `PLAY_ADMIN_EMAIL` allowlist (default `saaz.m@icloud.com`); looks up assessments `User` by `firebaseUid`.
+- `SHORTS_ENABLED=false` by default — gates feature routes; `GET /api/shorts/health` is always on.
+- Phase A (implemented): daily challenges, `GET /today`, Firebase-gated admin CRUD at `/admin/challenges/*`, Shorts client `Home` + `/Admin` page, build sessions (`POST/GET /session`) with E2B iframes on `/Build`, submit snapshot (`POST /submit`) + Admin Submissions tab (files + blob preview).
+- Claude Code + token budget: Anthropic-compatible Messages proxy at `/session/:id/llm/v1/messages` (Bearer `llmProxyToken`, meters `tokensUsed` / `tokenBudget`); sandbox provisioned with `ANTHROPIC_BASE_URL` + session token (no user Anthropic login). Build page: desktop defaults to **Chat** mode (chat stream + live preview; toggle to **Studio** for Monaco + chat + preview); mobile (<768px) is always chat-first with change-triggered preview cards and a fullscreen interactive preview. Preference stored in `localStorage` (`playBuildLayout.v1`). Chat relay `POST /session/:id/claude/message` → `claude -p` in E2B. Chat + workspace files persist on the session (refresh/resume within the build window; snapshot restore if sandbox dies). **Wall-clock build limit:** `expiresAt = min(startedAt + limit, end of challenge period)` — challenge `timeLimitMinutes` or `SHORTS_BUILD_TIME_LIMIT_MINUTES` (default 10). Leaving Build pauses the sandbox; paused sessions do **not** count toward `SHORTS_MAX_CONCURRENT_SESSIONS`. Requires `SHORTS_LLM_PROXY_PUBLIC_URL` (E2B cannot reach localhost). Server still exposes `/session/:id/terminal*` PTY routes (unused by Build UI). code-server is **removed** from the Shorts E2B template.
+- **Make mode (E2B vs serverless):** builds can be made two ways, selected per-session at creation via `challenge.makeMode` (admin toggle) → `SHORTS_MAKE_MODE` env → `e2b` default. **E2B** = sandbox + Claude Code (`claude -p`), true multi-file, sandbox static preview. **Serverless** = one direct Anthropic Messages call returning a single self-contained `index.html` (CSS/JS inlined, CDN libs allowed), stored on the session `workspaceSnapshot`, served by the backend at `GET /session/:id/preview` (no sandbox, no concurrency cap, no pause/resume). Downstream is identical because both produce `{ path, content }[]`. Serverless forces the chat-first Build layout (no Monaco/Studio) and hides the effort picker (Messages API has no effort param — model still applies). Mode is stamped on the session (`PlayBuildSession.makeMode`) so flipping the toggle/env never mis-routes an active session. Serverless make lives in `server/src/services/shorts/serverlessMake.ts`.
+- Admin auth: Firebase + `SHORTS_ADMIN_EMAIL` allowlist (default `saaz.m@icloud.com`); looks up assessments `User` by `firebaseUid`.
 - No shared models with assessments `Submission`; admin reuses Bridge Firebase accounts.
-- Play E2B: build via `cd play/e2b-template && npx tsx build.dev.ts`; smoke with `npx tsx src/scripts/play-sandbox-smoke.ts` from `server/`. The Python preview server sends `Cache-Control: no-store` so live JS/CSS edits cannot be replaced by cached starter assets. Set `PLAY_E2B_TEMPLATE_ID`. Grading still uses the default E2B image.
-- **Vote / browse / leaderboard:** public gallery + pairwise five-vote rounds with recap; Bayesian (TrueSkill-style) ranking; date-scoped leaderboard. Must submit same UTC day to vote. Saved submission previews are served by `GET /api/play/preview/:id/:revision/*` (API-origin iframes by default); Build live previews still use E2B. Client toggle: `play/client/src/config/submissionPreview.js` `SUBMISSION_PREVIEW_MODE` (`"api"` | `"blob"`).
+- Shorts E2B: build via `cd shorts/e2b-template && npx tsx build.dev.ts`; smoke with `npx tsx src/scripts/shorts-sandbox-smoke.ts` from `server/`. The Python preview server sends `Cache-Control: no-store` so live JS/CSS edits cannot be replaced by cached starter assets. Set `SHORTS_E2B_TEMPLATE_ID`. Grading still uses the default E2B image.
+- **Vote / browse / leaderboard:** public gallery + pairwise five-vote rounds with recap; Bayesian (TrueSkill-style) ranking; date-scoped leaderboard. Must submit same UTC day to vote. Saved submission previews are served by `GET /api/shorts/preview/:id/:revision/*` (API-origin iframes by default); Build live previews still use E2B. Client toggle: `shorts/client/src/config/submissionPreview.js` `SUBMISSION_PREVIEW_MODE` (`"api"` | `"blob"`).
 ## Ports and URLs
 
 | Service         | Dev URL                          | Production URL                                           |
 |-----------------|----------------------------------|----------------------------------------------------------|
 | Frontend (Vite) | `http://localhost:5173`          | `https://www.bridge-jobs.com` (Vercel)                   |
-| Play (Vite)     | `http://localhost:5174`          | `https://play.bridge-jobs.com` (Vercel, root `play/client`) |
+| Shorts (Vite)     | `http://localhost:5174`          | `https://play.bridge-jobs.com` (Vercel, root `shorts/client`) |
 | Backend (Express)| `http://localhost:5050`         | `https://bridge-assessements-1.onrender.com` (Render)    |
 | Health check    | `http://localhost:5050/health`   | `https://bridge-assessements-1.onrender.com/health`      |
 | API base        | `http://localhost:5050/api`      | `https://bridge-assessements-1.onrender.com/api`         |
-| Play API        | `http://localhost:5050/api/play` | `https://bridge-assessements-1.onrender.com/api/play`    |
+| Shorts API        | `http://localhost:5050/api/shorts` | `https://bridge-assessements-1.onrender.com/api/shorts`    |
 
 - The backend port is configured via `PORT` env var (defaults to `5050`).
-- The frontend Vite dev server runs on port `5173` by default; Play runs on `5174`.
+- The frontend Vite dev server runs on port `5173` by default; Shorts runs on `5174`.
 - The client resolves its API base URL in `client/src/config/api.js`: uses `VITE_API_URL` env var if set, otherwise `localhost:5050` in dev mode and the Render URL in production.
-- Play client uses `play/client/src/config/api.js` with base `${VITE_API_URL}/api/play`.
+- Shorts client uses `shorts/client/src/config/api.js` with base `${VITE_API_URL}/api/shorts`.
 - CORS allowed origins are hardcoded in `server/src/server.ts` -- if you add a new frontend domain, update the `allowedOrigins` array there.
-- Current allowed CORS origins: `FRONTEND_URL`, `PLAY_FRONTEND_URL`, `https://play.bridge-jobs.com`, `https://www.bridge-jobs.com`, two Vercel preview domains, plus `localhost:5173`, `localhost:5174`, and `localhost:3000` in dev.
+- Current allowed CORS origins: `FRONTEND_URL`, `SHORTS_FRONTEND_URL`, `https://play.bridge-jobs.com`, `https://www.bridge-jobs.com`, two Vercel preview domains, plus `localhost:5173`, `localhost:5174`, and `localhost:3000` in dev.
 
 ## How to Run Locally
 
@@ -167,18 +170,19 @@ See `server/config.env.example` for the full list. Key variables:
 - `BEHAVIORAL_GRADING_MAX_CONCURRENT` -- Max concurrent behavioral grading jobs (default: `2`)
 - `BEHAVIORAL_GRADING_UPLOAD_ENABLED` -- Enable behavioral grading for uploaded archives (default: `true`)
 
-**Play (consumer daily challenge):**
-- `PLAY_ENABLED` -- Gate `/api/play` feature routes (default: disabled); `GET /api/play/health` always on
-- `PLAY_DB_NAME` -- Mongo database for Play product (default: `bridge-play`, same Atlas cluster)
-- `PLAY_FRONTEND_URL` -- CORS origin for Play Vercel app (e.g. `https://play.bridge-jobs.com`)
-- `PLAY_ADMIN_EMAIL` -- Email allowed to manage challenges via `/api/play/admin/*` (default: `saaz.m@icloud.com`)
-- `PLAY_E2B_TEMPLATE_ID` -- Custom E2B template for Play sandboxes (default `bridge-play-dev`; build from `play/e2b-template/`)
-- `PLAY_MAX_CONCURRENT_SESSIONS` -- Soft cap on **running** (non-paused) Play sessions (default: `5`)
-- `PLAY_BUILD_TIME_LIMIT_MINUTES` -- Wall-clock build window from start (default: `10`); overridden by challenge `timeLimitMinutes`; always capped by challenge period end
-- `PLAY_CHALLENGE_CADENCE` -- `weekly` (default) or `daily`. Weekly: one published challenge per Mon–Sun UTC week; `challengeDate` = Monday. Daily: one per UTC calendar day. Swap with this env var only.
-- `PLAY_LLM_PROXY_PUBLIC_URL` -- Public base URL for the Play LLM proxy that E2B sandboxes can reach (e.g. Render or a tunnel). Required for Claude Code; sandboxes cannot call `localhost`
-- `PLAY_ANTHROPIC_MODEL` -- Optional default model for Claude Code in Play sandboxes
-- `ANTHROPIC_API_KEY` -- Org Anthropic key used by the Play Messages proxy (never written into the sandbox)
+**Shorts (consumer daily challenge):**
+- `SHORTS_ENABLED` -- Gate `/api/shorts` feature routes (default: disabled); `GET /api/shorts/health` always on
+- `SHORTS_DB_NAME` -- Mongo database for Shorts product (default: `bridge-play`, same Atlas cluster)
+- `SHORTS_FRONTEND_URL` -- CORS origin for Shorts Vercel app (e.g. `https://play.bridge-jobs.com`)
+- `SHORTS_ADMIN_EMAIL` -- Email allowed to manage challenges via `/api/shorts/admin/*` (default: `saaz.m@icloud.com`)
+- `SHORTS_E2B_TEMPLATE_ID` -- Custom E2B template for Shorts sandboxes (default `bridge-play-dev`; build from `shorts/e2b-template/`)
+- `SHORTS_MAKE_MODE` -- Build path when a challenge doesn't set its own: `e2b` (default, sandbox + Claude Code) or `serverless` (single self-contained HTML generated by one direct Anthropic Messages call, no sandbox). Resolution: per-challenge `makeMode` (admin toggle) > `SHORTS_MAKE_MODE` > `e2b`. Stamped per-session at creation, so flipping it never mis-routes a live session.
+- `SHORTS_MAX_CONCURRENT_SESSIONS` -- Soft cap on **running** (non-paused) Shorts sessions (default: `5`; serverless sessions are exempt — no sandbox)
+- `SHORTS_BUILD_TIME_LIMIT_MINUTES` -- Wall-clock build window from start (default: `10`); overridden by challenge `timeLimitMinutes`; always capped by challenge period end
+- `SHORTS_CHALLENGE_CADENCE` -- `weekly` (default) or `daily`. Weekly: one published challenge per Mon–Sun UTC week; `challengeDate` = Monday. Daily: one per UTC calendar day. Swap with this env var only.
+- `SHORTS_LLM_PROXY_PUBLIC_URL` -- Public base URL for the Shorts LLM proxy that E2B sandboxes can reach (e.g. Render or a tunnel). Required for Claude Code; sandboxes cannot call `localhost`
+- `SHORTS_ANTHROPIC_MODEL` -- Optional default model for Claude Code in Shorts sandboxes
+- `ANTHROPIC_API_KEY` -- Org Anthropic key used by the Shorts Messages proxy (never written into the sandbox)
 
 **Billing:**
 - `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_PRICE_ID` / `APP_URL` -- Stripe billing
@@ -292,20 +296,21 @@ server/src/
 │   │   ├── agentJudge.ts      # Tool-using judge (run_command/read_file in sandbox, then finish)
 │   │   └── artifacts.ts       # collectJudgeArtifacts + bashLc helpers
 │   ├── play/
-│   │   ├── challenges.ts      # Play daily challenge CRUD + UTC today lookup
-│   │   ├── sandbox.ts         # Play E2B create/getUrls/kill (custom template)
+│   │   ├── challenges.ts      # Shorts daily challenge CRUD + UTC today lookup
+│   │   ├── sandbox.ts         # Shorts E2B create/getUrls/kill (custom template)
 │   │   ├── sessions.ts        # Create/resume build sessions + response shaping
-│   │   ├── submissions.ts     # Snapshot workspace → PlaySubmission (rejects starter-only)
-│   │   ├── starterDetection.ts # Heuristics for unchanged / near-empty Play starter
+│   │   ├── submissions.ts     # Snapshot workspace → PlaySubmission (E2B sandbox or serverless snapshot; rejects starter-only)
+│   │   ├── serverlessMake.ts  # Serverless make: direct Anthropic call → single-file HTML on session (no sandbox)
+│   │   ├── starterDetection.ts # Heuristics for unchanged / near-empty Shorts starter
 │   │   ├── voting.ts          # Public gallery, pairwise votes, Bayesian ranking, leaderboard
-│   │   ├── preview.ts         # Revisioned API-origin submission file previews (path-safe)
+│   │   ├── preview.ts         # Revisioned submission previews + live serverless session preview (path-safe)
 │   │   ├── bayesianRating.ts  # TrueSkill-style 1v1 updates + matchmaking heuristic
 │   │   ├── ratingConstants.ts # Shared μ/σ defaults + round size caps
 │   │   ├── llmProxy.ts        # Anthropic Messages proxy + token budget + claude -p relay
 │   │   ├── claudeProvision.ts # Write Claude settings + ANTHROPIC_BASE_URL/AUTH_TOKEN in sandbox
 │   │   ├── workspaceFiles.ts  # List/read/write E2B project files for Monaco sync
-│   │   ├── models.ts          # Allowed Claude models / aliases for Play
-│   │   ├── terminal.ts        # Multi-PTY bridge (shell/preview; unused by Play Build UI)
+│   │   ├── models.ts          # Allowed Claude models / aliases for Shorts
+│   │   ├── terminal.ts        # Multi-PTY bridge (shell/preview; unused by Shorts Build UI)
 │   │   ├── sessionPersist.ts  # Claude chat + workspace snapshot save/restore for resume
 │   │   └── index.ts
 │   ├── gradingEvidence/
@@ -365,8 +370,8 @@ server/src/
     ├── generateDummyConversation.ts
     ├── listSubmissions.ts
     ├── seedCompetition.ts   # Link Mongo Competition slug → assessment (hackathon dashboard)
-    ├── seedPlayChallenge.ts # Upsert Play daily challenge from play/challenges/*.json
-    ├── play-sandbox-smoke.ts # Create Play E2B template sandbox; print preview URL + Claude check
+    ├── seedShortsChallenge.ts # Upsert Shorts daily challenge from shorts/challenges/*.json
+    ├── shorts-sandbox-smoke.ts # Create Shorts E2B template sandbox; print preview URL + Claude check
     ├── replaceSubmissionWithGeneratedMarkdown.ts
     ├── replaceTraceWithMarkdown.ts
     ├── seedDummyInterview.ts
@@ -398,14 +403,14 @@ server/src/
 - `POST /:slug/join` -- Self-serve registration: creates a **pending** submission (same as employer generate-link) and returns `token` + `shareLink`; does **not** apply employer free-tier submission limits; stricter rate limit in production (30/hour/IP); duplicate email per assessment returns 409
 - `GET /:slug/leaderboard` -- Public leaderboard for submitted candidates (rank by `scores.overall`, then completeness, then workflow overall score); top 50 default, `?limit=` max 100; respects `leaderboardPublic` on the competition document
 
-**Play routes** (`/api/play`, consumer product — requires `PLAY_ENABLED=true` except health):
-- `GET /health` -- Always on; smoke check `{ ok: true, product: "play" }`
-- `GET /today` -- Published challenge for the current period (`PLAY_CHALLENGE_CADENCE`); includes `cadence` + `periodEndsAt`; 404 `{ error: "no_challenge_today" }` if none
+**Shorts routes** (`/api/shorts`, consumer product — requires `SHORTS_ENABLED=true` except health; every route is also served under the legacy `/api/play` alias):
+- `GET /health` -- Always on; smoke check `{ ok: true, product: "shorts" }`
+- `GET /today` -- Published challenge for the current period (`SHORTS_CHALLENGE_CADENCE`); includes `cadence` + `periodEndsAt`; 404 `{ error: "no_challenge_today" }` if none
 - `GET /period` -- `{ cadence, periodKey, periodEndsAt, label }` for clients
-- `GET /admin/challenges` -- List challenges (Firebase + `PLAY_ADMIN_EMAIL`; query: `limit`, `from`, `to`, `status`)
+- `GET /admin/challenges` -- List challenges (Firebase + `SHORTS_ADMIN_EMAIL`; query: `limit`, `from`, `to`, `status`)
 - `GET /admin/challenges/:slug` -- Single challenge (admin)
-- `POST /admin/challenges` -- Create challenge (admin)
-- `PATCH /admin/challenges/:slug` -- Update challenge (admin)
+- `POST /admin/challenges` -- Create challenge (admin); optional `makeMode` (`e2b` | `serverless`)
+- `PATCH /admin/challenges/:slug` -- Update challenge (admin); optional `makeMode` (`e2b` | `serverless`) — the site's Build-mode toggle
 - `POST /session` -- Create or resume E2B build session (`{ anonymousId }`); returns `previewUrl`, `chatMessages`, `expiresAt` (wall-clock build limit); reconnects sandbox or restores `workspaceSnapshot` if box died; provisions Claude `ANTHROPIC_*` + `llmProxyToken`. When running seats are full: **503** `{ code: "session_queue", activeCount, maxConcurrent, estimatedWaitSeconds }` (client waitlist polls)
 - `POST /session/:id/pause` -- Pause E2B sandbox while user leaves Build (`{ anonymousId }`); session stays active until end of UTC day
 - `POST /session/:id/resume` -- Resume paused sandbox / keep-alive running box; refresh `previewUrl`
@@ -413,9 +418,10 @@ server/src/
 - `GET /session/:id/files` -- List workspace files for Monaco (`?anonymousId=`)
 - `GET /session/:id/file` -- Read one file (`?anonymousId=&path=`)
 - `PUT /session/:id/file` -- Write one file (`{ anonymousId, path, content }`) into E2B; upserts session `workspaceSnapshot`
-- `GET /session/:id/workspace-revision` -- Workspace fingerprint for preview refresh (`?anonymousId=`)
+- `GET /session/:id/workspace-revision` -- Workspace fingerprint for preview refresh (`?anonymousId=`); serverless returns a `workspaceSnapshotAt`-derived revision (no sandbox)
+- `GET /session/:id/preview` and `GET /session/:id/preview/*` -- **Serverless make mode only:** serve the live session's generated file(s) from `workspaceSnapshot` (`?anonymousId=`; ownership-checked; `Cache-Control: no-store`). This is the iframe `previewUrl` for serverless builds (E2B builds preview from the sandbox instead)
 - `POST /session/:id/llm/v1/messages` -- Anthropic-compatible Messages proxy for Claude Code in E2B (Bearer `llmProxyToken`); streams; increments `tokensUsed`; **429** when over `tokenBudget`
-- `POST /session/:id/claude/message` -- Chat relay: run `claude -p` in sandbox (`{ anonymousId, prompt }`); appends `chatMessages` + refreshes `workspaceSnapshot`; returns stdout text
+- `POST /session/:id/claude/message` -- Chat turn. Dispatches on the session's `makeMode`: **E2B** runs `claude -p` in the sandbox; **serverless** makes one Anthropic Messages call → single-file HTML saved to `workspaceSnapshot`. Both meter tokens, append `chatMessages`, and return assistant text (`{ anonymousId, prompt, model?, effort? }`; `effort` is ignored in serverless)
 - `POST /session/:id/terminal` -- Create/resume named E2B PTY (unused by Build UI; kept for possible future use)
 - `GET /session/:id/terminals` -- List terminal tabs (`?anonymousId=`)
 - `GET /session/:id/terminal/stream` -- SSE PTY output (`?anonymousId=&terminalId=&pid=`)
@@ -510,9 +516,9 @@ server/src/
 - `POST /elevenlabs` -- ElevenLabs post-call transcript webhook (HMAC signature verified, generates summary)
 
 ### Rate Limiting (production only, disabled in dev)
-- General API: 100 requests / 15 minutes per IP (shared across most `/api/*` routes; proctoring and Play preview excluded)
+- General API: 100 requests / 15 minutes per IP (shared across most `/api/*` routes; proctoring and Shorts preview excluded)
 - Proctoring (`/api/proctoring/*`): 8000 requests / 15 minutes per IP (separate limiter; screen capture is high-volume)
-- Play preview (`/api/play/preview/*`): 3000 requests / 15 minutes per IP (separate limiter; gallery iframe assets)
+- Shorts preview (`/api/shorts/preview/*`): 3000 requests / 15 minutes per IP (separate limiter; gallery iframe assets)
 - Auth endpoints (`/api/users/whoami`): 5 requests / 15 minutes per IP
 - Webhooks: 50 requests / 15 minutes per IP
 - Competition join (`POST /api/competitions/:slug/join`): 30 requests / 60 minutes per IP
@@ -689,12 +695,12 @@ Behavioral grading: `behavioralGradingStatus` (`pending`/`completed`/`failed`), 
 Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`, `{ "interview.conversationId": 1 }` (sparse), `{ "llmWorkflow.trace.sessionId": 1 }` (sparse)
 
 ### PlayChallenge (bridge-play DB)
-Fields: `slug` (unique, lowercase `a-z0-9-`), `challengeDate` (unique, `YYYY-MM-DD` UTC), `title` (max 120), `prompt`, `tokenBudget`, `timeLimitMinutes` (optional), `category` (`widget`/`game`/`tool`/`other`), `status` (`draft`/`published`)
+Fields: `slug` (unique, lowercase `a-z0-9-`), `challengeDate` (unique, `YYYY-MM-DD` UTC), `title` (max 120), `prompt`, `tokenBudget`, `timeLimitMinutes` (optional), `category` (`widget`/`game`/`tool`/`other`), `status` (`draft`/`published`), `makeMode` (optional `e2b`/`serverless`; unset → `SHORTS_MAKE_MODE` default — the site's Build-mode toggle)
 
 Indexes: unique on `slug`, unique on `challengeDate`, `{ status: 1, challengeDate: -1 }`
 
 ### PlayBuildSession (bridge-play DB)
-Fields: `anonymousId` (indexed), `challengeSlug`, `challengeDate` (`YYYY-MM-DD`), `status` (`provisioning`/`active`/`failed`/`expired`/`submitted`), `e2bSandboxId`, `previewUrl`, `vscodeUrl` (legacy; unused by Monaco Build UI), `tokenBudget`, `tokensUsed` (default 0), `llmProxyToken` (Bearer for Messages proxy; never returned to browser), `llmCalls` (optional counter), `startedAt`, `expiresAt` (wall-clock build limit: `min(startedAt + timeLimit, end of UTC day)`), `chatMessages[]` `{ role, text, createdAt }` (persisted Claude chat), `workspaceSnapshot[]` `{ path, content }` + `workspaceSnapshotAt` (file backup for sandbox recreate), `sandboxPaused` (bool; paused sessions excluded from concurrent cap), `error` (optional)
+Fields: `anonymousId` (indexed), `challengeSlug`, `challengeDate` (`YYYY-MM-DD`), `status` (`provisioning`/`active`/`failed`/`expired`/`submitted`), `makeMode` (optional `e2b`/`serverless`; stamped at creation, unset → treated as `e2b`), `e2bSandboxId` (absent for serverless), `previewUrl` (serverless: backend `/session/:id/preview`; E2B: sandbox URL), `vscodeUrl` (legacy; unused by Monaco Build UI), `tokenBudget`, `tokensUsed` (default 0), `llmProxyToken` (Bearer for Messages proxy; never returned to browser), `llmCalls` (optional counter), `startedAt`, `expiresAt` (wall-clock build limit: `min(startedAt + timeLimit, end of UTC day)`), `chatMessages[]` `{ role, text, createdAt }` (persisted Claude chat), `workspaceSnapshot[]` `{ path, content }` + `workspaceSnapshotAt` (E2B: file backup for sandbox recreate; serverless: the authoritative generated file(s)), `sandboxPaused` (bool; paused sessions excluded from concurrent cap), `error` (optional)
 
 Indexes: `{ anonymousId: 1, challengeDate: 1, status: 1 }`
 

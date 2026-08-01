@@ -6,7 +6,8 @@ import crypto from "crypto";
 import type { Request, Response } from "express";
 import createHttpError from "http-errors";
 import { Types } from "mongoose";
-import { getPlayBuildSessionModel } from "../../models/play/buildSession.js";
+import { getShortsLlmProxyPublicUrl } from "../../utils/shortsEnv.js";
+import { getPlayBuildSessionModel } from "../../models/shorts/buildSession.js";
 import type { Sandbox } from "e2b";
 import { runPlayCommand, connectPlaySandbox } from "./sandbox.js";
 
@@ -58,7 +59,7 @@ const ANTHROPIC_API = "https://api.anthropic.com";
  */
 export function getPlayLlmProxyPublicBase(): string {
   const raw =
-    process.env.PLAY_LLM_PROXY_PUBLIC_URL?.trim() ||
+    getShortsLlmProxyPublicUrl() ||
     `http://localhost:${process.env.PORT || 5050}`;
   return raw.replace(/\/$/, "");
 }
@@ -79,7 +80,7 @@ export function generateLlmProxyToken(): string {
 }
 
 export function buildSessionLlmBaseUrl(sessionId: string): string {
-  return `${getPlayLlmProxyPublicBase()}/api/play/session/${sessionId}/llm`;
+  return `${getPlayLlmProxyPublicBase()}/api/shorts/session/${sessionId}/llm`;
 }
 
 let proxyHealthCache: { baseUrl: string; checkedAt: number } | null = null;
@@ -91,11 +92,11 @@ export function isPlayClaudeRunInFlight(sessionId: string): boolean {
   return claudeRunsInFlight.has(sessionId);
 }
 
-function beginPlayClaudeRun(sessionId: string): void {
+export function beginPlayClaudeRun(sessionId: string): void {
   claudeRunsInFlight.add(sessionId);
 }
 
-function endPlayClaudeRun(sessionId: string): void {
+export function endPlayClaudeRun(sessionId: string): void {
   claudeRunsInFlight.delete(sessionId);
 }
 
@@ -132,7 +133,7 @@ async function assertPlayLlmProxyReachable(): Promise<void> {
   }
 
   try {
-    const response = await fetch(`${baseUrl}/api/play/health`, {
+    const response = await fetch(`${baseUrl}/api/shorts/health`, {
       signal: AbortSignal.timeout(8_000),
     });
     if (!response.ok) {
@@ -148,7 +149,7 @@ async function assertPlayLlmProxyReachable(): Promise<void> {
   }
 }
 
-function getAnthropicApiKeyOrThrow(): string {
+export function getAnthropicApiKeyOrThrow(): string {
   const key = process.env.ANTHROPIC_API_KEY?.trim();
   if (!key) {
     throw createHttpError(
@@ -203,7 +204,7 @@ async function loadActiveSessionForProxy(
   return doc;
 }
 
-function parseUsageFromAnthropicBody(body: unknown): number {
+export function parseUsageFromAnthropicBody(body: unknown): number {
   if (!body || typeof body !== "object") return 0;
   const usage = (body as { usage?: { input_tokens?: number; output_tokens?: number } })
     .usage;
@@ -211,7 +212,7 @@ function parseUsageFromAnthropicBody(body: unknown): number {
   return (usage.input_tokens || 0) + (usage.output_tokens || 0);
 }
 
-async function incrementSessionUsage(
+export async function incrementSessionUsage(
   sessionId: string,
   tokens: number,
 ): Promise<void> {

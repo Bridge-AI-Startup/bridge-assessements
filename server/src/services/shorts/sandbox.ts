@@ -7,6 +7,7 @@ import {
   getE2bApiKeyOrThrow,
   runCommand,
 } from "../e2b/graderSandbox.js";
+import { shortsEnv } from "../../utils/shortsEnv.js";
 
 export const PLAY_CODE_SERVER_PORT = 8081;
 export const PLAY_PREVIEW_PORT = 8080;
@@ -29,8 +30,10 @@ export type CreatePlaySandboxOptions = {
 };
 
 export function getPlayE2bTemplateId(): string {
-  return (
-    process.env.PLAY_E2B_TEMPLATE_ID?.trim() || DEFAULT_PLAY_TEMPLATE
+  return shortsEnv(
+    "SHORTS_E2B_TEMPLATE_ID",
+    "PLAY_E2B_TEMPLATE_ID",
+    DEFAULT_PLAY_TEMPLATE,
   );
 }
 

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchTodayChallenge } from "@/api/challenge";
 import ModelEffortPicker from "@/components/workspace/ModelEffortPicker";
+import TokenGauge from "@/components/workspace/TokenGauge";
 
 const STARTER_PROMPTS = [
   "Build the basic version",
@@ -164,7 +165,8 @@ export default function ChatFirstBuild({
   chatError,
   onSendMessage,
   exhausted,
-  tokensLabel,
+  tokensUsed,
+  tokenBudget,
   tokenTone,
   timeLabel,
   timeTone,
@@ -172,6 +174,8 @@ export default function ChatFirstBuild({
   onRefreshPreview,
   modelEffort,
   setModelEffort,
+  hideEffort = false,
+  engineLabel = "Claude Code",
   onSubmitClick,
   chatEndRef,
   submitModal,
@@ -353,7 +357,12 @@ export default function ChatFirstBuild({
           </p>
         ) : null}
         <div className="mb-1.5">
-          <ModelEffortPicker value={modelEffort} onChange={setModelEffort} />
+          <ModelEffortPicker
+            value={modelEffort}
+            onChange={setModelEffort}
+            hideEffort={hideEffort}
+            engineLabel={engineLabel}
+          />
         </div>
         <div className="flex items-end gap-2">
           <textarea
@@ -404,18 +413,19 @@ export default function ChatFirstBuild({
               <p className="truncate text-sm font-medium tracking-tight text-ink">
                 {session.challenge.title}
               </p>
-              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span
                   className={`font-mono text-[11px] tabular-nums ${toneClass(timeTone)}`}
                 >
                   {timeLabel}
                 </span>
                 <span className="text-fog-light">·</span>
-                <span
-                  className={`truncate font-mono text-[11px] tabular-nums ${toneClass(tokenTone)}`}
-                >
-                  {tokensLabel}
-                </span>
+                <TokenGauge
+                  used={tokensUsed}
+                  budget={tokenBudget}
+                  tone={tokenTone}
+                  exhausted={exhausted}
+                />
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">

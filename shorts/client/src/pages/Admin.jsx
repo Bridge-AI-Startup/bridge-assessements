@@ -14,6 +14,10 @@ import {
 import AdminSubmissions from "@/pages/AdminSubmissions";
 
 const CATEGORIES = ["widget", "game", "tool", "other"];
+const MAKE_MODES = [
+  { value: "e2b", label: "E2B sandbox (Claude Code)" },
+  { value: "serverless", label: "Serverless (single-file HTML)" },
+];
 
 function addUtcDays(yyyyMmDd, days) {
   const [y, m, d] = yyyyMmDd.split("-").map(Number);
@@ -31,6 +35,7 @@ function emptyForm(challengeDate, lockedDate = false) {
     timeLimitMinutes: 30,
     category: "widget",
     status: "draft",
+    makeMode: "e2b",
     lockedDate,
     isNew: true,
   };
@@ -46,6 +51,7 @@ function formFromChallenge(challenge, lockedDate = false) {
     timeLimitMinutes: challenge.timeLimitMinutes ?? "",
     category: challenge.category,
     status: challenge.status,
+    makeMode: challenge.makeMode ?? "e2b",
     lockedDate,
     isNew: false,
   };
@@ -222,6 +228,7 @@ export default function Admin() {
         tokenBudget: Number(form.tokenBudget),
         category: form.category,
         status: form.status,
+        makeMode: form.makeMode,
       };
       if (form.timeLimitMinutes !== "" && form.timeLimitMinutes != null) {
         payload.timeLimitMinutes = Number(form.timeLimitMinutes);
@@ -590,6 +597,23 @@ export default function Admin() {
                       </option>
                     ))}
                   </select>
+                </label>
+                <label className="block text-sm">
+                  <span className="font-medium text-fog">Build mode</span>
+                  <select
+                    value={form.makeMode}
+                    onChange={(e) => updateField("makeMode", e.target.value)}
+                    className="mt-1 w-full rounded border border-line px-3 py-2 text-sm"
+                  >
+                    {MAKE_MODES.map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="mt-1 block text-xs text-fog-light">
+                    Serverless generates a single-file HTML app with no sandbox.
+                  </span>
                 </label>
               </div>
 

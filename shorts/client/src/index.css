@@ -25,3 +25,52 @@ body {
     @apply font-mono text-[11px] font-medium uppercase tracking-label text-fog;
   }
 }
+
+@keyframes token-gauge-delta {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  15% {
+    opacity: 1;
+    transform: translateY(-6px);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(-10px);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-16px);
+  }
+}
+
+@keyframes token-gauge-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.token-gauge-delta {
+  animation: token-gauge-delta 2.2s ease-out forwards;
+}
+
+.token-gauge-pulse {
+  animation: token-gauge-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .token-gauge-delta {
+    animation: none;
+    opacity: 1;
+    transform: translateY(-10px);
+  }
+
+  .token-gauge-pulse {
+    animation: none;
+  }
+}

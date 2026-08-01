@@ -2,8 +2,8 @@
  * Smoke-test the Play E2B template: create sandbox, print URLs, curl preview.
  *
  * Usage (from server/):
- *   npx tsx src/scripts/play-sandbox-smoke.ts
- *   npx tsx src/scripts/play-sandbox-smoke.ts --keep
+ *   npx tsx src/scripts/shorts-sandbox-smoke.ts
+ *   npx tsx src/scripts/shorts-sandbox-smoke.ts --keep
  *
  * Requires E2B_API_KEY and a built template (PLAY_E2B_TEMPLATE_ID or bridge-play-dev).
  * Build first: cd ../play/e2b-template && npx tsx build.dev.ts
@@ -16,7 +16,7 @@ import {
   killPlaySandbox,
   runPlayCommand,
   writeChallengeMarkdown,
-} from "../services/play/sandbox.js";
+} from "../services/shorts/sandbox.js";
 
 const SAMPLE_CHALLENGE = `# Smoke challenge
 
@@ -59,7 +59,7 @@ async function main() {
   console.log("  keep:", keep);
 
   const sandbox = await createPlaySandbox({
-    metadata: { purpose: "play-sandbox-smoke" },
+    metadata: { purpose: "shorts-sandbox-smoke" },
   });
 
   try {

@@ -1,5 +1,5 @@
 import { Schema } from "mongoose";
-import { getPlayConnection } from "../../db/playConnection.js";
+import { getPlayConnection } from "../../db/shortsConnection.js";
 
 const BUILD_SESSION_STATUSES = [
   "provisioning",
@@ -33,6 +33,13 @@ const BuildSessionSchema = new Schema(
       required: true,
       enum: BUILD_SESSION_STATUSES,
       default: "provisioning",
+    },
+    // Which "make" path built this session. Stamped at creation; read per-doc so
+    // flipping SHORTS_MAKE_MODE never mis-routes an already-running session.
+    // Absent on legacy docs → treated as "e2b".
+    makeMode: {
+      type: String,
+      enum: ["e2b", "serverless"],
     },
     e2bSandboxId: {
       type: String,

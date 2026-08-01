@@ -25,6 +25,8 @@ export type SessionChatMessage = {
 export type PlaySession = {
   sessionId: string;
   status: string;
+  /** "serverless" = single-file HTML generation (no sandbox); default "e2b". */
+  makeMode?: "e2b" | "serverless";
   vscodeUrl?: string;
   previewUrl?: string;
   expiresAt?: string;

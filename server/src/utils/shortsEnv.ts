@@ -73,3 +73,16 @@ export function getShortsChallengeCadence(): string {
 export function getShortsAnthropicModel(): string {
   return shortsEnv("SHORTS_ANTHROPIC_MODEL", "PLAY_ANTHROPIC_MODEL");
 }
+
+export type ShortsMakeMode = "e2b" | "serverless";
+
+/**
+ * Which "make" path builds serve. `e2b` (default) provisions a sandbox running
+ * Claude Code; `serverless` generates a single self-contained HTML file via a
+ * direct Anthropic Messages call (no sandbox). Switch with one env var; the mode
+ * is stamped per-session at creation so flipping it never mis-routes live sessions.
+ */
+export function getShortsMakeMode(): ShortsMakeMode {
+  const raw = shortsEnv("SHORTS_MAKE_MODE", "PLAY_MAKE_MODE", "e2b").toLowerCase();
+  return raw === "serverless" ? "serverless" : "e2b";
+}

@@ -8,6 +8,7 @@ export type TodayChallenge = {
   tokenBudget: number;
   timeLimitMinutes?: number;
   category: string;
+  makeMode?: "e2b" | "serverless";
   cadence?: "daily" | "weekly";
   periodEndsAt?: string;
 };

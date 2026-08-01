@@ -1,10 +1,10 @@
 import createHttpError from "http-errors";
 import { Types } from "mongoose";
-import { getPlaySubmissionModel } from "../../models/play/submission.js";
+import { getPlaySubmissionModel } from "../../models/shorts/submission.js";
 import {
   getPlayVoteModel,
   getPlayVoteRoundModel,
-} from "../../models/play/vote.js";
+} from "../../models/shorts/vote.js";
 import {
   isProvisional,
   MAX_WEIGHTED_VOTES_PER_DAY,

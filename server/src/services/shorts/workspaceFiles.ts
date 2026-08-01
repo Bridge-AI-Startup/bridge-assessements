@@ -4,7 +4,7 @@
 import createHttpError from "http-errors";
 import type { Sandbox } from "e2b";
 import { Types } from "mongoose";
-import { getPlayBuildSessionModel } from "../../models/play/buildSession.js";
+import { getPlayBuildSessionModel } from "../../models/shorts/buildSession.js";
 import {
   PLAY_WORKSPACE,
   PLAY_SNAPSHOT_SKIP_DIR_PATTERN,

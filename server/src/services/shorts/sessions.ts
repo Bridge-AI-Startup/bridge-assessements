@@ -1,6 +1,14 @@
 import createHttpError from "http-errors";
 import { Sandbox } from "e2b";
-import { getPlayBuildSessionModel } from "../../models/play/buildSession.js";
+import {
+  getShortsMakeMode,
+  getShortsMaxConcurrentSessions,
+} from "../../utils/shortsEnv.js";
+import { getPlayBuildSessionModel } from "../../models/shorts/buildSession.js";
+import {
+  buildSessionPreviewUrl,
+  provisionServerlessSession,
+} from "./serverlessMake.js";
 import {
   getChallengeBySlug,
   getTodayChallenge,
@@ -45,6 +53,7 @@ export type SessionChatMessage = {
 export type SessionResponse = {
   sessionId: string;
   status: string;
+  makeMode: "e2b" | "serverless";
   vscodeUrl?: string;
   previewUrl?: string;
   expiresAt?: string;
@@ -58,7 +67,7 @@ export type SessionResponse = {
 };
 
 function getMaxConcurrentSessions(): number {
-  const raw = process.env.PLAY_MAX_CONCURRENT_SESSIONS;
+  const raw = getShortsMaxConcurrentSessions();
   const n = raw ? parseInt(raw, 10) : 5;
   return Number.isFinite(n) && n > 0 ? n : 5;
 }
@@ -127,6 +136,7 @@ function toSessionResponse(
   doc: {
     _id: { toString(): string };
     status: string;
+    makeMode?: "e2b" | "serverless";
     vscodeUrl?: string;
     previewUrl?: string;
     expiresAt?: Date;
@@ -148,6 +158,8 @@ function toSessionResponse(
   const result: SessionResponse = {
     sessionId: doc._id.toString(),
     status: doc.status,
+    // Absent on legacy docs → E2B. The client branches its Build UI off this.
+    makeMode: doc.makeMode === "serverless" ? "serverless" : "e2b",
     challenge: {
       slug: challenge.slug,
       title: challenge.title,
@@ -413,6 +425,17 @@ async function createOrResumeSessionUnlocked(
   }
 
   if (existing) {
+    // Serverless sessions have no sandbox to revive — just refresh preview + return.
+    if (existing.makeMode === "serverless") {
+      if (!existing.previewUrl) {
+        existing.previewUrl = buildSessionPreviewUrl(
+          existing._id.toString(),
+          anonymousId,
+        );
+        await existing.save();
+      }
+      return toSessionResponse(existing, challenge);
+    }
     if (existing.e2bSandboxId) {
       const alive = await isSandboxAlive(existing.e2bSandboxId);
       if (alive) {
@@ -472,6 +495,25 @@ async function createOrResumeSessionUnlocked(
       },
     },
   );
+
+  // Serverless make mode: no sandbox, no concurrency ceiling. Create the session
+  // active immediately with a server-hosted previewUrl and return.
+  // Per-challenge override (set by admins) wins; else the server env default.
+  const resolvedMakeMode = challenge.makeMode ?? getShortsMakeMode();
+  if (resolvedMakeMode === "serverless") {
+    const expiresAt = computeBuildSessionExpiresAt({
+      startedAt: now,
+      challengeDate: challenge.challengeDate,
+      challengeTimeLimitMinutes: challenge.timeLimitMinutes,
+    });
+    const doc = await provisionServerlessSession({
+      anonymousId,
+      challenge,
+      startedAt: now,
+      expiresAt,
+    });
+    return toSessionResponse(doc, challenge);
+  }
 
   // Paused builders park their sandbox but should not block newcomers.
   const activeCount = await BuildSession.countDocuments({
@@ -617,6 +659,15 @@ export async function getSessionWorkspaceRevision(
   if (doc.anonymousId !== anonymousId.trim()) {
     throw createHttpError(403, "session_forbidden");
   }
+  // Serverless has no sandbox to fingerprint — derive a revision from the last
+  // snapshot write. (The client skips this poll in serverless mode.)
+  if (doc.makeMode === "serverless") {
+    const ts =
+      doc.workspaceSnapshotAt instanceof Date
+        ? doc.workspaceSnapshotAt.getTime()
+        : 0;
+    return { revision: String(ts) };
+  }
   if (doc.status !== "active" || !doc.e2bSandboxId) {
     throw createHttpError(400, "session_not_active");
   }
@@ -651,7 +702,8 @@ async function loadOwnedActiveSession(sessionId: string, anonymousId: string) {
     await expireSession(doc, "Build time limit reached");
     throw createHttpError(400, "session_expired");
   }
-  if (!doc.e2bSandboxId) {
+  // Serverless sessions never have a sandbox; only E2B sessions require one.
+  if (doc.makeMode !== "serverless" && !doc.e2bSandboxId) {
     throw createHttpError(400, "session_not_active");
   }
   return doc;
@@ -667,6 +719,11 @@ export async function pausePlayBuildSession(
   anonymousId: string,
 ): Promise<{ paused: boolean; sandboxPaused: boolean }> {
   const doc = await loadOwnedActiveSession(sessionId, anonymousId);
+
+  // Nothing to pause in serverless mode — session stays active until it expires.
+  if (doc.makeMode === "serverless") {
+    return { paused: true, sandboxPaused: false };
+  }
 
   if (doc.sandboxPaused) {
     return { paused: true, sandboxPaused: true };
@@ -698,6 +755,19 @@ export async function resumePlayBuildSession(
   anonymousId: string,
 ): Promise<SessionResponse> {
   const doc = await loadOwnedActiveSession(sessionId, anonymousId);
+
+  // Serverless resume is a no-op keep-alive — refresh preview URL and return.
+  if (doc.makeMode === "serverless") {
+    if (!doc.previewUrl) {
+      doc.previewUrl = buildSessionPreviewUrl(doc._id.toString(), anonymousId);
+      await doc.save();
+    }
+    const bySlugServerless = await getChallengeBySlug(doc.challengeSlug);
+    return bySlugServerless
+      ? toSessionResponse(doc, toChallengeSummary(bySlugServerless))
+      : toSessionResponse(doc, fallbackChallengeSummary(doc));
+  }
+
   const timeoutMs = e2bTimeoutMsForChallengeDay(doc.challengeDate);
 
   let sandbox: Sandbox;

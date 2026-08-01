@@ -1,7 +1,7 @@
 import { RequestHandler } from "express";
 import { AuthError } from "../errors/auth.js";
 import UserModel from "../models/user.js";
-import { getPlayAdminEmail } from "../utils/playAdmin.js";
+import { getPlayAdminEmail } from "../utils/shortsAdmin.js";
 
 /**
  * Requires Firebase auth (verifyAuthToken) and PLAY_ADMIN_EMAIL allowlist.
