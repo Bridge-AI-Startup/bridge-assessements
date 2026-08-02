@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchTodayChallenge } from "@/api/challenge";
+import Markdown from "@/components/Markdown";
 import ModelEffortPicker from "@/components/workspace/ModelEffortPicker";
 import TokenGauge from "@/components/workspace/TokenGauge";
 
@@ -260,9 +261,7 @@ export default function ChatFirstBuild({
             {session.challenge.title}
           </p>
           {challengePrompt ? (
-            <p className="mt-1.5 whitespace-pre-wrap text-sm text-fog">
-              {challengePrompt}
-            </p>
+            <Markdown text={challengePrompt} className="mt-1.5 !text-sm" />
           ) : null}
         </section>
 

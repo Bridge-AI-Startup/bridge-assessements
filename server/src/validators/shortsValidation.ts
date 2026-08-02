@@ -320,3 +320,18 @@ export const leaderboardValidation = [
     .isLength({ min: 8, max: 128 })
     .withMessage("anonymousId must be 8–128 characters"),
 ];
+
+export const publicListChallengesValidation = [
+  query("limit")
+    .optional()
+    .isInt({ min: 1, max: 200 })
+    .withMessage("limit must be between 1 and 200"),
+];
+
+export const accountLinkValidation = [
+  body("anonymousId")
+    .isString()
+    .trim()
+    .isLength({ min: 8, max: 128 })
+    .withMessage("anonymousId must be 8–128 characters"),
+];

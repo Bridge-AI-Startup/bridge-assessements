@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { listSubmissions } from "@/api/submissions";
+import { listPastChallenges } from "@/api/challenges";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
 import {
   fetchChallengePeriod,
@@ -19,6 +20,10 @@ export default function Gallery() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // "builds" = one round's gallery; "rounds" = archive of past challenges.
+  const [viewMode, setViewMode] = useState("builds");
+  const [rounds, setRounds] = useState(null);
+  const [roundsError, setRoundsError] = useState(null);
   const anonymousId = useMemo(() => getOrCreateAnonymousId(), []);
 
   useEffect(() => {
@@ -73,12 +78,39 @@ export default function Gallery() {
     };
   }, [challengeDate, anonymousId]);
 
+  // Lazy-load the archive the first time the tab is opened.
+  useEffect(() => {
+    if (viewMode !== "rounds" || rounds !== null) return undefined;
+    let cancelled = false;
+    (async () => {
+      setRoundsError(null);
+      try {
+        const result = await listPastChallenges({ limit: 100 });
+        if (!cancelled) setRounds(result.challenges || []);
+      } catch (err) {
+        if (!cancelled) {
+          setRoundsError(
+            err instanceof Error ? err.message : "Failed to load rounds",
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [viewMode, rounds]);
+
   function onDateChange(value) {
     setChallengeDate(value);
     const currentKey = period?.periodKey;
     setSearchParams(
       currentKey && value === currentKey ? {} : { challengeDate: value },
     );
+  }
+
+  function openRound(round) {
+    setViewMode("builds");
+    onDateChange(round.challengeDate);
   }
 
   const possessive = periodPossessive(period?.cadence || "weekly");
@@ -97,34 +129,126 @@ export default function Gallery() {
               Browse builds
             </h1>
             <p className="mt-1 text-sm text-fog-light">
-              {total} submission{total === 1 ? "" : "s"} for{" "}
-              <span className="font-mono">{challengeDate || "…"}</span> — click a
-              preview to open
+              {viewMode === "rounds" ? (
+                <>Every past challenge — open one to see its builds and rankings</>
+              ) : (
+                <>
+                  {total} submission{total === 1 ? "" : "s"} for{" "}
+                  <span className="font-mono">{challengeDate || "…"}</span> —
+                  click a preview to open
+                </>
+              )}
             </p>
           </div>
-          <label className="label-mono block">
-            Challenge date
-            <input
-              type="date"
-              value={challengeDate}
-              onChange={(e) => onDateChange(e.target.value)}
-              disabled={!challengeDate}
-              className="mt-1 block rounded-xl border border-line bg-paper px-3 py-2 font-mono text-sm text-ink focus:border-ink focus:outline-none disabled:opacity-50"
-            />
-          </label>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex rounded-xl border border-line p-1">
+              {[
+                { id: "builds", label: "This round" },
+                { id: "rounds", label: "Past rounds" },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setViewMode(tab.id)}
+                  className={`rounded-lg px-3 py-1.5 text-sm ${
+                    viewMode === tab.id
+                      ? "bg-mist font-medium text-ink"
+                      : "text-fog-light hover:text-ink"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            {viewMode === "builds" && (
+              <label className="label-mono block">
+                Challenge date
+                <input
+                  type="date"
+                  value={challengeDate}
+                  onChange={(e) => onDateChange(e.target.value)}
+                  disabled={!challengeDate}
+                  className="mt-1 block rounded-xl border border-line bg-paper px-3 py-2 font-mono text-sm text-ink focus:border-ink focus:outline-none disabled:opacity-50"
+                />
+              </label>
+            )}
+          </div>
         </div>
 
-        {loading && (
+        {viewMode === "rounds" && (
+          <>
+            {roundsError && (
+              <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {roundsError}
+              </div>
+            )}
+            {!roundsError && rounds === null && (
+              <p className="text-center text-sm text-fog-light">
+                Loading rounds…
+              </p>
+            )}
+            {rounds !== null && rounds.length === 0 && (
+              <div className="rounded-2xl border border-line bg-paper px-4 py-10 text-center shadow-card">
+                <p className="text-[22px] font-medium tracking-tight text-ink">
+                  No past rounds yet
+                </p>
+              </div>
+            )}
+            <div className="grid gap-4 sm:grid-cols-2">
+              {(rounds || []).map((round) => (
+                <div
+                  key={round.slug}
+                  className="rounded-2xl border border-line bg-paper p-5 shadow-card"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-[16px] font-medium text-ink">
+                        {round.title}
+                        {round.isCurrent ? (
+                          <span className="ml-2 rounded-full bg-accent-blue/10 px-2 py-0.5 font-mono text-[10px] uppercase text-accent-blue">
+                            live
+                          </span>
+                        ) : null}
+                      </p>
+                      <p className="mt-1 font-mono text-xs text-fog-light">
+                        {round.challengeDate} · {round.category} ·{" "}
+                        {round.submissionCount} build
+                        {round.submissionCount === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openRound(round)}
+                      className="btn-pill-secondary"
+                    >
+                      View builds
+                    </button>
+                    <Link
+                      to={`/Leaderboard?challengeDate=${round.challengeDate}`}
+                      className="btn-pill-secondary"
+                    >
+                      Leaderboard
+                    </Link>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {viewMode === "builds" && loading && (
           <p className="text-center text-sm text-fog-light">
             Loading submissions…
           </p>
         )}
-        {error && (
+        {viewMode === "builds" && error && (
           <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
           </div>
         )}
-        {!loading && !error && items.length === 0 && (
+        {viewMode === "builds" && !loading && !error && items.length === 0 && (
           <div className="rounded-2xl border border-line bg-paper px-4 py-10 text-center shadow-card">
             <p className="text-[22px] font-medium tracking-tight text-ink">
               No submissions yet
@@ -139,7 +263,7 @@ export default function Gallery() {
           </div>
         )}
 
-        {mine.length > 0 && (
+        {viewMode === "builds" && mine.length > 0 && (
           <section className="mb-10">
             <div className="mb-3 flex items-baseline justify-between gap-3">
               <h2 className="text-[18px] font-medium tracking-tight text-ink">
@@ -157,17 +281,19 @@ export default function Gallery() {
           </section>
         )}
 
-        {mine.length > 0 && !loading && items.length > 0 && (
+        {viewMode === "builds" && mine.length > 0 && !loading && items.length > 0 && (
           <h2 className="mb-3 text-[18px] font-medium tracking-tight text-ink">
             All builds
           </h2>
         )}
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {items.map((item) => (
-            <SubmissionCard key={item.id} item={item} />
-          ))}
-        </div>
+        {viewMode === "builds" && (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {items.map((item) => (
+              <SubmissionCard key={item.id} item={item} />
+            ))}
+          </div>
+        )}
       </main>
     </div>
   );

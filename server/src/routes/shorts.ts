@@ -3,8 +3,10 @@ import * as PlayController from "../controllers/shorts/index.js";
 import { verifyAuthToken } from "../validators/auth.js";
 import { requirePlayAdmin } from "../middleware/requireShortsAdmin.js";
 import {
+  accountLinkValidation,
   createChallengeValidation,
   createSessionValidation,
+  publicListChallengesValidation,
   getSessionValidation,
   listChallengesValidation,
   listSessionFilesValidation,
@@ -32,6 +34,24 @@ const router = express.Router();
 router.get("/today", PlayController.getToday);
 router.get("/period", PlayController.getPeriod);
 router.get("/models", PlayController.listModels);
+router.get(
+  "/challenges",
+  publicListChallengesValidation,
+  PlayController.listPublicChallenges,
+);
+
+// Account routes: Firebase-authenticated consumers (no admin allowlist).
+router.post(
+  "/account/link",
+  verifyAuthToken,
+  accountLinkValidation,
+  PlayController.postAccountLink,
+);
+router.get(
+  "/account/submissions",
+  verifyAuthToken,
+  PlayController.getAccountSubmissionsHandler,
+);
 // Immutable submission previews (before other parameterized routes).
 router.get(
   "/preview/:id/:revision",

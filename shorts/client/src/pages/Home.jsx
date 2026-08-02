@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { fetchTodayChallenge } from "@/api/challenge";
 import { listSubmissions } from "@/api/submissions";
 import ShortsHeader from "@/components/ShortsHeader";
+import Markdown from "@/components/Markdown";
 import SubmissionCard from "@/components/gallery/SubmissionCard";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
 import {
@@ -214,9 +215,7 @@ export default function Home() {
               </div>
 
               <div className="px-6 py-5 sm:px-8 sm:py-6">
-                <pre className="whitespace-pre-wrap font-sans text-[15px] leading-relaxed text-fog">
-                  {state.challenge.prompt}
-                </pre>
+                <Markdown text={state.challenge.prompt} />
               </div>
 
               <div className="border-t border-line px-6 py-3 sm:px-8">

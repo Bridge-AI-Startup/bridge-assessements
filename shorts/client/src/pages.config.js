@@ -4,6 +4,7 @@ import Vote from "./pages/Vote";
 import Leaderboard from "./pages/Leaderboard";
 import Gallery from "./pages/Gallery";
 import Submission from "./pages/Submission";
+import MySubmissions from "./pages/MySubmissions";
 import Admin from "./pages/Admin";
 import QueuePreview from "./pages/QueuePreview";
 
@@ -14,6 +15,7 @@ export const PAGES = {
   Leaderboard,
   Gallery,
   Submission,
+  MySubmissions,
   Admin,
   QueuePreview,
 };

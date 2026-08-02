@@ -536,6 +536,48 @@ export async function listPublicSubmissions(options: {
   };
 }
 
+/**
+ * Every submission belonging to any of `anonymousIds`, newest round first,
+ * each with its rank within its round. Powers the account "My submissions"
+ * view, so it must work across challenge dates (unlike the gallery).
+ */
+export async function listOwnerSubmissions(
+  anonymousIds: string[],
+): Promise<PublicSubmissionSummary[]> {
+  const ids = [...new Set(anonymousIds.map((s) => s.trim()).filter(Boolean))];
+  if (ids.length === 0) return [];
+
+  const Submission = getPlaySubmissionModel();
+  const own = (await Submission.find({ anonymousId: { $in: ids } })
+    .select(
+      "anonymousId displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches",
+    )
+    .lean()) as LeanSubmission[];
+  if (own.length === 0) return [];
+
+  // Rank each submission within its round; one ranked load per distinct date.
+  const dates = [...new Set(own.map((d) => d.challengeDate))];
+  const rankById = new Map<string, number>();
+  for (const date of dates) {
+    const ranked = await loadRankedForDate(date);
+    ranked.forEach((doc, i) => rankById.set(String(doc._id), i + 1));
+  }
+
+  own.sort((a, b) => {
+    if (a.challengeDate !== b.challengeDate) {
+      return a.challengeDate < b.challengeDate ? 1 : -1;
+    }
+    return (
+      new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
+    );
+  });
+
+  return own.map((doc) => ({
+    ...toPublicSummary(doc, { rank: rankById.get(String(doc._id)) }),
+    isMine: true,
+  }));
+}
+
 export async function getPublicSubmissionById(
   id: string,
   anonymousId?: string,

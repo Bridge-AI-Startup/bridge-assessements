@@ -12,6 +12,7 @@ import {
   periodPossessive,
 } from "@/lib/challengePeriod";
 import AdminSubmissions from "@/pages/AdminSubmissions";
+import Markdown from "@/components/Markdown";
 
 const CATEGORIES = ["widget", "game", "tool", "other"];
 const MAKE_MODES = [
@@ -561,6 +562,15 @@ export default function Admin() {
                   <code className="rounded bg-mist px-1">CHALLENGE.md</code>.
                 </p>
               </label>
+
+              {form.prompt.trim() && (
+                <div className="rounded-xl border border-line bg-paper p-4">
+                  <p className="label-mono mb-2">
+                    Preview — how builders will see it
+                  </p>
+                  <Markdown text={form.prompt} />
+                </div>
+              )}
 
               <div className="grid gap-4 sm:grid-cols-3">
                 <label className="block text-sm">

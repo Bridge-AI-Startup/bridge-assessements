@@ -6,9 +6,14 @@ import {
   getChallengeBySlug,
   getTodayChallenge,
   listChallenges,
+  listPastChallenges,
   updateChallenge,
   type ChallengeStatus,
 } from "../../services/shorts/challenges.js";
+import {
+  getAccountSubmissions,
+  linkAnonymousId,
+} from "../../services/shorts/account.js";
 import { getChallengePeriodInfo } from "../../services/shorts/challengePeriod.js";
 import {
   createOrResumeSession,
@@ -625,6 +630,49 @@ export const getLeaderboard: RequestHandler = async (req, res, next) => {
         ? String(req.query.anonymousId)
         : undefined,
     });
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const listPublicChallenges: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const result = await listPastChallenges({
+      limit: req.query.limit
+        ? parseInt(String(req.query.limit), 10)
+        : undefined,
+    });
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const postAccountLink: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    // verifyAuthToken puts the verified Firebase uid on the body.
+    const result = await linkAnonymousId({
+      firebaseUid: String(req.body.uid || ""),
+      anonymousId: String(req.body.anonymousId || ""),
+    });
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getAccountSubmissionsHandler: RequestHandler = async (
+  req,
+  res,
+  next,
+) => {
+  try {
+    const result = await getAccountSubmissions(String(req.body.uid || ""));
     res.status(200).json(result);
   } catch (error) {
     next(error);

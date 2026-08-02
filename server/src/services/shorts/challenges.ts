@@ -4,6 +4,7 @@ import {
   CHALLENGE_STATUSES,
   getPlayChallengeModel,
 } from "../../models/shorts/challenge.js";
+import { getPlaySubmissionModel } from "../../models/shorts/submission.js";
 
 import {
   endOfChallengePeriod,
@@ -99,6 +100,62 @@ export async function getTodayChallenge(): Promise<PublicChallenge | null> {
   challenge.cadence = getPlayChallengeCadence();
   challenge.periodEndsAt = endOfChallengePeriod(periodKey).toISOString();
   return challenge;
+}
+
+export type PastChallengeSummary = {
+  slug: string;
+  title: string;
+  challengeDate: string;
+  category: ChallengeCategory;
+  submissionCount: number;
+  /** True for the current period's challenge. */
+  isCurrent: boolean;
+};
+
+/**
+ * Published challenges up to and including the current period, newest first,
+ * with per-round submission counts. Public — powers the archive view.
+ */
+export async function listPastChallenges(
+  options: { limit?: number } = {},
+): Promise<{ challenges: PastChallengeSummary[]; total: number }> {
+  const Challenge = getPlayChallengeModel();
+  const limit = Math.min(Math.max(options.limit ?? 52, 1), 200);
+  const currentKey = getCurrentPeriodKey();
+
+  const filter = {
+    status: "published",
+    challengeDate: { $lte: currentKey },
+  };
+
+  const [docs, total] = await Promise.all([
+    Challenge.find(filter)
+      .select("slug title challengeDate category")
+      .sort({ challengeDate: -1 })
+      .limit(limit)
+      .lean(),
+    Challenge.countDocuments(filter),
+  ]);
+
+  // One aggregation for all rounds on the page, not a count per round.
+  const Submission = getPlaySubmissionModel();
+  const counts = (await Submission.aggregate([
+    { $match: { challengeDate: { $in: docs.map((d) => d.challengeDate) } } },
+    { $group: { _id: "$challengeDate", count: { $sum: 1 } } },
+  ])) as Array<{ _id: string; count: number }>;
+  const countByDate = new Map(counts.map((c) => [c._id, c.count]));
+
+  return {
+    total,
+    challenges: docs.map((doc) => ({
+      slug: doc.slug as string,
+      title: doc.title as string,
+      challengeDate: doc.challengeDate as string,
+      category: doc.category as ChallengeCategory,
+      submissionCount: countByDate.get(doc.challengeDate) ?? 0,
+      isCurrent: doc.challengeDate === currentKey,
+    })),
+  };
 }
 
 export async function listChallenges(options: ListChallengesOptions = {}) {

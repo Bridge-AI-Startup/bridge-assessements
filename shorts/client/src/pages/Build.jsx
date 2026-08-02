@@ -3,6 +3,9 @@ import { Link } from "react-router-dom";
 import { ensureSession, getSession, getWorkspaceRevision, clearStoredSessionId, pauseSession, pauseSessionBeacon, resumeSession } from "@/api/session";
 import { fetchSessionUsage, sendClaudeMessage } from "@/api/claude";
 import { submitSession } from "@/api/submit";
+import { linkCurrentAnonymousId } from "@/api/account";
+import { useAuth } from "@/lib/useAuth";
+import AccountModal from "@/components/AccountModal";
 import {
   fetchChallengePeriod,
   periodPossessive,
@@ -346,6 +349,8 @@ export default function Build() {
   const [displayName, setDisplayName] = useState(() => getDisplayName());
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
+  const { user, signedIn } = useAuth();
+  const [showAccountModal, setShowAccountModal] = useState(false);
   const [splitPct, setSplitPct] = useState(58);
   const [leftPaneSizes, setLeftPaneSizes] = useState(DEFAULT_LEFT_SIZES);
   const [leftStackOrder, setLeftStackOrder] = useState(DEFAULT_LEFT_STACK);
@@ -875,6 +880,11 @@ export default function Build() {
       return;
     }
     persistDisplayName(result.result.displayName || name);
+    // Signed in → make sure this browser's id (and so this build) is on the
+    // account. Idempotent; ignore failures — the submission itself succeeded.
+    if (signedIn) {
+      linkCurrentAnonymousId().catch(() => {});
+    }
     setShowSubmitModal(false);
     setState({
       kind: "submitted",
@@ -1207,6 +1217,26 @@ export default function Build() {
           Confirm the name for this submission. Your workspace will be saved
           and closed.
         </p>
+        {signedIn ? (
+          <p className="mt-2 rounded-xl bg-mist px-3 py-2 text-xs text-fog">
+            Signed in as{" "}
+            <span className="font-medium text-ink">{user?.email}</span> — this
+            build will be saved to your account.
+          </p>
+        ) : (
+          <div className="mt-2 rounded-xl bg-mist px-3 py-2 text-xs text-fog">
+            Submitting as a guest keeps this build in this browser only.{" "}
+            <button
+              type="button"
+              onClick={() => setShowAccountModal(true)}
+              disabled={submitting}
+              className="font-medium text-ink underline"
+            >
+              Create an account or sign in
+            </button>{" "}
+            to keep it across devices.
+          </div>
+        )}
         <label className="mt-4 block text-sm font-medium text-fog">
           Name
           <input
@@ -1255,10 +1285,21 @@ export default function Build() {
             disabled={submitting || !displayName.trim()}
             className="btn-pill"
           >
-            {submitting ? "Submitting…" : "Confirm submit"}
+            {submitting
+              ? "Submitting…"
+              : signedIn
+                ? "Confirm submit"
+                : "Submit as guest"}
           </button>
         </div>
       </form>
+      {showAccountModal && (
+        <AccountModal
+          title="Save this build to an account"
+          subtitle="Sign in or create an account, then confirm your submission — it will follow you across devices."
+          onClose={() => setShowAccountModal(false)}
+        />
+      )}
     </div>
   ) : null;
 
