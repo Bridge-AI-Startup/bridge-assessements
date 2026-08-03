@@ -21,6 +21,99 @@ export const STARTER_FILES: Record<string, string> = {
   </head>
   <body>
     <main>
+      <p>Enter a prompt in the chat and your build will pop up here.</p>
+    </main>
+    <script src="main.js"></script>
+  </body>
+</html>
+`,
+  "style.css": `:root {
+  color-scheme: light;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  line-height: 1.5;
+  color: #0f172a;
+  background: #f8fafc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+}
+
+main {
+  text-align: center;
+}
+
+p {
+  margin: 0;
+  color: #94a3b8;
+}
+`,
+  "main.js": `console.log("Bridge Play starter ready. Build your challenge in this project.");
+`,
+  "README.md": `# Bridge Play starter
+
+Static HTML/CSS/JS project for daily challenges.
+
+## How to work
+
+1. Open \`CHALLENGE.md\` when it appears (injected per session).
+2. Edit **\`index.html\` in place** — Preview opens that file first. Use \`style.css\` / \`main.js\` as needed.
+3. Multi-page is OK: add more \`.html\` files and link them from \`index.html\`.
+4. Watch the **Preview** pane — static server, opens \`index.html\` by default.
+5. Use the **Claude** chat panel to build or iterate.
+
+## Constraints (v1)
+
+- **Entry = \`index.html\`.** That is the home page users land on.
+- Extra HTML pages are allowed when linked from the entry (or each other).
+- Vanilla JS or CDN frameworks only — no Vite, npm build, Next, or CRA.
+- Keep everything in this folder so the static preview server can serve it.
+`,
+};
+
+/**
+ * Older starter copy that live snapshots may still hold. Sessions created before
+ * a starter rewrite keep the previous files in `workspaceSnapshot`, so every
+ * shipped variant must stay comparable or those builds sail past the submit gate.
+ */
+const LEGACY_STARTER_FILES: Record<string, string[]> = {
+  "index.html": [
+    // Bare empty state, replaced by the prompt-box pointer.
+    `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bridge Shorts</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main>
+      <p>Nothing here yet.</p>
+    </main>
+    <script src="main.js"></script>
+  </body>
+</html>
+`,
+    // Four-step onboarding copy, replaced by the bare empty state.
+    `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bridge Shorts</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main>
       <p class="eyebrow">Preview</p>
       <h1>Nothing here yet — and that's normal.</h1>
       <p class="lede">
@@ -56,7 +149,35 @@ export const STARTER_FILES: Record<string, string> = {
   </body>
 </html>
 `,
-  "style.css": `:root {
+    // Plain-language rewrite predecessor (post code-server removal).
+    `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bridge Play</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Bridge Play</h1>
+      <p>
+        Open <code>CHALLENGE.md</code>, then build your solution in
+        <strong>this</strong> <code>index.html</code> (Preview only loads this
+        file).
+      </p>
+      <p class="hint">
+        Tip: chat with Claude in the chat panel to build this.
+      </p>
+    </main>
+    <script src="main.js"></script>
+  </body>
+</html>
+`,
+  ],
+  "style.css": [
+    // Stylesheet for the four-step onboarding starter.
+    `:root {
   color-scheme: light;
   font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   line-height: 1.5;
@@ -143,63 +264,6 @@ code {
   border-radius: 4px;
 }
 `,
-  "main.js": `console.log("Bridge Play starter ready. Build your challenge in this project.");
-`,
-  "README.md": `# Bridge Play starter
-
-Static HTML/CSS/JS project for daily challenges.
-
-## How to work
-
-1. Open \`CHALLENGE.md\` when it appears (injected per session).
-2. Edit **\`index.html\` in place** — Preview opens that file first. Use \`style.css\` / \`main.js\` as needed.
-3. Multi-page is OK: add more \`.html\` files and link them from \`index.html\`.
-4. Watch the **Preview** pane — static server, opens \`index.html\` by default.
-5. Use the **Claude** chat panel to build or iterate.
-
-## Constraints (v1)
-
-- **Entry = \`index.html\`.** That is the home page users land on.
-- Extra HTML pages are allowed when linked from the entry (or each other).
-- Vanilla JS or CDN frameworks only — no Vite, npm build, Next, or CRA.
-- Keep everything in this folder so the static preview server can serve it.
-`,
-};
-
-/**
- * Older starter copy that live snapshots may still hold. Sessions created before
- * a starter rewrite keep the previous files in `workspaceSnapshot`, so every
- * shipped variant must stay comparable or those builds sail past the submit gate.
- */
-const LEGACY_STARTER_FILES: Record<string, string[]> = {
-  "index.html": [
-    // Plain-language rewrite predecessor (post code-server removal).
-    `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Bridge Play</title>
-    <link rel="stylesheet" href="style.css" />
-  </head>
-  <body>
-    <main>
-      <h1>Bridge Play</h1>
-      <p>
-        Open <code>CHALLENGE.md</code>, then build your solution in
-        <strong>this</strong> <code>index.html</code> (Preview only loads this
-        file).
-      </p>
-      <p class="hint">
-        Tip: chat with Claude in the chat panel to build this.
-      </p>
-    </main>
-    <script src="main.js"></script>
-  </body>
-</html>
-`,
-  ],
-  "style.css": [
     `:root {
   color-scheme: light;
   font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
@@ -279,6 +343,10 @@ const IGNORED_PATHS = new Set([
 /** Phrases that uniquely mark the default starter index.html / main.js. */
 const STARTER_INDEX_PHRASES = [
   "<title>bridge shorts</title>",
+  "your build will pop up here",
+  // Bare empty state — keep so snapshots from that window still match.
+  "<p>nothing here yet.</p>",
+  // Four-step onboarding starter copy — keep so older snapshots still match.
   "nothing here yet — and that's normal",
   "describe what you want in the chat, in plain english",
   "no coding needed. keep an eye on",

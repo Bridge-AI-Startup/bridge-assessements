@@ -19,68 +19,10 @@ body {
 }
 
 main {
-  max-width: 32rem;
-  width: 100%;
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 1.5rem 1.75rem;
-}
-
-h1 {
-  margin: 0 0 0.75rem;
-  font-size: 1.5rem;
-  letter-spacing: -0.02em;
+  text-align: center;
 }
 
 p {
-  margin: 0 0 0.75rem;
-  color: #334155;
-}
-
-.eyebrow {
-  margin: 0 0 0.5rem;
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  margin: 0;
   color: #94a3b8;
-}
-
-.lede {
-  margin-bottom: 1.25rem;
-}
-
-ol {
-  margin: 0 0 1.25rem;
-  padding-left: 1.25rem;
-  color: #334155;
-}
-
-li {
-  margin-bottom: 0.75rem;
-}
-
-li:last-child {
-  margin-bottom: 0;
-}
-
-li strong {
-  color: #0f172a;
-}
-
-.hint {
-  margin-bottom: 0;
-  padding-top: 1rem;
-  border-top: 1px solid #e2e8f0;
-  font-size: 0.9rem;
-  color: #64748b;
-}
-
-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.9em;
-  background: #f1f5f9;
-  padding: 0.1em 0.35em;
-  border-radius: 4px;
 }

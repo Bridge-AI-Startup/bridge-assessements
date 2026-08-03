@@ -4,21 +4,51 @@
     {
       "name": "backend",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "server", "run", "dev"],
+      "runtimeArgs": [
+        "--prefix",
+        "server",
+        "run",
+        "dev"
+      ],
       "port": 5050
     },
     {
       "name": "client",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "client", "run", "dev", "--", "--port", "5273", "--strictPort"],
+      "runtimeArgs": [
+        "--prefix",
+        "client",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5273",
+        "--strictPort"
+      ],
       "port": 5273
     },
     {
       "name": "shorts-client",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "shorts/client", "run", "dev"],
+      "runtimeArgs": [
+        "--prefix",
+        "shorts/client",
+        "run",
+        "dev"
+      ],
       "port": 5174,
       "autoPort": true
+    },
+    {
+      "name": "starter-preview",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5181"
+      ],
+      "cwd": "shorts/e2b-template/starter-project",
+      "port": 5181
     }
   ]
 }
