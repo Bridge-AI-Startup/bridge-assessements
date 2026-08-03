@@ -1132,12 +1132,6 @@ export default function Build() {
             </p>
           )}
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
-            {chatMessages.length === 0 && (
-              <p className="text-sm text-slate-400">
-                Try: “Add a delete button for each todo” or “Make the UI look
-                cleaner.”
-              </p>
-            )}
             {chatMessages.filter((m) => m.role !== "preview").map((m, i) => (
               <div
                 key={i}

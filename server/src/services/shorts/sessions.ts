@@ -35,6 +35,22 @@ import {
 } from "./sessionPersist.js";
 import { createKeyedAsyncLock } from "./keyedAsyncLock.js";
 
+/**
+ * Serverless previews are served by this backend, so their URL is only valid
+ * while the public base URL is unchanged. Re-stamp it on every resume: a
+ * session started behind a tunnel that has since died (or moved) otherwise
+ * keeps handing the browser an unreachable iframe origin forever.
+ */
+async function syncServerlessPreviewUrl(
+  doc: { previewUrl?: string; _id: unknown; save: () => Promise<unknown> },
+  anonymousId: string,
+): Promise<void> {
+  const fresh = buildSessionPreviewUrl(String(doc._id), anonymousId);
+  if (doc.previewUrl === fresh) return;
+  doc.previewUrl = fresh;
+  await doc.save();
+}
+
 export type SessionChallengeSummary = {
   slug: string;
   title: string;
@@ -411,13 +427,7 @@ async function createOrResumeSessionUnlocked(
   if (existing) {
     // Serverless sessions have no sandbox to revive — just refresh preview + return.
     if (existing.makeMode === "serverless") {
-      if (!existing.previewUrl) {
-        existing.previewUrl = buildSessionPreviewUrl(
-          existing._id.toString(),
-          anonymousId,
-        );
-        await existing.save();
-      }
+      await syncServerlessPreviewUrl(existing, anonymousId);
       return toSessionResponse(existing, challenge);
     }
     if (existing.e2bSandboxId) {
@@ -739,10 +749,7 @@ export async function resumePlayBuildSession(
 
   // Serverless resume is a no-op keep-alive — refresh preview URL and return.
   if (doc.makeMode === "serverless") {
-    if (!doc.previewUrl) {
-      doc.previewUrl = buildSessionPreviewUrl(doc._id.toString(), anonymousId);
-      await doc.save();
-    }
+    await syncServerlessPreviewUrl(doc, anonymousId);
     const bySlugServerless = await getChallengeBySlug(doc.challengeSlug);
     return bySlugServerless
       ? toSessionResponse(doc, toChallengeSummary(bySlugServerless))

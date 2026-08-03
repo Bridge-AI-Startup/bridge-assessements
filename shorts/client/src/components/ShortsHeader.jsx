@@ -4,6 +4,7 @@ import { signOut } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
 import { useAuth } from "@/lib/useAuth";
 import AccountModal from "@/components/AccountModal";
+import bridgeLogo from "@/assets/bridge-logo.svg";
 
 const NAV = [
   { id: "browse", label: "Browse", to: "/Gallery" },
@@ -53,14 +54,23 @@ export default function ShortsHeader({ active = null, cta = null, children = nul
 
   return (
     <header className="border-b border-line bg-paper">
-      <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-4">
-        <div className="flex min-w-0 items-center gap-8">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-3 px-6 py-4">
+        <div className="mr-auto flex min-w-0 items-center gap-8">
           <Link
             to="/"
-            className="shrink-0 text-[15px] font-semibold tracking-tight"
+            className="flex shrink-0 items-center gap-2 text-[15px] font-semibold tracking-tight"
           >
-            <span className="text-ink">Bridge</span>{" "}
-            <span className="text-fog-light">Shorts</span>
+            <img
+              src={bridgeLogo}
+              alt="Bridge"
+              className="h-7 w-7 object-contain"
+              width={28}
+              height={28}
+            />
+            <span>
+              <span className="text-ink">Bridge</span>{" "}
+              <span className="text-fog-light">Shorts</span>
+            </span>
           </Link>
           <nav className="hidden items-center gap-5 sm:flex">
             {NAV.map((item) => (
@@ -87,8 +97,13 @@ export default function ShortsHeader({ active = null, cta = null, children = nul
           </nav>
         </div>
 
+        {children ? (
+          <div className="order-last flex w-full items-center sm:order-none sm:w-auto">
+            {children}
+          </div>
+        ) : null}
+
         <div className="flex shrink-0 items-center gap-3">
-          {children}
           {!loading &&
             (signedIn ? (
               <div className="relative" ref={menuRef}>

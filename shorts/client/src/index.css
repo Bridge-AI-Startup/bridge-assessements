@@ -2,6 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
+/* iOS Safari auto-zooms the page (and leaves it zoomed) when a focused form
+   control's computed font-size is under 16px. Force 16px on touch-size screens
+   so tapping sign-in fields or the prompt box never rescales the site.
+   !important is needed to beat Tailwind's .text-sm on the elements. */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
 body {
   margin: 0;
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -72,5 +84,59 @@ body {
 
   .token-gauge-pulse {
     animation: none;
+  }
+}
+
+@keyframes vote-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes vote-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes vote-pane-in {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.97);
+  }
+}
+
+@keyframes vote-pane-out {
+  to {
+    opacity: 0;
+    transform: translateY(24px) scale(0.97);
+  }
+}
+
+.vote-backdrop-enter {
+  animation: vote-fade-in 180ms ease-out;
+}
+
+.vote-backdrop-exit {
+  animation: vote-fade-out 150ms ease-in forwards;
+}
+
+.vote-pane-enter {
+  animation: vote-pane-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.vote-pane-exit {
+  animation: vote-pane-out 150ms ease-in forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vote-backdrop-enter,
+  .vote-pane-enter {
+    animation: none;
+  }
+
+  .vote-backdrop-exit,
+  .vote-pane-exit {
+    animation: vote-fade-out 1ms forwards;
   }
 }

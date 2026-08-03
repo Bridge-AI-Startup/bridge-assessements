@@ -40,6 +40,14 @@ export function getShortsLlmProxyPublicUrl(): string {
   return shortsEnv("SHORTS_LLM_PROXY_PUBLIC_URL", "PLAY_LLM_PROXY_PUBLIC_URL");
 }
 
+/**
+ * Public base URL of this API as the *browser* should reach it (serverless
+ * preview iframes). Empty unless explicitly set; see getShortsPublicApiBase().
+ */
+export function getShortsPublicApiUrl(): string {
+  return shortsEnv("SHORTS_PUBLIC_API_URL", "PLAY_PUBLIC_API_URL");
+}
+
 export function getShortsMaxConcurrentSessions(): string {
   return shortsEnv(
     "SHORTS_MAX_CONCURRENT_SESSIONS",

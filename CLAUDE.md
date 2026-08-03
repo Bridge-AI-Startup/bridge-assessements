@@ -184,6 +184,7 @@ See `server/config.env.example` for the full list. Key variables:
 - `SHORTS_BUILD_TIME_LIMIT_MINUTES` -- Wall-clock build window from start (default: `10`); overridden by challenge `timeLimitMinutes`; always capped by challenge period end
 - `SHORTS_CHALLENGE_CADENCE` -- `weekly` (default) or `daily`. Weekly: one published challenge per Mon–Sun UTC week; `challengeDate` = Monday. Daily: one per UTC calendar day. Swap with this env var only.
 - `SHORTS_LLM_PROXY_PUBLIC_URL` -- Public base URL for the Shorts LLM proxy that E2B sandboxes can reach (e.g. Render or a tunnel). Required for Claude Code; sandboxes cannot call `localhost`
+- `SHORTS_PUBLIC_API_URL` -- Base URL the **browser** uses for serverless preview iframes (`GET /session/:id/preview`). Leave unset normally: dev falls back to `http://localhost:$PORT`, production falls back to `SHORTS_LLM_PROXY_PUBLIC_URL`. Set it only when the browser is not on the API host (e.g. phone testing through a tunnel). Keeping this separate from the E2B-facing proxy URL is what stops a dead tunnel from breaking local serverless previews
 - `SHORTS_ANTHROPIC_MODEL` -- Optional default model for Claude Code in Shorts sandboxes
 - `ANTHROPIC_API_KEY` -- Org Anthropic key used by the Shorts Messages proxy (never written into the sandbox)
 
@@ -374,6 +375,9 @@ server/src/
     ├── listSubmissions.ts
     ├── seedCompetition.ts   # Link Mongo Competition slug → assessment (hackathon dashboard)
     ├── seedShortsChallenge.ts # Upsert Shorts daily challenge from shorts/challenges/*.json
+    ├── seedShortsLaunchRound.ts # Cold-start round seed driven by shorts/seed-builds/<date>/seed.json: upsert challenge, insert seeded builds + simulated vote graph (--date=YYYY-MM-DD, dry-run unless --apply; refuses if the round already has submissions)
+    ├── moveShortsLaunchRound.ts # One-off: re-dated the week-1 seeded round from 2026-08-03 onto 2026-07-27 (kept as a template for date moves)
+    ├── swapShortsRounds.ts  # One-off: swapped the seeded memory-match and make-time-visible rounds between 2026-07-27 and 2026-08-03 (kept as a template for round swaps)
     ├── dropShortsSubmissionUniqueIndex.ts # One-time: drop legacy unique {anonymousId, challengeDate} on PlaySubmission
     ├── shorts-sandbox-smoke.ts # Create Shorts E2B template sandbox; print preview URL + Claude check
     ├── replaceSubmissionWithGeneratedMarkdown.ts
@@ -426,7 +430,7 @@ server/src/
 - `GET /session/:id/file` -- Read one file (`?anonymousId=&path=`)
 - `PUT /session/:id/file` -- Write one file (`{ anonymousId, path, content }`) into E2B; upserts session `workspaceSnapshot`
 - `GET /session/:id/workspace-revision` -- Workspace fingerprint for preview refresh (`?anonymousId=`); serverless returns a `workspaceSnapshotAt`-derived revision (no sandbox)
-- `GET /session/:id/preview` and `GET /session/:id/preview/*` -- **Serverless make mode only:** serve the live session's generated file(s) from `workspaceSnapshot` (`?anonymousId=`; ownership-checked; `Cache-Control: no-store`). This is the iframe `previewUrl` for serverless builds (E2B builds preview from the sandbox instead)
+- `GET /session/:id/preview` and `GET /session/:id/preview/*` -- **Serverless make mode only:** serve the live session's generated file(s) from `workspaceSnapshot` (`?anonymousId=`; ownership-checked; `Cache-Control: no-store`). This is the iframe `previewUrl` for serverless builds (E2B builds preview from the sandbox instead); its absolute base comes from `SHORTS_PUBLIC_API_URL` → `http://localhost:$PORT` in dev → `SHORTS_LLM_PROXY_PUBLIC_URL` in production, and is re-stamped on every session create/resume so a stale base can't strand an existing session
 - `POST /session/:id/llm/v1/messages` -- Anthropic-compatible Messages proxy for Claude Code in E2B (Bearer `llmProxyToken`); streams; increments `tokensUsed`; **429** when over `tokenBudget`
 - `POST /session/:id/claude/message` -- Chat turn. Dispatches on the session's `makeMode`: **E2B** runs `claude -p` in the sandbox; **serverless** makes one Anthropic Messages call → single-file HTML saved to `workspaceSnapshot`. Both meter tokens, append `chatMessages`, and return assistant text (`{ anonymousId, prompt, model?, effort? }`; `effort` is ignored in serverless)
 - `POST /submit` -- Snapshot workspace files into a **new** `PlaySubmission` (`{ sessionId, anonymousId, displayName }`), mark session submitted, kill sandbox; **400** `{ code: "starter_only" }` if snapshot is still the unchanged / near-empty starter. Never overwrites an earlier build — repeat submits create additional independent entries, each starting at default μ/σ

@@ -14,6 +14,7 @@ import { getPlayBuildSessionModel } from "../../models/shorts/buildSession.js";
 import type { PublicChallenge } from "./challenges.js";
 import { getChallengeBySlug } from "./challenges.js";
 import { filterPlayPublicFiles } from "./sandbox.js";
+import { getShortsPublicApiUrl } from "../../utils/shortsEnv.js";
 import {
   STARTER_FILES,
   isIndexHtmlStarterLike,
@@ -53,12 +54,31 @@ const SERVERLESS_SYSTEM_PROMPT = [
   "- Return ONLY the HTML. No markdown fences, no explanation, no prose before or after.",
 ].join("\n");
 
+/**
+ * Browser-facing base for serverless preview iframes.
+ *
+ * This only has to be reachable from the user's browser — unlike the LLM proxy
+ * base, which must be reachable from inside an E2B sandbox. Locally that means
+ * this server's own origin: a stale or dead tunnel in
+ * SHORTS_LLM_PROXY_PUBLIC_URL (serverless mode never uses E2B) must not leave
+ * the preview pointing at an offline host. Override with SHORTS_PUBLIC_API_URL
+ * when the browser is not on this machine.
+ */
+export function getShortsPublicApiBase(): string {
+  const explicit = getShortsPublicApiUrl();
+  if (explicit) return explicit.replace(/\/$/, "");
+  if (process.env.NODE_ENV === "production") {
+    return getPlayLlmProxyPublicBase();
+  }
+  return `http://localhost:${process.env.PORT || 5050}`;
+}
+
 /** Absolute preview URL the browser iframe loads for a serverless session. */
 export function buildSessionPreviewUrl(
   sessionId: string,
   anonymousId: string,
 ): string {
-  const base = getPlayLlmProxyPublicBase();
+  const base = getShortsPublicApiBase();
   const q = new URLSearchParams({ anonymousId }).toString();
   return `${base}/api/shorts/session/${sessionId}/preview?${q}`;
 }

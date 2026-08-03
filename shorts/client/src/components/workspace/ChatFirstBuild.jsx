@@ -4,12 +4,6 @@ import Markdown from "@/components/Markdown";
 import ModelEffortPicker from "@/components/workspace/ModelEffortPicker";
 import TokenGauge from "@/components/workspace/TokenGauge";
 
-const STARTER_PROMPTS = [
-  "Build the basic version",
-  "Make it look beautiful",
-  "Add a fun twist",
-];
-
 function toneClass(tone) {
   if (tone === "danger") return "text-red-600";
   if (tone === "warn") return "text-accent-amber";
@@ -227,11 +221,6 @@ export default function ChatFirstBuild({
     if (textareaRef.current) textareaRef.current.style.height = "auto";
   }
 
-  function sendStarter(prompt) {
-    if (chatBusy || exhausted) return;
-    void onSendMessage(prompt);
-  }
-
   function openPreview() {
     if (isDesktop) {
       onRefreshPreview?.();
@@ -264,22 +253,6 @@ export default function ChatFirstBuild({
             <Markdown text={challengePrompt} className="mt-1.5 !text-sm" />
           ) : null}
         </section>
-
-        {chatMessages.length === 0 ? (
-          <div className="flex flex-wrap gap-2">
-            {STARTER_PROMPTS.map((prompt) => (
-              <button
-                key={prompt}
-                type="button"
-                disabled={chatBusy || exhausted}
-                onClick={() => sendStarter(prompt)}
-                className="rounded-full border border-line bg-cream px-3 py-1.5 text-xs text-fog hover:bg-mist active:bg-mist disabled:opacity-40"
-              >
-                {prompt}
-              </button>
-            ))}
-          </div>
-        ) : null}
 
         {chatMessages.map((message, index) => {
           if (message.role === "preview") {

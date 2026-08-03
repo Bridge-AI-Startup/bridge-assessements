@@ -1,0 +1,11 @@
+{
+  "slug": "memory-match-2026-08-03",
+  "challengeDate": "2026-08-03",
+  "title": "Build a Memory Match Game",
+  "prompt": "Build a memory match card game as a single page.\n\n**Entry:** Preview opens `index.html` \u2014 put everything there (inline CSS/JS, or CDN links). No Vite/npm.\n\nRequirements:\n\n- Shows a grid of face-down cards in 8 matching pairs (16 cards)\n- Clicking a card flips it face up\n- Two face-up cards that match stay up; two that don't flip back after a short pause\n- Tracks and shows the number of moves\n- Announces a win when all pairs are matched, with a way to play again\n\nShuffle the deck on every new game. Make it look good \u2014 people vote on these.\n\nYou're done when you can play a full game start to finish in Preview and start a fresh one.",
+  "tokenBudget": 40000,
+  "timeLimitMinutes": 10,
+  "category": "game",
+  "status": "published",
+  "makeMode": "serverless"
+}

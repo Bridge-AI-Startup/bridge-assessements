@@ -136,14 +136,14 @@ export default function Leaderboard() {
         )}
 
         {data && data.entries.length > 0 && (
-          <div className="overflow-hidden rounded-2xl border border-line bg-paper shadow-card">
+          <div className="overflow-x-auto rounded-2xl border border-line bg-paper shadow-card">
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-line">
-                  <th className="label-mono px-5 py-3">Rank</th>
-                  <th className="label-mono px-5 py-3">Builder</th>
-                  <th className="label-mono px-5 py-3">Score</th>
-                  <th className="label-mono px-5 py-3">Record</th>
+                  <th className="label-mono px-3 py-3 sm:px-5">Rank</th>
+                  <th className="label-mono px-3 py-3 sm:px-5">Builder</th>
+                  <th className="label-mono px-3 py-3 sm:px-5">Score</th>
+                  <th className="label-mono px-3 py-3 sm:px-5">Record</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
@@ -153,7 +153,7 @@ export default function Leaderboard() {
                     className={row.isMine ? "bg-cream" : undefined}
                   >
                     <td
-                      className={`px-5 py-3.5 font-mono text-sm ${
+                      className={`whitespace-nowrap px-3 py-3.5 font-mono text-sm sm:px-5 ${
                         row.rank === 1 ? "text-ink" : "text-fog-light"
                       }`}
                     >
@@ -168,7 +168,7 @@ export default function Leaderboard() {
                         #{row.rank}
                       </span>
                     </td>
-                    <td className="px-5 py-3.5">
+                    <td className="px-3 py-3.5 sm:px-5">
                       <Link
                         to={`/Submission?id=${row.id}`}
                         className="font-medium text-ink hover:underline"
@@ -186,12 +186,12 @@ export default function Leaderboard() {
                         </span>
                       ) : null}
                     </td>
-                    <td className="px-5 py-3.5 font-mono text-fog">
+                    <td className="whitespace-nowrap px-3 py-3.5 font-mono text-fog sm:px-5">
                       {row.score}
                     </td>
-                    <td className="px-5 py-3.5 font-mono text-fog">
+                    <td className="whitespace-nowrap px-3 py-3.5 font-mono text-fog sm:px-5">
                       {row.wins}-{row.losses}
-                      <span className="ml-1 text-fog-light">
+                      <span className="ml-1 hidden text-fog-light sm:inline">
                         ({row.matches})
                       </span>
                     </td>

@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArrowRight, ArrowLeft, Mail, Lock, AlertCircle } from "lucide-react";
@@ -148,11 +147,7 @@ export default function GetStarted() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#dbeafe] via-[#eff6ff] to-white flex items-center justify-center p-6">
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md relative"
-      >
+      <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md relative">
         <a
           href={MARKETING_ORIGIN}
           className="absolute top-4 left-4 inline-flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900"
@@ -271,7 +266,7 @@ export default function GetStarted() {
             Sign in
           </a>
         </div>
-      </motion.div>
+      </div>
     </div>
   );
 }

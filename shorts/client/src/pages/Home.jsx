@@ -146,7 +146,7 @@ export default function Home() {
             <div>
               <h1 className="max-w-xl text-[40px] font-medium leading-[1.1] tracking-tight lg:text-[48px]">
                 <span className="text-ink">{headline}</span>{" "}
-                <span className="text-fog-light">Ship it in one sitting.</span>
+                <span className="text-fog-light">Ship something small, fast.</span>
               </h1>
             </div>
             <div className="rounded-2xl border border-line bg-paper px-6 py-10 shadow-card">
@@ -167,7 +167,7 @@ export default function Home() {
             <div className="lg:sticky lg:top-12 lg:pt-2">
               <h1 className="max-w-xl text-[40px] font-medium leading-[1.1] tracking-tight lg:text-[48px]">
                 <span className="text-ink">{headline}</span>{" "}
-                <span className="text-fog-light">Ship it in one sitting.</span>
+                <span className="text-fog-light">Ship something small, fast.</span>
               </h1>
               <p className="label-mono mt-5">
                 {formatPeriodHeading(

@@ -143,7 +143,7 @@ export default function AccountModal({
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4">
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-sm rounded-2xl border border-line bg-paper p-6 shadow-card"
+        className="max-h-full w-full max-w-sm overflow-y-auto rounded-2xl border border-line bg-paper p-6 shadow-card"
       >
         <h2 className="text-lg font-medium tracking-tight text-ink">
           {title}

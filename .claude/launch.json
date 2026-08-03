@@ -1,0 +1,24 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "server", "run", "dev"],
+      "port": 5050
+    },
+    {
+      "name": "client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "client", "run", "dev", "--", "--port", "5273", "--strictPort"],
+      "port": 5273
+    },
+    {
+      "name": "shorts-client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "shorts/client", "run", "dev"],
+      "port": 5174,
+      "autoPort": true
+    }
+  ]
+}

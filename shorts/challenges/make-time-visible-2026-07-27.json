@@ -1,0 +1,11 @@
+{
+  "slug": "make-time-visible-2026-07-27",
+  "challengeDate": "2026-07-27",
+  "title": "Make Time Visible",
+  "prompt": "**This week: make time visible.**\n\nBuild a page that shows the current time \u2014 but not with a boring clock face. Color, words, motion, planets, sand, decay: anything, as long as someone can actually tell roughly what time it is.\n\nThe only rule: it must reflect the real current time, live.\n\nPeople vote on these side by side. The generic version loses \u2014 make it yours.\n\nYou're done when it's something you'd leave open on a second monitor.",
+  "tokenBudget": 40000,
+  "timeLimitMinutes": 10,
+  "category": "widget",
+  "status": "published",
+  "makeMode": "serverless"
+}

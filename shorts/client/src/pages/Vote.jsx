@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { castVote, fetchVoteNext } from "@/api/vote";
 import { shouldFetchSubmissionFiles } from "@/config/submissionPreview";
@@ -11,30 +11,130 @@ import {
 import ShortsHeader from "@/components/ShortsHeader";
 
 function PreviewPane({ card, side, onPick, disabled }) {
+  const [expanded, setExpanded] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const closeTimer = useRef(null);
   const preview = useSubmissionPreview({
     submissionId: card?.id,
     previewRevision: card?.previewRevision ?? card?.submittedAt,
     files: card?.files,
   });
 
+  const minimize = useCallback(() => {
+    setClosing(true);
+    clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => {
+      setExpanded(false);
+      setClosing(false);
+    }, 150);
+  }, []);
+
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
+
+  // New matchup → snap back to the card instantly.
+  useEffect(() => {
+    clearTimeout(closeTimer.current);
+    setExpanded(false);
+    setClosing(false);
+  }, [card?.id]);
+
+  useEffect(() => {
+    if (!expanded) return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape") minimize();
+    };
+    window.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [expanded, minimize]);
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-line bg-paper shadow-card">
-      <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
-        <div>
-          <p className="text-sm font-medium text-ink">{card.displayName}</p>
+    <div
+      className={
+        expanded
+          ? "h-[70vh] rounded-2xl border border-dashed border-line lg:h-auto lg:min-h-0"
+          : "flex h-[70vh] flex-col lg:h-auto lg:min-h-0"
+      }
+    >
+      {expanded && (
+        <div
+          className={`fixed inset-0 z-[59] bg-ink/40 ${
+            closing ? "vote-backdrop-exit" : "vote-backdrop-enter"
+          }`}
+          onClick={minimize}
+          aria-hidden="true"
+        />
+      )}
+      <div
+        className={
+          expanded
+            ? `fixed inset-x-0 bottom-0 top-14 z-[60] flex flex-col overflow-hidden rounded-t-2xl border border-line bg-paper shadow-card sm:inset-x-8 sm:inset-y-6 sm:rounded-2xl lg:inset-x-16 ${
+                closing ? "vote-pane-exit" : "vote-pane-enter"
+              }`
+            : "flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-2xl border border-line bg-paper shadow-card"
+        }
+      >
+      <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-2.5">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-ink">
+            {card.displayName}
+          </p>
           <p className="font-mono text-[11px] text-fog-light">
             score {card.score} · {card.wins}-{card.losses}
             {card.provisional ? " · provisional" : ""}
           </p>
         </div>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => onPick(side)}
-          className="btn-pill"
-        >
-          Pick this
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onPick(side)}
+            className="btn-pill"
+          >
+            Pick this
+          </button>
+          <button
+            type="button"
+            onClick={() => (expanded ? minimize() : setExpanded(true))}
+            aria-label={expanded ? "Minimize" : "Expand"}
+            title={expanded ? "Minimize (Esc)" : "Expand"}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-mist text-ink transition-colors hover:bg-line focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+          >
+            {expanded ? (
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M14 10h6M14 10V4M14 10l7-7M10 14H4M10 14v6M10 14l-7 7" />
+              </svg>
+            ) : (
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+              </svg>
+            )}
+          </button>
+        </div>
       </div>
       {preview?.url ? (
         <iframe
@@ -48,6 +148,7 @@ function PreviewPane({ card, side, onPick, disabled }) {
           No index.html to preview
         </div>
       )}
+      </div>
     </div>
   );
 }
@@ -59,7 +160,7 @@ function RoundMeter({ round, periodLabel }) {
     (round.votesInRound / round.roundSize) * 100,
   );
   return (
-    <div className="min-w-[160px]">
+    <div className="w-full sm:w-auto sm:min-w-[160px]">
       <div className="flex items-center justify-between gap-3">
         <span className="font-mono text-xs text-ink">
           Vote {Math.min(round.votesInRound, round.roundSize)} / {round.roundSize}
@@ -369,7 +470,7 @@ export default function Vote() {
         )}
 
         {state.kind === "pair" && (
-          <div className="flex min-h-0 flex-1 flex-col gap-4">
+          <div className="flex flex-1 flex-col gap-4 lg:min-h-0">
             <p className="text-center text-sm text-fog">
               Which build is better? Hit{" "}
               <span className="font-mono text-ink">
@@ -377,7 +478,7 @@ export default function Vote() {
               </span>{" "}
               to unlock your round recap.
             </p>
-            <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-2">
+            <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-2">
               <PreviewPane
                 card={state.data.left}
                 side="left"
