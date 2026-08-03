@@ -363,6 +363,10 @@ export const postClaudeMessage: RequestHandler = async (req, res, next) => {
       exitCode: result.exitCode,
       model: result.model,
       effort: result.effort,
+      // Serverless turns report whether the reply rebuilt the app or was just
+      // chat; the E2B path leaves this null and the client diffs the workspace.
+      workspaceChanged:
+        "workspaceChanged" in result ? result.workspaceChanged : null,
       usage,
     });
   } catch (error) {

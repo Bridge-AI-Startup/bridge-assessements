@@ -34,6 +34,8 @@ export async function fetchSessionUsage(
 export type ClaudeMessageResult = {
   output: string;
   exitCode: number;
+  /** Serverless: did this turn rebuild the app? null on the E2B path. */
+  workspaceChanged: boolean | null;
   usage: SessionUsage | null;
 };
 
@@ -69,6 +71,10 @@ export async function sendClaudeMessage(
       result: {
         output: String(body.output || ""),
         exitCode: Number(body.exitCode ?? 0),
+        workspaceChanged:
+          typeof body.workspaceChanged === "boolean"
+            ? body.workspaceChanged
+            : null,
         usage: body.usage || null,
       },
     };

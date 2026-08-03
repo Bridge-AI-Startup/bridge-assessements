@@ -331,7 +331,7 @@ export default function Admin() {
           onSubmit={handleSignIn}
           className="w-full max-w-sm rounded-2xl border border-line bg-paper p-6 shadow-card"
         >
-          <h1 className="text-xl font-semibold text-ink">Play Admin</h1>
+          <h1 className="text-xl font-semibold text-ink">Shorts Admin</h1>
           <p className="mt-1 text-sm text-fog-light">Sign in with your Bridge account</p>
           <label className="mt-4 block text-sm font-medium text-fog">
             Email
@@ -376,7 +376,7 @@ export default function Admin() {
       <div className="flex min-h-screen flex-col items-center justify-center bg-paper p-6">
         <p className="text-lg font-medium text-ink">Access denied</p>
         <p className="mt-2 text-sm text-fog-light">
-          Signed in as {authUser.email} — not a Play admin.
+          Signed in as {authUser.email} — not a Shorts admin.
         </p>
         <button
           type="button"
@@ -413,7 +413,7 @@ export default function Admin() {
       <header className="border-b border-line bg-paper">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
           <div className="flex items-center gap-4">
-            <h1 className="text-lg font-semibold text-ink">Play Admin</h1>
+            <h1 className="text-lg font-semibold text-ink">Shorts Admin</h1>
             <nav className="flex gap-1 rounded-2xl bg-mist p-0.5 text-sm">
               <button
                 type="button"

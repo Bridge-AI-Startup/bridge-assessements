@@ -40,19 +40,32 @@ const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
 const SERVERLESS_MAX_TOKENS = 16384;
 const SERVERLESS_MAX_FILE_BYTES = 500 * 1024; // 500 KB per file
 const SERVERLESS_MAX_TOTAL_BYTES = 1.5 * 1024 * 1024; // 1.5 MB total
+const SERVERLESS_MAX_REPLY_CHARS = 4000; // chat text stored/returned per turn
 const GENERATE_TIMEOUT_MS = 120_000;
 
 const SERVERLESS_SYSTEM_PROMPT = [
-  "You are building a small, fun, self-contained web creation for a phone-first daily challenge.",
+  "You are the build partner for a phone-first daily challenge where people make small, fun, self-contained web creations.",
   "",
-  "Output rules (strict):",
-  "- Return exactly ONE complete HTML document, starting with `<!DOCTYPE html>` and ending with `</html>`.",
-  "- Inline ALL CSS in a <style> tag and ALL JavaScript in a <script> tag. Do NOT reference separate .css/.js files.",
-  "- You MAY load libraries from a CDN via <script src> / <link href>, and you MAY call public, keyless, CORS-enabled APIs (e.g. open-meteo). Never require an API key.",
-  "- No build step, no bundlers, no frameworks that need compilation. Vanilla JS or CDN builds only.",
-  "- Make it work on a phone: responsive, touch-friendly, no horizontal scroll.",
-  "- Return ONLY the HTML. No markdown fences, no explanation, no prose before or after.",
+  "Every turn you reply in exactly ONE of two ways — never both, never a mix:",
+  "",
+  "1. BUILD — when the user wants the app created, changed, fixed, styled, or extended.",
+  "   Return exactly ONE complete HTML document, starting with `<!DOCTYPE html>` and ending with `</html>`.",
+  "   - Inline ALL CSS in a <style> tag and ALL JavaScript in a <script> tag. Do NOT reference separate .css/.js files.",
+  "   - You MAY load libraries from a CDN via <script src> / <link href>, and you MAY call public, keyless, CORS-enabled APIs (e.g. open-meteo). Never require an API key.",
+  "   - No build step, no bundlers, no frameworks that need compilation. Vanilla JS or CDN builds only.",
+  "   - Make it work on a phone: responsive, touch-friendly, no horizontal scroll.",
+  "   - Return ONLY the HTML. No markdown fences, no explanation, no prose before or after.",
+  "",
+  "2. TALK — when the user is brainstorming, asking a question, asking for ideas or an explanation, or otherwise not asking for a code change.",
+  "   Reply in short plain text. No HTML document, no code fences, no full-file dumps.",
+  "   Keep it under about 120 words and easy to read on a phone. Offer concrete ideas they can then ask you to build.",
+  "",
+  "If the request is ambiguous, prefer TALK and ask one short clarifying question.",
 ].join("\n");
+
+/** How many prior chat turns to replay so TALK mode has conversational memory. */
+const HISTORY_MAX_MESSAGES = 8;
+const HISTORY_MAX_CHARS_PER_MESSAGE = 1500;
 
 /**
  * Browser-facing base for serverless preview iframes.
@@ -124,13 +137,39 @@ function stripCodeFences(raw: string): string {
   return s;
 }
 
-function looksLikeHtml(html: string): boolean {
-  const lower = html.slice(0, 4000).toLowerCase();
-  return (
-    lower.includes("<!doctype html") ||
-    lower.includes("<html") ||
-    lower.includes("<body")
-  );
+/**
+ * Classify a serverless turn's response: a full HTML document means "rebuild the
+ * app", anything else is a plain chat reply (brainstorming, questions, ideas).
+ *
+ * A document is only accepted when it is a complete `<html>…</html>` — a stray
+ * tag mentioned inside prose must not overwrite the user's build. Any prose that
+ * came alongside the document is kept as the chat message.
+ */
+type MakeResponse =
+  | { kind: "html"; html: string; note: string }
+  | { kind: "text"; text: string };
+
+const HTML_DOC_RE = /<!doctype\s+html[\s\S]*?<\/html\s*>/i;
+const HTML_TAG_DOC_RE = /<html[\s>][\s\S]*?<\/html\s*>/i;
+const MIN_HTML_DOC_CHARS = 200;
+
+export function classifyMakeResponse(raw: string): MakeResponse {
+  const text = stripCodeFences(raw).trim();
+  if (!text) return { kind: "text", text: "" };
+
+  const match = HTML_DOC_RE.exec(text) || HTML_TAG_DOC_RE.exec(text);
+  if (match && match[0].length >= MIN_HTML_DOC_CHARS) {
+    const html = match[0].trim();
+    const note = (
+      text.slice(0, match.index) + text.slice(match.index + match[0].length)
+    )
+      .replace(/```[a-zA-Z]*/g, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    return { kind: "html", html, note };
+  }
+
+  return { kind: "text", text };
 }
 
 function buildUserMessage(input: {
@@ -149,16 +188,46 @@ function buildUserMessage(input: {
   // tokens and can anchor the model to boilerplate.
   if (input.currentHtml && !isIndexHtmlStarterLike(input.currentHtml)) {
     parts.push(
-      "Here is the current index.html — modify it to satisfy the request, and return the full updated file:",
+      "Here is the current index.html. If this turn is a BUILD, modify it to satisfy the request and return the full updated file:",
       "",
       input.currentHtml,
       "",
     );
   } else {
-    parts.push("There is no meaningful file yet — build it from scratch.", "");
+    parts.push(
+      "There is no meaningful file yet — if this turn is a BUILD, build it from scratch.",
+      "",
+    );
   }
   parts.push(`Request: ${input.request}`);
   return parts.filter((p) => p !== null).join("\n");
+}
+
+/**
+ * Replay recent chat turns so TALK mode can hold a conversation. Consecutive
+ * same-role messages are merged — the Messages API requires alternating roles.
+ */
+function buildHistoryMessages(
+  chatMessages: Array<{ role?: string; text?: string }> | undefined,
+): Array<{ role: "user" | "assistant"; content: string }> {
+  const recent = (chatMessages || [])
+    .filter(
+      (m) => (m?.role === "user" || m?.role === "assistant") && m?.text?.trim(),
+    )
+    .slice(-HISTORY_MAX_MESSAGES);
+
+  const out: Array<{ role: "user" | "assistant"; content: string }> = [];
+  for (const m of recent) {
+    const role = m.role as "user" | "assistant";
+    const content = String(m.text).slice(0, HISTORY_MAX_CHARS_PER_MESSAGE);
+    const last = out[out.length - 1];
+    if (last && last.role === role) last.content = `${last.content}\n\n${content}`;
+    else out.push({ role, content });
+  }
+  // The turn's own message is appended by the caller as a user message.
+  while (out.length && out[0].role === "assistant") out.shift();
+  if (out.length && out[out.length - 1].role === "user") out.pop();
+  return out;
 }
 
 /** Which "make" path owns this session. Absent (legacy) → "e2b". */
@@ -220,6 +289,8 @@ export async function runServerlessMakeTurn(input: {
   exitCode: number;
   model: string;
   effort: PlayEffortLevel | null;
+  /** True when this turn rewrote the build (vs. a plain chat reply). */
+  workspaceChanged: boolean;
 }> {
   const prompt = input.prompt.trim();
   if (!prompt) throw createHttpError(400, "prompt is required");
@@ -271,6 +342,9 @@ export async function runServerlessMakeTurn(input: {
       max_tokens: SERVERLESS_MAX_TOKENS,
       system: SERVERLESS_SYSTEM_PROMPT,
       messages: [
+        ...buildHistoryMessages(
+          doc.chatMessages as Array<{ role?: string; text?: string }>,
+        ),
         {
           role: "user",
           content: buildUserMessage({
@@ -327,13 +401,27 @@ export async function runServerlessMakeTurn(input: {
       );
     }
 
-    const html = stripCodeFences(extractTextFromMessage(parsed));
-    if (!html || !looksLikeHtml(html)) {
-      throw createHttpError(
-        502,
-        "The model did not return a valid HTML file. Try rephrasing your request.",
-      );
+    const response = classifyMakeResponse(extractTextFromMessage(parsed));
+
+    // Not a build — a brainstorm / question / explanation. Keep the workspace as
+    // it is and just read the model's text back into the chat.
+    if (response.kind === "text") {
+      const reply = response.text.trim();
+      if (!reply) {
+        throw createHttpError(
+          502,
+          "The model returned an empty response. Try rephrasing your request.",
+        );
+      }
+      const output = reply.slice(0, SERVERLESS_MAX_REPLY_CHARS);
+      await appendSessionChatMessages(input.sessionId, [
+        { role: "user", text: prompt, createdAt: new Date() },
+        { role: "assistant", text: output, createdAt: new Date() },
+      ]);
+      return { output, exitCode: 0, model, effort, workspaceChanged: false };
     }
+
+    const html = response.html;
     if (Buffer.byteLength(html, "utf8") > SERVERLESS_MAX_FILE_BYTES) {
       throw createHttpError(413, "The generated file is too large.");
     }
@@ -351,12 +439,14 @@ export async function runServerlessMakeTurn(input: {
     );
 
     // Store a short human-readable confirmation, never the raw HTML blob.
+    const note = response.note.slice(0, SERVERLESS_MAX_REPLY_CHARS).trim();
+    const output = note || "Updated your build.";
     await appendSessionChatMessages(input.sessionId, [
       { role: "user", text: prompt, createdAt: new Date() },
-      { role: "assistant", text: "Updated your build.", createdAt: new Date() },
+      { role: "assistant", text: output, createdAt: new Date() },
     ]);
 
-    return { output: "Updated your build.", exitCode: 0, model, effort };
+    return { output, exitCode: 0, model, effort, workspaceChanged: true };
   } finally {
     endPlayClaudeRun(input.sessionId);
   }

@@ -801,8 +801,9 @@ export default function Build() {
     setChatMessages((prev) => [...prev, { role: "user", text: prompt }]);
     chatBusyRef.current = true;
     setChatBusy(true);
-    // Serverless regenerates the file every successful turn — no sandbox to
-    // fingerprint, so skip the revision probes and always refresh the preview.
+    // Serverless turns tell us directly whether the file was rewritten (a build)
+    // or the model just answered in chat — no sandbox to fingerprint, so skip
+    // the revision probes entirely.
     const serverless = state.session.makeMode === "serverless";
     const revisionBefore = serverless
       ? null
@@ -824,11 +825,11 @@ export default function Build() {
     const revisionAfter = serverless
       ? null
       : await getWorkspaceRevision(state.session.sessionId);
-    const workspaceChanged =
-      serverless ||
-      revisionBefore.status !== "ok" ||
-      revisionAfter.status !== "ok" ||
-      revisionBefore.revision !== revisionAfter.revision;
+    const workspaceChanged = serverless
+      ? result.result.workspaceChanged !== false
+      : revisionBefore.status !== "ok" ||
+        revisionAfter.status !== "ok" ||
+        revisionBefore.revision !== revisionAfter.revision;
     setChatMessages((prev) => {
       const next = [
         ...prev,
@@ -842,8 +843,10 @@ export default function Build() {
         : next;
     });
     if (result.result.usage) setUsage(result.result.usage);
-    setPreviewTick((t) => t + 1);
-    setEditorRefreshKey((k) => k + 1);
+    if (workspaceChanged) {
+      setPreviewTick((t) => t + 1);
+      setEditorRefreshKey((k) => k + 1);
+    }
     chatBusyRef.current = false;
     setChatBusy(false);
   }
