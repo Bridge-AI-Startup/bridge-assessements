@@ -84,7 +84,7 @@ export default function BehavioralGradingLiveTrace({ progress, behavioralChecks 
 
       {completed.length > 0 && (
         <div className="space-y-1.5">
-          <p className="text-[10px] font-medium uppercase tracking-wider text-gray-500">
+          <p className="text-[10px] font-medium uppercase font-mono tracking-[0.03em] text-gray-500">
             Completed
           </p>
           {completed.map((c) => (
@@ -138,7 +138,7 @@ export default function BehavioralGradingLiveTrace({ progress, behavioralChecks 
 
       {!progress && behavioralChecks.length > 0 && (
         <div className="space-y-1">
-          <p className="text-[10px] font-medium uppercase tracking-wider text-gray-500">
+          <p className="text-[10px] font-medium uppercase font-mono tracking-[0.03em] text-gray-500">
             Queued checks
           </p>
           {behavioralChecks.map((text, i) => (

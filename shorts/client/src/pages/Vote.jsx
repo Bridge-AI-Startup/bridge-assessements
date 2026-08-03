@@ -10,7 +10,80 @@ import {
 } from "@/lib/challengePeriod";
 import ShortsHeader from "@/components/ShortsHeader";
 
-function PreviewPane({ card, side, onPick, disabled }) {
+const GUIDE_STORAGE_KEY = "shortsVoteGuide.v1";
+
+function guideDismissed() {
+  try {
+    return window.localStorage.getItem(GUIDE_STORAGE_KEY) === "dismissed";
+  } catch {
+    return false;
+  }
+}
+
+function rememberGuideDismissed() {
+  try {
+    window.localStorage.setItem(GUIDE_STORAGE_KEY, "dismissed");
+  } catch {
+    // Private mode / storage disabled — the guide just reappears next visit.
+  }
+}
+
+/**
+ * Explains what voting is and how a pick works. Open by default until the
+ * builder dismisses it once, then reachable from the "How voting works"
+ * toggle above the matchup.
+ */
+function VotingGuide({ onDismiss, periodLabel }) {
+  const steps = [
+    {
+      title: "Two builds, side by side",
+      body: `Both are real, working builds from ${periodLabel}'s challenge. They're live — click straight into them and try them out, or expand one to full screen.`,
+    },
+    {
+      title: "Pick the one you'd rather keep open",
+      body: "There's no right answer and nothing to score. Go with taste: which one is more fun, more surprising, better made?",
+    },
+    {
+      title: "Five picks make a round",
+      body: "After every five picks you get a recap showing exactly how your votes moved the leaderboard. Everyone's picks are combined into the ranking.",
+    },
+  ];
+
+  return (
+    <section className="rounded-2xl border border-line bg-cream px-5 py-4 shadow-card">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="label-mono text-fog-light">How voting works</p>
+          <h2 className="mt-1 text-[17px] font-medium tracking-tight text-ink">
+            Head-to-head, five picks at a time
+          </h2>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="label-mono shrink-0 hover:text-ink"
+        >
+          Got it
+        </button>
+      </div>
+      <ol className="mt-3 grid gap-3 sm:grid-cols-3">
+        {steps.map((step, index) => (
+          <li key={step.title} className="flex gap-2.5">
+            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-ink font-mono text-[10px] text-white">
+              {index + 1}
+            </span>
+            <div>
+              <p className="text-sm font-medium text-ink">{step.title}</p>
+              <p className="mt-0.5 text-sm text-fog">{step.body}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function PreviewPane({ card, side, label, onPick, disabled }) {
   const [expanded, setExpanded] = useState(false);
   const [closing, setClosing] = useState(false);
   const closeTimer = useRef(null);
@@ -79,14 +152,26 @@ function PreviewPane({ card, side, onPick, disabled }) {
         }
       >
       <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-2.5">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-ink">
-            {card.displayName}
-          </p>
-          <p className="font-mono text-[11px] text-fog-light">
-            score {card.score} · {card.wins}-{card.losses}
-            {card.provisional ? " · provisional" : ""}
-          </p>
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-mist font-mono text-[11px] font-medium text-ink">
+            {label}
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-ink">
+              {card.displayName}
+            </p>
+            {/* Ratings are deliberately not shown mid-vote — seeing a score
+                anchors the pick. They're on the leaderboard instead.
+                The header row is tight once the pick pill and expand button
+                are in it, so the hint has a shorter phrasing on small screens
+                rather than truncating to "…click inside to tr…". */}
+            <p className="truncate text-[11px] text-fog-light">
+              <span className="sm:hidden">Live — tap to try it</span>
+              <span className="hidden sm:inline">
+                Live — click inside to try it
+              </span>
+            </p>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <button
@@ -95,13 +180,15 @@ function PreviewPane({ card, side, onPick, disabled }) {
             onClick={() => onPick(side)}
             className="btn-pill"
           >
-            Pick this
+            Pick {label}
           </button>
           <button
             type="button"
             onClick={() => (expanded ? minimize() : setExpanded(true))}
-            aria-label={expanded ? "Minimize" : "Expand"}
-            title={expanded ? "Minimize (Esc)" : "Expand"}
+            aria-label={
+              expanded ? "Minimize preview" : "Expand preview to full screen"
+            }
+            title={expanded ? "Minimize (Esc)" : "Expand to full screen"}
             className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-mist text-ink transition-colors hover:bg-line focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
           >
             {expanded ? (
@@ -160,10 +247,14 @@ function RoundMeter({ round, periodLabel }) {
     (round.votesInRound / round.roundSize) * 100,
   );
   return (
-    <div className="w-full sm:w-auto sm:min-w-[160px]">
+    <div
+      className="w-full sm:w-auto sm:min-w-[180px]"
+      title={`${round.votesInRound} of ${round.roundSize} picks done in this round · ${round.votesToday} of ${round.maxVotes} total votes used ${periodLabel}`}
+    >
       <div className="flex items-center justify-between gap-3">
         <span className="font-mono text-xs text-ink">
-          Vote {Math.min(round.votesInRound, round.roundSize)} / {round.roundSize}
+          Pick {Math.min(round.votesInRound + 1, round.roundSize)} of{" "}
+          {round.roundSize}
         </span>
         <span className="font-mono text-[11px] text-fog-light">
           {round.votesToday}/{round.maxVotes} {periodLabel}
@@ -190,6 +281,13 @@ export default function Vote() {
   const [state, setState] = useState({ kind: "loading" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  // Open on a first visit, then only when the builder asks for it again.
+  const [showGuide, setShowGuide] = useState(() => !guideDismissed());
+
+  function dismissGuide() {
+    setShowGuide(false);
+    rememberGuideDismissed();
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -343,6 +441,19 @@ export default function Vote() {
                     : "No matchups"}
             </h1>
             <p className="mt-2 text-sm text-fog">{state.data.message}</p>
+            {state.data.reason === "must_submit" ? (
+              <p className="mt-2 text-sm text-fog-light">
+                Voting is builders ranking each other&apos;s work head to head,
+                so you take part by entering a build of your own first. It takes
+                about ten minutes.
+              </p>
+            ) : null}
+            {state.data.reason === "not_enough_submissions" ? (
+              <p className="mt-2 text-sm text-fog-light">
+                Matchups put two builds side by side, so voting opens once a
+                couple more people have entered this round.
+              </p>
+            ) : null}
             <div className="mt-6 flex flex-wrap justify-center gap-3">
               {state.data.reason === "must_submit" && (
                 <Link to="/Build" className="btn-pill">
@@ -370,6 +481,10 @@ export default function Vote() {
             <h1 className="mt-2 text-[22px] font-medium tracking-tight text-ink">
               How your votes moved the board
             </h1>
+            <p className="mt-1 text-sm text-fog-light">
+              Each pick nudges both builds&apos; ratings — winners climb, losers
+              slip — and everyone&apos;s picks are pooled into the ranking below.
+            </p>
 
             <div className="mt-5">
               <h2 className="label-mono">Your picks</h2>
@@ -471,27 +586,55 @@ export default function Vote() {
 
         {state.kind === "pair" && (
           <div className="flex flex-1 flex-col gap-4 lg:min-h-0">
-            <p className="text-center text-sm text-fog">
-              Which build is better? Hit{" "}
-              <span className="font-mono text-ink">
-                {round?.votesInRound}/{round?.roundSize}
-              </span>{" "}
-              to unlock your round recap.
-            </p>
+            {showGuide ? (
+              <VotingGuide periodLabel={periodLabel} onDismiss={dismissGuide} />
+            ) : null}
+
+            <div className="flex flex-wrap items-baseline justify-center gap-x-2 gap-y-1 text-center">
+              <p className="text-sm text-ink">
+                Try both, then pick the one you&apos;d rather keep open.
+              </p>
+              {round ? (
+                <p className="text-sm text-fog-light">
+                  {Math.max(round.roundSize - round.votesInRound, 0)} more{" "}
+                  {round.roundSize - round.votesInRound === 1
+                    ? "pick"
+                    : "picks"}{" "}
+                  until your round recap.
+                </p>
+              ) : null}
+              {!showGuide ? (
+                <button
+                  type="button"
+                  onClick={() => setShowGuide(true)}
+                  className="text-sm text-fog underline underline-offset-2 hover:text-ink"
+                >
+                  How voting works
+                </button>
+              ) : null}
+            </div>
+
             <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-2">
               <PreviewPane
                 card={state.data.left}
                 side="left"
+                label="A"
                 onPick={pick}
                 disabled={busy}
               />
               <PreviewPane
                 card={state.data.right}
                 side="right"
+                label="B"
                 onPick={pick}
                 disabled={busy}
               />
             </div>
+
+            <p className="text-center text-xs text-fog-light">
+              Your picks feed the ranking — every builder&apos;s votes are
+              combined, and nobody sees who voted for what.
+            </p>
           </div>
         )}
       </main>

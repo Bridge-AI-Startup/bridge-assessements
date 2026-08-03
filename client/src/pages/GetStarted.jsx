@@ -146,8 +146,8 @@ export default function GetStarted() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[#dbeafe] via-[#eff6ff] to-white flex items-center justify-center p-6">
-      <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md relative">
+    <div className="min-h-screen bg-gradient-to-b from-[#F4F2E9] via-[#FDFCF7] to-white flex items-center justify-center p-6">
+      <div className="bg-white rounded-card border border-border shadow-[0_2px_18px_rgba(33,32,28,0.06)] p-8 w-full max-w-md relative">
         <a
           href={MARKETING_ORIGIN}
           className="absolute top-4 left-4 inline-flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900"
@@ -163,7 +163,7 @@ export default function GetStarted() {
               className="w-full h-full object-contain"
             />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900 mb-1">
+          <h1 className="text-2xl font-medium tracking-[-0.012em] text-gray-900 mb-1">
             Set up your company
           </h1>
           <p className="text-gray-500 text-sm">
@@ -241,7 +241,7 @@ export default function GetStarted() {
               (!currentUser && !password.trim()) ||
               !companyName.trim()
             }
-            className="w-full bg-[#1E3A8A] hover:bg-[#152a66] text-white py-5 rounded-xl font-semibold disabled:opacity-50"
+            className="w-full bg-[#21201C] hover:bg-[#35332D] text-white py-5 rounded-full disabled:opacity-50"
           >
             {isLoading ? (
               <span className="flex items-center gap-2">
@@ -261,7 +261,7 @@ export default function GetStarted() {
           Already have an account?{" "}
           <a
             href={createPageUrl("Login")}
-            className="text-[#1E3A8A] font-medium hover:underline"
+            className="text-[#21201C] font-medium hover:underline"
           >
             Sign in
           </a>

@@ -52,7 +52,7 @@ export default function AssessmentPanel({
             <Button variant="ghost" size="sm" onClick={handleCancel}>
               <X className="w-4 h-4 mr-1" /> Cancel
             </Button>
-            <Button size="sm" onClick={handleSave} className="bg-[#1E3A8A] text-white hover:bg-[#152a66]">
+            <Button size="sm" onClick={handleSave} className="bg-[#21201C] text-white hover:bg-[#35332D]">
               <Check className="w-4 h-4 mr-1" /> Save
             </Button>
           </div>
@@ -66,7 +66,7 @@ export default function AssessmentPanel({
           {content.map((item, index) => (
             <motion.li 
               key={index}
-              className={`flex items-start gap-3 p-2 rounded-lg transition-colors duration-300 ${showHighlight ? 'bg-[#FFFF00]/30' : ''}`}
+              className={`flex items-start gap-3 p-2 rounded-lg transition-colors duration-300 ${showHighlight ? 'bg-[#F0D294]/40' : ''}`}
             >
               <span className="w-6 h-6 rounded-md bg-gray-100 flex items-center justify-center flex-shrink-0 text-xs font-medium text-gray-600">
                 {index + 1}
@@ -85,10 +85,10 @@ export default function AssessmentPanel({
           {Object.entries(content).map(([key, value]) => (
             <motion.div 
               key={key}
-              className={`flex items-center justify-between p-3 rounded-lg border border-gray-100 transition-colors duration-300 ${showHighlight ? 'bg-[#FFFF00]/30' : 'bg-gray-50'}`}
+              className={`flex items-center justify-between p-3 rounded-lg border border-gray-100 transition-colors duration-300 ${showHighlight ? 'bg-[#F0D294]/40' : 'bg-gray-50'}`}
             >
               <span className="text-gray-700">{key}</span>
-              <div className={`w-10 h-6 rounded-full ${value ? 'bg-[#1E3A8A]' : 'bg-gray-300'} relative cursor-pointer transition-colors`}>
+              <div className={`w-10 h-6 rounded-full ${value ? 'bg-[#21201C]' : 'bg-gray-300'} relative cursor-pointer transition-colors`}>
                 <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${value ? 'right-1' : 'left-1'}`} />
               </div>
             </motion.div>
@@ -99,7 +99,7 @@ export default function AssessmentPanel({
 
     return (
       <motion.p 
-        className={`text-gray-700 leading-relaxed p-2 rounded-lg transition-colors duration-300 ${showHighlight ? 'bg-[#FFFF00]/30' : ''}`}
+        className={`text-gray-700 leading-relaxed p-2 rounded-lg transition-colors duration-300 ${showHighlight ? 'bg-[#F0D294]/40' : ''}`}
       >
         {content}
       </motion.p>
@@ -118,8 +118,8 @@ export default function AssessmentPanel({
         onClick={() => setIsOpen(!isOpen)}
       >
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-[#1E3A8A]/10 flex items-center justify-center">
-            <Icon className="w-4 h-4 text-[#1E3A8A]" />
+          <div className="w-8 h-8 rounded-lg bg-[#21201C]/10 flex items-center justify-center">
+            <Icon className="w-4 h-4 text-[#21201C]" />
           </div>
           <h3 className="font-semibold text-gray-900">{title}</h3>
         </div>
@@ -127,7 +127,7 @@ export default function AssessmentPanel({
           {!isEditing && (
             <button 
               onClick={(e) => { e.stopPropagation(); handleEdit(); }}
-              className="p-2 text-gray-400 hover:text-[#1E3A8A] transition-colors"
+              className="p-2 text-gray-400 hover:text-[#21201C] transition-colors"
             >
               <Pencil className="w-4 h-4" />
             </button>

@@ -29,9 +29,9 @@ export default function VisualEditAgent() {
 
 		// Use different styles for hover vs selected
 		if (isSelected) {
-			overlay.style.border = '2px solid #2563EB';
+			overlay.style.border = '2px solid #21201C';
 		} else {
-			overlay.style.border = '2px solid #95a5fc';
+			overlay.style.border = '2px solid #B0ACA0';
 			overlay.style.backgroundColor = 'rgba(99, 102, 241, 0.05)';
 		}
 
@@ -64,8 +64,8 @@ export default function VisualEditAgent() {
 			label.style.padding = '2px 8px';
 			label.style.fontSize = '11px';
 			label.style.fontWeight = isSelected ? '500' : '400';
-			label.style.color = isSelected ? '#ffffff' : '#526cff';
-			label.style.backgroundColor = isSelected ? '#526cff' : '#DBEAFE';
+			label.style.color = isSelected ? '#ffffff' : '#21201C';
+			label.style.backgroundColor = isSelected ? '#21201C' : '#F4F2E9';
 			label.style.borderRadius = '3px';
 			label.style.boxShadow = isSelected ? 'none' : 'none';
 			label.style.minWidth = '24px';

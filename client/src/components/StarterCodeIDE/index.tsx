@@ -51,7 +51,7 @@ function TreeNode({
     return (
       <div
         className={`group flex items-center gap-1.5 px-2 py-1 cursor-pointer text-xs rounded-sm select-none ${
-          isActive ? "bg-[#1E3A8A] text-white" : "text-slate-700 hover:bg-slate-100"
+          isActive ? "bg-[#21201C] text-white" : "text-slate-700 hover:bg-slate-100"
         }`}
         onClick={() => onSelect(node.path)}
       >
@@ -247,7 +247,7 @@ export default function StarterCodeIDE({ files, readOnly, onChange }: StarterCod
                   if (e.key === "Enter") commitPathRename();
                   if (e.key === "Escape") setEditingPath(null);
                 }}
-                className="text-xs font-mono border border-slate-300 rounded px-1 py-0.5 w-64 focus:outline-none focus:ring-1 focus:ring-[#1E3A8A]/30"
+                className="text-xs font-mono border border-slate-300 rounded px-1 py-0.5 w-64 focus:outline-none focus:ring-1 focus:ring-[#21201C]/30"
               />
             ) : (
               <span

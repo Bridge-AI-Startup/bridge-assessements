@@ -22,6 +22,16 @@ const SubmissionSchema = new Schema(
       index: true,
       trim: true,
     },
+    /**
+     * Set when the builder was signed in at submit time. `anonymousId` stays
+     * the browser-level owner tag (isMine, self-vote exclusion); this is the
+     * account-level one, so a build submitted while signed in follows the
+     * account even if that browser's id is never linked again.
+     */
+    firebaseUid: {
+      type: String,
+      trim: true,
+    },
     displayName: {
       type: String,
       required: true,
@@ -92,6 +102,8 @@ const SubmissionSchema = new Schema(
 // the same challenge, each rated on its own. Non-unique lookup index backs the
 // "my submissions" view.
 SubmissionSchema.index({ anonymousId: 1, challengeDate: 1, submittedAt: -1 });
+// Account history: builds submitted while signed in, regardless of browser id.
+SubmissionSchema.index({ firebaseUid: 1, submittedAt: -1 }, { sparse: true });
 SubmissionSchema.index({ challengeDate: -1, submittedAt: -1 });
 SubmissionSchema.index({ challengeDate: 1, rankingScore: -1 });
 

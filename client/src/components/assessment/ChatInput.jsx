@@ -47,7 +47,7 @@ export default function ChatInput({ onSubmit, isLoading }) {
               whileTap={{ scale: 0.98 }}
               onClick={() => handleChipClick(action)}
               disabled={isLoading}
-              className="px-3 py-1.5 text-xs rounded-full bg-gray-50 border border-gray-200 text-gray-500 hover:border-[#1E3A8A] hover:text-[#1E3A8A] hover:bg-blue-50 transition-all duration-200 disabled:opacity-50"
+              className="px-3 py-1.5 text-xs rounded-full bg-gray-50 border border-gray-200 text-gray-500 hover:border-[#21201C] hover:text-[#21201C] hover:bg-blue-50 transition-all duration-200 disabled:opacity-50"
             >
               {action}
             </motion.button>
@@ -67,13 +67,13 @@ export default function ChatInput({ onSubmit, isLoading }) {
             <Button
               onClick={handleSubmit}
               disabled={isLoading}
-              className="bg-[#FFFF00] hover:bg-[#faed00] text-[#1E3A8A] p-2.5 h-auto rounded-xl font-semibold transition-all duration-200 shadow-sm flex-shrink-0"
+              className="bg-[#21201C] hover:bg-[#35332D] text-[#FAF9F2] p-2.5 h-auto rounded-full transition-all duration-200 shadow-sm flex-shrink-0"
             >
               {isLoading ? (
                 <motion.div
                   animate={{ rotate: 360 }}
                   transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                  className="w-5 h-5 border-2 border-[#1E3A8A] border-t-transparent rounded-full"
+                  className="w-5 h-5 border-2 border-[#21201C] border-t-transparent rounded-full"
                 />
               ) : (
                 <ArrowRight className="w-5 h-5" />

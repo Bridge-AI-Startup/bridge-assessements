@@ -99,7 +99,7 @@ export default function AuthModal({ isOpen, onClose }) {
           className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
         >
           {/* Header */}
-          <div className="relative bg-gradient-to-br from-[#1E3A8A] to-[#1e40af] px-6 py-8 text-center">
+          <div className="relative bg-gradient-to-br from-[#21201C] to-[#21201C] px-6 py-8 text-center">
             <button
               onClick={onClose}
               className="absolute top-4 right-4 text-white/70 hover:text-white transition-colors"
@@ -113,7 +113,7 @@ export default function AuthModal({ isOpen, onClose }) {
                 className="w-full h-full object-contain"
               />
             </div>
-            <h2 className="text-2xl font-bold text-white mb-1">Welcome back</h2>
+            <h2 className="text-2xl font-medium tracking-[-0.012em] text-white mb-1">Welcome back</h2>
             <p className="text-blue-200 text-sm">
               Sign in to continue to your dashboard
             </p>
@@ -166,7 +166,7 @@ export default function AuthModal({ isOpen, onClose }) {
               <Button
                 type="submit"
                 disabled={isLoading}
-                className="w-full bg-[#1E3A8A] hover:bg-[#152a66] text-white py-5 rounded-xl font-semibold"
+                className="w-full bg-[#21201C] hover:bg-[#35332D] text-white py-5 rounded-full "
               >
                 {isLoading ? (
                   <span className="flex items-center gap-2">
@@ -189,7 +189,7 @@ export default function AuthModal({ isOpen, onClose }) {
                   onClose();
                   window.location.href = createPageUrl("GetStarted");
                 }}
-                className="text-[#1E3A8A] font-medium hover:underline"
+                className="text-[#21201C] font-medium hover:underline"
               >
                 Sign up free
               </button>

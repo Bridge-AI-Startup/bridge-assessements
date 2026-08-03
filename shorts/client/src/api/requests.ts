@@ -4,6 +4,38 @@ import { auth } from "@/firebase/firebase";
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 type ErrorField = "message" | "error";
 
+/**
+ * No usable response came back: the host refused the connection, or the
+ * browser blocked the response because CORS rejected our origin. `fetch`
+ * collapses both into a bare `TypeError: Failed to fetch` — it cannot tell
+ * them apart, and neither can we, so the message has to name both.
+ *
+ * Both are common in local dev. The backend stops accepting connections for
+ * a few seconds after any file under `server/` is saved (nodemon restart),
+ * and the CORS allowlist in `server/src/server.ts` only covers specific dev
+ * origins — a Vite port other than the usual one is rejected, which returns
+ * a 500 with no CORS headers that the page never gets to see.
+ */
+export class ApiNetworkError extends Error {
+  readonly url: string;
+  readonly method: Method;
+
+  constructor(method: Method, url: string, cause: unknown) {
+    super(
+      `No response from the Shorts API (${method} ${url}). Either the backend ` +
+        `is not accepting connections — it restarts for a few seconds after ` +
+        `any server file is saved, so check \`cd server && npm run dev\` is ` +
+        `running — or it rejected this page's origin (${window.location.origin}) ` +
+        `via CORS. Check the server log for a "Blocked request from ` +
+        `unauthorized origin" warning.`,
+    );
+    this.name = "ApiNetworkError";
+    this.url = url;
+    this.method = method;
+    this.cause = cause;
+  }
+}
+
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const user = auth.currentUser;
   if (!user) {
@@ -30,11 +62,17 @@ async function fetchRequest(
     Object.assign(headers, await getAuthHeaders());
   }
 
-  return fetch(url, {
-    method,
-    headers,
-    body: hasBody ? JSON.stringify(body) : undefined,
-  });
+  try {
+    return await fetch(url, {
+      method,
+      headers,
+      body: hasBody ? JSON.stringify(body) : undefined,
+    });
+  } catch (error) {
+    // Only network-level failures land here; an HTTP error status resolves
+    // normally and is handled by the caller off `res.ok`.
+    throw new ApiNetworkError(method, url, error);
+  }
 }
 
 export async function readJsonBody(

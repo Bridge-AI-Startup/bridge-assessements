@@ -34,6 +34,8 @@ export type PlaySession = {
   tokenBudget?: number;
   chatMessages?: SessionChatMessage[];
   sandboxPaused?: boolean;
+  /** Seconds after `expiresAt` in which submitting still works (0 = none). */
+  submitGraceSeconds?: number;
   error?: string;
 };
 
@@ -200,6 +202,34 @@ export async function pauseSession(
       status: "error",
       message: getRequestErrorMessage(error),
     };
+  }
+}
+
+/**
+ * Stop the submit clock — call when the submit dialog opens. The build clock is
+ * unaffected; this only guarantees the finished work stays submittable while
+ * the builder names it or signs in.
+ */
+export async function holdSessionSubmit(sessionId: string): Promise<
+  | { status: "ok"; submitDeadline: string }
+  | { status: "error"; message: string }
+> {
+  const anonymousId = getOrCreateAnonymousId();
+  try {
+    const res = await post(
+      `/session/${encodeURIComponent(sessionId)}/submit-hold`,
+      { anonymousId },
+    );
+    const body = await readJsonBody(res);
+    if (!res.ok) {
+      return {
+        status: "error",
+        message: getResponseErrorMessage(body, res.status),
+      };
+    }
+    return { status: "ok", submitDeadline: String(body.submitDeadline || "") };
+  } catch (error) {
+    return { status: "error", message: getRequestErrorMessage(error) };
   }
 }
 

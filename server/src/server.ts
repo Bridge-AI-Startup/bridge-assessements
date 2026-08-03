@@ -23,7 +23,23 @@ import playRoutes from "./routes/shorts.js";
 import { health as playHealth } from "./controllers/shorts/index.js";
 import { shortsEnabled } from "./utils/shortsEnv.js";
 import { errorHandler } from "./errors/handler.js";
+import { isDevLoopbackOrigin } from "./utils/corsOrigins.js";
 import { startIncrementalScheduler } from "./ai/transcript/incrementalScheduler.js";
+
+// Node 15+ terminates the process on an unhandled rejection. Without these
+// handlers a background async failure (E2B, Mongo, a stray promise) kills the
+// server silently: in-flight browser requests die as "TypeError: Failed to
+// fetch" and nothing in the log says why. Log the reason, then exit so the
+// supervisor (nodemon locally, Render in prod) restarts a clean process.
+process.on("unhandledRejection", (reason) => {
+  console.error("\n💥 Unhandled promise rejection — server is exiting:", reason);
+  process.exit(1);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("\n💥 Uncaught exception — server is exiting:", error);
+  process.exit(1);
+});
 
 const PORT = process.env.PORT || 5050;
 const app = express();
@@ -74,11 +90,19 @@ const allowedOrigins = [
   "https://bridge-play.vercel.app", // Shorts Vercel default host
   "https://bridge-landing-saazms-projects.vercel.app",
   "https://bridge-landing-7dg0wxh94-saazms-projects.vercel.app",
-  // Development
+  // Development — the usual ports, documented. Any other loopback port is
+  // also accepted in dev via isDevLoopback below.
   ...(process.env.NODE_ENV === "development"
     ? ["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"]
     : []),
 ].filter(Boolean); // Remove any undefined/null values
+
+// Any other loopback origin is accepted in development only; see
+// utils/corsOrigins.ts for why the fixed list above is not enough. Gate on the
+// raw env var, not the `nodeEnv` fallback: an unset NODE_ENV must not widen
+// CORS on a misconfigured deploy.
+const isDevLoopback = (origin: string): boolean =>
+  isDevLoopbackOrigin(origin, process.env.NODE_ENV);
 
 app.use(
   cors({
@@ -89,11 +113,14 @@ app.use(
       }
 
       // Check if origin is in allowed list
-      if (allowedOrigins.includes(origin)) {
+      if (allowedOrigins.includes(origin) || isDevLoopback(origin)) {
         callback(null, true);
       } else {
         console.warn(
           `⚠️ [CORS] Blocked request from unauthorized origin: ${origin}`,
+        );
+        console.warn(
+          `   The browser will report this as "TypeError: Failed to fetch".`,
         );
         callback(new Error("Not allowed by CORS"));
       }

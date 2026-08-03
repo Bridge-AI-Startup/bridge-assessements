@@ -48,7 +48,7 @@ export default function CandidatePreviewModal({ isOpen, onClose, assessment }) {
                   className="w-full h-full object-contain"
                 />
               </div>
-              <h1 className="text-2xl font-bold text-gray-900 mb-2">
+              <h1 className="text-2xl font-medium tracking-[-0.012em] text-gray-900 mb-2">
                 Technical Assessment
               </h1>
               <p className="text-gray-500">
@@ -86,7 +86,7 @@ export default function CandidatePreviewModal({ isOpen, onClose, assessment }) {
                 ].map((item, index) => (
                   <span
                     key={index}
-                    className="px-3 py-1.5 bg-[#1E3A8A]/10 text-[#1E3A8A] text-sm rounded-lg"
+                    className="px-3 py-1.5 bg-[#21201C]/10 text-[#21201C] text-sm rounded-lg"
                   >
                     {item.criteria}
                   </span>
@@ -96,7 +96,7 @@ export default function CandidatePreviewModal({ isOpen, onClose, assessment }) {
 
             {/* CTA */}
             <div className="text-center pt-4 border-t border-gray-100">
-              <Button className="bg-[#1E3A8A] text-white hover:bg-[#152a66] px-8 py-3 h-auto rounded-xl text-base">
+              <Button className="bg-[#21201C] text-white hover:bg-[#35332D] px-8 py-3 h-auto rounded-full text-base">
                 Start Assessment
               </Button>
               <p className="text-xs text-gray-400 mt-3">

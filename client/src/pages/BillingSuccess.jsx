@@ -52,9 +52,9 @@ export default function BillingSuccess() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-[#f8f9fb] flex items-center justify-center">
+      <div className="min-h-screen bg-[#FAF9F2] flex items-center justify-center">
         <div className="text-center">
-          <div className="w-8 h-8 border-2 border-[#1E3A8A]/30 border-t-[#1E3A8A] rounded-full animate-spin mx-auto mb-4"></div>
+          <div className="w-8 h-8 border-2 border-[#21201C]/30 border-t-[#21201C] rounded-full animate-spin mx-auto mb-4"></div>
           <p className="text-gray-500">Verifying your subscription...</p>
         </div>
       </div>
@@ -62,24 +62,24 @@ export default function BillingSuccess() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#f8f9fb] to-[#eef1f8] flex items-center justify-center px-4">
+    <div className="min-h-screen bg-gradient-to-br from-[#FAF9F2] to-[#F4F2E9] flex items-center justify-center px-4">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center"
+        className="max-w-md w-full bg-white rounded-card border border-border shadow-[0_2px_18px_rgba(33,32,28,0.06)] p-8 text-center"
       >
         {error ? (
           <>
             <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-4">
               <span className="text-red-600 text-2xl">⚠️</span>
             </div>
-            <h1 className="text-2xl font-bold text-gray-900 mb-2">
+            <h1 className="text-2xl font-medium tracking-[-0.012em] text-gray-900 mb-2">
               Verification Error
             </h1>
             <p className="text-gray-600 mb-6">{error}</p>
             <Button
               onClick={() => navigate(createPageUrl("Subscription"))}
-              className="bg-[#1E3A8A] hover:bg-[#152a66] text-white"
+              className="bg-[#21201C] hover:bg-[#35332D] text-white"
             >
               Go to Subscription
             </Button>
@@ -89,7 +89,7 @@ export default function BillingSuccess() {
             <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
               <CheckCircle className="w-10 h-10 text-green-600" />
             </div>
-            <h1 className="text-2xl font-bold text-gray-900 mb-2">
+            <h1 className="text-2xl font-medium tracking-[-0.012em] text-gray-900 mb-2">
               Subscription Activated!
             </h1>
             <p className="text-gray-600 mb-6">
@@ -103,7 +103,7 @@ export default function BillingSuccess() {
             )}
             <Button
               onClick={() => navigate(createPageUrl("Home"))}
-              className="bg-[#1E3A8A] hover:bg-[#152a66] text-white"
+              className="bg-[#21201C] hover:bg-[#35332D] text-white"
             >
               Go to Dashboard
               <ArrowRight className="w-4 h-4 ml-2" />

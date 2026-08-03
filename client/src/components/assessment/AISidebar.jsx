@@ -82,7 +82,7 @@ export default function AISidebar({
               className={`text-sm p-3 rounded-xl ${
                 msg.role === "assistant"
                   ? "bg-gray-50 text-gray-700"
-                  : "bg-[#1E3A8A] text-white ml-4"
+                  : "bg-[#21201C] text-white ml-4"
               }`}
             >
               {msg.content}
@@ -99,7 +99,7 @@ export default function AISidebar({
             {contextSections.map((section) => (
               <span
                 key={section}
-                className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-white border border-[#1E3A8A]/20 text-[#1E3A8A] rounded-full"
+                className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-white border border-[#21201C]/20 text-[#21201C] rounded-full"
               >
                 {section === "projectDescription" && "Project Description"}
                 {section === "testCases" && "Test Cases"}
@@ -123,18 +123,18 @@ export default function AISidebar({
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Make this harder for mid-level engineers…"
-            className="flex-1 min-h-[60px] max-h-[100px] text-sm resize-none border-gray-200 focus-visible:ring-[#1E3A8A] rounded-xl"
+            className="flex-1 min-h-[60px] max-h-[100px] text-sm resize-none border-gray-200 focus-visible:ring-[#21201C] rounded-xl"
           />
           <Button
             onClick={handleSubmit}
             disabled={isLoading}
-            className="bg-[#FFFF00] hover:bg-[#faed00] text-[#1E3A8A] p-2.5 h-auto rounded-xl shadow-sm hover:shadow-md hover:scale-105 transition-all"
+            className="bg-[#21201C] hover:bg-[#35332D] text-[#FAF9F2] p-2.5 h-auto rounded-full shadow-sm hover:shadow-md hover:scale-105 transition-all"
           >
             {isLoading ? (
               <motion.div
                 animate={{ rotate: 360 }}
                 transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                className="w-5 h-5 border-2 border-[#1E3A8A] border-t-transparent rounded-full"
+                className="w-5 h-5 border-2 border-[#21201C] border-t-transparent rounded-full"
               />
             ) : (
               <ArrowRight className="w-5 h-5" />
@@ -149,7 +149,7 @@ export default function AISidebar({
               key={index}
               onClick={() => handleChipClick(action)}
               disabled={isLoading}
-              className="px-3 py-1.5 text-xs rounded-full bg-gray-50 border border-gray-200 text-gray-600 hover:border-[#1E3A8A] hover:text-[#1E3A8A] hover:bg-blue-50 transition-all disabled:opacity-50"
+              className="px-3 py-1.5 text-xs rounded-full bg-gray-50 border border-gray-200 text-gray-600 hover:border-[#21201C] hover:text-[#21201C] hover:bg-blue-50 transition-all disabled:opacity-50"
             >
               {action}
             </button>
@@ -164,9 +164,9 @@ export default function AISidebar({
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
-            className="px-5 py-4 border-t border-gray-100 bg-[#FFFF00]/10"
+            className="px-5 py-4 border-t border-gray-100 bg-[#F0D294]/20"
           >
-            <div className="flex items-center gap-2 text-sm text-[#1E3A8A]">
+            <div className="flex items-center gap-2 text-sm text-[#21201C]">
               <Sparkles className="w-4 h-4 animate-pulse" />
               Bridge is updating your assessment…
             </div>

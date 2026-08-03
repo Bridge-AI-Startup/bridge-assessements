@@ -379,7 +379,7 @@ export default function CreateAssessment() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[#dbeafe] via-[#eff6ff] to-white">
+    <div className="min-h-screen bg-gradient-to-b from-[#F4F2E9] via-[#FDFCF7] to-white">
       <div className="max-w-4xl mx-auto px-6 py-16 md:py-24">
         {/* Back Button */}
         <motion.div
@@ -390,7 +390,7 @@ export default function CreateAssessment() {
         >
           <Link
             to={createPageUrl("Home")}
-            className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-[#1E3A8A] transition-colors"
+            className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-[#21201C] transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
             Back to Assessments
@@ -405,7 +405,7 @@ export default function CreateAssessment() {
           className="text-center mb-12"
         >
           {/* Heading */}
-          <h1 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4 tracking-tight">
+          <h1 className="text-4xl md:text-5xl font-medium tracking-[-0.012em] text-gray-900 mb-4 tracking-tight">
             Describe the role. <br /> Bridge builds the evaluation pipeline.
           </h1>
 
@@ -428,8 +428,8 @@ export default function CreateAssessment() {
             onClick={() => setCreationMode("ai")}
             className={`px-6 py-3 rounded-xl font-medium transition-all ${
               creationMode === "ai"
-                ? "bg-[#1E3A8A] text-white shadow-md"
-                : "bg-white text-gray-700 border border-gray-200 hover:border-[#1E3A8A]/30"
+                ? "bg-[#21201C] text-white shadow-md"
+                : "bg-white text-gray-700 border border-gray-200 hover:border-[#21201C]/30"
             }`}
           >
             Generate with AI
@@ -438,8 +438,8 @@ export default function CreateAssessment() {
             onClick={() => setCreationMode("manual")}
             className={`px-6 py-3 rounded-xl font-medium transition-all ${
               creationMode === "manual"
-                ? "bg-[#1E3A8A] text-white shadow-md"
-                : "bg-white text-gray-700 border border-gray-200 hover:border-[#1E3A8A]/30"
+                ? "bg-[#21201C] text-white shadow-md"
+                : "bg-white text-gray-700 border border-gray-200 hover:border-[#21201C]/30"
             }`}
           >
             Create Manually
@@ -613,7 +613,7 @@ export default function CreateAssessment() {
                     !manualDescription.trim() ||
                     manualTimeLimit < 1))
               }
-              className="bg-[#FFFF00] hover:bg-[#faed00] text-[#1E3A8A] px-6 py-2.5 h-auto rounded-xl font-semibold transition-all duration-200 disabled:opacity-50 shadow-sm"
+              className="bg-[#21201C] hover:bg-[#35332D] text-[#FAF9F2] px-6 py-2.5 h-auto rounded-full transition-all duration-200 disabled:opacity-50 shadow-sm"
             >
               <AnimatePresence mode="wait">
                 {isGenerating ? (

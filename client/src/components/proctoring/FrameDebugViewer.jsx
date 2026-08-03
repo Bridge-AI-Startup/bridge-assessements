@@ -14,12 +14,12 @@ import { getDebugFrames, renderOverlay } from "@/api/proctoring";
 
 // Region type → color mapping for bounding box overlays
 const REGION_COLORS = {
-  ai_chat: { border: "#f59e0b", bg: "rgba(245, 158, 11, 0.15)", label: "AI Chat" },
-  terminal: { border: "#10b981", bg: "rgba(16, 185, 129, 0.15)", label: "Terminal" },
-  editor: { border: "#3b82f6", bg: "rgba(59, 130, 246, 0.15)", label: "Editor" },
-  file_tree: { border: "#8b5cf6", bg: "rgba(139, 92, 246, 0.15)", label: "File Tree" },
-  browser: { border: "#ef4444", bg: "rgba(239, 68, 68, 0.15)", label: "Browser" },
-  other: { border: "#6b7280", bg: "rgba(107, 114, 128, 0.15)", label: "Other" },
+  ai_chat: { border: "#d69b31", bg: "rgba(214, 155, 49, 0.15)", label: "AI Chat" },
+  terminal: { border: "#6d955e", bg: "rgba(109, 149, 94, 0.15)", label: "Terminal" },
+  editor: { border: "#4a7ca8", bg: "rgba(74, 124, 168, 0.15)", label: "Editor" },
+  file_tree: { border: "#8c6ba8", bg: "rgba(140, 107, 168, 0.15)", label: "File Tree" },
+  browser: { border: "#d06e61", bg: "rgba(208, 110, 97, 0.15)", label: "Browser" },
+  other: { border: "#8a867b", bg: "rgba(138, 134, 123, 0.15)", label: "Other" },
 };
 
 /**

@@ -537,18 +537,30 @@ export async function listPublicSubmissions(options: {
 }
 
 /**
- * Every submission belonging to any of `anonymousIds`, newest round first,
- * each with its rank within its round. Powers the account "My submissions"
- * view, so it must work across challenge dates (unlike the gallery).
+ * Every submission belonging to any of `anonymousIds` — plus any submitted
+ * while signed in as `firebaseUid` — newest round first, each with its rank
+ * within its round. Powers the account "My submissions" view, so it must work
+ * across challenge dates (unlike the gallery).
+ *
+ * The uid arm is what makes an account-attributed build survive a browser id
+ * that is never linked again (cleared storage, a different device).
  */
 export async function listOwnerSubmissions(
   anonymousIds: string[],
+  firebaseUid?: string | null,
 ): Promise<PublicSubmissionSummary[]> {
   const ids = [...new Set(anonymousIds.map((s) => s.trim()).filter(Boolean))];
-  if (ids.length === 0) return [];
+  const uid = firebaseUid?.trim() || null;
+  if (ids.length === 0 && !uid) return [];
+
+  const ownerClauses: Array<Record<string, unknown>> = [];
+  if (ids.length) ownerClauses.push({ anonymousId: { $in: ids } });
+  if (uid) ownerClauses.push({ firebaseUid: uid });
 
   const Submission = getPlaySubmissionModel();
-  const own = (await Submission.find({ anonymousId: { $in: ids } })
+  const own = (await Submission.find(
+    ownerClauses.length === 1 ? ownerClauses[0] : { $or: ownerClauses },
+  )
     .select(
       "anonymousId displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches",
     )

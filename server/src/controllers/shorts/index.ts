@@ -20,6 +20,7 @@ import {
   getSession as getPlaySession,
   getSessionWorkspaceRevision,
   isSessionQueueError,
+  holdPlayBuildSessionSubmit,
   pausePlayBuildSession,
   resumePlayBuildSession,
 } from "../../services/shorts/sessions.js";
@@ -181,6 +182,21 @@ export const getSession: RequestHandler = async (req, res, next) => {
       String(req.query.anonymousId),
     );
     res.status(200).json(session);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/** Opening the submit dialog stops the submit clock. See holdPlayBuildSessionSubmit. */
+export const holdSessionSubmit: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const result = await holdPlayBuildSessionSubmit(
+      String(req.params.id),
+      String(req.body.anonymousId),
+    );
+    res.status(200).json(result);
   } catch (error) {
     next(error);
   }
@@ -382,6 +398,9 @@ export const submit: RequestHandler = async (req, res, next) => {
       sessionId: String(req.body.sessionId),
       anonymousId: String(req.body.anonymousId),
       displayName: String(req.body.displayName),
+      // optionalAuthToken sets `uid` only for a valid Firebase token; guests
+      // submit exactly as before.
+      firebaseUid: req.body.uid ? String(req.body.uid) : null,
     });
     res.status(200).json(result);
   } catch (error) {

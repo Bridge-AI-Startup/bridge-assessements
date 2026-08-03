@@ -260,7 +260,7 @@ export default function TranscriptPlayground() {
           animate={{ opacity: 1, y: 0 }}
           className="mb-8"
         >
-          <h1 className="text-2xl font-bold text-gray-900">
+          <h1 className="text-2xl font-medium tracking-[-0.012em] text-gray-900">
             Raw transcript playground
           </h1>
           <p className="text-sm text-gray-500 mt-1">

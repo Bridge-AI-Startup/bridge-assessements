@@ -3,7 +3,10 @@
  */
 import type { Sandbox } from "e2b";
 import { Types } from "mongoose";
-import { getShortsBuildTimeLimitMinutes } from "../../utils/shortsEnv.js";
+import {
+  getShortsBuildTimeLimitMinutes,
+  getShortsSubmitGraceSeconds,
+} from "../../utils/shortsEnv.js";
 import { getPlayBuildSessionModel } from "../../models/shorts/buildSession.js";
 import { endOfChallengePeriod } from "./challengePeriod.js";
 import {
@@ -63,6 +66,63 @@ export function computeBuildSessionExpiresAt(input: {
     getBuildTimeLimitMinutes(input.challengeTimeLimitMinutes) * 60_000;
   const timed = new Date(input.startedAt.getTime() + limitMs);
   return timed.getTime() < dayEnd.getTime() ? timed : dayEnd;
+}
+
+const DEFAULT_SUBMIT_GRACE_SECONDS = 120;
+
+/**
+ * Grace window after `expiresAt` in which a build can still be **submitted**.
+ * Building is over at `expiresAt` — chat turns are refused — this only buys
+ * time to get the finished work saved (same idea as the assessments product's
+ * late-submit window). `SHORTS_SUBMIT_GRACE_SECONDS=0` disables it.
+ */
+export function getSubmitGraceSeconds(): number {
+  const raw = getShortsSubmitGraceSeconds();
+  if (!raw) return DEFAULT_SUBMIT_GRACE_SECONDS;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_SUBMIT_GRACE_SECONDS;
+}
+
+export function getSubmitGraceMs(): number {
+  return getSubmitGraceSeconds() * 1000;
+}
+
+/** True while a timed-out session may still submit (never true before expiry). */
+export function isWithinSubmitGrace(
+  expiresAt?: Date | null,
+  now: number = Date.now(),
+): boolean {
+  if (!expiresAt) return false;
+  const end = expiresAt.getTime();
+  return now > end && now <= end + getSubmitGraceMs();
+}
+
+/**
+ * How long opening the submit dialog keeps the build submittable.
+ *
+ * Clicking Submit stops the submit clock: the builder may still need to name
+ * the build, or sign in — a Google popup and a first-time account can easily
+ * outlast the two-minute grace, and losing a finished build to that is the
+ * worst possible failure. Bounded rather than infinite so a session held open
+ * early cannot be submitted into a round that settled hours ago.
+ */
+const SUBMIT_HOLD_MINUTES = 15;
+
+export function getSubmitHoldMs(): number {
+  return SUBMIT_HOLD_MINUTES * 60 * 1000;
+}
+
+/**
+ * True while a submit hold is still good. Unlike the grace window this can be
+ * true *before* `expiresAt` — it is a floor under the submit deadline, never a
+ * ceiling, and it never extends build time (chat/file writes check `expiresAt`).
+ */
+export function isWithinSubmitHold(
+  submitHoldAt?: Date | null,
+  now: number = Date.now(),
+): boolean {
+  if (!submitHoldAt) return false;
+  return now <= submitHoldAt.getTime() + getSubmitHoldMs();
 }
 
 /** E2B Hobby/default API rejects sandbox timeouts above 1 hour. */

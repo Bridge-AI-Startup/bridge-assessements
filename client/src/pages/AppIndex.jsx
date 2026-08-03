@@ -19,8 +19,8 @@ export default function AppIndex() {
   }, [navigate]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#f8f9fb]">
-      <div className="w-8 h-8 border-2 border-[#1E3A8A]/30 border-t-[#1E3A8A] rounded-full animate-spin" />
+    <div className="min-h-screen flex items-center justify-center bg-[#FAF9F2]">
+      <div className="w-8 h-8 border-2 border-[#21201C]/30 border-t-[#21201C] rounded-full animate-spin" />
     </div>
   );
 }

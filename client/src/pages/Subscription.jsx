@@ -43,9 +43,9 @@ export default function Subscription() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-[#f8f9fb] flex items-center justify-center">
+      <div className="min-h-screen bg-[#FAF9F2] flex items-center justify-center">
         <div className="text-center">
-          <div className="w-8 h-8 border-2 border-[#1E3A8A]/30 border-t-[#1E3A8A] rounded-full animate-spin mx-auto mb-4"></div>
+          <div className="w-8 h-8 border-2 border-[#21201C]/30 border-t-[#21201C] rounded-full animate-spin mx-auto mb-4"></div>
           <p className="text-gray-500">Loading...</p>
         </div>
       </div>
@@ -163,7 +163,7 @@ export default function Subscription() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#f8f9fb] to-[#eef1f8] py-12 px-4">
+    <div className="min-h-screen bg-gradient-to-br from-[#FAF9F2] to-[#F4F2E9] py-12 px-4">
       <div className="max-w-6xl mx-auto">
         {/* Back Button */}
         <motion.div
@@ -188,7 +188,7 @@ export default function Subscription() {
           animate={{ opacity: 1, y: 0 }}
           className="text-center mb-12"
         >
-          <h1 className="text-4xl font-bold text-gray-900 mb-4">
+          <h1 className="text-4xl font-medium tracking-[-0.012em] text-gray-900 mb-4">
             Choose Your Plan
           </h1>
           <p className="text-lg text-gray-600 max-w-2xl mx-auto">
@@ -205,7 +205,7 @@ export default function Subscription() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: index * 0.1 }}
-              className={`relative bg-white rounded-2xl shadow-xl overflow-hidden border-2 ${
+              className={`relative bg-white rounded-card border border-border shadow-[0_2px_18px_rgba(33,32,28,0.06)] overflow-hidden border-2 ${
                 tier.popular ? "border-green-500 scale-105" : "border-gray-200"
               }`}
             >
@@ -227,11 +227,11 @@ export default function Subscription() {
                   >
                     {tier.subtitle}
                   </div>
-                  <h2 className="text-3xl font-bold text-gray-900 mb-2">
+                  <h2 className="text-3xl font-medium tracking-[-0.012em] text-gray-900 mb-2">
                     {tier.name}
                   </h2>
                   <div className="flex items-baseline gap-2 mb-2">
-                    <span className="text-5xl font-bold text-gray-900">
+                    <span className="text-5xl font-medium tracking-[-0.012em] text-gray-900">
                       {tier.price}
                     </span>
                     {tier.period !== "forever" && (

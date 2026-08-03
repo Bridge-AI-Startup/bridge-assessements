@@ -8,16 +8,16 @@ export default function BillingCancel() {
   const navigate = useNavigate();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#f8f9fb] to-[#eef1f8] flex items-center justify-center px-4">
+    <div className="min-h-screen bg-gradient-to-br from-[#FAF9F2] to-[#F4F2E9] flex items-center justify-center px-4">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center"
+        className="max-w-md w-full bg-white rounded-card border border-border shadow-[0_2px_18px_rgba(33,32,28,0.06)] p-8 text-center"
       >
         <div className="w-16 h-16 rounded-full bg-orange-100 flex items-center justify-center mx-auto mb-4">
           <XCircle className="w-10 h-10 text-orange-600" />
         </div>
-        <h1 className="text-2xl font-bold text-gray-900 mb-2">
+        <h1 className="text-2xl font-medium tracking-[-0.012em] text-gray-900 mb-2">
           Checkout Cancelled
         </h1>
         <p className="text-gray-600 mb-6">
@@ -28,13 +28,13 @@ export default function BillingCancel() {
           <Button
             onClick={() => navigate(createPageUrl("Subscription"))}
             variant="outline"
-            className="border-[#1E3A8A] text-[#1E3A8A] hover:bg-[#1E3A8A]/5"
+            className="border-[#21201C] text-[#21201C] hover:bg-[#21201C]/5"
           >
             Try Again
           </Button>
           <Button
             onClick={() => navigate(createPageUrl("Home"))}
-            className="bg-[#1E3A8A] hover:bg-[#152a66] text-white"
+            className="bg-[#21201C] hover:bg-[#35332D] text-white"
           >
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back to Dashboard

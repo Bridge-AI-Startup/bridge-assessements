@@ -407,6 +407,11 @@ export async function runClaudePrintPrompt(input: {
   if (doc.status !== "active" || !doc.e2bSandboxId) {
     throw createHttpError(400, "session_not_active");
   }
+  // Building ends at the buzzer. The submit grace window is for saving work
+  // only — without this check it would double as extra build time.
+  if (doc.expiresAt && doc.expiresAt.getTime() <= Date.now()) {
+    throw createHttpError(400, "session_expired");
+  }
   if ((doc.tokensUsed ?? 0) >= doc.tokenBudget) {
     throw createHttpError(429, "token_budget_exceeded");
   }

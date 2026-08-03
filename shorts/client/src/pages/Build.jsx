@@ -1,9 +1,8 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { ensureSession, getSession, getWorkspaceRevision, clearStoredSessionId, pauseSession, pauseSessionBeacon, resumeSession } from "@/api/session";
+import { ensureSession, getSession, getWorkspaceRevision, clearStoredSessionId, holdSessionSubmit, pauseSession, pauseSessionBeacon, resumeSession } from "@/api/session";
 import { fetchSessionUsage, sendClaudeMessage } from "@/api/claude";
 import { submitSession } from "@/api/submit";
-import { linkCurrentAnonymousId } from "@/api/account";
 import { useAuth } from "@/lib/useAuth";
 import AccountModal from "@/components/AccountModal";
 import {
@@ -23,6 +22,9 @@ import {
 import WorkspaceEditor from "@/components/workspace/WorkspaceEditor";
 import ModelEffortPicker from "@/components/workspace/ModelEffortPicker";
 import ChatFirstBuild from "@/components/workspace/ChatFirstBuild";
+import BuildWaitCard from "@/components/workspace/BuildWaitCard";
+import OutOfCreditsModal from "@/components/workspace/OutOfCreditsModal";
+import BuildTimeModal from "@/components/workspace/BuildTimeModal";
 import {
   compactTokens,
   useTokenDelta,
@@ -31,6 +33,33 @@ import SessionWaitlist from "@/components/SessionWaitlist";
 
 const DEFAULT_LEFT_STACK = ["editor", "chat"];
 const DEFAULT_LEFT_SIZES = { editor: 55, chat: 45 };
+
+const OUT_OF_CREDITS_MESSAGE = "You ran out of credits for this build.";
+const OUT_OF_TIME_MESSAGE = "Time is up — this build can't be changed anymore.";
+/** How long before `expiresAt` the "almost out of time" pop-up fires. */
+const TIME_WARNING_MS = 60_000;
+
+/** Server-declared window after `expiresAt` in which submitting still works. */
+function submitGraceMs(session) {
+  const seconds = Number(session?.submitGraceSeconds);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
+}
+
+/**
+ * A 429 the server raised on the token budget — not an upstream rate limit,
+ * which also comes back as 429 but carries the provider's own message.
+ */
+function isOutOfCreditsError(result) {
+  return (
+    result.httpStatus === 429 &&
+    /token_budget_exceeded/i.test(String(result.message || ""))
+  );
+}
+
+/** The server refused the turn because the build clock had already run out. */
+function isOutOfTimeError(result) {
+  return /session_expired/i.test(String(result.message || ""));
+}
 
 function LayoutModeToggle({ mode, onChange }) {
   const options = [
@@ -346,6 +375,16 @@ export default function Build() {
   const [state, setState] = useState({ kind: "provisioning" });
   const [periodCadence, setPeriodCadence] = useState("weekly");
   const [showSubmitModal, setShowSubmitModal] = useState(false);
+  /**
+   * Timestamp the submit clock stopped at (dialog open), or null when running.
+   * The countdown reads this instead of "now", so naming a build or signing in
+   * can never burn the clock. The server holds the same way (`submitHoldAt`).
+   */
+  const [submitHoldAtMs, setSubmitHoldAtMs] = useState(null);
+  /** null, or { lastPrompt, note, checking } while the credits pop-up is up. */
+  const [creditsModal, setCreditsModal] = useState(null);
+  /** null, or { kind: "warning" | "timeUp", note, busy } for the clock pop-ups. */
+  const [timeModal, setTimeModal] = useState(null);
   const [displayName, setDisplayName] = useState(() => getDisplayName());
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
@@ -378,6 +417,9 @@ export default function Build() {
   const splitRef = useRef(null);
   const leftColRef = useRef(null);
   const recoveringRef = useRef(false);
+  /** Each clock pop-up fires once per session, not once per tick. */
+  const warnShownRef = useRef(false);
+  const timeUpShownRef = useRef(false);
   const chatBusyRef = useRef(false);
   const verticalDragRef = useRef(null);
   const minimizedRef = useRef(minimized);
@@ -422,6 +464,10 @@ export default function Build() {
       });
       return;
     }
+    // Fresh session (or a resumed one) gets a fresh set of clock pop-ups.
+    warnShownRef.current = false;
+    timeUpShownRef.current = false;
+    setTimeModal(null);
     setState({ kind: "ready", session });
     const restoredMessages = Array.isArray(session.chatMessages)
       ? session.chatMessages.map((m) => ({
@@ -477,10 +523,35 @@ export default function Build() {
     return () => clearInterval(id);
   }, [state.kind, state.kind === "ready" ? state.session.expiresAt : null]);
 
+  // Clock pop-ups: a heads-up near the end, then the time's-up pop-up, which
+  // stays useful because the server still accepts a submit for the grace window.
+  // Only once the grace is spent does the page fall back to the expired screen.
   useEffect(() => {
     if (state.kind !== "ready" || !state.session?.expiresAt) return;
-    const left = new Date(state.session.expiresAt).getTime() - nowMs;
-    if (left <= 0) {
+    // Submit clock held (dialog open): no warnings, and never tear the page
+    // down to the expired screen — that would unmount the dialog and lose a
+    // finished build while the builder is signing in.
+    if (submitHoldAtMs) return;
+    const expiresAtMs = new Date(state.session.expiresAt).getTime();
+    const left = expiresAtMs - nowMs;
+
+    if (left > 0) {
+      if (left <= TIME_WARNING_MS && !warnShownRef.current) {
+        warnShownRef.current = true;
+        // Don't interrupt someone already filling in the submit form.
+        if (!showSubmitModal) {
+          setTimeModal({ kind: "warning", note: null, busy: false });
+        }
+      }
+      return;
+    }
+
+    if (!timeUpShownRef.current) {
+      openTimeUpModal();
+    }
+
+    if (nowMs > expiresAtMs + submitGraceMs(state.session)) {
+      setTimeModal(null);
       clearStoredSessionId();
       setState({
         kind: "expired",
@@ -492,6 +563,8 @@ export default function Build() {
     nowMs,
     state.kind,
     state.kind === "ready" ? state.session.expiresAt : null,
+    showSubmitModal,
+    submitHoldAtMs,
   ]);
 
   // Pause E2B when leaving Build; resume when returning.
@@ -788,12 +861,27 @@ export default function Build() {
     };
   }, [dragging, draggingVerticalIndex, reorderingPane]);
 
-  async function sendPrompt(promptText) {
+  /**
+   * @param {string} promptText
+   * @param {{ force?: boolean }} [opts] force skips the local credit check —
+   *   only the retry path uses it, after re-reading usage from the server
+   *   (the `usage` state in this closure is still the stale exhausted one).
+   */
+  async function sendPrompt(promptText, opts = {}) {
     if (state.kind !== "ready" || chatBusyRef.current) return;
     const prompt = promptText.trim();
     if (!prompt) return;
-    if (usage?.exhausted) {
-      setChatError("Token budget exhausted for this challenge.");
+    if (!opts.force && usage?.exhausted) {
+      setChatError(OUT_OF_CREDITS_MESSAGE);
+      openCreditsModal(prompt);
+      return;
+    }
+    const expiresAt = state.session.expiresAt
+      ? new Date(state.session.expiresAt).getTime()
+      : null;
+    if (expiresAt != null && Date.now() >= expiresAt) {
+      setChatError(OUT_OF_TIME_MESSAGE);
+      openTimeUpModal();
       return;
     }
     setChatError(null);
@@ -815,11 +903,27 @@ export default function Build() {
     if (result.status === "error") {
       chatBusyRef.current = false;
       setChatBusy(false);
-      setChatError(result.message);
+      const outOfCredits = isOutOfCreditsError(result);
+      const outOfTime = isOutOfTimeError(result);
+      const message = outOfCredits
+        ? OUT_OF_CREDITS_MESSAGE
+        : outOfTime
+          ? OUT_OF_TIME_MESSAGE
+          : result.message;
+      setChatError(message);
       setChatMessages((prev) => [
         ...prev,
-        { role: "assistant", text: `(Error: ${result.message})` },
+        { role: "assistant", text: `(Error: ${message})` },
       ]);
+      if (outOfCredits) {
+        // Server refused the turn on budget — reflect it in the meter too.
+        setUsage((prev) =>
+          prev ? { ...prev, remaining: 0, exhausted: true } : prev,
+        );
+        openCreditsModal(prompt);
+      } else if (outOfTime) {
+        openTimeUpModal();
+      }
       return;
     }
     const revisionAfter = serverless
@@ -842,13 +946,68 @@ export default function Build() {
         ? [...next, { role: "preview", tick: Date.now() }]
         : next;
     });
-    if (result.result.usage) setUsage(result.result.usage);
+    if (result.result.usage) {
+      setUsage(result.result.usage);
+      // Last turn drained the budget — tell the builder before they type again.
+      if (result.result.usage.exhausted) {
+        openCreditsModal();
+      }
+    }
     if (workspaceChanged) {
       setPreviewTick((t) => t + 1);
       setEditorRefreshKey((k) => k + 1);
     }
     chatBusyRef.current = false;
     setChatBusy(false);
+  }
+
+  function openCreditsModal(lastPrompt = null) {
+    setCreditsModal({ lastPrompt, note: null, checking: false });
+  }
+
+  function openTimeUpModal() {
+    timeUpShownRef.current = true;
+    setCreditsModal(null);
+    setTimeModal({ kind: "timeUp", note: null, busy: false });
+  }
+
+  /**
+   * "Try again" from the out-of-credits pop-up: re-read the meter from the
+   * server first — the turn may have failed on a passing upstream hiccup — and
+   * only re-send the last message if credits actually came back.
+   */
+  async function retryAfterOutOfCredits() {
+    if (state.kind !== "ready") return;
+    setCreditsModal((prev) =>
+      prev ? { ...prev, checking: true, note: null } : prev,
+    );
+    const fresh = await fetchSessionUsage(state.session.sessionId);
+    if (fresh) setUsage(fresh);
+    if (fresh && !fresh.exhausted) {
+      const prompt = creditsModal?.lastPrompt;
+      setCreditsModal(null);
+      setChatError(null);
+      if (prompt) void sendPrompt(prompt, { force: true });
+      return;
+    }
+    setCreditsModal((prev) =>
+      prev
+        ? {
+            ...prev,
+            checking: false,
+            note: "Still out of credits — there is nothing left to spend on this build.",
+          }
+        : prev,
+    );
+  }
+
+  /** "Try again" from the time's-up pop-up: start a fresh build session. */
+  async function restartAfterTimeUp() {
+    setTimeModal((prev) => (prev ? { ...prev, busy: true, note: null } : prev));
+    clearStoredSessionId();
+    setTimeModal(null);
+    setState({ kind: "provisioning" });
+    await loadSession();
   }
 
   function handleChatSubmit(e) {
@@ -878,16 +1037,21 @@ export default function Build() {
               code: "starter_only",
               message: result.message,
             }
-          : { message: result.message },
+          : /session_expired|session_not_active/i.test(
+                String(result.message || ""),
+              )
+            ? {
+                message:
+                  "The clock ran out before this went through — the window to submit has closed.",
+              }
+            : { message: result.message },
       );
       return;
     }
     persistDisplayName(result.result.displayName || name);
-    // Signed in → make sure this browser's id (and so this build) is on the
-    // account. Idempotent; ignore failures — the submission itself succeeded.
-    if (signedIn) {
-      linkCurrentAnonymousId().catch(() => {});
-    }
+    // No client-side account link here: the submit request carries the ID token
+    // when signed in, so the server stamps the submission with the account and
+    // claims this browser id in the same transaction.
     setShowSubmitModal(false);
     setState({
       kind: "submitted",
@@ -1028,8 +1192,11 @@ export default function Build() {
   const startedAtMs = session.startedAt
     ? new Date(session.startedAt).getTime()
     : expiresAtMs;
+  // While the submit clock is held, the countdown reads from the moment it
+  // stopped rather than from now — the displayed time freezes with the dialog.
+  const clockNowMs = submitHoldAtMs ?? nowMs;
   const remainingMs =
-    expiresAtMs != null ? Math.max(0, expiresAtMs - nowMs) : null;
+    expiresAtMs != null ? Math.max(0, expiresAtMs - clockNowMs) : null;
   const totalWindowMs =
     expiresAtMs != null && startedAtMs != null
       ? Math.max(1, expiresAtMs - startedAtMs)
@@ -1046,6 +1213,19 @@ export default function Build() {
         : remainingMs <= 15 * 60_000
           ? "warn"
           : "ok";
+
+  // Clock state. `timeIsUp` closes the chat everywhere (the server refuses
+  // turns past expiresAt); `graceRemainingMs` is the submit-only window left.
+  const timeIsUp = expiresAtMs != null && nowMs >= expiresAtMs;
+  const graceRemainingMs =
+    expiresAtMs != null
+      ? Math.max(0, expiresAtMs + submitGraceMs(session) - nowMs)
+      : 0;
+  // A held submit clock keeps the button live past the grace window. `timeIsUp`
+  // deliberately still reads real time — building is over either way.
+  const canSubmitAfterTimeUp =
+    !timeIsUp || graceRemainingMs > 0 || submitHoldAtMs != null;
+  const chatLocked = exhausted || timeIsUp;
 
   const leftColumnWidth =
     editorFullscreen || chatFullscreen
@@ -1147,9 +1327,7 @@ export default function Build() {
                 {m.text}
               </div>
             ))}
-            {chatBusy && (
-              <p className="text-xs text-slate-500">Claude Code is working…</p>
-            )}
+            <BuildWaitCard active={chatBusy} />
             <div ref={chatEndRef} />
           </div>
           {chatError && (
@@ -1163,7 +1341,7 @@ export default function Build() {
               <ModelEffortPicker
                 value={modelEffort}
                 onChange={setModelEffort}
-                hideEffort={serverless}
+                serverless={serverless}
                 engineLabel={serverless ? "Serverless" : "Claude Code"}
               />
             </div>
@@ -1172,9 +1350,13 @@ export default function Build() {
               onChange={(e) => setChatInput(e.target.value)}
               rows={chatFullscreen ? 5 : 2}
               placeholder={
-                exhausted ? "Budget exhausted" : "Ask Claude Code to build…"
+                timeIsUp
+                  ? "Time is up"
+                  : exhausted
+                    ? "Out of credits"
+                    : "Ask Claude Code to build…"
               }
-              disabled={chatBusy || exhausted}
+              disabled={chatBusy || chatLocked}
               className="w-full resize-none rounded border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50"
             />
             <button
@@ -1194,6 +1376,33 @@ export default function Build() {
     setSubmitError(null);
     setDisplayName((prev) => prev.trim() || getDisplayName());
     setShowSubmitModal(true);
+    // Stop the clock immediately, before the round trip — the UI must never
+    // keep counting down while the request is in flight.
+    setSubmitHoldAtMs(Date.now());
+    if (state.kind === "ready") {
+      void holdSessionSubmit(state.session.sessionId).then((result) => {
+        // The server refused to hold (already too late). Let the clock run
+        // again so the page behaves honestly instead of showing a frozen
+        // timer for a build that can no longer be submitted.
+        if (result.status === "error") setSubmitHoldAtMs(null);
+      });
+    }
+  }
+
+  /**
+   * Closing the dialog resumes the clock — but only if there is still build
+   * time left. Past expiry the hold is what keeps the finished build alive, so
+   * cancelling must not throw it away.
+   */
+  function closeSubmitModal() {
+    setShowSubmitModal(false);
+    const expiresAt =
+      state.kind === "ready" && state.session.expiresAt
+        ? new Date(state.session.expiresAt).getTime()
+        : null;
+    if (expiresAt == null || Date.now() < expiresAt) {
+      setSubmitHoldAtMs(null);
+    }
   }
 
   function setBuildLayout(mode) {
@@ -1214,6 +1423,11 @@ export default function Build() {
           Confirm the name for this submission. Your workspace will be saved
           and closed.
         </p>
+        {submitHoldAtMs != null && (
+          <p className="mt-2 font-mono text-[10px] font-medium uppercase tracking-label text-fog-light">
+            Build timer paused — take your time
+          </p>
+        )}
         {signedIn ? (
           <p className="mt-2 rounded-xl bg-mist px-3 py-2 text-xs text-fog">
             Signed in as{" "}
@@ -1271,7 +1485,7 @@ export default function Build() {
         <div className="mt-4 flex justify-end gap-2">
           <button
             type="button"
-            onClick={() => setShowSubmitModal(false)}
+            onClick={closeSubmitModal}
             disabled={submitting}
             className="btn-pill-secondary"
           >
@@ -1300,6 +1514,40 @@ export default function Build() {
     </div>
   ) : null;
 
+  const creditsModalNode = creditsModal ? (
+    <OutOfCreditsModal
+      tokensUsed={tokensUsed}
+      tokenBudget={tokenBudget}
+      note={creditsModal.note}
+      checking={creditsModal.checking}
+      onSubmitBuild={() => {
+        setCreditsModal(null);
+        openSubmitModal();
+      }}
+      onTryAgain={() => void retryAfterOutOfCredits()}
+      onClose={() => setCreditsModal(null)}
+    />
+  ) : null;
+
+  const timeModalNode = timeModal ? (
+    <BuildTimeModal
+      kind={timeModal.kind}
+      timeLabel={remainingMs != null ? formatCountdown(remainingMs) : ""}
+      graceLabel={
+        graceRemainingMs > 0 ? formatCountdown(graceRemainingMs) : null
+      }
+      canSubmit={canSubmitAfterTimeUp}
+      note={timeModal.note}
+      busy={timeModal.busy}
+      onSubmitBuild={() => {
+        setTimeModal(null);
+        openSubmitModal();
+      }}
+      onTryAgain={() => void restartAfterTimeUp()}
+      onClose={() => setTimeModal(null)}
+    />
+  ) : null;
+
   const layoutToggle = (
     <LayoutModeToggle mode={layoutMode} onChange={setBuildLayout} />
   );
@@ -1324,11 +1572,16 @@ export default function Build() {
     onRefreshPreview: () => setPreviewTick((tick) => tick + 1),
     modelEffort,
     setModelEffort,
-    hideEffort: serverless,
+    serverless,
     engineLabel: serverless ? "Serverless" : "Claude Code",
     onSubmitClick: openSubmitModal,
     chatEndRef,
     submitModal,
+    creditsModal: creditsModalNode,
+    onShowCreditsHelp: () => openCreditsModal(),
+    timeModal: timeModalNode,
+    timeIsUp,
+    onShowTimeHelp: () => openTimeUpModal(),
   };
 
   if (isMobile) {
@@ -1390,10 +1643,18 @@ export default function Build() {
         </div>
       </header>
 
-      {exhausted && (
-        <div className="border-b border-accent-amber/30 bg-accent-amber/8 px-4 py-2 text-center font-mono text-[11px] uppercase tracking-label text-accent-amber">
-          Token budget exhausted — Claude Code requests are blocked until the
-          next challenge.
+      {(timeIsUp || exhausted) && (
+        <div className="flex items-center justify-center gap-2 border-b border-accent-amber/30 bg-accent-amber/8 px-4 py-2 text-center font-mono text-[11px] uppercase tracking-label text-accent-amber">
+          {timeIsUp
+            ? "Time is up — no more changes can be made."
+            : "You ran out of credits — no more changes can be made."}
+          <button
+            type="button"
+            onClick={() => (timeIsUp ? openTimeUpModal() : openCreditsModal())}
+            className="underline underline-offset-2"
+          >
+            What now?
+          </button>
         </div>
       )}
 
@@ -1572,6 +1833,8 @@ export default function Build() {
       </div>
 
       {submitModal}
+      {creditsModalNode}
+      {timeModalNode}
     </div>
   );
 }

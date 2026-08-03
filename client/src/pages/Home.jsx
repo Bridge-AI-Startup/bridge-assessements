@@ -237,7 +237,7 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f8f9fb]">
+    <div className="min-h-screen bg-[#FAF9F2]">
       <div className="max-w-6xl mx-auto px-6 py-8">
         {/* Header */}
         <motion.div
@@ -246,7 +246,7 @@ export default function Home() {
           className="flex items-center justify-between mb-8"
         >
           <div>
-            <h1 className="text-2xl font-bold text-[#1E3A8A] mb-1">
+            <h1 className="text-3xl font-medium tracking-[-0.012em] text-[#21201C] mb-1">
               Assessments
             </h1>
             <p className="text-gray-500 text-sm">
@@ -255,7 +255,7 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-3">
             <Link to={createPageUrl("CreateAssessment")}>
-              <Button className="bg-[#1E3A8A] hover:bg-[#152a66] text-white rounded-full px-5">
+              <Button className="bg-[#21201C] hover:bg-[#35332D] text-white rounded-full px-5">
                 <Plus className="w-4 h-4 mr-2" />
                 New Assessment
               </Button>
@@ -263,7 +263,7 @@ export default function Home() {
             <Link to={createPageUrl("Subscription")}>
               <Button
                 variant="outline"
-                className="border-[#1E3A8A] text-[#1E3A8A] hover:bg-[#1E3A8A]/5 rounded-full px-5"
+                className="border-[#21201C] text-[#21201C] hover:bg-[#21201C]/5 rounded-full px-5"
               >
                 <CreditCard className="w-4 h-4 mr-2" />
                 Subscription
@@ -272,7 +272,7 @@ export default function Home() {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="rounded-full h-9 w-9 p-0">
-                  <div className="w-8 h-8 rounded-full bg-[#1E3A8A] flex items-center justify-center">
+                  <div className="w-8 h-8 rounded-full bg-[#21201C] flex items-center justify-center">
                     <User className="w-4 h-4 text-white" />
                   </div>
                 </Button>
@@ -359,7 +359,7 @@ export default function Home() {
           >
             <Card className="border-indigo-200 bg-white shadow-sm">
               <CardHeader className="pb-2">
-                <CardTitle className="flex items-center gap-2 text-lg text-[#1E3A8A]">
+                <CardTitle className="flex items-center gap-2 text-lg text-[#21201C]">
                   <Trophy className="h-5 w-5" />
                   {CHALLENGE_BRAND_NAME} — default competition
                 </CardTitle>
@@ -367,7 +367,7 @@ export default function Home() {
                   Sets which competition powers{" "}
                   <Link
                     to={createPageUrl("HackathonDashboard")}
-                    className="font-medium text-[#1E3A8A] underline-offset-2 hover:underline"
+                    className="font-medium text-[#21201C] underline-offset-2 hover:underline"
                   >
                     {CHALLENGE_BRAND_NAME}
                   </Link>{" "}
@@ -394,7 +394,7 @@ export default function Home() {
                   </div>
                   <Button
                     type="button"
-                    className="bg-[#1E3A8A] hover:bg-[#152a66] text-white sm:shrink-0"
+                    className="bg-[#21201C] hover:bg-[#35332D] text-white sm:shrink-0"
                     onClick={handleSaveHackathonSlug}
                     disabled={hackathonSlugSaving}
                   >
@@ -444,8 +444,8 @@ export default function Home() {
             animate={{ opacity: 1, y: 0 }}
             className="bg-white rounded-xl border border-gray-200 p-12 text-center"
           >
-            <div className="w-16 h-16 rounded-2xl bg-[#1E3A8A]/10 flex items-center justify-center mx-auto mb-4">
-              <FileText className="w-8 h-8 text-[#1E3A8A]" />
+            <div className="w-16 h-16 rounded-2xl bg-[#21201C]/10 flex items-center justify-center mx-auto mb-4">
+              <FileText className="w-8 h-8 text-[#21201C]" />
             </div>
             <h3 className="text-lg font-semibold text-gray-900 mb-2">
               No assessments yet
@@ -455,7 +455,7 @@ export default function Home() {
               candidates
             </p>
             <Link to={createPageUrl("CreateAssessment")}>
-              <Button className="bg-[#1E3A8A] hover:bg-[#152a66] text-white rounded-full px-6">
+              <Button className="bg-[#21201C] hover:bg-[#35332D] text-white rounded-full px-6">
                 <Plus className="w-4 h-4 mr-2" />
                 Create Assessment
               </Button>
@@ -531,7 +531,7 @@ export default function Home() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="w-full text-[#1E3A8A] border-[#1E3A8A]/20 hover:bg-[#1E3A8A]/5"
+                      className="w-full text-[#21201C] border-[#21201C]/20 hover:bg-[#21201C]/5"
                     >
                       <BarChart3 className="w-4 h-4 mr-1.5" />
                       Submissions

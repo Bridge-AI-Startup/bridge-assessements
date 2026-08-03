@@ -17,8 +17,8 @@ export default function PresetPills({ onSelect, selectedPreset }) {
           onClick={() => onSelect(preset.value)}
           className={`px-4 py-2 text-sm rounded-full border transition-all duration-200 ${
             selectedPreset === preset.value
-              ? 'bg-[#1E3A8A] text-white border-[#1E3A8A]'
-              : 'bg-white text-gray-600 border-gray-200 hover:border-[#1E3A8A] hover:text-[#1E3A8A]'
+              ? 'bg-[#21201C] text-white border-[#21201C]'
+              : 'bg-white text-gray-600 border-gray-200 hover:border-[#21201C] hover:text-[#21201C]'
           }`}
         >
           {preset.label}

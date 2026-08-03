@@ -1,7 +1,7 @@
 /**
  * Detect near-empty / unchanged Play starter projects so submit can reject them.
  *
- * Starter copy must stay in sync with `play/e2b-template/starter-project/`.
+ * Starter copy must stay in sync with `shorts/e2b-template/starter-project/`.
  */
 
 export const STARTER_ONLY_CODE = "starter_only" as const;
@@ -9,9 +9,172 @@ export const STARTER_ONLY_CODE = "starter_only" as const;
 export const STARTER_ONLY_MESSAGE =
   "Build something first — your project still looks like the unchanged starter.";
 
-/** Embedded from play/e2b-template/starter-project (post code-server removal). */
+/** Embedded from shorts/e2b-template/starter-project (post code-server removal). */
 export const STARTER_FILES: Record<string, string> = {
   "index.html": `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bridge Shorts</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Preview</p>
+      <h1>Nothing here yet — and that's normal.</h1>
+      <p class="lede">
+        Whatever you build will show up right here. It's blank because you
+        haven't asked for anything yet.
+      </p>
+      <ol>
+        <li>
+          <strong>Read the challenge.</strong>
+          It's at the top of the chat — that's what you're making today.
+        </li>
+        <li>
+          <strong>Describe what you want in the chat, in plain English.</strong>
+          Something like "a dice roller with one big red button" is enough to
+          start.
+        </li>
+        <li>
+          <strong>Watch this panel.</strong>
+          It refreshes every time your build changes. Don't like it? Say what to
+          change and ask again — as many times as you want.
+        </li>
+        <li>
+          <strong>Press Submit when you're happy with it.</strong>
+          Then go vote on what everyone else made.
+        </li>
+      </ol>
+      <p class="hint">
+        No coding needed. Keep an eye on <strong>Time left</strong> at the top —
+        when it runs out, so does the round.
+      </p>
+    </main>
+    <script src="main.js"></script>
+  </body>
+</html>
+`,
+  "style.css": `:root {
+  color-scheme: light;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  line-height: 1.5;
+  color: #0f172a;
+  background: #f8fafc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+}
+
+main {
+  max-width: 32rem;
+  width: 100%;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 1.5rem 1.75rem;
+}
+
+h1 {
+  margin: 0 0 0.75rem;
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+}
+
+p {
+  margin: 0 0 0.75rem;
+  color: #334155;
+}
+
+.eyebrow {
+  margin: 0 0 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.lede {
+  margin-bottom: 1.25rem;
+}
+
+ol {
+  margin: 0 0 1.25rem;
+  padding-left: 1.25rem;
+  color: #334155;
+}
+
+li {
+  margin-bottom: 0.75rem;
+}
+
+li:last-child {
+  margin-bottom: 0;
+}
+
+li strong {
+  color: #0f172a;
+}
+
+.hint {
+  margin-bottom: 0;
+  padding-top: 1rem;
+  border-top: 1px solid #e2e8f0;
+  font-size: 0.9rem;
+  color: #64748b;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9em;
+  background: #f1f5f9;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+`,
+  "main.js": `console.log("Bridge Play starter ready. Build your challenge in this project.");
+`,
+  "README.md": `# Bridge Play starter
+
+Static HTML/CSS/JS project for daily challenges.
+
+## How to work
+
+1. Open \`CHALLENGE.md\` when it appears (injected per session).
+2. Edit **\`index.html\` in place** — Preview opens that file first. Use \`style.css\` / \`main.js\` as needed.
+3. Multi-page is OK: add more \`.html\` files and link them from \`index.html\`.
+4. Watch the **Preview** pane — static server, opens \`index.html\` by default.
+5. Use the **Claude** chat panel to build or iterate.
+
+## Constraints (v1)
+
+- **Entry = \`index.html\`.** That is the home page users land on.
+- Extra HTML pages are allowed when linked from the entry (or each other).
+- Vanilla JS or CDN frameworks only — no Vite, npm build, Next, or CRA.
+- Keep everything in this folder so the static preview server can serve it.
+`,
+};
+
+/**
+ * Older starter copy that live snapshots may still hold. Sessions created before
+ * a starter rewrite keep the previous files in `workspaceSnapshot`, so every
+ * shipped variant must stay comparable or those builds sail past the submit gate.
+ */
+const LEGACY_STARTER_FILES: Record<string, string[]> = {
+  "index.html": [
+    // Plain-language rewrite predecessor (post code-server removal).
+    `<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -28,14 +191,16 @@ export const STARTER_FILES: Record<string, string> = {
         file).
       </p>
       <p class="hint">
-        Tip: edit files in the Monaco editor, or ask Claude in the chat panel.
+        Tip: chat with Claude in the chat panel to build this.
       </p>
     </main>
     <script src="main.js"></script>
   </body>
 </html>
 `,
-  "style.css": `:root {
+  ],
+  "style.css": [
+    `:root {
   color-scheme: light;
   font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   line-height: 1.5;
@@ -89,28 +254,17 @@ code {
   border-radius: 4px;
 }
 `,
-  "main.js": `console.log("Bridge Play starter ready. Build your challenge in this project.");
-`,
-  "README.md": `# Bridge Play starter
-
-Static HTML/CSS/JS project for daily challenges.
-
-## How to work
-
-1. Open \`CHALLENGE.md\` when it appears (injected per session).
-2. Edit **\`index.html\` in place** — Preview opens that file first. Use \`style.css\` / \`main.js\` as needed.
-3. Multi-page is OK: add more \`.html\` files and link them from \`index.html\`.
-4. Watch the **Preview** pane — static server, opens \`index.html\` by default.
-5. Use the **Claude** chat panel to build or iterate.
-
-## Constraints (v1)
-
-- **Entry = \`index.html\`.** That is the home page users land on.
-- Extra HTML pages are allowed when linked from the entry (or each other).
-- Vanilla JS or CDN frameworks only — no Vite, npm build, Next, or CRA.
-- Keep everything in this folder so the static preview server can serve it.
-`,
+  ],
 };
+
+/** Current + every shipped legacy version of a starter file. */
+function starterVariants(path: string): string[] {
+  const current = STARTER_FILES[path];
+  return [
+    ...(current != null ? [current] : []),
+    ...(LEGACY_STARTER_FILES[path] ?? []),
+  ];
+}
 
 /** Injected per session — ignore when comparing to starter. */
 const IGNORED_PATHS = new Set([
@@ -124,9 +278,16 @@ const IGNORED_PATHS = new Set([
 
 /** Phrases that uniquely mark the default starter index.html / main.js. */
 const STARTER_INDEX_PHRASES = [
+  "<title>bridge shorts</title>",
+  "nothing here yet — and that's normal",
+  "describe what you want in the chat, in plain english",
+  "no coding needed. keep an eye on",
+  // Pre-plain-language-rewrite starter copy — keep so older snapshots still match.
   "open challenge.md when present, then build your solution",
   "build your solution in this index.html",
   "preview only loads this",
+  "tip: chat with claude in the chat panel to build this",
+  // Pre-Monaco-removal starter copy — keep so older snapshots still match.
   "tip: edit files in the monaco editor, or ask claude in the chat panel",
   "<title>bridge play</title>",
 ];
@@ -239,23 +400,28 @@ export function isIndexHtmlStarterLike(content: string | undefined): boolean {
   const normalized = normalizeContent(content, "index.html");
   if (normalized.length < MIN_INDEX_CHARS) return true;
 
-  const starterNorm = normalizeContent(STARTER_FILES["index.html"], "index.html");
-  if (normalized === starterNorm) return true;
-
   const phrases = countStarterPhrases(normalized);
-  const lenRatio =
-    Math.abs(normalized.length - starterNorm.length) /
-    Math.max(starterNorm.length, 1);
 
-  // Still has distinctive starter copy and roughly the same size → starter-like
-  // unless the body actually diverged (edit distance).
-  if (phrases >= 2 && lenRatio <= LENGTH_TOLERANCE) {
-    return isNearIdentical(content, STARTER_FILES["index.html"], "index.html");
-  }
+  // Compare against every shipped starter — older sessions still hold old copy.
+  for (const variant of starterVariants("index.html")) {
+    const starterNorm = normalizeContent(variant, "index.html");
+    if (normalized === starterNorm) return true;
 
-  // Exact title + CHALLENGE tip still present and very close → reject whitespace/comment-only edits
-  if (phrases >= 2 && relativeEditDistance(normalized, starterNorm) <= 0.2) {
-    return true;
+    const lenRatio =
+      Math.abs(normalized.length - starterNorm.length) /
+      Math.max(starterNorm.length, 1);
+
+    // Still has distinctive starter copy and roughly the same size → starter-like
+    // unless the body actually diverged (edit distance).
+    if (phrases >= 2 && lenRatio <= LENGTH_TOLERANCE) {
+      if (isNearIdentical(content, variant, "index.html")) return true;
+      continue;
+    }
+
+    // Exact title + tip copy still present and very close → reject whitespace/comment-only edits
+    if (phrases >= 2 && relativeEditDistance(normalized, starterNorm) <= 0.2) {
+      return true;
+    }
   }
 
   return false;
@@ -295,11 +461,11 @@ export function isStarterOnlySubmission(
     const base = path.split("/").pop() ?? path;
     if (base === "index.html" || base === "index.htm") continue;
 
-    const starter = STARTER_FILES[base];
-    if (starter != null) {
+    const variants = starterVariants(base);
+    if (variants.length) {
       if (
         normalizeContent(content, base).length >= 40 &&
-        !isNearIdentical(content, starter, base)
+        !variants.some((starter) => isNearIdentical(content, starter, base))
       ) {
         return false;
       }

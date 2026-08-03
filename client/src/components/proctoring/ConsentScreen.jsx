@@ -10,13 +10,13 @@ export default function ConsentScreen({ onConsent, onDecline }) {
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="w-full max-w-lg mx-auto bg-white rounded-2xl shadow-xl p-8"
+      className="w-full max-w-lg mx-auto bg-white rounded-card border border-border shadow-[0_2px_18px_rgba(33,32,28,0.06)] p-8"
     >
       <div className="text-center mb-6">
         <div className="w-16 h-16 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-4">
           <Monitor className="w-8 h-8 text-blue-600" />
         </div>
-        <h2 className="text-xl font-bold text-gray-900">
+        <h2 className="text-xl font-medium tracking-[-0.012em] text-gray-900">
           Screen Recording Consent
         </h2>
         <p className="text-sm text-gray-500 mt-2">

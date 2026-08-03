@@ -50,12 +50,12 @@ export default function ReleaseCountdownBanner({ releaseAtIso }) {
       className={
         live
           ? "border-b border-emerald-200 bg-emerald-50/90 px-4 py-3 text-center"
-          : "border-b border-[#1e3a8a]/20 bg-gradient-to-r from-[#1e3a8a]/[0.07] via-slate-100 to-[#1e3a8a]/[0.07] px-4 py-3 text-center"
+          : "border-b border-[#21201C]/20 bg-gradient-to-r from-[#21201C]/[0.07] via-slate-100 to-[#21201C]/[0.07] px-4 py-3 text-center"
       }
     >
       <div className="mx-auto flex max-w-5xl flex-col items-center justify-center gap-1 sm:flex-row sm:gap-3">
         <span className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-800">
-          <Clock className="h-4 w-4 shrink-0 text-[#1e3a8a]" />
+          <Clock className="h-4 w-4 shrink-0 text-[#21201C]" />
           {live ? (
             <span>
               {CHALLENGE_BRAND_NAME} is live — registration is open.
@@ -66,7 +66,7 @@ export default function ReleaseCountdownBanner({ releaseAtIso }) {
         </span>
         {!live ? (
           <span
-            className="font-mono text-lg font-semibold tabular-nums tracking-tight text-[#1e3a8a] sm:text-xl"
+            className="font-mono text-lg font-medium tracking-[-0.012em] tabular-nums tracking-tight text-[#21201C] sm:text-xl"
             suppressHydrationWarning
           >
             {formatRemaining(remaining)}

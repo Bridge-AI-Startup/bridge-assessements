@@ -583,9 +583,9 @@ export default function AssessmentEditor() {
   // Show loading state while fetching assessment
   if (isFetchingAssessment) {
     return (
-      <div className="min-h-screen bg-[#f8f9fb] flex items-center justify-center">
+      <div className="min-h-screen bg-[#FAF9F2] flex items-center justify-center">
         <div className="text-center">
-          <div className="w-8 h-8 border-2 border-[#1E3A8A]/30 border-t-[#1E3A8A] rounded-full animate-spin mx-auto mb-4"></div>
+          <div className="w-8 h-8 border-2 border-[#21201C]/30 border-t-[#21201C] rounded-full animate-spin mx-auto mb-4"></div>
           <p className="text-gray-500">Loading assessment...</p>
         </div>
       </div>
@@ -595,7 +595,7 @@ export default function AssessmentEditor() {
   // Show error state if no assessment ID or failed to load
   if (!assessmentId || !assessmentData) {
     return (
-      <div className="min-h-screen bg-[#f8f9fb] flex items-center justify-center">
+      <div className="min-h-screen bg-[#FAF9F2] flex items-center justify-center">
         <div className="text-center">
           <p className="text-red-600 mb-4">Failed to load assessment</p>
           <Link to={createPageUrl("Home")}>
@@ -607,7 +607,7 @@ export default function AssessmentEditor() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f8f9fb]">
+    <div className="min-h-screen bg-[#FAF9F2]">
       <div className="max-w-7xl mx-auto px-6 py-8">
         {/* Header */}
         <motion.div
@@ -618,7 +618,7 @@ export default function AssessmentEditor() {
           <div>
             <Link
               to={createPageUrl("Home")}
-              className="text-sm text-gray-500 hover:text-[#1E3A8A] mb-1 block"
+              className="text-sm text-gray-500 hover:text-[#21201C] mb-1 block"
             >
               ← Back to Assessments
             </Link>
@@ -634,13 +634,13 @@ export default function AssessmentEditor() {
                       handleTitleCancel();
                     }
                   }}
-                  className="text-2xl font-bold text-[#1E3A8A] border-[#1E3A8A] focus-visible:ring-[#1E3A8A]"
+                  className="text-2xl font-medium tracking-[-0.012em] text-[#21201C] border-[#21201C] focus-visible:ring-[#21201C]"
                   autoFocus
                 />
                 <Button
                   onClick={handleTitleSave}
                   size="sm"
-                  className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                  className="bg-[#21201C] hover:bg-[#35332D]"
                   disabled={isSaving}
                 >
                   Save
@@ -656,7 +656,7 @@ export default function AssessmentEditor() {
               </div>
             ) : (
               <h1
-                className="text-2xl font-bold text-[#1E3A8A] cursor-pointer hover:underline"
+                className="text-2xl font-medium tracking-[-0.012em] text-[#21201C] cursor-pointer hover:underline"
                 onClick={() => setIsEditingTitle(true)}
                 title="Click to edit title"
               >
@@ -792,7 +792,7 @@ export default function AssessmentEditor() {
                             hours: parseInt(e.target.value) || 0,
                           }))
                         }
-                        className="w-16 text-center border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20 focus:border-[#1E3A8A]"
+                        className="w-16 text-center border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#21201C]/20 focus:border-[#21201C]"
                       />
                       <span className="text-sm text-gray-500">hours</span>
                     </div>
@@ -808,7 +808,7 @@ export default function AssessmentEditor() {
                             minutes: parseInt(e.target.value) || 0,
                           }))
                         }
-                        className="w-16 text-center border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20 focus:border-[#1E3A8A]"
+                        className="w-16 text-center border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#21201C]/20 focus:border-[#21201C]"
                       />
                       <span className="text-sm text-gray-500">minutes</span>
                     </div>
@@ -833,7 +833,7 @@ export default function AssessmentEditor() {
                       onChange={(e) =>
                         setStartDeadline(parseInt(e.target.value) || 1)
                       }
-                      className="w-16 text-center border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20 focus:border-[#1E3A8A]"
+                      className="w-16 text-center border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#21201C]/20 focus:border-[#21201C]"
                     />
                     <span className="text-sm text-gray-500">days</span>
                   </div>
@@ -884,7 +884,7 @@ export default function AssessmentEditor() {
                         <Button
                           size="sm"
                           onClick={handleStarterFilesSave}
-                          className="h-7 px-2 text-xs bg-[#1E3A8A] hover:bg-[#152a66]"
+                          className="h-7 px-2 text-xs bg-[#21201C] hover:bg-[#35332D]"
                           disabled={isSaving}
                         >
                           Save
@@ -905,7 +905,7 @@ export default function AssessmentEditor() {
                         setEditedStarterFilesLink(e.target.value)
                       }
                       placeholder="https://github.com/username/repo"
-                      className="w-full text-sm text-gray-700 bg-white border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20 focus:border-[#1E3A8A]"
+                      className="w-full text-sm text-gray-700 bg-white border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#21201C]/20 focus:border-[#21201C]"
                     />
                   ) : (
                     <div
@@ -980,7 +980,7 @@ export default function AssessmentEditor() {
                     {behavioralChecks.map((check, idx) => (
                       <li key={idx} className="flex gap-2 items-start">
                         <span
-                          className="mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#1E3A8A]/70"
+                          className="mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#21201C]/70"
                           aria-hidden
                         />
                         <input
@@ -993,7 +993,7 @@ export default function AssessmentEditor() {
                               return next;
                             })
                           }
-                          className="flex-1 text-sm text-gray-800 bg-white border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20 focus:border-[#1E3A8A]"
+                          className="flex-1 text-sm text-gray-800 bg-white border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#21201C]/20 focus:border-[#21201C]"
                           placeholder="Observable behavior…"
                         />
                         <Button
@@ -1036,7 +1036,7 @@ export default function AssessmentEditor() {
                       setBehavioralChecks(checks);
                     }}
                     disabled={isSaving}
-                    className="text-sm bg-[#1E3A8A] hover:bg-[#152a66]"
+                    className="text-sm bg-[#21201C] hover:bg-[#35332D]"
                   >
                     Save behavioral checks
                   </Button>
@@ -1078,7 +1078,7 @@ export default function AssessmentEditor() {
                               })
                             }
                             placeholder="e.g. Candidate explains their approach clearly"
-                            className={`flex-1 text-sm text-gray-700 bg-white border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20 focus:border-[#1E3A8A] ${
+                            className={`flex-1 text-sm text-gray-700 bg-white border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#21201C]/20 focus:border-[#21201C] ${
                               isInvalid ? "border-amber-500" : "border-gray-200"
                             }`}
                           />
@@ -1167,7 +1167,7 @@ export default function AssessmentEditor() {
                       setCriteriaValidation(nextValidation);
                     }}
                     disabled={isSaving}
-                    className="text-sm bg-[#1E3A8A] hover:bg-[#152a66]"
+                    className="text-sm bg-[#21201C] hover:bg-[#35332D]"
                   >
                     Save criteria
                   </Button>
@@ -1194,7 +1194,7 @@ export default function AssessmentEditor() {
                 </Link>
                 <Button
                   onClick={handleShare}
-                  className="px-5 h-10 rounded-full text-sm bg-[#FFFF00] hover:bg-[#faed00] text-[#1E3A8A] font-semibold shadow-sm hover:shadow-md hover:scale-105 transition-all"
+                  className="px-5 h-10 rounded-full text-sm bg-[#21201C] hover:bg-[#35332D] text-[#FAF9F2] shadow-sm hover:shadow-md hover:scale-105 transition-all"
                 >
                   <Share2 className="w-4 h-4 mr-2" />
                   Share assessment link
@@ -1274,7 +1274,7 @@ export default function AssessmentEditor() {
                       <Button
                         onClick={handleGenerateLink}
                         disabled={!candidateName.trim() || isGeneratingLink}
-                        className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                        className="bg-[#21201C] hover:bg-[#35332D]"
                       >
                         {isGeneratingLink ? "Generating..." : "Generate Link"}
                       </Button>
@@ -1302,7 +1302,7 @@ export default function AssessmentEditor() {
                           onClick={handleSendEmail}
                           disabled={isSendingEmail || emailSent}
                           size="sm"
-                          className="bg-[#1E3A8A] hover:bg-[#152a66] flex-shrink-0 ml-3"
+                          className="bg-[#21201C] hover:bg-[#35332D] flex-shrink-0 ml-3"
                         >
                           {emailSent ? (
                             <><Check className="w-4 h-4 mr-2" />Sent!</>
@@ -1314,7 +1314,7 @@ export default function AssessmentEditor() {
                     <DialogFooter>
                       <Button
                         onClick={() => { setShowShareModal(false); setGeneratedLink(""); setCandidateName(""); setCandidateEmail(""); setEmailSent(false); }}
-                        className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                        className="bg-[#21201C] hover:bg-[#35332D]"
                       >
                         Done
                       </Button>

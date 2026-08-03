@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchTodayChallenge } from "@/api/challenge";
 import Markdown from "@/components/Markdown";
+import BuildWaitCard from "@/components/workspace/BuildWaitCard";
 import ModelEffortPicker from "@/components/workspace/ModelEffortPicker";
 import TokenGauge from "@/components/workspace/TokenGauge";
 
@@ -169,11 +170,16 @@ export default function ChatFirstBuild({
   onRefreshPreview,
   modelEffort,
   setModelEffort,
-  hideEffort = false,
+  serverless = false,
   engineLabel = "Claude Code",
   onSubmitClick,
   chatEndRef,
   submitModal,
+  creditsModal,
+  onShowCreditsHelp,
+  timeModal,
+  timeIsUp = false,
+  onShowTimeHelp,
 }) {
   const isDesktop = variant === "desktop";
   const [challengePrompt, setChallengePrompt] = useState("");
@@ -293,22 +299,7 @@ export default function ChatFirstBuild({
           );
         })}
 
-        {chatBusy ? (
-          <div className="flex justify-start">
-            <div className="flex items-center gap-2 rounded-2xl rounded-bl-md bg-mist px-3.5 py-2.5">
-              <span className="flex gap-1">
-                {[0, 150, 300].map((delay) => (
-                  <span
-                    key={delay}
-                    className="h-1.5 w-1.5 animate-bounce rounded-full bg-fog-light"
-                    style={{ animationDelay: `${delay}ms` }}
-                  />
-                ))}
-              </span>
-              <span className="text-xs text-fog-light">Claude is building…</span>
-            </div>
-          </div>
-        ) : null}
+        <BuildWaitCard active={chatBusy} />
         <div ref={chatEndRef} />
       </main>
 
@@ -332,7 +323,7 @@ export default function ChatFirstBuild({
           <ModelEffortPicker
             value={modelEffort}
             onChange={setModelEffort}
-            hideEffort={hideEffort}
+            serverless={serverless}
             engineLabel={engineLabel}
           />
         </div>
@@ -355,15 +346,19 @@ export default function ChatFirstBuild({
             rows={1}
             enterKeyHint="send"
             placeholder={
-              exhausted ? "Budget exhausted" : "Describe what to build…"
+              timeIsUp
+                ? "Time is up"
+                : exhausted
+                  ? "Out of credits"
+                  : "Describe what to build…"
             }
-            disabled={chatBusy || exhausted}
+            disabled={chatBusy || exhausted || timeIsUp}
             className="min-h-10 max-h-24 flex-1 resize-none overflow-y-auto rounded-2xl border border-line bg-cream px-4 py-2.5 text-sm text-ink placeholder:text-fog-light focus:border-ink focus:outline-none disabled:opacity-50"
           />
           <button
             type="submit"
             aria-label={chatBusy ? "Claude is building" : "Send message"}
-            disabled={chatBusy || exhausted || !chatInput.trim()}
+            disabled={chatBusy || exhausted || timeIsUp || !chatInput.trim()}
             className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-ink text-white disabled:opacity-40"
           >
             <SendIcon />
@@ -409,10 +404,20 @@ export default function ChatFirstBuild({
           </div>
         </header>
 
-        {exhausted ? (
-          <div className="border-b border-accent-amber/30 bg-accent-amber/10 px-4 py-2 text-center font-mono text-[11px] uppercase tracking-label text-accent-amber">
-            Token budget exhausted — requests are paused until the next
-            challenge.
+        {timeIsUp || exhausted ? (
+          <div className="flex flex-wrap items-center justify-center gap-2 border-b border-accent-amber/30 bg-accent-amber/10 px-4 py-2 text-center font-mono text-[11px] uppercase tracking-label text-accent-amber">
+            {timeIsUp
+              ? "Time is up — no more changes can be made."
+              : "You ran out of credits — no more changes can be made."}
+            {(timeIsUp ? onShowTimeHelp : onShowCreditsHelp) ? (
+              <button
+                type="button"
+                onClick={timeIsUp ? onShowTimeHelp : onShowCreditsHelp}
+                className="underline underline-offset-2"
+              >
+                What now?
+              </button>
+            ) : null}
           </div>
         ) : null}
 
@@ -479,6 +484,8 @@ export default function ChatFirstBuild({
         </div>
       ) : null}
       {submitModal}
+      {creditsModal}
+      {timeModal}
     </>
   );
 }

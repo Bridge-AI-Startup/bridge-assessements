@@ -23,6 +23,13 @@ export type PlayModelOption = {
   /** Empty = no effort control for this model */
   efforts: PlayEffortLevel[];
   defaultEffort: PlayEffortLevel | null;
+  /**
+   * Serverless make only. The Shorts E2B template's Claude Code CLI rejects
+   * model ids it does not know ("may not exist or you may not have access"),
+   * so these never reach `claude -p` or the CLI-facing Messages proxy — the
+   * resolver rewrites them to the default model outside serverless mode.
+   */
+  serverlessOnly?: boolean;
 };
 
 export const PLAY_MODEL_OPTIONS: PlayModelOption[] = [
@@ -53,6 +60,17 @@ export const PLAY_MODEL_OPTIONS: PlayModelOption[] = [
     efforts: ["auto", "low", "medium", "high", "max"],
     defaultEffort: "auto",
   },
+  {
+    id: "claude-fable-5",
+    cliId: "claude-fable-5",
+    label: "Fable 5",
+    description: "Most capable · serverless only",
+    // Effort is not plumbed through the serverless Messages call yet, so the
+    // model runs at the API default. Advertising levels we ignore would lie.
+    efforts: [],
+    defaultEffort: null,
+    serverlessOnly: true,
+  },
 ];
 
 /** Map user/CLI aliases and retired IDs → allowlisted Anthropic API model. */
@@ -67,9 +85,22 @@ const MODEL_ALIASES: Record<string, string> = {
   "claude-opus-4-5": "claude-opus-4-5-20251101",
   "claude-opus-4-6": "claude-opus-4-5-20251101",
   "claude-opus-5": "claude-opus-4-5-20251101",
+  fable: "claude-fable-5",
 };
 
 const MODEL_IDS = new Set(PLAY_MODEL_OPTIONS.map((m) => m.id));
+
+/** Model used when a request asks for one this make mode cannot run. */
+const FALLBACK_MODEL_ID =
+  PLAY_MODEL_OPTIONS.find((m) => !m.serverlessOnly)?.id ??
+  PLAY_MODEL_OPTIONS[0].id;
+
+export type PlayModelScope = { serverless?: boolean };
+
+function isRunnableIn(id: string, scope?: PlayModelScope): boolean {
+  if (scope?.serverless) return true;
+  return !PLAY_MODEL_OPTIONS.find((m) => m.id === id)?.serverlessOnly;
+}
 
 export function canonicalizePlayModel(raw?: string | null): string | null {
   const id = String(raw || "").trim();
@@ -80,13 +111,13 @@ export function canonicalizePlayModel(raw?: string | null): string | null {
   return null;
 }
 
-export function getPlayAnthropicModel(): string {
+export function getPlayAnthropicModel(scope?: PlayModelScope): string {
   const fromEnv =
     getShortsAnthropicModel() ||
     process.env.ANTHROPIC_MODEL?.trim();
   const canonical = canonicalizePlayModel(fromEnv);
-  if (canonical) return canonical;
-  return PLAY_MODEL_OPTIONS[0].id;
+  if (canonical && isRunnableIn(canonical, scope)) return canonical;
+  return FALLBACK_MODEL_ID;
 }
 
 export function getPlayModelOption(modelId: string): PlayModelOption | null {
@@ -94,9 +125,18 @@ export function getPlayModelOption(modelId: string): PlayModelOption | null {
   return PLAY_MODEL_OPTIONS.find((m) => m.id === id) || null;
 }
 
-/** Full Anthropic model id for Messages API / proxy. */
-export function resolvePlayModel(raw?: string | null): string {
-  return canonicalizePlayModel(raw) || getPlayAnthropicModel();
+/**
+ * Full Anthropic model id for Messages API / proxy. Pass `{ serverless: true }`
+ * from the serverless make path; every other caller (E2B `claude -p`, the
+ * CLI-facing proxy) gets serverless-only models rewritten to the default.
+ */
+export function resolvePlayModel(
+  raw?: string | null,
+  scope?: PlayModelScope,
+): string {
+  const id = canonicalizePlayModel(raw);
+  if (id && isRunnableIn(id, scope)) return id;
+  return getPlayAnthropicModel(scope);
 }
 
 /** Value for `claude -p --model` (prefer short CLI alias). */

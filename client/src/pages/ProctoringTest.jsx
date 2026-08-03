@@ -401,7 +401,7 @@ export default function ProctoringTest() {
           <div className="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center mx-auto mb-3">
             <Monitor className="w-6 h-6 text-purple-600" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">
+          <h1 className="text-2xl font-medium tracking-[-0.012em] text-gray-900">
             Proctoring Test Page
           </h1>
           <p className="text-sm text-gray-500 mt-1">
@@ -486,19 +486,19 @@ export default function ProctoringTest() {
               <div className="grid grid-cols-3 gap-3 text-sm">
                 <div className="bg-blue-50 rounded-lg p-3">
                   <div className="text-gray-500">Video Chunks</div>
-                  <div className="text-2xl font-mono font-bold text-blue-600">
+                  <div className="text-2xl font-mono font-medium tracking-[-0.012em] text-blue-600">
                     {videoChunkCount}
                   </div>
                 </div>
                 <div className="bg-blue-50 rounded-lg p-3">
                   <div className="text-gray-500">Chunks Uploaded</div>
-                  <div className="text-2xl font-mono font-bold text-green-600">
+                  <div className="text-2xl font-mono font-medium tracking-[-0.012em] text-green-600">
                     {videoUploadedChunks}
                   </div>
                 </div>
                 <div className="bg-blue-50 rounded-lg p-3">
                   <div className="text-gray-500">Video Size</div>
-                  <div className="text-2xl font-mono font-bold text-blue-600">
+                  <div className="text-2xl font-mono font-medium tracking-[-0.012em] text-blue-600">
                     {(totalVideoBytes / 1024 / 1024).toFixed(1)} MB
                   </div>
                 </div>
@@ -509,25 +509,25 @@ export default function ProctoringTest() {
             <div className="grid grid-cols-2 gap-4 mb-6 text-sm">
               <div className="bg-gray-50 rounded-lg p-3">
                 <div className="text-gray-500">Screenshots (Fallback)</div>
-                <div className="text-2xl font-mono font-bold text-gray-900">
+                <div className="text-2xl font-mono font-medium tracking-[-0.012em] text-gray-900">
                   {frameCount}
                 </div>
               </div>
               <div className="bg-gray-50 rounded-lg p-3">
                 <div className="text-gray-500">Screenshots Uploaded</div>
-                <div className="text-2xl font-mono font-bold text-green-600">
+                <div className="text-2xl font-mono font-medium tracking-[-0.012em] text-green-600">
                   {uploadedCount}
                 </div>
               </div>
               <div className="bg-gray-50 rounded-lg p-3">
                 <div className="text-gray-500">Duplicates Skipped</div>
-                <div className="text-2xl font-mono font-bold text-gray-400">
+                <div className="text-2xl font-mono font-medium tracking-[-0.012em] text-gray-400">
                   {duplicatesSkipped}
                 </div>
               </div>
               <div className="bg-gray-50 rounded-lg p-3">
                 <div className="text-gray-500">Failed Uploads</div>
-                <div className="text-2xl font-mono font-bold text-red-500">
+                <div className="text-2xl font-mono font-medium tracking-[-0.012em] text-red-500">
                   {failedCount}
                 </div>
               </div>

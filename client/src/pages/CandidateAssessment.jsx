@@ -687,9 +687,9 @@ export default function CandidateAssessment() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-[#f8f9fb] flex items-center justify-center">
+      <div className="min-h-screen bg-[#FAF9F2] flex items-center justify-center">
         <div className="text-center">
-          <div className="w-8 h-8 border-2 border-[#1E3A8A]/30 border-t-[#1E3A8A] rounded-full animate-spin mx-auto mb-4"></div>
+          <div className="w-8 h-8 border-2 border-[#21201C]/30 border-t-[#21201C] rounded-full animate-spin mx-auto mb-4"></div>
           <p className="text-gray-500">Loading assessment...</p>
         </div>
       </div>
@@ -698,7 +698,7 @@ export default function CandidateAssessment() {
 
   if (!submission || !assessment) {
     return (
-      <div className="min-h-screen bg-[#f8f9fb] flex items-center justify-center">
+      <div className="min-h-screen bg-[#FAF9F2] flex items-center justify-center">
         <div className="text-center">
           <p className="text-red-600 mb-4">Failed to load assessment</p>
         </div>
@@ -711,18 +711,18 @@ export default function CandidateAssessment() {
     const optedOutBeforeStarting = !submission.startedAt;
 
     return (
-      <div className="min-h-screen bg-gradient-to-br from-[#f8f9fb] to-[#eef1f8] flex items-center justify-center p-6">
+      <div className="min-h-screen bg-gradient-to-br from-[#FAF9F2] to-[#F4F2E9] flex items-center justify-center p-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-2xl bg-white rounded-2xl shadow-xl overflow-hidden"
+          className="w-full max-w-2xl bg-white rounded-card border border-border shadow-[0_2px_18px_rgba(33,32,28,0.06)] overflow-hidden"
         >
           {/* Header */}
           <div className="bg-orange-500 px-8 py-6 text-center">
             <div className="w-16 h-16 rounded-full bg-white flex items-center justify-center mx-auto mb-4">
               <X className="w-10 h-10 text-orange-500" />
             </div>
-            <h1 className="text-2xl font-bold text-white mb-1">
+            <h1 className="text-2xl font-medium tracking-[-0.012em] text-white mb-1">
               You Have Opted Out
             </h1>
             <p className="text-white/90">
@@ -798,14 +798,14 @@ export default function CandidateAssessment() {
 
   if (!hasStarted) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-[#f8f9fb] to-[#eef1f8] flex items-center justify-center p-6">
+      <div className="min-h-screen bg-gradient-to-br from-[#FAF9F2] to-[#F4F2E9] flex items-center justify-center p-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-2xl bg-white rounded-2xl shadow-xl overflow-hidden"
+          className="w-full max-w-2xl bg-white rounded-card border border-border shadow-[0_2px_18px_rgba(33,32,28,0.06)] overflow-hidden"
         >
           {/* Header */}
-          <div className="bg-[#1E3A8A] px-8 py-6 text-center">
+          <div className="bg-[#21201C] px-8 py-6 text-center">
             <div className="w-16 h-16 rounded-2xl bg-white flex items-center justify-center mx-auto mb-4 overflow-hidden">
               <img
                 src={bridgeLogo}
@@ -813,7 +813,7 @@ export default function CandidateAssessment() {
                 className="w-full h-full object-contain"
               />
             </div>
-            <h1 className="text-2xl font-bold text-white mb-1">
+            <h1 className="text-2xl font-medium tracking-[-0.012em] text-white mb-1">
               {assessment.title}
             </h1>
             <p className="text-blue-200">Technical Assessment</p>
@@ -829,7 +829,7 @@ export default function CandidateAssessment() {
             {/* Time Info */}
             <div className="flex items-center justify-center gap-6 mb-8 py-4 bg-gray-50 rounded-xl">
               <div className="flex items-center gap-2 text-gray-600">
-                <Clock className="w-5 h-5 text-[#1E3A8A]" />
+                <Clock className="w-5 h-5 text-[#21201C]" />
                 <span className="text-sm">
                   <strong>{timeLimitDisplay}</strong> to complete
                 </span>
@@ -875,7 +875,7 @@ export default function CandidateAssessment() {
             <Button
               onClick={handleStartClick}
               disabled={isStarting}
-              className="w-full bg-[#1E3A8A] hover:bg-[#152a66] text-white py-6 text-lg rounded-xl disabled:opacity-50 mb-3"
+              className="w-full bg-[#21201C] hover:bg-[#35332D] text-white py-6 text-lg rounded-full disabled:opacity-50 mb-3"
             >
               <Play className="w-5 h-5 mr-2" />
               {isStarting ? "Starting..." : "Start Assessment"}
@@ -909,7 +909,7 @@ export default function CandidateAssessment() {
               animate={{ opacity: 1, scale: 1 }}
               className="bg-white rounded-xl shadow-xl max-w-md w-full p-6"
             >
-              <h2 className="text-xl font-semibold text-gray-900 mb-2">
+              <h2 className="text-xl font-medium tracking-[-0.012em] text-gray-900 mb-2">
                 Opt Out of Assessment
               </h2>
               <p className="text-sm text-gray-600 mb-4">
@@ -950,7 +950,7 @@ export default function CandidateAssessment() {
 
   // Started state - show submission form
   return (
-    <div className="min-h-screen bg-[#f8f9fb] relative">
+    <div className="min-h-screen bg-[#FAF9F2] relative">
       {/* Recording Indicator */}
       {proctoringEnabled && screenCapture.isSharing && (
         <RecordingIndicator streamCount={screenCapture.streams.length} />
@@ -1148,7 +1148,7 @@ export default function CandidateAssessment() {
 
               <div className="flex items-center gap-3">
                 <div className="h-px flex-1 bg-gray-200" />
-                <span className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                <span className="text-xs font-medium uppercase font-mono tracking-[0.03em] text-gray-400">
                   or
                 </span>
                 <div className="h-px flex-1 bg-gray-200" />
@@ -1186,7 +1186,7 @@ export default function CandidateAssessment() {
                     isSubmitting ||
                     (timeRemaining !== null && timeRemaining <= 0)
                   }
-                  className="flex-1 bg-[#1E3A8A] hover:bg-[#152a66] text-white py-5 disabled:opacity-50"
+                  className="flex-1 bg-[#21201C] hover:bg-[#35332D] text-white py-5 disabled:opacity-50"
                 >
                   <Send className="w-4 h-4 mr-2" />
                   {isSubmitting ? "Submitting..." : "Submit Assessment"}
@@ -1212,7 +1212,7 @@ export default function CandidateAssessment() {
           transition={{ delay: 0.2 }}
           className="mt-8 bg-blue-50 rounded-xl border border-blue-100 p-5 text-center"
         >
-          <h3 className="font-medium text-[#1E3A8A] mb-2">Need Help?</h3>
+          <h3 className="font-medium text-[#21201C] mb-2">Need Help?</h3>
           <p className="text-sm text-gray-600">
             If you encounter any technical issues, contact saaz@bridge-jobs.com
           </p>
@@ -1232,7 +1232,7 @@ export default function CandidateAssessment() {
           >
             {!hasMissedGracePeriod ? (
               <>
-                <h2 className="text-xl font-semibold text-gray-900 mb-2">
+                <h2 className="text-xl font-medium tracking-[-0.012em] text-gray-900 mb-2">
                   Time is up
                 </h2>
                 <p className="text-sm text-gray-700 mb-4">
@@ -1240,10 +1240,10 @@ export default function CandidateAssessment() {
                   submit your work.
                 </p>
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
-                  <p className="text-xs uppercase tracking-wide text-amber-700 mb-1">
+                  <p className="text-xs uppercase font-mono tracking-[0.03em] text-amber-700 mb-1">
                     Grace Period Remaining
                   </p>
-                  <p className="text-2xl font-mono font-semibold text-amber-900">
+                  <p className="text-2xl font-mono font-medium tracking-[-0.012em] text-amber-900">
                     {graceCountdownDisplay}
                   </p>
                 </div>
@@ -1261,7 +1261,7 @@ export default function CandidateAssessment() {
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="h-px flex-1 bg-gray-200" />
-                    <span className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                    <span className="text-xs font-medium uppercase font-mono tracking-[0.03em] text-gray-400">
                       or
                     </span>
                     <div className="h-px flex-1 bg-gray-200" />
@@ -1277,7 +1277,7 @@ export default function CandidateAssessment() {
                 <Button
                   onClick={() => handleSubmit({ allowAfterMainTimer: true })}
                   disabled={!hasSubmissionReady || isSubmitting}
-                  className="w-full bg-[#1E3A8A] hover:bg-[#152a66] text-white"
+                  className="w-full bg-[#21201C] hover:bg-[#35332D] text-white"
                 >
                   <Send className="w-4 h-4 mr-2" />
                   {isSubmitting ? "Submitting..." : "Submit in Final Window"}
@@ -1285,7 +1285,7 @@ export default function CandidateAssessment() {
               </>
             ) : (
               <>
-                <h2 className="text-xl font-semibold text-red-700 mb-2">
+                <h2 className="text-xl font-medium tracking-[-0.012em] text-red-700 mb-2">
                   Time window closed
                 </h2>
                 <p className="text-sm text-gray-700">
@@ -1306,7 +1306,7 @@ export default function CandidateAssessment() {
             animate={{ opacity: 1, scale: 1 }}
             className="bg-white rounded-xl shadow-xl max-w-md w-full p-6"
           >
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">
+            <h2 className="text-xl font-medium tracking-[-0.012em] text-gray-900 mb-2">
               Opt Out of Assessment
             </h2>
             <p className="text-sm text-gray-600 mb-4">

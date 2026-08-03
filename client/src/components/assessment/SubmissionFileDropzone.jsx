@@ -124,13 +124,13 @@ export default function SubmissionFileDropzone({
           disabled || isPreparing
             ? "border-gray-200 bg-gray-50 opacity-60 cursor-not-allowed"
             : isDragging
-              ? "border-[#1E3A8A] bg-blue-50"
+              ? "border-[#21201C] bg-blue-50"
               : "border-gray-300 bg-gray-50 hover:border-gray-400",
         ].join(" ")}
       >
         <div className="flex flex-col items-center text-center gap-2">
           {isPreparing ? (
-            <Loader2 className="w-8 h-8 text-[#1E3A8A] animate-spin" />
+            <Loader2 className="w-8 h-8 text-[#21201C] animate-spin" />
           ) : (
             <Upload className="w-8 h-8 text-gray-400" />
           )}

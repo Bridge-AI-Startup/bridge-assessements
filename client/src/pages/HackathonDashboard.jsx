@@ -171,7 +171,7 @@ export default function HackathonDashboard() {
             href={BRIDGE_MARKETING_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="hidden items-center gap-1.5 text-sm font-medium text-[#1e3a8a] hover:underline sm:inline-flex"
+            className="hidden items-center gap-1.5 text-sm font-medium text-[#21201C] hover:underline sm:inline-flex"
           >
             bridge-jobs.com
             <ExternalLink className="h-3.5 w-3.5" />
@@ -185,7 +185,7 @@ export default function HackathonDashboard() {
 
       <main className="mx-auto max-w-5xl px-4 py-10 md:py-12">
         <div className="mb-10 text-center md:text-left">
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 md:text-3xl">
+          <h1 className="text-2xl font-medium tracking-[-0.012em] text-slate-900 md:text-3xl">
             {CHALLENGE_BRAND_NAME}
           </h1>
           <p className="mt-2 max-w-2xl text-slate-600">
@@ -215,7 +215,7 @@ export default function HackathonDashboard() {
               </CardHeader>
               <CardContent className="space-y-3 text-sm text-amber-950/85">
                 <p className="font-medium">Seed script (from server/)</p>
-                <pre className="overflow-x-auto rounded-lg bg-[#0c1222] p-4 text-xs text-slate-100">
+                <pre className="overflow-x-auto rounded-lg bg-[#21201C] p-4 text-xs text-slate-100">
                   npx tsx src/scripts/seedCompetition.ts YOUR_ASSESSMENT_ID {missingCompetitionSlug}
                 </pre>
                 <p className="text-xs text-amber-900/80">
@@ -240,11 +240,11 @@ export default function HackathonDashboard() {
             <div className="space-y-10">
               <Card
                 id="join"
-                className="scroll-mt-24 border-[#1e3a8a]/25 bg-white shadow-sm"
+                className="scroll-mt-24 border-[#21201C]/25 bg-white shadow-sm"
               >
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2 text-xl">
-                    <UserPlus className="h-6 w-6 text-[#1e3a8a]" />
+                    <UserPlus className="h-6 w-6 text-[#21201C]" />
                     Register
                   </CardTitle>
                   <CardDescription className="text-base">
@@ -296,7 +296,7 @@ export default function HackathonDashboard() {
                       <Button
                         type="submit"
                         disabled={joining}
-                        className="h-11 w-full bg-[#1e3a8a] hover:bg-[#172554] sm:w-auto"
+                        className="h-11 w-full bg-[#21201C] hover:bg-[#35332D] sm:w-auto"
                       >
                         {joining ? (
                           <>
@@ -324,7 +324,7 @@ export default function HackathonDashboard() {
               href={BRIDGE_MARKETING_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="font-medium text-[#1e3a8a] hover:underline"
+              className="font-medium text-[#21201C] hover:underline"
             >
               Bridge
             </a>

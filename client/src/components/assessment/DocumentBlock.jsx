@@ -69,7 +69,7 @@ export default function DocumentBlock({
       onClick={onSelect}
       className={`bg-white rounded-xl border transition-all duration-200 cursor-pointer ${
         isActive
-          ? "border-[#1E3A8A] shadow-sm"
+          ? "border-[#21201C] shadow-sm"
           : "border-gray-200 hover:border-gray-300"
       } ${
         isHighlighted
@@ -109,7 +109,7 @@ export default function DocumentBlock({
             className={`h-8 px-2.5 ${
               isInContext
                 ? "text-green-600 hover:text-green-700 hover:bg-green-50"
-                : "text-[#1E3A8A] hover:text-[#1E3A8A] hover:bg-blue-50"
+                : "text-[#21201C] hover:text-[#21201C] hover:bg-blue-50"
             }`}
           >
             <Plus
@@ -141,7 +141,7 @@ export default function DocumentBlock({
               <Button
                 size="sm"
                 onClick={handleSave}
-                className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                className="bg-[#21201C] hover:bg-[#35332D]"
               >
                 Save
               </Button>
@@ -220,7 +220,7 @@ export function DeliverableItem({ text, index, onEdit, onDelete }) {
         <div className="flex items-center gap-1">
           <button
             onClick={() => setIsEditing(true)}
-            className="p-1.5 text-gray-400 hover:text-[#1E3A8A] rounded transition-colors"
+            className="p-1.5 text-gray-400 hover:text-[#21201C] rounded transition-colors"
           >
             <Pencil className="w-3.5 h-3.5" />
           </button>
@@ -250,7 +250,7 @@ export function RubricItem({ criteria, weight, onEdit, onDelete }) {
   if (isEditing) {
     return (
       <div className="flex items-center gap-3 py-2.5 px-3 -mx-3 rounded-lg bg-gray-50">
-        <div className="w-2 h-2 rounded-full bg-[#1E3A8A]" />
+        <div className="w-2 h-2 rounded-full bg-[#21201C]" />
         <input
           type="text"
           value={editCriteria}
@@ -285,14 +285,14 @@ export function RubricItem({ criteria, weight, onEdit, onDelete }) {
   return (
     <div className="flex items-center justify-between py-2.5 px-3 -mx-3 rounded-lg hover:bg-gray-50 group transition-colors">
       <div className="flex items-center gap-3">
-        <div className="w-2 h-2 rounded-full bg-[#1E3A8A]" />
+        <div className="w-2 h-2 rounded-full bg-[#21201C]" />
         <span className="text-gray-700">{criteria}</span>
       </div>
       <div className="flex items-center gap-2">
         <span className="text-sm text-gray-400">{weight}</span>
         <button
           onClick={() => setIsEditing(true)}
-          className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-[#1E3A8A] rounded transition-colors"
+          className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-[#21201C] rounded transition-colors"
         >
           <Pencil className="w-3.5 h-3.5" />
         </button>
@@ -390,7 +390,7 @@ export function TestCaseItem({ name, type, points, onEdit, onDelete }) {
           <div className="flex items-center gap-1">
             <button
               onClick={() => setIsEditing(true)}
-              className="p-1.5 text-gray-400 hover:text-[#1E3A8A] rounded transition-colors"
+              className="p-1.5 text-gray-400 hover:text-[#21201C] rounded transition-colors"
             >
               <Pencil className="w-3.5 h-3.5" />
             </button>

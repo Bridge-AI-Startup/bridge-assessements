@@ -161,9 +161,9 @@ export function BulkInviteContent({ assessmentId, onSuccess, onDone }) {
           <div
             className={`flex items-center justify-center w-7 h-7 rounded-full text-xs font-semibold transition-colors ${
               s < step
-                ? "bg-[#1E3A8A] text-white"
+                ? "bg-[#21201C] text-white"
                 : s === step
-                ? "bg-[#1E3A8A] text-white ring-2 ring-[#1E3A8A]/30"
+                ? "bg-[#21201C] text-white ring-2 ring-[#21201C]/30"
                 : "bg-gray-100 text-gray-400"
             }`}
           >
@@ -172,7 +172,7 @@ export function BulkInviteContent({ assessmentId, onSuccess, onDone }) {
           {s < 3 && (
             <div
               className={`flex-1 h-0.5 rounded-full transition-colors ${
-                s < step ? "bg-[#1E3A8A]" : "bg-gray-200"
+                s < step ? "bg-[#21201C]" : "bg-gray-200"
               }`}
             />
           )}
@@ -203,11 +203,11 @@ export function BulkInviteContent({ assessmentId, onSuccess, onDone }) {
               onClick={() => fileInputRef.current?.click()}
               className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors mb-4 ${
                 isDragging
-                  ? "border-[#1E3A8A] bg-[#1E3A8A]/5"
-                  : "border-gray-200 hover:border-[#1E3A8A]/50 hover:bg-gray-50"
+                  ? "border-[#21201C] bg-[#21201C]/5"
+                  : "border-gray-200 hover:border-[#21201C]/50 hover:bg-gray-50"
               }`}
             >
-              <Upload className={`w-10 h-10 mx-auto mb-3 transition-colors ${isDragging ? "text-[#1E3A8A]" : "text-gray-400"}`} />
+              <Upload className={`w-10 h-10 mx-auto mb-3 transition-colors ${isDragging ? "text-[#21201C]" : "text-gray-400"}`} />
               <p className="text-sm font-medium text-gray-700 mb-1">
                 {isDragging ? "Drop your CSV file here" : "Drop a CSV file here, or click to browse"}
               </p>
@@ -217,7 +217,7 @@ export function BulkInviteContent({ assessmentId, onSuccess, onDone }) {
 
             <div className="flex items-center gap-3 mb-4">
               <div className="flex-1 h-px bg-gray-200" />
-              <span className="text-xs text-gray-400 uppercase tracking-wider">or paste CSV</span>
+              <span className="text-xs text-gray-400 uppercase font-mono tracking-[0.03em]">or paste CSV</span>
               <div className="flex-1 h-px bg-gray-200" />
             </div>
 
@@ -226,7 +226,7 @@ export function BulkInviteContent({ assessmentId, onSuccess, onDone }) {
               onChange={(e) => { setCsvText(e.target.value); setParseError(""); }}
               placeholder={"name,email\nJohn Smith,john@example.com\nJane Doe,jane@example.com"}
               rows={5}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20 resize-none placeholder:text-gray-400"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#21201C]/20 resize-none placeholder:text-gray-400"
             />
 
             <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
@@ -243,7 +243,7 @@ export function BulkInviteContent({ assessmentId, onSuccess, onDone }) {
             )}
 
             <div className="flex justify-end mt-5">
-              <Button onClick={handleNext} disabled={!csvText.trim()} className="bg-[#1E3A8A] hover:bg-[#152a66] flex items-center gap-2">
+              <Button onClick={handleNext} disabled={!csvText.trim()} className="bg-[#21201C] hover:bg-[#35332D] flex items-center gap-2">
                 Next <ChevronRight className="w-4 h-4" />
               </Button>
             </div>
@@ -279,8 +279,8 @@ export function BulkInviteContent({ assessmentId, onSuccess, onDone }) {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
                   <tr>
-                    <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-                    <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">Name</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">Email</th>
                     <th className="w-8 px-2 py-2" />
                   </tr>
                 </thead>
@@ -317,7 +317,7 @@ export function BulkInviteContent({ assessmentId, onSuccess, onDone }) {
 
             <div className="flex justify-between mt-5">
               <Button variant="outline" onClick={() => { setParseError(""); goToStep(1); }} disabled={isSending}>Back</Button>
-              <Button onClick={handleImportAndSend} disabled={isSending || candidates.length === 0} className="bg-[#1E3A8A] hover:bg-[#152a66] min-w-[140px]">
+              <Button onClick={handleImportAndSend} disabled={isSending || candidates.length === 0} className="bg-[#21201C] hover:bg-[#35332D] min-w-[140px]">
                 {isSending ? (
                   <span className="flex items-center gap-2">
                     <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -363,7 +363,7 @@ export function BulkInviteContent({ assessmentId, onSuccess, onDone }) {
                 </>
               )}
               <div className="flex justify-center mt-6">
-                <Button onClick={onDone} className="bg-[#1E3A8A] hover:bg-[#152a66]">Close</Button>
+                <Button onClick={onDone} className="bg-[#21201C] hover:bg-[#35332D]">Close</Button>
               </div>
             </div>
           </motion.div>
@@ -379,7 +379,7 @@ export default function BulkInviteModal({ isOpen, onClose, assessmentId, onSucce
       <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Upload className="w-5 h-5 text-[#1E3A8A]" />
+            <Upload className="w-5 h-5 text-[#21201C]" />
             Import Candidates
           </DialogTitle>
           <DialogDescription>

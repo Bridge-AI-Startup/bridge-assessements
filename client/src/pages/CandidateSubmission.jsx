@@ -95,7 +95,7 @@ export default function CandidateSubmission() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f8f9fb]">
+    <div className="min-h-screen bg-[#FAF9F2]">
       <div className="max-w-5xl mx-auto px-6 py-8">
         {/* Header */}
         <motion.div
@@ -113,11 +113,11 @@ export default function CandidateSubmission() {
 
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-full bg-[#1E3A8A] flex items-center justify-center text-white text-xl font-semibold">
+              <div className="w-14 h-14 rounded-full bg-[#21201C] flex items-center justify-center text-white text-xl font-medium tracking-[-0.012em]">
                 {candidate.name.split(' ').map(n => n[0]).join('')}
               </div>
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">{candidate.name}</h1>
+                <h1 className="text-2xl font-medium tracking-[-0.012em] text-gray-900">{candidate.name}</h1>
                 <p className="text-gray-500">{candidate.email}</p>
               </div>
             </div>
@@ -126,7 +126,7 @@ export default function CandidateSubmission() {
                 <Download className="w-4 h-4" />
                 Export PDF
               </Button>
-              <Button className="gap-2 bg-[#1E3A8A] hover:bg-[#152a66]">
+              <Button className="gap-2 bg-[#21201C] hover:bg-[#35332D]">
                 <MessageSquare className="w-4 h-4" />
                 Send Feedback
               </Button>
@@ -143,20 +143,20 @@ export default function CandidateSubmission() {
         >
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <p className="text-sm text-gray-500 mb-1">Overall Score</p>
-            <p className={`text-3xl font-bold ${getScoreColor(candidate.overallScore)}`}>
+            <p className={`text-3xl font-medium tracking-[-0.012em] ${getScoreColor(candidate.overallScore)}`}>
               {candidate.overallScore}%
             </p>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <p className="text-sm text-gray-500 mb-1">Time Spent</p>
-            <p className="text-xl font-semibold text-gray-900 flex items-center gap-2">
+            <p className="text-xl font-medium tracking-[-0.012em] text-gray-900 flex items-center gap-2">
               <Clock className="w-5 h-5 text-gray-400" />
               {candidate.timeSpent}
             </p>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <p className="text-sm text-gray-500 mb-1">Tests Passed</p>
-            <p className="text-xl font-semibold text-gray-900">
+            <p className="text-xl font-medium tracking-[-0.012em] text-gray-900">
               {testResults.filter(t => t.passed).length}/{testResults.length}
             </p>
           </div>
@@ -166,7 +166,7 @@ export default function CandidateSubmission() {
               href={candidate.githubUrl} 
               target="_blank" 
               rel="noopener noreferrer"
-              className="text-[#1E3A8A] hover:underline flex items-center gap-1 text-sm font-medium"
+              className="text-[#21201C] hover:underline flex items-center gap-1 text-sm font-medium"
             >
               View on GitHub
               <ExternalLink className="w-3.5 h-3.5" />
@@ -187,7 +187,7 @@ export default function CandidateSubmission() {
             className="w-full flex items-center justify-between p-5 text-left"
           >
             <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-              <Code className="w-5 h-5 text-[#1E3A8A]" />
+              <Code className="w-5 h-5 text-[#21201C]" />
               Test Results
             </h2>
             {expandedSections.tests ? <ChevronUp className="w-5 h-5 text-gray-400" /> : <ChevronDown className="w-5 h-5 text-gray-400" />}
@@ -232,7 +232,7 @@ export default function CandidateSubmission() {
           >
             <div className="flex items-center gap-4">
               <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                <MessageSquare className="w-5 h-5 text-[#1E3A8A]" />
+                <MessageSquare className="w-5 h-5 text-[#21201C]" />
                 AI Interview Responses
               </h2>
               <div className={`px-2.5 py-1 rounded-full text-sm font-semibold ${getScoreBg(interviewAvgScore)} ${getScoreColor(interviewAvgScore)}`}>
@@ -256,7 +256,7 @@ export default function CandidateSubmission() {
                   <div className="mb-3 rounded-lg overflow-hidden bg-gray-900 aspect-video flex items-center justify-center relative group cursor-pointer">
                     <div className="absolute inset-0 flex items-center justify-center">
                       <div className="w-14 h-14 rounded-full bg-white/90 flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
-                        <Play className="w-6 h-6 text-[#1E3A8A] ml-1" />
+                        <Play className="w-6 h-6 text-[#21201C] ml-1" />
                       </div>
                     </div>
                     <p className="text-white/60 text-xs absolute bottom-3 left-3">Video response • 1:24</p>
@@ -266,7 +266,7 @@ export default function CandidateSubmission() {
                     <p className="text-xs text-gray-500 mb-1">Transcript</p>
                     <p className="text-sm text-gray-700 italic">"{item.answer}"</p>
                   </div>
-                  <div className="flex items-start gap-2 text-xs text-[#1E3A8A] bg-blue-50 rounded-lg p-2">
+                  <div className="flex items-start gap-2 text-xs text-[#21201C] bg-blue-50 rounded-lg p-2">
                     <Star className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
                     <span>{item.aiNotes}</span>
                   </div>

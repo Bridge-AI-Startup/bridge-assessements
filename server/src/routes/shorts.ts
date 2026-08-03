@@ -1,6 +1,6 @@
 import express from "express";
 import * as PlayController from "../controllers/shorts/index.js";
-import { verifyAuthToken } from "../validators/auth.js";
+import { optionalAuthToken, verifyAuthToken } from "../validators/auth.js";
 import { requirePlayAdmin } from "../middleware/requireShortsAdmin.js";
 import {
   accountLinkValidation,
@@ -83,6 +83,12 @@ router.post(
   pauseResumeSessionValidation,
   PlayController.resumeSession,
 );
+// Opening the submit dialog stops the submit clock (not the build clock).
+router.post(
+  "/session/:id/submit-hold",
+  pauseResumeSessionValidation,
+  PlayController.holdSessionSubmit,
+);
 router.get(
   "/session/:id/workspace-revision",
   getSessionValidation,
@@ -141,7 +147,14 @@ router.post(
   "/session/:id/llm/v1/messages",
   PlayController.proxySessionMessages,
 );
-router.post("/submit", submitSessionValidation, PlayController.submit);
+// Optional auth: a signed-in builder stamps the submission with their account
+// (and links this browser id); guests submit unauthenticated exactly as before.
+router.post(
+  "/submit",
+  optionalAuthToken,
+  submitSessionValidation,
+  PlayController.submit,
+);
 router.get(
   "/submissions",
   publicListSubmissionsValidation,

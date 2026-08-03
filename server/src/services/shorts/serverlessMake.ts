@@ -37,30 +37,41 @@ import {
 } from "./models.js";
 
 const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
+/**
+ * Claude Fable 5 runs safety classifiers that can decline a request (HTTP 200 +
+ * `stop_reason: "refusal"`). `fallbacks: "default"` lets the API re-run the
+ * declined request on Anthropic's recommended substitute inside the same call,
+ * routed by refusal category, so a false positive still returns a build.
+ */
+const REFUSAL_FALLBACK_MODELS = new Set(["claude-fable-5"]);
+const REFUSAL_FALLBACK_BETA = "server-side-fallback-2026-07-01";
 const SERVERLESS_MAX_TOKENS = 16384;
 const SERVERLESS_MAX_FILE_BYTES = 500 * 1024; // 500 KB per file
 const SERVERLESS_MAX_TOTAL_BYTES = 1.5 * 1024 * 1024; // 1.5 MB total
 const SERVERLESS_MAX_REPLY_CHARS = 4000; // chat text stored/returned per turn
 const GENERATE_TIMEOUT_MS = 120_000;
 
-const SERVERLESS_SYSTEM_PROMPT = [
+export const SERVERLESS_SYSTEM_PROMPT = [
   "You are the build partner for a phone-first daily challenge where people make small, fun, self-contained web creations.",
   "",
-  "Every turn you reply in exactly ONE of two ways — never both, never a mix:",
+  "Every turn is one of two shapes:",
   "",
   "1. BUILD — when the user wants the app created, changed, fixed, styled, or extended.",
+  "   If they also asked something, answer it first in at most two short plain-text sentences, then the document. If they only asked for the change, start straight with the document.",
   "   Return exactly ONE complete HTML document, starting with `<!DOCTYPE html>` and ending with `</html>`.",
   "   - Inline ALL CSS in a <style> tag and ALL JavaScript in a <script> tag. Do NOT reference separate .css/.js files.",
   "   - You MAY load libraries from a CDN via <script src> / <link href>, and you MAY call public, keyless, CORS-enabled APIs (e.g. open-meteo). Never require an API key.",
   "   - No build step, no bundlers, no frameworks that need compilation. Vanilla JS or CDN builds only.",
   "   - Make it work on a phone: responsive, touch-friendly, no horizontal scroll.",
-  "   - Return ONLY the HTML. No markdown fences, no explanation, no prose before or after.",
+  "   - No markdown fences around the document, and nothing at all after `</html>`.",
+  "   - Do not narrate or explain the code — the user sees the running preview, not the source.",
   "",
   "2. TALK — when the user is brainstorming, asking a question, asking for ideas or an explanation, or otherwise not asking for a code change.",
   "   Reply in short plain text. No HTML document, no code fences, no full-file dumps.",
   "   Keep it under about 120 words and easy to read on a phone. Offer concrete ideas they can then ask you to build.",
   "",
-  "If the request is ambiguous, prefer TALK and ask one short clarifying question.",
+  "A turn that asks something AND requests a change is a BUILD: answer briefly, then build. Never drop half the message.",
+  "If the request is ambiguous and implies no change, prefer TALK and ask one short clarifying question.",
 ].join("\n");
 
 /** How many prior chat turns to replay so TALK mode has conversational memory. */
@@ -143,7 +154,9 @@ function stripCodeFences(raw: string): string {
  *
  * A document is only accepted when it is a complete `<html>…</html>` — a stray
  * tag mentioned inside prose must not overwrite the user's build. Any prose that
- * came alongside the document is kept as the chat message.
+ * came alongside the document is kept as the chat message: a turn that both asks
+ * something and requests a change answers in that prose and rebuilds, so neither
+ * half of the message is silently dropped.
  */
 type MakeResponse =
   | { kind: "html"; html: string; note: string }
@@ -323,9 +336,10 @@ export async function runServerlessMakeTurn(input: {
   }
 
   const apiKey = getAnthropicApiKeyOrThrow();
-  const model = resolvePlayModel(input.model);
-  // `effort` has no Anthropic Messages equivalent (it's a Claude Code CLI concept);
-  // resolve it only so the response shape matches the E2B path for the UI.
+  const model = resolvePlayModel(input.model, { serverless: true });
+  // The Messages API does take effort (`output_config.effort`), but this path
+  // doesn't send it — resolve it only so the response shape matches the E2B
+  // path for the UI. Every serverless model runs at the API default.
   const effort = resolvePlayEffort(model, input.effort);
 
   const challengeDoc = await getChallengeBySlug(doc.challengeSlug);
@@ -337,8 +351,10 @@ export async function runServerlessMakeTurn(input: {
 
   beginPlayClaudeRun(input.sessionId);
   try {
+    const wantsRefusalFallback = REFUSAL_FALLBACK_MODELS.has(model);
     const requestBody = {
       model,
+      ...(wantsRefusalFallback ? { fallbacks: "default" as const } : {}),
       max_tokens: SERVERLESS_MAX_TOKENS,
       system: SERVERLESS_SYSTEM_PROMPT,
       messages: [
@@ -365,6 +381,9 @@ export async function runServerlessMakeTurn(input: {
           "content-type": "application/json",
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
+          ...(wantsRefusalFallback
+            ? { "anthropic-beta": REFUSAL_FALLBACK_BETA }
+            : {}),
         },
         body: JSON.stringify(requestBody),
         signal: AbortSignal.timeout(GENERATE_TIMEOUT_MS),
@@ -394,10 +413,22 @@ export async function runServerlessMakeTurn(input: {
     const tokens = parseUsageFromAnthropicBody(parsed);
     await incrementSessionUsage(input.sessionId, tokens);
 
-    if ((parsed as { stop_reason?: string } | null)?.stop_reason === "max_tokens") {
+    const stopReason = (parsed as { stop_reason?: string } | null)?.stop_reason;
+
+    if (stopReason === "max_tokens") {
       throw createHttpError(
         502,
         "The build got cut off (too large). Try a simpler request.",
+      );
+    }
+
+    // Safety classifiers declined (HTTP 200, empty or partial content). Without
+    // this branch it falls through to the empty-response error, which reads as a
+    // model glitch rather than a declined request.
+    if (stopReason === "refusal") {
+      throw createHttpError(
+        400,
+        "That request was declined. Try a different idea for your build.",
       );
     }
 

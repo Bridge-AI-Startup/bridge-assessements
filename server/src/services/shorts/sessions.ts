@@ -29,6 +29,11 @@ import { generateLlmProxyToken } from "./llmProxy.js";
 import {
   computeBuildSessionExpiresAt,
   e2bTimeoutMsForChallengeDay,
+  getSubmitGraceMs,
+  getSubmitGraceSeconds,
+  getSubmitHoldMs,
+  isWithinSubmitGrace,
+  isWithinSubmitHold,
   restoreSessionSnapshotAndPrompt,
   serializeChatMessages,
   type SnapshotFile,
@@ -76,6 +81,8 @@ export type SessionResponse = {
   tokenBudget?: number;
   chatMessages?: SessionChatMessage[];
   sandboxPaused?: boolean;
+  /** Seconds after `expiresAt` in which submitting still works (0 = none). */
+  submitGraceSeconds: number;
   error?: string;
 };
 
@@ -182,6 +189,7 @@ function toSessionResponse(
     tokenBudget: doc.tokenBudget,
     chatMessages: serializeChatMessages(doc.chatMessages),
     sandboxPaused: Boolean(doc.sandboxPaused),
+    submitGraceSeconds: getSubmitGraceSeconds(),
   };
   if (doc.previewUrl) result.previewUrl = doc.previewUrl;
   if (doc.expiresAt) result.expiresAt = doc.expiresAt.toISOString();
@@ -263,10 +271,12 @@ async function expireSession(
  */
 async function reapExpiredActiveSessions(): Promise<void> {
   const BuildSession = getPlayBuildSessionModel();
-  const now = new Date();
+  // Leave the submit grace window alone: reaping kills the sandbox, and an E2B
+  // build that just ran out of time still needs its files snapshotted.
+  const cutoff = new Date(Date.now() - getSubmitGraceMs());
   const stale = await BuildSession.find({
     status: "active",
-    expiresAt: { $lte: now },
+    expiresAt: { $lte: cutoff },
   }).limit(50);
 
   for (const doc of stale) {
@@ -699,6 +709,55 @@ async function loadOwnedActiveSession(sessionId: string, anonymousId: string) {
     throw createHttpError(400, "session_not_active");
   }
   return doc;
+}
+
+/**
+ * Stop the submit clock: called when the builder opens the submit dialog.
+ *
+ * Naming a build and (especially) creating an account mid-submit can take
+ * longer than the two-minute grace window, and a finished build lost to the
+ * clock while signing in is the worst outcome the product has. The hold only
+ * moves the *submit* deadline — `expiresAt` is untouched, so chat turns and
+ * file writes still stop exactly when they did before.
+ *
+ * Re-stamped on every open, so a builder who cancels and comes back gets a
+ * fresh window rather than the remains of an old one.
+ */
+export async function holdPlayBuildSessionSubmit(
+  sessionId: string,
+  anonymousId: string,
+): Promise<{ heldAt: string; submitDeadline: string }> {
+  const BuildSession = getPlayBuildSessionModel();
+  const doc = await BuildSession.findById(sessionId);
+  if (!doc) throw createHttpError(404, "session_not_found");
+  if (doc.anonymousId !== anonymousId.trim()) {
+    throw createHttpError(403, "session_forbidden");
+  }
+  if (doc.status === "submitted") {
+    throw createHttpError(409, "session_already_submitted");
+  }
+
+  // A hold can only be placed while the build is still submittable — otherwise
+  // an expired session could be revived indefinitely by opening the dialog.
+  const alreadyHeld = isWithinSubmitHold(doc.submitHoldAt);
+  const submittable =
+    (doc.status === "active" || doc.status === "expired") &&
+    (!doc.expiresAt ||
+      doc.expiresAt.getTime() > Date.now() ||
+      isWithinSubmitGrace(doc.expiresAt) ||
+      alreadyHeld);
+  if (!submittable) {
+    throw createHttpError(400, "session_expired");
+  }
+
+  const heldAt = new Date();
+  doc.submitHoldAt = heldAt;
+  await doc.save();
+
+  return {
+    heldAt: heldAt.toISOString(),
+    submitDeadline: new Date(heldAt.getTime() + getSubmitHoldMs()).toISOString(),
+  };
 }
 
 /**

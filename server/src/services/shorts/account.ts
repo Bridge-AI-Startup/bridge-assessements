@@ -69,7 +69,7 @@ export async function getAccountSubmissions(
   firebaseUid: string,
 ): Promise<{ submissions: AccountSubmissionEntry[]; linkedIds: number }> {
   const ids = await getLinkedAnonymousIds(firebaseUid);
-  const submissions = await listOwnerSubmissions(ids);
+  const submissions = await listOwnerSubmissions(ids, firebaseUid);
 
   const slugs = [...new Set(submissions.map((s) => s.challengeSlug))];
   const Challenge = getPlayChallengeModel();

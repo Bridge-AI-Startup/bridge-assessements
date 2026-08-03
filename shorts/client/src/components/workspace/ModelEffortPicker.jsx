@@ -23,13 +23,14 @@ function saveStored(model, effort) {
 
 /**
  * Claude Code–style /model picker: model list + conditional effort slider.
- * `hideEffort` drops the effort control entirely — used in serverless make mode,
- * where the direct Messages API has no effort parameter.
+ * `serverless` drops the effort control (the direct Messages call sends no
+ * effort) and is what admits serverless-only models such as Fable 5, which the
+ * E2B template's Claude Code CLI cannot run.
  */
 export default function ModelEffortPicker({
   value,
   onChange,
-  hideEffort = false,
+  serverless = false,
   engineLabel = "Claude Code",
 }) {
   const [models, setModels] = useState([]);
@@ -45,7 +46,9 @@ export default function ModelEffortPicker({
         if (!res.ok) return;
         const body = await res.json();
         if (cancelled) return;
-        const list = Array.isArray(body.models) ? body.models : [];
+        const list = (Array.isArray(body.models) ? body.models : []).filter(
+          (m) => serverless || !m.serverlessOnly,
+        );
         setModels(list);
         setDefaultModel(body.defaultModel || list[0]?.id || null);
       } catch {
@@ -55,10 +58,13 @@ export default function ModelEffortPicker({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [serverless]);
 
   useEffect(() => {
-    if (!models.length || value?.model) return;
+    if (!models.length) return;
+    // Also runs when the selected model isn't offered here — e.g. Fable 5 kept
+    // in localStorage from a serverless round, then reused on an E2B one.
+    if (value?.model && models.some((m) => m.id === value.model)) return;
     const stored = loadStored();
     const modelId =
       (stored?.model && models.some((m) => m.id === stored.model)
@@ -134,7 +140,7 @@ export default function ModelEffortPicker({
           {engineLabel}
         </span>
         <span className="truncate font-medium">{selected.label}</span>
-        {!hideEffort && value?.effort && efforts.length > 0 && (
+        {!serverless && value?.effort && efforts.length > 0 && (
           <span className="truncate text-slate-400">· {value.effort}</span>
         )}
         <span className="text-slate-400" aria-hidden>
@@ -175,7 +181,7 @@ export default function ModelEffortPicker({
             })}
           </ul>
 
-          {hideEffort ? null : efforts.length > 0 ? (
+          {serverless ? null : efforts.length > 0 ? (
             <div className="border-t border-slate-100 px-1 pt-2">
               <div className="mb-1 flex items-center justify-between">
                 <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">

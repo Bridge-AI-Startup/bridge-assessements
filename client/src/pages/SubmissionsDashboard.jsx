@@ -189,13 +189,13 @@ function EnrichedTranscriptView({ enriched }) {
     <div className="bg-gray-50 rounded-lg border border-gray-200 p-3 max-h-[40vh] overflow-y-auto space-y-4">
       {narrative ? (
         <div>
-          <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1">Session summary</p>
+          <p className="text-xs font-semibold text-gray-600 uppercase font-mono tracking-[0.03em] mb-1">Session summary</p>
           <p className="text-sm text-gray-800 leading-relaxed">{narrative}</p>
         </div>
       ) : null}
       {events.length > 0 ? (
         <div>
-          <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">Activity timeline</p>
+          <p className="text-xs font-semibold text-gray-600 uppercase font-mono tracking-[0.03em] mb-2">Activity timeline</p>
           <ul className="space-y-3">
             {events.map((evt, idx) => (
               <li key={idx} className="border-l-2 border-blue-200 pl-3 py-0.5">
@@ -1886,7 +1886,7 @@ export default function SubmissionsDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f8f9fb]">
+    <div className="min-h-screen bg-[#FAF9F2]">
       <div className="max-w-6xl mx-auto px-6 py-8">
         {/* Header */}
         <motion.div
@@ -1897,7 +1897,7 @@ export default function SubmissionsDashboard() {
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm mb-1">
           <Link
             to={createPageUrl("Home")}
-              className="text-gray-500 hover:text-[#1E3A8A]"
+              className="text-gray-500 hover:text-[#21201C]"
           >
             ← Back to Assessments
           </Link>
@@ -1910,7 +1910,7 @@ export default function SubmissionsDashboard() {
                   to={
                     createPageUrl("AssessmentEditor") + `?id=${assessmentId}`
                   }
-                  className="text-gray-500 hover:text-[#1E3A8A] inline-flex items-center gap-1"
+                  className="text-gray-500 hover:text-[#21201C] inline-flex items-center gap-1"
                 >
                   <Pencil className="w-3.5 h-3.5 shrink-0" />
                   Edit assessment
@@ -1919,7 +1919,7 @@ export default function SubmissionsDashboard() {
             ) : null}
           </div>
           <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-bold text-[#1E3A8A]">
+            <h1 className="text-3xl font-medium tracking-[-0.012em] text-[#21201C]">
               {assessment ? assessment.title : "Submissions Dashboard"}
             </h1>
             <Button
@@ -1930,7 +1930,7 @@ export default function SubmissionsDashboard() {
               disabled={isRefreshing}
               title="Refresh submissions"
               aria-label="Refresh submissions"
-              className="h-7 w-7 text-gray-400 hover:text-[#1E3A8A]"
+              className="h-7 w-7 text-gray-400 hover:text-[#21201C]"
             >
               <RefreshCw
                 className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`}
@@ -1976,7 +1976,7 @@ export default function SubmissionsDashboard() {
             <div className="flex items-center justify-between mb-2">
               <Users className="w-5 h-5 text-gray-400" />
             </div>
-            <p className="text-2xl font-bold text-gray-900">
+            <p className="text-2xl font-medium tracking-[-0.012em] text-gray-900">
               {stats.totalInvited}
             </p>
             <p className="text-sm text-gray-500">Total Invited</p>
@@ -1990,7 +1990,7 @@ export default function SubmissionsDashboard() {
                 {startRate}%
               </span>
             </div>
-            <p className="text-2xl font-bold text-gray-900">{stats.started}</p>
+            <p className="text-2xl font-medium tracking-[-0.012em] text-gray-900">{stats.started}</p>
             <p className="text-sm text-gray-500">Started</p>
           </div>
 
@@ -2002,7 +2002,7 @@ export default function SubmissionsDashboard() {
                 {completionRate}%
               </span>
             </div>
-            <p className="text-2xl font-bold text-gray-900">
+            <p className="text-2xl font-medium tracking-[-0.012em] text-gray-900">
               {stats.completed}
             </p>
             <p className="text-sm text-gray-500">Completed</p>
@@ -2016,7 +2016,7 @@ export default function SubmissionsDashboard() {
                 {dropoffRate}%
               </span>
             </div>
-            <p className="text-2xl font-bold text-red-600">
+            <p className="text-2xl font-medium tracking-[-0.012em] text-red-600">
               {stats.started - stats.completed}
             </p>
             <p className="text-sm text-gray-500">Dropoff</p>
@@ -2028,7 +2028,7 @@ export default function SubmissionsDashboard() {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.15 }}
-          className="sticky top-0 z-20 bg-[#f8f9fb]/95 backdrop-blur-sm border border-gray-200 rounded-xl p-4 mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4"
+          className="sticky top-0 z-20 bg-[#FAF9F2]/95 backdrop-blur-sm border border-gray-200 rounded-xl p-4 mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4"
         >
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -2044,7 +2044,7 @@ export default function SubmissionsDashboard() {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E3A8A]/20"
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#21201C]/20"
             >
               <option value="all">All Status</option>
               <option value="completed">Completed</option>
@@ -2077,7 +2077,7 @@ export default function SubmissionsDashboard() {
                   setShareTab("single");
                   resetShareModalState();
                 }}
-                className="bg-[#1E3A8A] hover:bg-[#152a66] flex items-center gap-2 w-full sm:w-auto justify-center"
+                className="bg-[#21201C] hover:bg-[#35332D] flex items-center gap-2 w-full sm:w-auto justify-center"
               >
                 <Share2 className="w-4 h-4" />
                 Share assessment
@@ -2100,7 +2100,7 @@ export default function SubmissionsDashboard() {
         {/* Loading State */}
         {isLoading ? (
           <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
-            <div className="w-8 h-8 border-2 border-[#1E3A8A]/30 border-t-[#1E3A8A] rounded-full animate-spin mx-auto mb-4"></div>
+            <div className="w-8 h-8 border-2 border-[#21201C]/30 border-t-[#21201C] rounded-full animate-spin mx-auto mb-4"></div>
             <p className="text-gray-500">Loading submissions...</p>
           </div>
         ) : sortedSubmissions.length === 0 ? (
@@ -2126,19 +2126,19 @@ export default function SubmissionsDashboard() {
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
                     Candidate
                   </th>
-                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
                     Status
                   </th>
-                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
                     Time Spent
                   </th>
-                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
                     Combined
                   </th>
-                  <th className="text-right px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="text-right px-5 py-3 text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
                     Actions
                   </th>
                 </tr>
@@ -2170,7 +2170,7 @@ export default function SubmissionsDashboard() {
                     >
                       <td className="px-5 py-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-full bg-[#1E3A8A] flex items-center justify-center text-white text-sm font-medium">
+                          <div className="w-9 h-9 rounded-full bg-[#21201C] flex items-center justify-center text-white text-sm font-medium">
                             {initials}
                           </div>
                           <div>
@@ -2287,7 +2287,7 @@ export default function SubmissionsDashboard() {
                                 <button
                                   type="button"
                                   onClick={(e) => openEvaluation(e)}
-                                  className="text-left text-xs text-[#1E3A8A] hover:underline"
+                                  className="text-left text-xs text-[#21201C] hover:underline"
                                   title="View scores and evaluation"
                                 >
                                   View evaluation
@@ -2310,7 +2310,7 @@ export default function SubmissionsDashboard() {
                                     setEvaluationTab("recording");
                                     setShowEvaluationModal(true);
                                   }}
-                                  className="text-left text-xs font-medium text-[#1E3A8A] hover:underline"
+                                  className="text-left text-xs font-medium text-[#21201C] hover:underline"
                                   title="Watch the screen capture while scores are still generating"
                                 >
                                   View screen recording
@@ -2405,7 +2405,7 @@ export default function SubmissionsDashboard() {
                                     setEvaluationTab("recording");
                                     setShowEvaluationModal(true);
                                   }}
-                                  className="text-left text-xs font-medium text-[#1E3A8A] hover:underline"
+                                  className="text-left text-xs font-medium text-[#21201C] hover:underline"
                                   title="Watch the screen capture"
                                 >
                                   View screen recording
@@ -2537,7 +2537,7 @@ export default function SubmissionsDashboard() {
                 >
                   <div className="flex items-center gap-3">
                     <TrendingDown className="w-6 h-6 text-orange-600" />
-                    <h2 className="text-xl font-semibold text-gray-900">
+                    <h2 className="text-xl font-medium tracking-[-0.012em] text-gray-900">
                       Dropoff feedback analysis
                     </h2>
                     <Badge className="bg-orange-100 text-orange-700">
@@ -2746,7 +2746,7 @@ export default function SubmissionsDashboard() {
                           disabled={
                             !shareCandidateName.trim() || isGeneratingShareLink
                           }
-                          className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                          className="bg-[#21201C] hover:bg-[#35332D]"
                         >
                           {isGeneratingShareLink
                             ? "Generating..."
@@ -2801,7 +2801,7 @@ export default function SubmissionsDashboard() {
                               shareEmailSentForGenerated
                             }
                             size="sm"
-                                className="bg-[#1E3A8A] hover:bg-[#152a66] flex-shrink-0"
+                                className="bg-[#21201C] hover:bg-[#35332D] flex-shrink-0"
                           >
                             {shareEmailSentForGenerated ? (
                               <>
@@ -2826,7 +2826,7 @@ export default function SubmissionsDashboard() {
                                 setDashboardTab("candidates");
                             resetShareModalState();
                           }}
-                          className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                          className="bg-[#21201C] hover:bg-[#35332D]"
                         >
                           Done
                         </Button>
@@ -2874,7 +2874,7 @@ export default function SubmissionsDashboard() {
                 </SheetHeader>
                 <div className="mt-6 space-y-5 flex-1">
                   <div>
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+                    <p className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-2">
                       Pipeline
                     </p>
                     <div className="flex flex-col gap-2">
@@ -2931,7 +2931,7 @@ export default function SubmissionsDashboard() {
                   </div>
                   <div className="flex flex-col gap-2">
                     <Button
-                      className="w-full bg-[#1E3A8A] hover:bg-[#152a66]"
+                      className="w-full bg-[#21201C] hover:bg-[#35332D]"
                       onClick={() => {
                         setSelectedEvaluationSubmission(panelSubmission);
                         setShowEvaluationModal(true);
@@ -3121,7 +3121,7 @@ export default function SubmissionsDashboard() {
                     <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
                       {selectedBehavioralSubmission.behavioralGradingReport
                         ?.failureCategory ? (
-                        <p className="text-xs font-medium uppercase tracking-wide mb-1">
+                        <p className="text-xs font-medium uppercase font-mono tracking-[0.03em] mb-1">
                           Failure:{" "}
                           {
                             selectedBehavioralSubmission.behavioralGradingReport
@@ -3260,7 +3260,7 @@ export default function SubmissionsDashboard() {
                       size="sm"
                       onClick={handleSendInviteEmail}
                       disabled={shareEmailSending || shareEmailSent}
-                      className="bg-[#1E3A8A] hover:bg-[#152a66] flex-shrink-0"
+                      className="bg-[#21201C] hover:bg-[#35332D] flex-shrink-0"
                     >
                       {shareEmailSent ? (
                         <>
@@ -3284,7 +3284,7 @@ export default function SubmissionsDashboard() {
                   <Button
                     type="button"
                     onClick={closeShareModal}
-                    className="bg-[#1E3A8A] hover:bg-[#152a66]"
+                    className="bg-[#21201C] hover:bg-[#35332D]"
                   >
                     Done
                   </Button>
@@ -3429,7 +3429,7 @@ export default function SubmissionsDashboard() {
                                 className={`max-w-[80%] rounded-lg p-3 ${
                                   turn.role === "agent"
                                     ? "bg-white border border-gray-200"
-                                    : "bg-[#1E3A8A] text-white"
+                                    : "bg-[#21201C] text-white"
                                 }`}
                               >
                                 <p className="text-xs font-medium mb-1 opacity-70">
@@ -3591,7 +3591,7 @@ export default function SubmissionsDashboard() {
                       <div className="rounded-lg border border-gray-200 bg-white p-3 space-y-3">
                         <div className="flex items-center justify-between gap-3">
                           <div>
-                            <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                            <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
                               Behavioral grading
                             </p>
                             <div className="mt-1 flex items-center gap-2">
@@ -3864,10 +3864,10 @@ export default function SubmissionsDashboard() {
                           <>
                             {combinedModal != null && (
                               <div className="rounded-lg border border-gray-200 bg-white p-3 mb-3">
-                                <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                                <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
                                   Combined score
                                 </p>
-                                <p className="text-2xl font-semibold text-gray-900 tabular-nums">
+                                <p className="text-2xl font-medium tracking-[-0.012em] text-gray-900 tabular-nums">
                                   {Math.round(combinedModal)}
                                 </p>
                                 {combinedModalBreakdown ? (
@@ -3883,7 +3883,7 @@ export default function SubmissionsDashboard() {
                             key={i}
                             className="rounded-lg border border-gray-200 bg-gray-50 p-3"
                           >
-                            <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                            <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
                               {m.label}
                             </p>
                                   <p className="text-lg font-semibold text-gray-900">
@@ -3913,7 +3913,7 @@ export default function SubmissionsDashboard() {
 
                       {/* Pipeline steps from real grading status */}
                       <div className="rounded-lg border border-gray-200 bg-white p-3">
-                        <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-2">
+                        <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-2">
                           Pipeline
                         </p>
                         <div className="flex flex-wrap gap-4 sm:gap-6">
@@ -4142,7 +4142,7 @@ export default function SubmissionsDashboard() {
                                 onClick={() =>
                                   downloadProctoringVideo(recordingSession._id)
                                 }
-                                className="text-[#1E3A8A] hover:underline"
+                                className="text-[#21201C] hover:underline"
                               >
                                 Download recording
                               </button>
@@ -4151,7 +4151,7 @@ export default function SubmissionsDashboard() {
                           <p className="text-xs text-gray-500 pt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
                             <Link
                               to="/DemoReplay"
-                              className="text-[#1E3A8A] hover:underline"
+                              className="text-[#21201C] hover:underline"
                             >
                               Timeline demo with sample video
                             </Link>
@@ -4192,10 +4192,10 @@ export default function SubmissionsDashboard() {
                         if (evaluable.length === 0) return null;
                         return (
                           <div className="rounded-xl border-2 border-gray-200 bg-white px-4 py-3 shadow-sm">
-                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            <p className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
                               Overall score
                             </p>
-                            <p className={`text-2xl font-bold tabular-nums ${scoreColor}`}>
+                            <p className={`text-2xl font-medium tracking-[-0.012em] tabular-nums ${scoreColor}`}>
                               {overall != null
                                 ? (Math.round(overall * 10) / 10).toFixed(1)
                                 : "—"}
@@ -4208,7 +4208,7 @@ export default function SubmissionsDashboard() {
                       {/* Session summary from evaluation report */}
                       {selectedEvaluationSubmission?.evaluationReport?.session_summary && (
                         <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
-                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+                          <p className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-2">
                             Session summary
                           </p>
                           <p className="text-sm text-gray-700 leading-relaxed">
@@ -4220,7 +4220,7 @@ export default function SubmissionsDashboard() {
                       {selectedEvaluationSubmission.evaluationReport
                         .criteria_results?.length > 0 && (
                         <div>
-                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">
+                          <p className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-3">
                             Criteria results
                           </p>
                           <div className="space-y-3">
@@ -4250,7 +4250,7 @@ export default function SubmissionsDashboard() {
                                     <p className="font-semibold text-gray-900">
                                       {r.criterion}
                                     </p>
-                                    <span className={`text-xl font-bold tabular-nums shrink-0 ${scoreTextColor}`}>
+                                    <span className={`text-xl font-medium tracking-[-0.012em] tabular-nums shrink-0 ${scoreTextColor}`}>
                                       {r.evaluable ? `${r.score}` : "—"}/10
                                     </span>
                                   </div>
@@ -4281,7 +4281,7 @@ export default function SubmissionsDashboard() {
                                             }
                                           );
                                         }}
-                                        className="text-[#1E3A8A] hover:underline text-xs font-medium"
+                                        className="text-[#21201C] hover:underline text-xs font-medium"
                                       >
                                         Evidence: {r.evidence.length} moment(s){" "}
                                         {expandedEvidenceCriteria.has(i)
@@ -4321,7 +4321,7 @@ export default function SubmissionsDashboard() {
                   {selectedEvaluationSubmission && (
                     <div className="space-y-3">
                       <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-[#1E3A8A]" />
+                        <FileText className="w-4 h-4 text-[#21201C]" />
                         Screen transcript
                       </h3>
                       {selectedEvaluationSubmission.enrichedTranscript ? (
@@ -4465,7 +4465,7 @@ export default function SubmissionsDashboard() {
                   {selectedEvaluationSubmission?.interview?.transcript?.turns?.length > 0 ? (
                     <div className="space-y-4">
                       <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-                        <MessageSquare className="w-4 h-4 text-[#1E3A8A]" />
+                        <MessageSquare className="w-4 h-4 text-[#21201C]" />
                         Agent communication
                       </h3>
                       <p className="text-xs text-gray-500">
@@ -4475,13 +4475,13 @@ export default function SubmissionsDashboard() {
                       {/* Communication summary & score */}
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 sm:col-span-2">
-                          <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1.5">Summary</p>
+                          <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-1.5">Summary</p>
                           <p className="text-sm text-gray-700">
                             {selectedEvaluationSubmission.interview.summary || "No summary generated yet."}
                           </p>
                         </div>
                         <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                          <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">Communication score</p>
+                          <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-1">Communication score</p>
                           <p className="text-lg font-semibold text-emerald-600">
                             {selectedEvaluationSubmission.interview.analysis?.communicationScore != null
                               ? `${selectedEvaluationSubmission.interview.analysis.communicationScore}/10`
@@ -4492,7 +4492,7 @@ export default function SubmissionsDashboard() {
 
                       {/* Transcript */}
                       <div>
-                        <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+                        <p className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-2">
                           Transcript ({selectedEvaluationSubmission.interview.transcript.turns.length} turns)
                         </p>
                         <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 space-y-4 max-h-[50vh] overflow-y-auto">
@@ -4505,7 +4505,7 @@ export default function SubmissionsDashboard() {
                                 className={`max-w-[85%] rounded-lg p-3 ${
                                   turn.role === "agent"
                                     ? "bg-white border border-gray-200"
-                                    : "bg-[#1E3A8A] text-white"
+                                    : "bg-[#21201C] text-white"
                                 }`}
                               >
                                 <p className="text-xs font-medium mb-1 opacity-70">

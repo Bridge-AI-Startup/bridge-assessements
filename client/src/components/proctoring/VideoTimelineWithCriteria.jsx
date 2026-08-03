@@ -245,7 +245,7 @@ export default function VideoTimelineWithCriteria({
         >
           <div className="flex items-center gap-2 mb-1">
             <Tag className="w-3.5 h-3.5 text-gray-400" />
-            <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+            <span className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
               {highlights[selectedHighlight].category ?? "Moment"}
             </span>
             {highlights[selectedHighlight].score != null && (

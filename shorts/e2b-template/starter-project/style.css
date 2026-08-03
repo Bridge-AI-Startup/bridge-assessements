@@ -38,8 +38,41 @@ p {
   color: #334155;
 }
 
+.eyebrow {
+  margin: 0 0 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.lede {
+  margin-bottom: 1.25rem;
+}
+
+ol {
+  margin: 0 0 1.25rem;
+  padding-left: 1.25rem;
+  color: #334155;
+}
+
+li {
+  margin-bottom: 0.75rem;
+}
+
+li:last-child {
+  margin-bottom: 0;
+}
+
+li strong {
+  color: #0f172a;
+}
+
 .hint {
   margin-bottom: 0;
+  padding-top: 1rem;
+  border-top: 1px solid #e2e8f0;
   font-size: 0.9rem;
   color: #64748b;
 }

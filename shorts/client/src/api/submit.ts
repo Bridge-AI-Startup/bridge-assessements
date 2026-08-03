@@ -1,7 +1,7 @@
 import {
+  authPost,
   getRequestErrorMessage,
   getResponseErrorMessage,
-  post,
   readJsonBody,
 } from "@/api/requests";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
@@ -36,7 +36,10 @@ export async function submitSession(input: {
 }): Promise<SubmitResult> {
   const anonymousId = getOrCreateAnonymousId();
   try {
-    const res = await post("/submit", {
+    // authPost attaches the Firebase ID token when signed in and nothing when
+    // not — a build submitted right after signing in is stamped with that
+    // account server-side, so it is never left as a guest-only entry.
+    const res = await authPost("/submit", {
       sessionId: input.sessionId,
       anonymousId,
       displayName: input.displayName.trim(),

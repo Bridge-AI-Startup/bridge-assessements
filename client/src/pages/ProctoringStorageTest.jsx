@@ -382,7 +382,7 @@ export default function ProctoringStorageTest() {
           <div className="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center mx-auto mb-3">
             <FolderOpen className="w-6 h-6 text-indigo-600" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">
+          <h1 className="text-2xl font-medium tracking-[-0.012em] text-gray-900">
             Proctoring Storage Test
           </h1>
           <p className="text-sm text-gray-500 mt-1">

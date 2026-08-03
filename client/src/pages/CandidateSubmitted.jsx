@@ -65,9 +65,9 @@ export default function CandidateSubmitted() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-[#f8f9fb] flex items-center justify-center">
+      <div className="min-h-screen bg-[#FAF9F2] flex items-center justify-center">
         <div className="text-center">
-          <div className="w-8 h-8 border-2 border-[#1E3A8A]/30 border-t-[#1E3A8A] rounded-full animate-spin mx-auto mb-4"></div>
+          <div className="w-8 h-8 border-2 border-[#21201C]/30 border-t-[#21201C] rounded-full animate-spin mx-auto mb-4"></div>
           <p className="text-gray-500">Loading...</p>
         </div>
       </div>
@@ -76,7 +76,7 @@ export default function CandidateSubmitted() {
 
   if (!submission || !assessment) {
     return (
-      <div className="min-h-screen bg-[#f8f9fb] flex items-center justify-center">
+      <div className="min-h-screen bg-[#FAF9F2] flex items-center justify-center">
         <div className="text-center">
           <p className="text-red-600 mb-4">Failed to load submission</p>
         </div>
@@ -91,17 +91,17 @@ export default function CandidateSubmitted() {
     const optedOutBeforeStarting = !submission.startedAt;
 
     return (
-      <div className="min-h-screen bg-gradient-to-br from-[#f8f9fb] to-[#eef1f8] flex items-center justify-center p-6">
+      <div className="min-h-screen bg-gradient-to-br from-[#FAF9F2] to-[#F4F2E9] flex items-center justify-center p-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-2xl bg-white rounded-2xl shadow-xl overflow-hidden"
+          className="w-full max-w-2xl bg-white rounded-card border border-border shadow-[0_2px_18px_rgba(33,32,28,0.06)] overflow-hidden"
         >
           <div className="bg-orange-500 px-8 py-6 text-center">
             <div className="w-16 h-16 rounded-full bg-white flex items-center justify-center mx-auto mb-4">
               <X className="w-10 h-10 text-orange-500" />
             </div>
-            <h1 className="text-2xl font-bold text-white mb-1">
+            <h1 className="text-2xl font-medium tracking-[-0.012em] text-white mb-1">
               You Have Opted Out
             </h1>
             <p className="text-white/90">
@@ -156,11 +156,11 @@ export default function CandidateSubmitted() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#f8f9fb] to-[#eef1f8] flex items-center justify-center p-6">
+    <div className="min-h-screen bg-gradient-to-br from-[#FAF9F2] to-[#F4F2E9] flex items-center justify-center p-6">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-2xl bg-white rounded-2xl shadow-xl overflow-hidden"
+        className="w-full max-w-2xl bg-white rounded-card border border-border shadow-[0_2px_18px_rgba(33,32,28,0.06)] overflow-hidden"
       >
         <div
           className={`px-8 py-6 text-center ${
@@ -174,7 +174,7 @@ export default function CandidateSubmitted() {
               }`}
             />
           </div>
-          <h1 className="text-2xl font-bold text-white mb-1">
+          <h1 className="text-2xl font-medium tracking-[-0.012em] text-white mb-1">
             {isExpired
               ? "Assessment Submitted (Time Expired)"
               : "Assessment Submitted Successfully!"}
@@ -211,7 +211,7 @@ export default function CandidateSubmitted() {
             {submission.githubLink && (
               <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
                 <div className="flex items-start gap-3">
-                  <LinkIcon className="w-5 h-5 text-[#1E3A8A] flex-shrink-0 mt-0.5" />
+                  <LinkIcon className="w-5 h-5 text-[#21201C] flex-shrink-0 mt-0.5" />
                   <div className="flex-1">
                     <h3 className="font-medium text-gray-900 mb-1">
                       GitHub Repository
@@ -220,7 +220,7 @@ export default function CandidateSubmitted() {
                       href={submission.githubLink}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-[#1E3A8A] hover:underline text-sm break-all"
+                      className="text-[#21201C] hover:underline text-sm break-all"
                     >
                       {submission.githubLink}
                     </a>
@@ -231,7 +231,7 @@ export default function CandidateSubmitted() {
             {submission.codeSource === "upload" && (
               <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
                 <div className="flex items-start gap-3">
-                  <FileCheck className="w-5 h-5 text-[#1E3A8A] flex-shrink-0 mt-0.5" />
+                  <FileCheck className="w-5 h-5 text-[#21201C] flex-shrink-0 mt-0.5" />
                   <div className="flex-1">
                     <h3 className="font-medium text-gray-900 mb-1">
                       Project Archive Uploaded

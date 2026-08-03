@@ -62,6 +62,13 @@ export function getShortsBuildTimeLimitMinutes(): string {
   );
 }
 
+export function getShortsSubmitGraceSeconds(): string {
+  return shortsEnv(
+    "SHORTS_SUBMIT_GRACE_SECONDS",
+    "PLAY_SUBMIT_GRACE_SECONDS",
+  );
+}
+
 export function getShortsChallengeCadence(): string {
   return shortsEnv("SHORTS_CHALLENGE_CADENCE", "PLAY_CHALLENGE_CADENCE", "weekly");
 }

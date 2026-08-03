@@ -9,6 +9,8 @@ import {
   snapshotProjectFiles,
 } from "./sandbox.js";
 import { snapshotServerlessSubmission } from "./serverlessMake.js";
+import { linkAnonymousId } from "./account.js";
+import { isWithinSubmitGrace, isWithinSubmitHold } from "./sessionPersist.js";
 import { assertNotStarterOnly } from "./starterDetection.js";
 import type { Sandbox } from "e2b";
 
@@ -46,9 +48,12 @@ export async function submitSession(input: {
   sessionId: string;
   anonymousId: string;
   displayName: string;
+  /** Verified Firebase uid when the builder was signed in at submit time. */
+  firebaseUid?: string | null;
 }): Promise<SubmitResult> {
   const anonymousId = input.anonymousId.trim();
   const displayName = input.displayName.trim();
+  const firebaseUid = input.firebaseUid?.trim() || null;
   if (!anonymousId) {
     throw createHttpError(400, "anonymousId is required");
   }
@@ -70,10 +75,22 @@ export async function submitSession(input: {
   if (session.status === "submitted") {
     throw createHttpError(409, "session_already_submitted");
   }
-  if (session.status !== "active") {
+  // Building stops at expiresAt, but the finished work can still be saved for a
+  // short grace window — a session that timed out seconds ago is `expired`
+  // rather than `active`, so both statuses are allowed while grace holds.
+  // Opening the submit dialog stops the submit clock outright (`submitHoldAt`),
+  // which is what keeps a signup or Google popup from eating a finished build.
+  const inGrace =
+    isWithinSubmitGrace(session.expiresAt) ||
+    isWithinSubmitHold(session.submitHoldAt);
+  if (session.status !== "active" && !(session.status === "expired" && inGrace)) {
     throw createHttpError(400, `session_not_active:${session.status}`);
   }
-  if (session.expiresAt && session.expiresAt.getTime() <= Date.now()) {
+  if (
+    session.expiresAt &&
+    session.expiresAt.getTime() <= Date.now() &&
+    !inGrace
+  ) {
     session.status = "expired";
     await session.save();
     throw createHttpError(400, "session_expired");
@@ -87,30 +104,40 @@ export async function submitSession(input: {
     // Serverless: the generated file(s) already live on the session snapshot.
     snapshot = snapshotServerlessSubmission(session);
   } else {
+    // In the grace window the box may already be reaped. Building stopped at
+    // expiry, so the persisted snapshot is the final state — submit that
+    // instead of failing the builder for a sandbox they no longer control.
     if (!session.e2bSandboxId) {
-      throw createHttpError(502, "session has no sandbox");
-    }
-    try {
-      sandbox = await connectPlaySandbox(session.e2bSandboxId, {
-        timeoutMs: 60 * 60 * 1000,
-      });
-    } catch {
-      session.status = "expired";
-      session.error = "Sandbox no longer reachable";
-      await session.save();
-      throw createHttpError(502, "Sandbox no longer reachable");
+      if (!inGrace) throw createHttpError(502, "session has no sandbox");
+    } else {
+      try {
+        sandbox = await connectPlaySandbox(session.e2bSandboxId, {
+          timeoutMs: 60 * 60 * 1000,
+        });
+      } catch {
+        if (!inGrace) {
+          session.status = "expired";
+          session.error = "Sandbox no longer reachable";
+          await session.save();
+          throw createHttpError(502, "Sandbox no longer reachable");
+        }
+      }
     }
 
-    try {
-      snapshot = await snapshotProjectFiles(sandbox);
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to snapshot project";
-      const status =
-        message.includes("exceeds") || message.includes("too many")
-          ? 413
-          : 502;
-      throw createHttpError(status, message);
+    if (sandbox) {
+      try {
+        snapshot = await snapshotProjectFiles(sandbox);
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Failed to snapshot project";
+        const status =
+          message.includes("exceeds") || message.includes("too many")
+            ? 413
+            : 502;
+        throw createHttpError(status, message);
+      }
+    } else {
+      snapshot = snapshotServerlessSubmission(session);
     }
   }
 
@@ -124,6 +151,10 @@ export async function submitSession(input: {
   // votes an earlier one earned.
   const doc = await Submission.create({
     anonymousId,
+    // Signed in at submit time → the build belongs to the account, not just to
+    // this browser. Someone who signs in from the submit dialog gets the build
+    // they just made attributed immediately.
+    ...(firebaseUid ? { firebaseUid } : {}),
     displayName,
     challengeSlug: session.challengeSlug,
     challengeDate: session.challengeDate,
@@ -133,6 +164,12 @@ export async function submitSession(input: {
     totalBytes: snapshot.totalBytes,
     submittedAt,
   });
+
+  // Claim the browser id too, so everything else built here follows the account.
+  // Best-effort: the submission itself is already saved and already attributed.
+  if (firebaseUid) {
+    await linkAnonymousId({ firebaseUid, anonymousId }).catch(() => undefined);
+  }
 
   session.status = "submitted";
   session.previewUrl = undefined;
