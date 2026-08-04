@@ -25,6 +25,7 @@ import {
   resumePlayBuildSession,
 } from "../../services/shorts/sessions.js";
 import {
+  deleteSubmission,
   getSubmissionById,
   listSubmissions,
   submitSession,
@@ -438,6 +439,17 @@ export const adminGetSubmission: RequestHandler = async (req, res, next) => {
     validationErrorParser(errors);
     const submission = await getSubmissionById(String(req.params.id));
     res.status(200).json(submission);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const adminDeleteSubmission: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const result = await deleteSubmission(String(req.params.id));
+    res.status(200).json({ deleted: true, ...result });
   } catch (error) {
     next(error);
   }

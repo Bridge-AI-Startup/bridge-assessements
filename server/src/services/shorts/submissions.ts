@@ -3,6 +3,10 @@ import { Types } from "mongoose";
 import { getPlayBuildSessionModel } from "../../models/shorts/buildSession.js";
 import { getPlaySubmissionModel } from "../../models/shorts/submission.js";
 import {
+  getPlayVoteModel,
+  getPlayVoteRoundModel,
+} from "../../models/shorts/vote.js";
+import {
   connectPlaySandbox,
   filterPlayPublicFiles,
   killPlaySandbox,
@@ -221,6 +225,64 @@ export async function listSubmissions(options: {
     submittedAt: new Date(doc.submittedAt).toISOString(),
     anonymousId: doc.anonymousId,
   }));
+}
+
+export type DeleteSubmissionResult = {
+  id: string;
+  displayName: string;
+  challengeDate: string;
+  /** Head-to-head votes removed along with the build. */
+  votesRemoved: number;
+};
+
+/**
+ * Admin: remove a submission and the vote records that point at it.
+ *
+ * Ratings are updated incrementally as votes land, so deleting a build does
+ * **not** claw back the points its opponents already won from beating it —
+ * unwinding that would mean replaying every vote in the round. What this does
+ * guarantee is no dangling references: the build leaves the gallery,
+ * leaderboard and matchup pool, its votes go with it (which also frees those
+ * voters to be shown other pairs), and any round recap that named it is
+ * scrubbed.
+ */
+export async function deleteSubmission(
+  id: string,
+): Promise<DeleteSubmissionResult> {
+  if (!Types.ObjectId.isValid(id)) {
+    throw createHttpError(400, "invalid submission id");
+  }
+  const Submission = getPlaySubmissionModel();
+  const doc = await Submission.findById(id);
+  if (!doc) {
+    throw createHttpError(404, "submission_not_found");
+  }
+
+  const displayName = doc.displayName;
+  const challengeDate = doc.challengeDate;
+
+  const Vote = getPlayVoteModel();
+  const votes = await Vote.deleteMany({
+    $or: [{ winnerId: doc._id }, { loserId: doc._id }],
+  });
+
+  const VoteRound = getPlayVoteRoundModel();
+  await VoteRound.updateMany(
+    { challengeDate },
+    {
+      $pull: { seenSubmissionIds: id },
+      $unset: { [`rankSnapshot.${id}`]: "" },
+    },
+  );
+
+  await doc.deleteOne();
+
+  return {
+    id,
+    displayName,
+    challengeDate,
+    votesRemoved: votes.deletedCount ?? 0,
+  };
 }
 
 export async function getSubmissionById(

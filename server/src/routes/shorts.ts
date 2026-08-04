@@ -205,6 +205,11 @@ adminRouter.get(
   submissionIdParamValidation,
   PlayController.adminGetSubmission,
 );
+adminRouter.delete(
+  "/submissions/:id",
+  submissionIdParamValidation,
+  PlayController.adminDeleteSubmission,
+);
 router.use("/admin", adminRouter);
 
 export default router;

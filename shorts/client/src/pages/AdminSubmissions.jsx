@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { authGet } from "@/api/requests";
+import { authDelete, authGet, readJsonBody } from "@/api/requests";
 import { useSubmissionPreview } from "@/lib/useSubmissionPreview";
 import { fetchChallengePeriod } from "@/lib/challengePeriod";
 
@@ -19,6 +19,10 @@ export default function AdminSubmissions() {
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [selectedPath, setSelectedPath] = useState(null);
+  /** Two-step delete: arm on first click, act on the second. */
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [notice, setNotice] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,6 +72,7 @@ export default function AdminSubmissions() {
   }, [challengeDate]);
 
   useEffect(() => {
+    setConfirmDeleteId(null);
     if (!selectedId) {
       setDetail(null);
       setSelectedPath(null);
@@ -99,6 +104,38 @@ export default function AdminSubmissions() {
       cancelled = true;
     };
   }, [selectedId]);
+
+  async function handleDelete(id) {
+    if (confirmDeleteId !== id) {
+      setConfirmDeleteId(id);
+      return;
+    }
+    setDeleting(true);
+    setError(null);
+    try {
+      const res = await authDelete(`/admin/submissions/${id}`);
+      const body = await readJsonBody(res);
+      if (!res.ok) {
+        throw new Error(
+          typeof body.error === "string" ? body.error : `HTTP ${res.status}`,
+        );
+      }
+      const votes = Number(body.votesRemoved) || 0;
+      setNotice(
+        `Deleted "${body.displayName || "build"}"${
+          votes ? ` and ${votes} vote${votes === 1 ? "" : "s"}` : ""
+        }.`,
+      );
+      setConfirmDeleteId(null);
+      setSelectedId(null);
+      setDetail(null);
+      await loadList(challengeDate);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   const preview = useSubmissionPreview({
     submissionId: detail?.id,
@@ -136,6 +173,10 @@ export default function AdminSubmissions() {
 
       {error && (
         <p className="mt-3 text-sm text-red-600">{error}</p>
+      )}
+
+      {notice && (
+        <p className="mt-3 text-sm text-fog">{notice}</p>
       )}
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
@@ -186,12 +227,48 @@ export default function AdminSubmissions() {
           )}
           {selectedId && detail && !detailLoading && (
             <div className="flex flex-col">
-              <div className="border-b border-line px-3 py-2">
-                <p className="font-medium text-ink">{detail.displayName}</p>
-                <p className="text-xs text-fog-light">
-                  #{detail.challengeSlug} · {detail.challengeDate}
-                </p>
+              <div className="flex items-start justify-between gap-3 border-b border-line px-3 py-2">
+                <div className="min-w-0">
+                  <p className="font-medium text-ink">{detail.displayName}</p>
+                  <p className="text-xs text-fog-light">
+                    #{detail.challengeSlug} · {detail.challengeDate}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {confirmDeleteId === detail.id ? (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteId(null)}
+                      disabled={deleting}
+                      className="rounded border border-line bg-paper px-2 py-1 text-xs text-fog hover:bg-mist disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(detail.id)}
+                    disabled={deleting}
+                    className={`rounded px-2 py-1 text-xs disabled:opacity-50 ${
+                      confirmDeleteId === detail.id
+                        ? "bg-red-600 text-white hover:bg-red-700"
+                        : "border border-red-200 text-red-600 hover:bg-red-50"
+                    }`}
+                  >
+                    {deleting
+                      ? "Deleting…"
+                      : confirmDeleteId === detail.id
+                        ? "Confirm delete"
+                        : "Delete"}
+                  </button>
+                </div>
               </div>
+              {confirmDeleteId === detail.id ? (
+                <p className="border-b border-line bg-red-50 px-3 py-2 text-xs text-red-700">
+                  Permanently deletes this build and its head-to-head votes.
+                  Opponents keep the rating they already won from it.
+                </p>
+              ) : null}
 
               <div className="grid min-h-[20rem] grid-cols-1 border-b border-line md:grid-cols-2">
                 <div className="border-b border-line md:border-b-0 md:border-r">
