@@ -1339,7 +1339,6 @@ export default function Build() {
                 value={modelEffort}
                 onChange={setModelEffort}
                 serverless={serverless}
-                engineLabel={serverless ? "Serverless" : "Claude Code"}
               />
             </div>
             <textarea
@@ -1570,7 +1569,6 @@ export default function Build() {
     modelEffort,
     setModelEffort,
     serverless,
-    engineLabel: serverless ? "Serverless" : "Claude Code",
     onSubmitClick: openSubmitModal,
     chatEndRef,
     submitModal,

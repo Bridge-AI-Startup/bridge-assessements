@@ -171,7 +171,6 @@ export default function ChatFirstBuild({
   modelEffort,
   setModelEffort,
   serverless = false,
-  engineLabel = "Claude Code",
   onSubmitClick,
   chatEndRef,
   submitModal,
@@ -324,7 +323,6 @@ export default function ChatFirstBuild({
             value={modelEffort}
             onChange={setModelEffort}
             serverless={serverless}
-            engineLabel={engineLabel}
           />
         </div>
         <div className="flex items-end gap-2">

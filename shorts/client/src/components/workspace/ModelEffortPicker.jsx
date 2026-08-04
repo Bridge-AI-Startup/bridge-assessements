@@ -26,12 +26,16 @@ function saveStored(model, effort) {
  * `serverless` drops the effort control (the direct Messages call sends no
  * effort) and is what admits serverless-only models such as Fable 5, which the
  * E2B template's Claude Code CLI cannot run.
+ *
+ * The trigger deliberately does NOT name the engine ("Serverless" / "Claude
+ * Code"): that is an implementation detail the builder can do nothing with, and
+ * it read as a status tag rather than a control. It says "Change model" instead,
+ * because the whole point of the pill is that it is clickable.
  */
 export default function ModelEffortPicker({
   value,
   onChange,
   serverless = false,
-  engineLabel = "Claude Code",
 }) {
   const [models, setModels] = useState([]);
   const [defaultModel, setDefaultModel] = useState(null);
@@ -134,16 +138,14 @@ export default function ModelEffortPicker({
         type="button"
         onClick={() => setOpen((o) => !o)}
         className="flex max-w-full items-center gap-1.5 rounded border border-slate-200 bg-white px-2 py-1 text-left text-[11px] text-slate-700 hover:bg-slate-50"
-        title="Claude Code model and effort"
+        title="Change the model"
       >
-        <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-          {engineLabel}
-        </span>
         <span className="truncate font-medium">{selected.label}</span>
         {!serverless && value?.effort && efforts.length > 0 && (
           <span className="truncate text-slate-400">· {value.effort}</span>
         )}
-        <span className="text-slate-400" aria-hidden>
+        <span className="shrink-0 text-slate-400">— change model</span>
+        <span className="shrink-0 text-slate-400" aria-hidden>
           ▾
         </span>
       </button>
@@ -151,7 +153,7 @@ export default function ModelEffortPicker({
       {open && (
         <div className="absolute bottom-full left-0 z-30 mb-1 w-72 rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
           <p className="px-1 pb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">
-            {engineLabel} · Model
+            Pick a model
           </p>
           <ul className="mb-2 space-y-0.5">
             {models.map((m) => {
