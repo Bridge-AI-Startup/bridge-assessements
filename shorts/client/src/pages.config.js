@@ -1,7 +1,6 @@
 import Home from "./pages/Home";
 import Build from "./pages/Build";
 import Vote from "./pages/Vote";
-import Leaderboard from "./pages/Leaderboard";
 import Gallery from "./pages/Gallery";
 import Submission from "./pages/Submission";
 import MySubmissions from "./pages/MySubmissions";
@@ -12,7 +11,6 @@ export const PAGES = {
   Home,
   Build,
   Vote,
-  Leaderboard,
   Gallery,
   Submission,
   MySubmissions,

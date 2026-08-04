@@ -156,13 +156,7 @@ export default function MySubmissions() {
                   to={`/Gallery?challengeDate=${round.challengeDate}`}
                   className="label-mono underline hover:text-ink"
                 >
-                  Gallery
-                </Link>
-                <Link
-                  to={`/Leaderboard?challengeDate=${round.challengeDate}`}
-                  className="label-mono underline hover:text-ink"
-                >
-                  Leaderboard
+                  Rankings
                 </Link>
               </div>
             </div>

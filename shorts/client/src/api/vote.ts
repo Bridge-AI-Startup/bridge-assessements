@@ -90,36 +90,6 @@ export type CastVoteResponse = {
   canContinue: boolean;
 };
 
-export type LeaderboardResponse = {
-  challengeDate: string;
-  entries: Array<{
-    id: string;
-    displayName: string;
-    challengeSlug: string;
-    challengeDate: string;
-    score: number;
-    wins: number;
-    losses: number;
-    matches: number;
-    provisional: boolean;
-    rank?: number;
-    isMine?: boolean;
-    submittedAt: string;
-  }>;
-  total: number;
-  you: {
-    id: string;
-    displayName: string;
-    score: number;
-    wins: number;
-    losses: number;
-    matches: number;
-    provisional: boolean;
-    rank?: number;
-    isMine?: boolean;
-  } | null;
-};
-
 export async function fetchVoteNext(options: {
   anonymousId: string;
   challengeDate?: string;
@@ -153,22 +123,6 @@ export async function castVote(body: {
   if (!res.ok) {
     const errorBody = await readJsonBody(res);
     throw new Error(getResponseErrorMessage(errorBody, res.status));
-  }
-  return res.json();
-}
-
-export async function fetchLeaderboard(options: {
-  challengeDate?: string;
-  limit?: number;
-  anonymousId?: string;
-} = {}): Promise<LeaderboardResponse> {
-  const qs = new URLSearchParams();
-  if (options.challengeDate) qs.set("challengeDate", options.challengeDate);
-  if (options.limit) qs.set("limit", String(options.limit));
-  if (options.anonymousId) qs.set("anonymousId", options.anonymousId);
-  const res = await get(`/leaderboard?${qs}`);
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
   }
   return res.json();
 }

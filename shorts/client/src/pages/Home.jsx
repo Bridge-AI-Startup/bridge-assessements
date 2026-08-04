@@ -187,10 +187,6 @@ export default function Home() {
                 <Link to="/Vote" className="label-mono hover:text-ink">
                   Vote
                 </Link>
-                <span className="text-line">·</span>
-                <Link to="/Leaderboard" className="label-mono hover:text-ink">
-                  Leaderboard
-                </Link>
               </div>
             </div>
 
@@ -244,10 +240,6 @@ export default function Home() {
                   <span className="text-line">·</span>
                   <Link to="/Vote" className="label-mono hover:text-ink">
                     Vote
-                  </Link>
-                  <span className="text-line">·</span>
-                  <Link to="/Leaderboard" className="label-mono hover:text-ink">
-                    Leaderboard
                   </Link>
                 </div>
               </div>

@@ -1134,10 +1134,7 @@ export default function Build() {
             Vote on {possessive} builds
           </Link>
           <Link to="/Gallery" className="btn-pill-secondary">
-            Browse
-          </Link>
-          <Link to="/Leaderboard" className="btn-pill-secondary">
-            Leaderboard
+            Browse rankings
           </Link>
         </div>
         <Link to="/" className="mt-4 text-sm text-fog-light hover:underline">

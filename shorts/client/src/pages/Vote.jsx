@@ -88,7 +88,7 @@ function PreviewPane({ card, side, label, onPick, disabled }) {
               {card.displayName}
             </p>
             {/* Ratings are deliberately not shown mid-vote — seeing a score
-                anchors the pick. They're on the leaderboard instead.
+                anchors the pick. They're in the gallery's ranking instead.
                 The header row is tight once the pick pill and expand button
                 are in it, so the hint has a shorter phrasing on small screens
                 rather than truncating to "…click inside to tr…". */}
@@ -370,9 +370,6 @@ export default function Vote() {
               <Link to="/Gallery" className="btn-pill-secondary">
                 Browse builds
               </Link>
-              <Link to="/Leaderboard" className="btn-pill-secondary">
-                Leaderboard
-              </Link>
             </div>
           </div>
         )}
@@ -479,8 +476,8 @@ export default function Vote() {
                   for this {noun}.
                 </p>
               )}
-              <Link to="/Leaderboard" className="btn-pill-secondary">
-                View leaderboard
+              <Link to="/Gallery" className="btn-pill-secondary">
+                See the rankings
               </Link>
             </div>
           </div>

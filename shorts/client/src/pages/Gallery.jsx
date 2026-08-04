@@ -130,12 +130,12 @@ export default function Gallery() {
             </h1>
             <p className="mt-1 text-sm text-fog-light">
               {viewMode === "rounds" ? (
-                <>Every past challenge — open one to see its builds and rankings</>
+                <>Every past challenge — open one to see its ranked builds</>
               ) : (
                 <>
-                  {total} submission{total === 1 ? "" : "s"} for{" "}
-                  <span className="font-mono">{challengeDate || "…"}</span> —
-                  click a preview to open
+                  {total} build{total === 1 ? "" : "s"} for{" "}
+                  <span className="font-mono">{challengeDate || "…"}</span>,
+                  ranked by community votes — click a preview to open
                 </>
               )}
             </p>
@@ -223,14 +223,8 @@ export default function Gallery() {
                       onClick={() => openRound(round)}
                       className="btn-pill-secondary"
                     >
-                      View builds
+                      View rankings
                     </button>
-                    <Link
-                      to={`/Leaderboard?challengeDate=${round.challengeDate}`}
-                      className="btn-pill-secondary"
-                    >
-                      Leaderboard
-                    </Link>
                   </div>
                 </div>
               ))}
@@ -283,7 +277,7 @@ export default function Gallery() {
 
         {viewMode === "builds" && mine.length > 0 && !loading && items.length > 0 && (
           <h2 className="mb-3 text-[18px] font-medium tracking-tight text-ink">
-            All builds
+            Rankings
           </h2>
         )}
 

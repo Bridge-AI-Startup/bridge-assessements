@@ -1,4 +1,10 @@
-import { BrowserRouter as Router, Route, Routes } from "react-router-dom";
+import {
+  BrowserRouter as Router,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+} from "react-router-dom";
 import { pagesConfig } from "./pages.config";
 import PageNotFound from "./lib/PageNotFound";
 
@@ -8,6 +14,16 @@ const MainPage = mainPageKey ? Pages[mainPageKey] : () => null;
 
 const LayoutWrapper = ({ children }) =>
   Layout ? <Layout>{children}</Layout> : <>{children}</>;
+
+/**
+ * The standalone leaderboard is gone — the gallery is the ranking now. Old
+ * links (shared rounds, bookmarks, the account page) keep working, query string
+ * and all, instead of landing on Page-not-found.
+ */
+function LeaderboardRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={`/Gallery${search}`} replace />;
+}
 
 export default function App() {
   return (
@@ -34,6 +50,7 @@ export default function App() {
               }
             />
           ))}
+        <Route path="/Leaderboard" element={<LeaderboardRedirect />} />
         <Route path="*" element={<PageNotFound />} />
       </Routes>
     </Router>
