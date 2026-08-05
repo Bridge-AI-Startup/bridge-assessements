@@ -707,6 +707,24 @@ export default function Build() {
         result.session.status === "failed" ||
         result.session.status === "expired"
       ) {
+        // Submit clock held (dialog open): tearing down here would unmount the
+        // dialog over a finished build the server still accepts — the submit
+        // gate takes expired sessions for as long as the hold/grace lasts.
+        if (submitHoldAtMs != null || showSubmitModal) return;
+        // The server stamps a timed-out session `expired` the moment any
+        // request touches it, but it stays submittable through the grace
+        // window — that path belongs to the time's-up pop-up, not this
+        // dead-end error screen.
+        const expiresAtMs = result.session.expiresAt
+          ? new Date(result.session.expiresAt).getTime()
+          : null;
+        if (
+          result.session.status === "expired" &&
+          expiresAtMs != null &&
+          Date.now() <= expiresAtMs + submitGraceMs(result.session)
+        ) {
+          return;
+        }
         setState({
           kind: "error",
           message:
@@ -718,7 +736,7 @@ export default function Build() {
       }
     }, 30000);
     return () => clearInterval(id);
-  }, [state]);
+  }, [state, showSubmitModal, submitHoldAtMs]);
 
   useEffect(() => {
     if (state.kind !== "ready") return undefined;
