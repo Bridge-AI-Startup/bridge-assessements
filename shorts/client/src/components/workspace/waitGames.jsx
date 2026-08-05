@@ -207,73 +207,9 @@ function RpsGame() {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Higher or lower: 1–100, ride the streak.                            */
-/* ------------------------------------------------------------------ */
-
-function rollExcept(current) {
-  let next = current;
-  while (next === current) next = 1 + Math.floor(Math.random() * 100);
-  return next;
-}
-
-function HigherLowerGame() {
-  const [current, setCurrent] = useState(() => 1 + Math.floor(Math.random() * 100));
-  const [streak, setStreak] = useState(0);
-  const [message, setMessage] = useState("Will the next number be higher or lower?");
-
-  function guess(higher) {
-    const next = rollExcept(current);
-    const right = higher ? next > current : next < current;
-    setCurrent(next);
-    if (right) {
-      setStreak((s) => s + 1);
-      setMessage(`${next} — right!`);
-    } else {
-      setStreak(0);
-      setMessage(`${next} — streak over.`);
-    }
-  }
-
-  return (
-    <div>
-      <div className="flex items-center gap-2">
-        <span className="flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-xl bg-ink font-mono text-xl tabular-nums text-white">
-          {current}
-        </span>
-        <div className="grid flex-1 gap-1.5">
-          <button
-            type="button"
-            onClick={() => guess(true)}
-            className="rounded-xl border border-line bg-paper py-1.5 text-sm font-medium text-ink transition-transform active:scale-95"
-          >
-            Higher
-          </button>
-          <button
-            type="button"
-            onClick={() => guess(false)}
-            className="rounded-xl border border-line bg-paper py-1.5 text-sm font-medium text-ink transition-transform active:scale-95"
-          >
-            Lower
-          </button>
-        </div>
-      </div>
-      <p className="mt-2 flex items-baseline justify-between text-xs">
-        <span className="text-ink" aria-live="polite">
-          {message}
-        </span>
-        <span className="font-mono tabular-nums text-fog-light">
-          Streak: {streak}
-        </span>
-      </p>
-    </div>
-  );
-}
-
 /** Registry keyed by the `game` field of a game bit in `lib/waitingRoom.js`. */
 export const WAIT_GAMES = {
   reaction: ReactionGame,
   shade: ShadeGame,
   rps: RpsGame,
-  higherlower: HigherLowerGame,
 };

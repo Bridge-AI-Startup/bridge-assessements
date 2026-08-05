@@ -123,7 +123,6 @@ const GAMES = [
   ["reaction", "Reaction test"],
   ["shade", "Odd one out"],
   ["rps", "Rock paper scissors"],
-  ["higherlower", "Higher or lower"],
 ];
 
 /** Fraction of draws that deal a minigame instead of a text bit. */
