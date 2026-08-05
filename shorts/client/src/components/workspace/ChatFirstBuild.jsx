@@ -163,6 +163,8 @@ export default function ChatFirstBuild({
   exhausted,
   tokensUsed,
   tokenBudget,
+  inputTokens = 0,
+  outputTokens = 0,
   tokenTone,
   timeLabel,
   timeTone,
@@ -388,6 +390,8 @@ export default function ChatFirstBuild({
                 <TokenGauge
                   used={tokensUsed}
                   budget={tokenBudget}
+                  inputTokens={inputTokens}
+                  outputTokens={outputTokens}
                   tone={tokenTone}
                   exhausted={exhausted}
                 />

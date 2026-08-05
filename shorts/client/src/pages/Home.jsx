@@ -183,11 +183,6 @@ export default function Home() {
                   Browse builds
                 </Link>
               </div>
-              <div className="mt-6 hidden flex-wrap gap-3 lg:flex">
-                <Link to="/Vote" className="label-mono hover:text-ink">
-                  Vote
-                </Link>
-              </div>
             </div>
 
             <article className="rounded-2xl border border-line bg-paper shadow-card">

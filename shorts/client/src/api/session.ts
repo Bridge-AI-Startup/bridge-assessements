@@ -32,6 +32,9 @@ export type PlaySession = {
   challenge: SessionChallenge;
   tokensUsed?: number;
   tokenBudget?: number;
+  /** Split of `tokensUsed`; both 0 on sessions that predate the split. */
+  inputTokensUsed?: number;
+  outputTokensUsed?: number;
   chatMessages?: SessionChatMessage[];
   sandboxPaused?: boolean;
   /** Seconds after `expiresAt` in which submitting still works (0 = none). */

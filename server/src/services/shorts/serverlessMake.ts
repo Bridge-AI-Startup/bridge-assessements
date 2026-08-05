@@ -35,6 +35,7 @@ import {
   resolvePlayModel,
   type PlayEffortLevel,
 } from "./models.js";
+import { SHORTS_VOICE, toPlainChatText } from "./voice.js";
 
 const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
 /**
@@ -54,10 +55,13 @@ const GENERATE_TIMEOUT_MS = 120_000;
 export const SERVERLESS_SYSTEM_PROMPT = [
   "You are the build partner for a phone-first daily challenge where people make small, fun, self-contained web creations.",
   "",
-  "Every turn is one of two shapes:",
+  SHORTS_VOICE,
+  "",
+  "Every turn is one of two shapes. The voice above applies to all of it — the line before a build, the answer to a question, everything.",
   "",
   "1. BUILD — when the user wants the app created, changed, fixed, styled, or extended.",
-  "   If they also asked something, answer it first in at most two short plain-text sentences, then the document. If they only asked for the change, start straight with the document.",
+  "   Open with ONE short friendly line about what you're making them (under about 12 words), then the document.",
+  "   If they also asked something, answer it first in at most two short plain-text sentences instead, then the document.",
   "   Return exactly ONE complete HTML document, starting with `<!DOCTYPE html>` and ending with `</html>`.",
   "   - Inline ALL CSS in a <style> tag and ALL JavaScript in a <script> tag. Do NOT reference separate .css/.js files.",
   "   - You MAY load libraries from a CDN via <script src> / <link href>, and you MAY call public, keyless, CORS-enabled APIs (e.g. open-meteo). Never require an API key.",
@@ -68,11 +72,32 @@ export const SERVERLESS_SYSTEM_PROMPT = [
   "",
   "2. TALK — when the user is brainstorming, asking a question, asking for ideas or an explanation, or otherwise not asking for a code change.",
   "   Reply in short plain text. No HTML document, no code fences, no full-file dumps.",
-  "   Keep it under about 120 words and easy to read on a phone. Offer concrete ideas they can then ask you to build.",
+  "   Hard limit: 80 words, and at most THREE ideas — one short line each. This is a chat bubble on a phone, not an article. Cutting the fourth idea is the right call every time.",
+  "   Offer concrete things they can then ask you to build, and stop. No recap or sign-off at the end.",
   "",
   "A turn that asks something AND requests a change is a BUILD: answer briefly, then build. Never drop half the message.",
   "If the request is ambiguous and implies no change, prefer TALK and ask one short clarifying question.",
 ].join("\n");
+
+/**
+ * Fallback chat line for a BUILD turn where the model sent the document with no
+ * prose in front of it. The system prompt asks for an opening line every time,
+ * so this is the backstop — rotated so a run of builds doesn't repeat one
+ * robotic sentence back at the builder.
+ */
+const BUILD_CONFIRMATIONS = [
+  "Done — have a look.",
+  "There you go, take a look.",
+  "Built it. See what you think.",
+  "That's up now — check it out.",
+  "Fresh version's ready for you.",
+];
+
+function pickBuildConfirmation(): string {
+  return BUILD_CONFIRMATIONS[
+    Math.floor(Math.random() * BUILD_CONFIRMATIONS.length)
+  ];
+}
 
 /** How many prior chat turns to replay so TALK mode has conversational memory. */
 const HISTORY_MAX_MESSAGES = 8;
@@ -410,15 +435,17 @@ export async function runServerlessMakeTurn(input: {
     }
 
     // Meter what was consumed BEFORE any post-checks (tokens were spent regardless).
-    const tokens = parseUsageFromAnthropicBody(parsed);
-    await incrementSessionUsage(input.sessionId, tokens);
+    await incrementSessionUsage(
+      input.sessionId,
+      parseUsageFromAnthropicBody(parsed),
+    );
 
     const stopReason = (parsed as { stop_reason?: string } | null)?.stop_reason;
 
     if (stopReason === "max_tokens") {
       throw createHttpError(
         502,
-        "The build got cut off (too large). Try a simpler request.",
+        "Ran out of room on that one — it got too big. Ask for something a bit simpler and I'll give it another go.",
       );
     }
 
@@ -428,7 +455,7 @@ export async function runServerlessMakeTurn(input: {
     if (stopReason === "refusal") {
       throw createHttpError(
         400,
-        "That request was declined. Try a different idea for your build.",
+        "I can't build that one, sorry. Throw me a different idea and we'll keep going.",
       );
     }
 
@@ -441,10 +468,10 @@ export async function runServerlessMakeTurn(input: {
       if (!reply) {
         throw createHttpError(
           502,
-          "The model returned an empty response. Try rephrasing your request.",
+          "That came back blank on my end. Try saying it a different way?",
         );
       }
-      const output = reply.slice(0, SERVERLESS_MAX_REPLY_CHARS);
+      const output = toPlainChatText(reply).slice(0, SERVERLESS_MAX_REPLY_CHARS);
       await appendSessionChatMessages(input.sessionId, [
         { role: "user", text: prompt, createdAt: new Date() },
         { role: "assistant", text: output, createdAt: new Date() },
@@ -454,7 +481,10 @@ export async function runServerlessMakeTurn(input: {
 
     const html = response.html;
     if (Buffer.byteLength(html, "utf8") > SERVERLESS_MAX_FILE_BYTES) {
-      throw createHttpError(413, "The generated file is too large.");
+      throw createHttpError(
+        413,
+        "That build came out way too big to save. Let's try a smaller version.",
+      );
     }
 
     // Overwrite the single-file snapshot atomically (do not doc.save() the stale
@@ -470,8 +500,11 @@ export async function runServerlessMakeTurn(input: {
     );
 
     // Store a short human-readable confirmation, never the raw HTML blob.
-    const note = response.note.slice(0, SERVERLESS_MAX_REPLY_CHARS).trim();
-    const output = note || "Updated your build.";
+    const note = toPlainChatText(response.note).slice(
+      0,
+      SERVERLESS_MAX_REPLY_CHARS,
+    );
+    const output = note || pickBuildConfirmation();
     await appendSessionChatMessages(input.sessionId, [
       { role: "user", text: prompt, createdAt: new Date() },
       { role: "assistant", text: output, createdAt: new Date() },

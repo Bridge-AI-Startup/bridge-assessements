@@ -1,6 +1,17 @@
 {
   "rewrites": [
     {
+      "source": "/Submission",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": "(?i).*(facebookexternalhit|twitterbot|whatsapp|slack|discord|telegram|linkedinbot|skypeuripreview|pinterest|applebot).*"
+        }
+      ],
+      "destination": "https://bridge-assessements-1.onrender.com/api/shorts/share"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

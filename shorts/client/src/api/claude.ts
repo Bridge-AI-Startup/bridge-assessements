@@ -13,6 +13,9 @@ export type SessionUsage = {
   llmCalls: number;
   remaining: number;
   exhausted: boolean;
+  /** Split of `tokensUsed`; both 0 on sessions that predate the split. */
+  inputTokens?: number;
+  outputTokens?: number;
 };
 
 export async function fetchSessionUsage(

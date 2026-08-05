@@ -39,6 +39,8 @@ router.get(
   publicListChallengesValidation,
   PlayController.listPublicChallenges,
 );
+// OG share card (HTML) — target of the Shorts Vercel bot-UA rewrite (?id=…).
+router.get("/share", PlayController.getSharePage);
 
 // Account routes: Firebase-authenticated consumers (no admin allowlist).
 router.post(

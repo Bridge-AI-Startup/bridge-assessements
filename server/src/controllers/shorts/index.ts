@@ -15,6 +15,7 @@ import {
   linkAnonymousId,
 } from "../../services/shorts/account.js";
 import { getChallengePeriodInfo } from "../../services/shorts/challengePeriod.js";
+import { renderSubmissionSharePage } from "../../services/shorts/sharePage.js";
 import {
   createOrResumeSession,
   getSession as getPlaySession,
@@ -84,6 +85,28 @@ export const getToday: RequestHandler = async (_req, res, next) => {
 
 export const listModels: RequestHandler = (_req, res) => {
   res.status(200).json(listPlayModelsPublic());
+};
+
+/**
+ * OpenGraph share card for a submission. Social crawlers land here via the
+ * Shorts Vercel bot-UA rewrite of `/Submission`; humans who follow the API URL
+ * directly are meta-refreshed to the client page. Serves HTML, not JSON.
+ */
+export const getSharePage: RequestHandler = async (req, res, next) => {
+  try {
+    const html = await renderSubmissionSharePage(
+      typeof req.query.id === "string" ? req.query.id : undefined,
+    );
+    res
+      .status(200)
+      .set("Content-Type", "text/html; charset=utf-8")
+      // Crawlers re-fetch aggressively; a short shared cache keeps a viral
+      // link from hammering Mongo while staying fresh enough for edits.
+      .set("Cache-Control", "public, max-age=300")
+      .send(html);
+  } catch (error) {
+    next(error);
+  }
 };
 
 export const adminListChallenges: RequestHandler = async (req, res, next) => {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import TokenBreakdown from "@/components/workspace/TokenBreakdown";
 
 const RADIUS = 8;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
@@ -67,9 +68,14 @@ export function useTokenDelta(used) {
  * Token budget gauge: a ring that fills as the budget is spent, with a
  * short "+N" flash each time Claude burns tokens so usage is hard to miss.
  *
+ * Hovering (or focusing, or tapping on touch) opens the input/output
+ * breakdown — the gauge itself only has room for one number.
+ *
  * @param {{
  *   used: number,
  *   budget: number,
+ *   inputTokens?: number,
+ *   outputTokens?: number,
  *   tone?: "ok" | "warn" | "danger",
  *   exhausted?: boolean,
  *   className?: string,
@@ -78,6 +84,8 @@ export function useTokenDelta(used) {
 export default function TokenGauge({
   used,
   budget,
+  inputTokens = 0,
+  outputTokens = 0,
   tone = "ok",
   exhausted = false,
   className = "",
@@ -86,10 +94,19 @@ export default function TokenGauge({
   const pct = budget > 0 ? clampPct((used / budget) * 100) : 0;
   const palette = TONES[tone] ?? TONES.ok;
   const remaining = Math.max(0, budget - used);
+  const [open, setOpen] = useState(false);
 
   return (
-    <div
-      className={`relative inline-flex items-center gap-1.5 rounded-full border py-0.5 pl-0.5 pr-2 ${palette.shell} ${className}`}
+    <button
+      type="button"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+      // Touch has no hover — tap toggles the same panel.
+      onClick={() => setOpen((v) => !v)}
+      aria-expanded={open}
+      className={`relative inline-flex items-center gap-1.5 rounded-full border py-0.5 pl-0.5 pr-2 text-left ${palette.shell} ${className}`}
       title={`${used.toLocaleString()} of ${budget.toLocaleString()} tokens used (${Math.round(pct)}%) — ${remaining.toLocaleString()} left`}
     >
       <svg
@@ -144,6 +161,14 @@ export default function TokenGauge({
       <span className="sr-only">
         {used.toLocaleString()} of {budget.toLocaleString()} tokens used
       </span>
-    </div>
+      {open ? (
+        <TokenBreakdown
+          used={used}
+          budget={budget}
+          input={inputTokens}
+          output={outputTokens}
+        />
+      ) : null}
+    </button>
   );
 }

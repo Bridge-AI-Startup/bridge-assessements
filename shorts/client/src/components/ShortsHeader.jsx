@@ -11,6 +11,15 @@ const NAV = [
   { id: "vote", label: "Vote", to: "/Vote" },
 ];
 
+/**
+ * The main Bridge site. Deliberately NOT wired to the logo: the wordmark says
+ * "Bridge Shorts", so anyone clicking it wants the Shorts home page — sending
+ * them off-app instead is a trap. It gets its own button beside the account
+ * control, styled `btn-pill-secondary` so it reads as a button without
+ * outranking a page's primary `cta` pill.
+ */
+const BRIDGE_SITE_URL = "https://www.bridge-jobs.com";
+
 function MenuIcon() {
   return (
     <svg
@@ -213,6 +222,15 @@ export default function ShortsHeader({ active = null, cta = null, children = nul
                 Sign in
               </button>
             ))}
+
+          <a
+            href={BRIDGE_SITE_URL}
+            className="btn-pill-secondary hidden sm:inline-flex"
+            title="Back to bridge-jobs.com"
+          >
+            Bridge Jobs
+          </a>
+
           {cta ? (
             <Link to={cta.to} className="btn-pill">
               {cta.label}
@@ -301,6 +319,18 @@ export default function ShortsHeader({ active = null, cta = null, children = nul
                     Sign in
                   </button>
                 )}
+
+                {/* Mirrors the desktop pill, which is hidden at this width. */}
+                <div className="border-t border-line px-3 pb-2 pt-3">
+                  <a
+                    href={BRIDGE_SITE_URL}
+                    role="menuitem"
+                    onClick={() => setNavOpen(false)}
+                    className="btn-pill-secondary w-full"
+                  >
+                    Bridge Jobs
+                  </a>
+                </div>
               </div>
             )}
           </div>

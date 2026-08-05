@@ -21,6 +21,7 @@ import {
 } from "@/lib/buildLayout";
 import WorkspaceEditor from "@/components/workspace/WorkspaceEditor";
 import ModelEffortPicker from "@/components/workspace/ModelEffortPicker";
+import ShareBuild from "@/components/ShareBuild";
 import ChatFirstBuild from "@/components/workspace/ChatFirstBuild";
 import BuildWaitCard from "@/components/workspace/BuildWaitCard";
 import OutOfCreditsModal from "@/components/workspace/OutOfCreditsModal";
@@ -29,6 +30,7 @@ import {
   compactTokens,
   useTokenDelta,
 } from "@/components/workspace/TokenGauge";
+import TokenBreakdown from "@/components/workspace/TokenBreakdown";
 import SessionWaitlist from "@/components/SessionWaitlist";
 
 const DEFAULT_LEFT_STACK = ["editor", "chat"];
@@ -183,18 +185,47 @@ function ProgressMeter({ label, valueLabel, pct, tone = "ok", delta = 0, pulse =
   );
 }
 
-/** Token budget meter with a "+N" flash whenever Claude spends tokens. */
-function TokenMeter({ used, budget, pct, tone, exhausted }) {
+/**
+ * Token budget meter with a "+N" flash whenever Claude spends tokens, and the
+ * input/output breakdown on hover (same panel the chat-first gauge shows).
+ */
+function TokenMeter({
+  used,
+  budget,
+  pct,
+  tone,
+  exhausted,
+  inputTokens = 0,
+  outputTokens = 0,
+}) {
   const delta = useTokenDelta(used);
+  const [open, setOpen] = useState(false);
   return (
-    <ProgressMeter
-      label="Tokens"
-      valueLabel={`${formatTokens(used)} / ${formatTokens(budget)}`}
-      pct={pct}
-      tone={tone}
-      delta={delta}
-      pulse={exhausted || tone === "danger"}
-    />
+    <div
+      className="relative"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+      tabIndex={0}
+    >
+      <ProgressMeter
+        label="Tokens"
+        valueLabel={`${formatTokens(used)} / ${formatTokens(budget)}`}
+        pct={pct}
+        tone={tone}
+        delta={delta}
+        pulse={exhausted || tone === "danger"}
+      />
+      {open ? (
+        <TokenBreakdown
+          used={used}
+          budget={budget}
+          input={inputTokens}
+          output={outputTokens}
+        />
+      ) : null}
+    </div>
   );
 }
 
@@ -491,6 +522,8 @@ export default function Build() {
       exhausted:
         (session.tokensUsed ?? 0) >=
         (session.tokenBudget ?? session.challenge.tokenBudget),
+      inputTokens: session.inputTokensUsed ?? 0,
+      outputTokens: session.outputTokensUsed ?? 0,
       llmCalls: 0,
     });
   };
@@ -1057,6 +1090,8 @@ export default function Build() {
       kind: "submitted",
       displayName: result.result.displayName,
       fileCount: result.result.fileCount,
+      // Lets the success screen offer a share link straight to the new entry.
+      submissionId: result.result.submissionId,
     });
   }
 
@@ -1133,6 +1168,14 @@ export default function Build() {
           <Link to="/Vote" className="btn-pill">
             Vote on {possessive} builds
           </Link>
+          {/* Resumed already-submitted sessions don't carry the id — no share. */}
+          {state.submissionId ? (
+            <ShareBuild
+              submissionId={state.submissionId}
+              displayName={state.displayName}
+              isMine
+            />
+          ) : null}
           <Link to="/Gallery" className="btn-pill-secondary">
             Browse rankings
           </Link>
@@ -1176,6 +1219,8 @@ export default function Build() {
     session.challenge.tokenBudget ??
     0;
   const tokensUsed = usage?.tokensUsed ?? session.tokensUsed ?? 0;
+  const inputTokens = usage?.inputTokens ?? session.inputTokensUsed ?? 0;
+  const outputTokens = usage?.outputTokens ?? session.outputTokensUsed ?? 0;
   const exhausted = usage?.exhausted ?? tokensUsed >= tokenBudget;
   const tokenPct =
     tokenBudget > 0 ? clampPct((tokensUsed / tokenBudget) * 100) : 0;
@@ -1560,6 +1605,8 @@ export default function Build() {
     exhausted,
     tokensUsed,
     tokenBudget,
+    inputTokens,
+    outputTokens,
     tokenTone,
     timeLabel:
       remainingMs != null ? formatCountdown(remainingMs) : "Build session",
@@ -1609,6 +1656,8 @@ export default function Build() {
                 pct={tokenPct}
                 tone={tokenTone}
                 exhausted={exhausted}
+                inputTokens={inputTokens}
+                outputTokens={outputTokens}
               />
             ) : null}
             {remainingMs != null ? (

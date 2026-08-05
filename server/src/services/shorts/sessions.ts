@@ -79,6 +79,9 @@ export type SessionResponse = {
   challenge: SessionChallengeSummary;
   tokensUsed?: number;
   tokenBudget?: number;
+  /** Split of `tokensUsed`; both 0 on sessions that predate the split. */
+  inputTokensUsed?: number;
+  outputTokensUsed?: number;
   chatMessages?: SessionChatMessage[];
   sandboxPaused?: boolean;
   /** Seconds after `expiresAt` in which submitting still works (0 = none). */
@@ -165,6 +168,8 @@ function toSessionResponse(
     challengeDate: string;
     tokenBudget: number;
     tokensUsed?: number;
+    inputTokensUsed?: number;
+    outputTokensUsed?: number;
     sandboxPaused?: boolean;
     chatMessages?: Array<{
       role: "user" | "assistant";
@@ -187,6 +192,8 @@ function toSessionResponse(
     },
     tokensUsed: doc.tokensUsed ?? 0,
     tokenBudget: doc.tokenBudget,
+    inputTokensUsed: doc.inputTokensUsed ?? 0,
+    outputTokensUsed: doc.outputTokensUsed ?? 0,
     chatMessages: serializeChatMessages(doc.chatMessages),
     sandboxPaused: Boolean(doc.sandboxPaused),
     submitGraceSeconds: getSubmitGraceSeconds(),

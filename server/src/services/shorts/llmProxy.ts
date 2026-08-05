@@ -201,24 +201,42 @@ async function loadActiveSessionForProxy(
   return doc;
 }
 
-export function parseUsageFromAnthropicBody(body: unknown): number {
-  if (!body || typeof body !== "object") return 0;
+/** Tokens a single call consumed, kept split by direction. */
+export type TokenSplit = { input: number; output: number };
+
+export function parseUsageFromAnthropicBody(body: unknown): TokenSplit {
+  if (!body || typeof body !== "object") return { input: 0, output: 0 };
   const usage = (body as { usage?: { input_tokens?: number; output_tokens?: number } })
     .usage;
-  if (!usage) return 0;
-  return (usage.input_tokens || 0) + (usage.output_tokens || 0);
+  if (!usage) return { input: 0, output: 0 };
+  return {
+    input: usage.input_tokens || 0,
+    output: usage.output_tokens || 0,
+  };
 }
 
+/**
+ * Meter one call. `tokensUsed` (the budget) stays the plain sum; the split is
+ * carried alongside it purely so the builder can see where their credits went.
+ */
 export async function incrementSessionUsage(
   sessionId: string,
-  tokens: number,
+  usage: TokenSplit,
 ): Promise<void> {
-  if (tokens <= 0) return;
+  const input = Math.max(0, usage.input || 0);
+  const output = Math.max(0, usage.output || 0);
+  const total = input + output;
+  if (total <= 0) return;
   const BuildSession = getPlayBuildSessionModel();
   await BuildSession.updateOne(
     { _id: sessionId },
     {
-      $inc: { tokensUsed: tokens, llmCalls: 1 },
+      $inc: {
+        tokensUsed: total,
+        inputTokensUsed: input,
+        outputTokensUsed: output,
+        llmCalls: 1,
+      },
     },
   );
 }
@@ -275,8 +293,7 @@ export async function handlePlayMessagesProxy(
     } catch {
       // leave null
     }
-    const tokens = parseUsageFromAnthropicBody(parsed);
-    await incrementSessionUsage(sessionId, tokens);
+    await incrementSessionUsage(sessionId, parseUsageFromAnthropicBody(parsed));
 
     res.status(upstream.status);
     const ct = upstream.headers.get("content-type");
@@ -341,7 +358,10 @@ export async function handlePlayMessagesProxy(
       }
     }
   } finally {
-    await incrementSessionUsage(sessionId, inputTokens + outputTokens);
+    await incrementSessionUsage(sessionId, {
+      input: inputTokens,
+      output: outputTokens,
+    });
     res.end();
   }
 }
@@ -352,6 +372,9 @@ export type SessionUsage = {
   llmCalls: number;
   remaining: number;
   exhausted: boolean;
+  /** Split of `tokensUsed`; both 0 on sessions that predate the split. */
+  inputTokens: number;
+  outputTokens: number;
 };
 
 export async function getSessionUsage(
@@ -372,6 +395,8 @@ export async function getSessionUsage(
   return {
     tokensUsed,
     tokenBudget,
+    inputTokens: doc.inputTokensUsed ?? 0,
+    outputTokens: doc.outputTokensUsed ?? 0,
     llmCalls: doc.llmCalls ?? 0,
     remaining: Math.max(0, tokenBudget - tokensUsed),
     exhausted: tokensUsed >= tokenBudget,

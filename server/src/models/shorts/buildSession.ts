@@ -60,6 +60,21 @@ const BuildSessionSchema = new Schema(
       default: 0,
       min: 0,
     },
+    // Same spend, split by direction — the budget still runs off `tokensUsed`
+    // (their sum). Absent on sessions that predate the split, which is why the
+    // UI only shows a breakdown when these are non-zero.
+    inputTokensUsed: {
+      type: Number,
+      required: true,
+      default: 0,
+      min: 0,
+    },
+    outputTokensUsed: {
+      type: Number,
+      required: true,
+      default: 0,
+      min: 0,
+    },
     llmProxyToken: {
       type: String,
       trim: true,
