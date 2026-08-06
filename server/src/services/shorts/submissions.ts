@@ -14,7 +14,7 @@ import {
 } from "./sandbox.js";
 import { snapshotServerlessSubmission } from "./serverlessMake.js";
 import { linkAnonymousId } from "./account.js";
-import { isWithinSubmitGrace, isWithinSubmitHold } from "./sessionPersist.js";
+import { isWithinSubmitGrace } from "./sessionPersist.js";
 import { assertNotStarterOnly } from "./starterDetection.js";
 import type { Sandbox } from "e2b";
 
@@ -79,14 +79,11 @@ export async function submitSession(input: {
   if (session.status === "submitted") {
     throw createHttpError(409, "session_already_submitted");
   }
-  // Building stops at expiresAt, but the finished work can still be saved for a
-  // short grace window — a session that timed out seconds ago is `expired`
-  // rather than `active`, so both statuses are allowed while grace holds.
-  // Opening the submit dialog stops the submit clock outright (`submitHoldAt`),
-  // which is what keeps a signup or Google popup from eating a finished build.
-  const inGrace =
-    isWithinSubmitGrace(session.expiresAt) ||
-    isWithinSubmitHold(session.submitHoldAt);
+  // Builds have no personal clock — `expiresAt` is the end of the round. A
+  // session caught by that rollover is `expired` rather than `active`, so both
+  // statuses are allowed while the short grace window holds, which keeps the
+  // round boundary from swallowing a build mid-submit.
+  const inGrace = isWithinSubmitGrace(session.expiresAt);
   if (session.status !== "active" && !(session.status === "expired" && inGrace)) {
     throw createHttpError(400, `session_not_active:${session.status}`);
   }

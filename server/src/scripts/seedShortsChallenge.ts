@@ -29,7 +29,6 @@ type SeedPayload = {
   title: string;
   prompt: string;
   tokenBudget: number;
-  timeLimitMinutes?: number;
   category: "widget" | "game" | "tool" | "other";
   status?: "draft" | "published";
 };
@@ -70,7 +69,6 @@ async function main() {
       title: payload.title,
       prompt: payload.prompt,
       tokenBudget: payload.tokenBudget,
-      timeLimitMinutes: payload.timeLimitMinutes,
       category: payload.category,
       status: payload.status ?? "draft",
     });
@@ -82,7 +80,6 @@ async function main() {
       title: payload.title,
       prompt: payload.prompt,
       tokenBudget: payload.tokenBudget,
-      timeLimitMinutes: payload.timeLimitMinutes,
       category: payload.category,
       status: payload.status ?? "draft",
     });

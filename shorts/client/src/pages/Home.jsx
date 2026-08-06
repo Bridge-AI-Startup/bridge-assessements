@@ -212,9 +212,6 @@ export default function Home() {
               <div className="border-t border-line px-6 py-3 sm:px-8">
                 <p className="label-mono">
                   {state.challenge.tokenBudget.toLocaleString()} token budget
-                  {state.challenge.timeLimitMinutes
-                    ? ` · ${state.challenge.timeLimitMinutes} min build`
-                    : ""}
                 </p>
               </div>
 

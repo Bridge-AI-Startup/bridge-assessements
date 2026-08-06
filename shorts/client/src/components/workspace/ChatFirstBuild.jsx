@@ -5,12 +5,6 @@ import BuildWaitCard from "@/components/workspace/BuildWaitCard";
 import ModelEffortPicker from "@/components/workspace/ModelEffortPicker";
 import TokenGauge from "@/components/workspace/TokenGauge";
 
-function toneClass(tone) {
-  if (tone === "danger") return "text-red-600";
-  if (tone === "warn") return "text-accent-amber";
-  return "text-fog";
-}
-
 function previewUrlWithTick(url, tick) {
   return `${url}${url.includes("?") ? "&" : "?"}_=${tick}`;
 }
@@ -166,8 +160,6 @@ export default function ChatFirstBuild({
   inputTokens = 0,
   outputTokens = 0,
   tokenTone,
-  timeLabel,
-  timeTone,
   previewTick,
   onRefreshPreview,
   modelEffort,
@@ -178,9 +170,6 @@ export default function ChatFirstBuild({
   submitModal,
   creditsModal,
   onShowCreditsHelp,
-  timeModal,
-  timeIsUp = false,
-  onShowTimeHelp,
 }) {
   const isDesktop = variant === "desktop";
   const [challengePrompt, setChallengePrompt] = useState("");
@@ -346,19 +335,15 @@ export default function ChatFirstBuild({
             rows={1}
             enterKeyHint="send"
             placeholder={
-              timeIsUp
-                ? "Time is up"
-                : exhausted
-                  ? "Out of credits"
-                  : "Describe what to build…"
+              exhausted ? "Out of credits" : "Describe what to build…"
             }
-            disabled={chatBusy || exhausted || timeIsUp}
+            disabled={chatBusy || exhausted}
             className="min-h-10 max-h-24 flex-1 resize-none overflow-y-auto rounded-2xl border border-line bg-cream px-4 py-2.5 text-sm text-ink placeholder:text-fog-light focus:border-ink focus:outline-none disabled:opacity-50"
           />
           <button
             type="submit"
             aria-label={chatBusy ? "Claude is building" : "Send message"}
-            disabled={chatBusy || exhausted || timeIsUp || !chatInput.trim()}
+            disabled={chatBusy || exhausted || !chatInput.trim()}
             className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-ink text-white disabled:opacity-40"
           >
             <SendIcon />
@@ -381,12 +366,6 @@ export default function ChatFirstBuild({
                 {session.challenge.title}
               </p>
               <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-                <span
-                  className={`font-mono text-[11px] tabular-nums ${toneClass(timeTone)}`}
-                >
-                  {timeLabel}
-                </span>
-                <span className="text-fog-light">·</span>
                 <TokenGauge
                   used={tokensUsed}
                   budget={tokenBudget}
@@ -406,15 +385,13 @@ export default function ChatFirstBuild({
           </div>
         </header>
 
-        {timeIsUp || exhausted ? (
+        {exhausted ? (
           <div className="flex flex-wrap items-center justify-center gap-2 border-b border-accent-amber/30 bg-accent-amber/10 px-4 py-2 text-center font-mono text-[11px] uppercase tracking-label text-accent-amber">
-            {timeIsUp
-              ? "Time is up — no more changes can be made."
-              : "You ran out of credits — no more changes can be made."}
-            {(timeIsUp ? onShowTimeHelp : onShowCreditsHelp) ? (
+            You ran out of credits — no more changes can be made.
+            {onShowCreditsHelp ? (
               <button
                 type="button"
-                onClick={timeIsUp ? onShowTimeHelp : onShowCreditsHelp}
+                onClick={onShowCreditsHelp}
                 className="underline underline-offset-2"
               >
                 What now?
@@ -487,7 +464,6 @@ export default function ChatFirstBuild({
       ) : null}
       {submitModal}
       {creditsModal}
-      {timeModal}
     </>
   );
 }

@@ -30,10 +30,6 @@ import {
   computeBuildSessionExpiresAt,
   e2bTimeoutMsForChallengeDay,
   getSubmitGraceMs,
-  getSubmitGraceSeconds,
-  getSubmitHoldMs,
-  isWithinSubmitGrace,
-  isWithinSubmitHold,
   restoreSessionSnapshotAndPrompt,
   serializeChatMessages,
   type SnapshotFile,
@@ -84,8 +80,6 @@ export type SessionResponse = {
   outputTokensUsed?: number;
   chatMessages?: SessionChatMessage[];
   sandboxPaused?: boolean;
-  /** Seconds after `expiresAt` in which submitting still works (0 = none). */
-  submitGraceSeconds: number;
   error?: string;
 };
 
@@ -132,28 +126,15 @@ export function isSessionQueueError(err: unknown): err is SessionQueueError {
   return err instanceof SessionQueueError;
 }
 
-async function estimateQueueWaitSeconds(
-  BuildSession: ReturnType<typeof getPlayBuildSessionModel>,
-  now: Date,
-): Promise<number> {
-  const soonest = await BuildSession.findOne({
-    status: "active",
-    expiresAt: { $gt: now },
-    sandboxPaused: { $ne: true },
-  })
-    .sort({ expiresAt: 1 })
-    .select({ expiresAt: 1 })
-    .lean();
-
-  if (soonest?.expiresAt) {
-    const sec = Math.ceil(
-      (new Date(soonest.expiresAt).getTime() - now.getTime()) / 1000,
-    );
-    // Floor: people often pause/submit sooner than full time limit.
-    return Math.max(20, Math.min(sec, 15 * 60));
-  }
-  return 45;
-}
+/**
+ * Rough wait for a Build seat.
+ *
+ * There is no per-build clock to count down any more, so `expiresAt` (the round
+ * end) says nothing about when a seat frees — seats free when someone submits
+ * or walks away and their sandbox pauses. That is unknowable, so this is a
+ * deliberately flat, honest-ish guess rather than a fake precise number.
+ */
+const ESTIMATED_QUEUE_WAIT_SECONDS = 90;
 
 function toSessionResponse(
   doc: {
@@ -196,7 +177,6 @@ function toSessionResponse(
     outputTokensUsed: doc.outputTokensUsed ?? 0,
     chatMessages: serializeChatMessages(doc.chatMessages),
     sandboxPaused: Boolean(doc.sandboxPaused),
-    submitGraceSeconds: getSubmitGraceSeconds(),
   };
   if (doc.previewUrl) result.previewUrl = doc.previewUrl;
   if (doc.expiresAt) result.expiresAt = doc.expiresAt.toISOString();
@@ -273,13 +253,13 @@ async function expireSession(
 }
 
 /**
- * Expire timed-out active sessions (wall-clock build limit) so they stop
- * holding concurrent seats. Best-effort; safe to call on every session create.
+ * Expire sessions whose challenge round has ended so they stop holding
+ * concurrent seats. Best-effort; safe to call on every session create.
  */
 async function reapExpiredActiveSessions(): Promise<void> {
   const BuildSession = getPlayBuildSessionModel();
   // Leave the submit grace window alone: reaping kills the sandbox, and an E2B
-  // build that just ran out of time still needs its files snapshotted.
+  // build caught by the round rollover still needs its files snapshotted.
   const cutoff = new Date(Date.now() - getSubmitGraceMs());
   const stale = await BuildSession.find({
     status: "active",
@@ -287,7 +267,7 @@ async function reapExpiredActiveSessions(): Promise<void> {
   }).limit(50);
 
   for (const doc of stale) {
-    await expireSession(doc, "Build time limit reached");
+    await expireSession(doc, "Challenge round ended");
   }
 }
 
@@ -323,7 +303,7 @@ async function reprovisionSandboxOnSession(
   }
 
   const timeoutMs = e2bTimeoutMsForChallengeDay(challenge.challengeDate);
-  // Keep original wall-clock expiresAt; do not stretch to end of UTC day.
+  // expiresAt is the round end and is unchanged by reprovisioning the box.
 
   const sandbox = await createPlaySandbox({
     timeoutMs,
@@ -417,7 +397,10 @@ async function createOrResumeSessionUnlocked(
   });
 
   if (existing) {
-    // Clamp legacy day-long expiresAt down to the wall-clock build window.
+    // Sessions run to the end of the round. Sessions created under the old
+    // per-build clock carry a short expiresAt, so resume *extends* them to the
+    // round end rather than clamping — otherwise a build in flight during the
+    // rollout would still die on the old timer.
     const legacyCreated = (existing as { createdAt?: Date }).createdAt;
     const startedAt =
       existing.startedAt instanceof Date
@@ -425,18 +408,20 @@ async function createOrResumeSessionUnlocked(
         : legacyCreated instanceof Date
           ? legacyCreated
           : now;
-    const capped = computeBuildSessionExpiresAt({
-      startedAt,
+    const roundEnd = computeBuildSessionExpiresAt({
       challengeDate: challenge.challengeDate,
-      challengeTimeLimitMinutes: challenge.timeLimitMinutes,
+      periodEndsAt: challenge.periodEndsAt ? new Date(challenge.periodEndsAt) : null,
     });
-    if (!existing.expiresAt || existing.expiresAt.getTime() > capped.getTime()) {
-      existing.expiresAt = capped;
+    if (
+      !existing.expiresAt ||
+      existing.expiresAt.getTime() !== roundEnd.getTime()
+    ) {
+      existing.expiresAt = roundEnd;
       if (!existing.startedAt) existing.startedAt = startedAt;
       await existing.save();
     }
     if (existing.expiresAt.getTime() <= Date.now()) {
-      await expireSession(existing, "Build time limit reached");
+      await expireSession(existing, "Challenge round ended");
       existing = null;
     }
   }
@@ -512,9 +497,8 @@ async function createOrResumeSessionUnlocked(
   const resolvedMakeMode = challenge.makeMode ?? getShortsMakeMode();
   if (resolvedMakeMode === "serverless") {
     const expiresAt = computeBuildSessionExpiresAt({
-      startedAt: now,
       challengeDate: challenge.challengeDate,
-      challengeTimeLimitMinutes: challenge.timeLimitMinutes,
+      periodEndsAt: challenge.periodEndsAt ? new Date(challenge.periodEndsAt) : null,
     });
     const doc = await provisionServerlessSession({
       anonymousId,
@@ -533,21 +517,16 @@ async function createOrResumeSessionUnlocked(
   });
   const maxConcurrent = getMaxConcurrentSessions();
   if (activeCount >= maxConcurrent) {
-    const estimatedWaitSeconds = await estimateQueueWaitSeconds(
-      BuildSession,
-      now,
-    );
     throw new SessionQueueError({
       activeCount,
       maxConcurrent,
-      estimatedWaitSeconds,
+      estimatedWaitSeconds: ESTIMATED_QUEUE_WAIT_SECONDS,
     });
   }
 
   const expiresAt = computeBuildSessionExpiresAt({
-    startedAt: now,
     challengeDate: challenge.challengeDate,
-    challengeTimeLimitMinutes: challenge.timeLimitMinutes,
+    periodEndsAt: challenge.periodEndsAt ? new Date(challenge.periodEndsAt) : null,
   });
   const timeoutMs = e2bTimeoutMsForChallengeDay(challenge.challengeDate, now);
 
@@ -708,7 +687,7 @@ async function loadOwnedActiveSession(sessionId: string, anonymousId: string) {
     throw createHttpError(400, "session_not_active");
   }
   if (doc.expiresAt && doc.expiresAt.getTime() <= Date.now()) {
-    await expireSession(doc, "Build time limit reached");
+    await expireSession(doc, "Challenge round ended");
     throw createHttpError(400, "session_expired");
   }
   // Serverless sessions never have a sandbox; only E2B sessions require one.
@@ -719,57 +698,8 @@ async function loadOwnedActiveSession(sessionId: string, anonymousId: string) {
 }
 
 /**
- * Stop the submit clock: called when the builder opens the submit dialog.
- *
- * Naming a build and (especially) creating an account mid-submit can take
- * longer than the two-minute grace window, and a finished build lost to the
- * clock while signing in is the worst outcome the product has. The hold only
- * moves the *submit* deadline — `expiresAt` is untouched, so chat turns and
- * file writes still stop exactly when they did before.
- *
- * Re-stamped on every open, so a builder who cancels and comes back gets a
- * fresh window rather than the remains of an old one.
- */
-export async function holdPlayBuildSessionSubmit(
-  sessionId: string,
-  anonymousId: string,
-): Promise<{ heldAt: string; submitDeadline: string }> {
-  const BuildSession = getPlayBuildSessionModel();
-  const doc = await BuildSession.findById(sessionId);
-  if (!doc) throw createHttpError(404, "session_not_found");
-  if (doc.anonymousId !== anonymousId.trim()) {
-    throw createHttpError(403, "session_forbidden");
-  }
-  if (doc.status === "submitted") {
-    throw createHttpError(409, "session_already_submitted");
-  }
-
-  // A hold can only be placed while the build is still submittable — otherwise
-  // an expired session could be revived indefinitely by opening the dialog.
-  const alreadyHeld = isWithinSubmitHold(doc.submitHoldAt);
-  const submittable =
-    (doc.status === "active" || doc.status === "expired") &&
-    (!doc.expiresAt ||
-      doc.expiresAt.getTime() > Date.now() ||
-      isWithinSubmitGrace(doc.expiresAt) ||
-      alreadyHeld);
-  if (!submittable) {
-    throw createHttpError(400, "session_expired");
-  }
-
-  const heldAt = new Date();
-  doc.submitHoldAt = heldAt;
-  await doc.save();
-
-  return {
-    heldAt: heldAt.toISOString(),
-    submitDeadline: new Date(heldAt.getTime() + getSubmitHoldMs()).toISOString(),
-  };
-}
-
-/**
  * Pause the E2B sandbox while the user leaves Build. Session stays active in Mongo
- * until the wall-clock build window ends; resume reconnects the same box.
+ * until the challenge round ends; resume reconnects the same box.
  * Paused sessions do not count toward PLAY_MAX_CONCURRENT_SESSIONS.
  */
 export async function pausePlayBuildSession(

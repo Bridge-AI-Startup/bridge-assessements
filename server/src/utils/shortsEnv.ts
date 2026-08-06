@@ -55,13 +55,6 @@ export function getShortsMaxConcurrentSessions(): string {
   );
 }
 
-export function getShortsBuildTimeLimitMinutes(): string {
-  return shortsEnv(
-    "SHORTS_BUILD_TIME_LIMIT_MINUTES",
-    "PLAY_BUILD_TIME_LIMIT_MINUTES",
-  );
-}
-
 export function getShortsSubmitGraceSeconds(): string {
   return shortsEnv(
     "SHORTS_SUBMIT_GRACE_SECONDS",

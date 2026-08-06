@@ -3,10 +3,7 @@
  */
 import type { Sandbox } from "e2b";
 import { Types } from "mongoose";
-import {
-  getShortsBuildTimeLimitMinutes,
-  getShortsSubmitGraceSeconds,
-} from "../../utils/shortsEnv.js";
+import { getShortsSubmitGraceSeconds } from "../../utils/shortsEnv.js";
 import { getPlayBuildSessionModel } from "../../models/shorts/buildSession.js";
 import { endOfChallengePeriod } from "./challengePeriod.js";
 import {
@@ -33,48 +30,33 @@ export function endOfUtcChallengeDay(challengeDate: string): Date {
   return endOfChallengePeriod(challengeDate);
 }
 
-const DEFAULT_BUILD_TIME_LIMIT_MINUTES = 10;
-
 /**
- * Wall-clock build window. Challenge `timeLimitMinutes` wins, else
- * `PLAY_BUILD_TIME_LIMIT_MINUTES` (default 10). Always capped by the end of
- * the challenge period (UTC day or week) so abandoned sessions free seats.
+ * When a build session stops accepting work: the end of its challenge round.
+ *
+ * There is deliberately **no per-build clock**. Builds used to expire a fixed
+ * number of minutes after `startedAt`, which meant a finished build could be
+ * lost while its author was typing a name or signing in. The only boundary now
+ * is the round itself, because a submission has to belong to the round it was
+ * built for.
  */
-export function getBuildTimeLimitMinutes(
-  challengeTimeLimitMinutes?: number | null,
-): number {
-  if (
-    typeof challengeTimeLimitMinutes === "number" &&
-    Number.isFinite(challengeTimeLimitMinutes) &&
-    challengeTimeLimitMinutes > 0
-  ) {
-    return Math.floor(challengeTimeLimitMinutes);
-  }
-  const raw = getShortsBuildTimeLimitMinutes();
-  const n = raw ? parseInt(raw, 10) : DEFAULT_BUILD_TIME_LIMIT_MINUTES;
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_BUILD_TIME_LIMIT_MINUTES;
-}
-
-/** `min(startedAt + limit, end of UTC challenge day)`. */
 export function computeBuildSessionExpiresAt(input: {
-  startedAt: Date;
   challengeDate: string;
-  challengeTimeLimitMinutes?: number | null;
+  /** Window-override rounds end here instead of the cadence-derived period end. */
+  periodEndsAt?: Date | null;
 }): Date {
-  const dayEnd = endOfUtcChallengeDay(input.challengeDate);
-  const limitMs =
-    getBuildTimeLimitMinutes(input.challengeTimeLimitMinutes) * 60_000;
-  const timed = new Date(input.startedAt.getTime() + limitMs);
-  return timed.getTime() < dayEnd.getTime() ? timed : dayEnd;
+  return input.periodEndsAt ?? endOfUtcChallengeDay(input.challengeDate);
 }
 
 const DEFAULT_SUBMIT_GRACE_SECONDS = 120;
 
 /**
  * Grace window after `expiresAt` in which a build can still be **submitted**.
- * Building is over at `expiresAt` — chat turns are refused — this only buys
- * time to get the finished work saved (same idea as the assessments product's
- * late-submit window). `SHORTS_SUBMIT_GRACE_SECONDS=0` disables it.
+ *
+ * `expiresAt` is now the round boundary rather than a personal clock, so this
+ * exists only to keep that boundary from being a cliff: someone who hits Submit
+ * as the round rolls over still gets their build saved. Building itself is over
+ * at `expiresAt` — chat turns are refused. `SHORTS_SUBMIT_GRACE_SECONDS=0`
+ * disables it.
  */
 export function getSubmitGraceSeconds(): number {
   const raw = getShortsSubmitGraceSeconds();
@@ -87,7 +69,7 @@ export function getSubmitGraceMs(): number {
   return getSubmitGraceSeconds() * 1000;
 }
 
-/** True while a timed-out session may still submit (never true before expiry). */
+/** True while a round-ended session may still submit (never true before expiry). */
 export function isWithinSubmitGrace(
   expiresAt?: Date | null,
   now: number = Date.now(),
@@ -95,34 +77,6 @@ export function isWithinSubmitGrace(
   if (!expiresAt) return false;
   const end = expiresAt.getTime();
   return now > end && now <= end + getSubmitGraceMs();
-}
-
-/**
- * How long opening the submit dialog keeps the build submittable.
- *
- * Clicking Submit stops the submit clock: the builder may still need to name
- * the build, or sign in — a Google popup and a first-time account can easily
- * outlast the two-minute grace, and losing a finished build to that is the
- * worst possible failure. Bounded rather than infinite so a session held open
- * early cannot be submitted into a round that settled hours ago.
- */
-const SUBMIT_HOLD_MINUTES = 15;
-
-export function getSubmitHoldMs(): number {
-  return SUBMIT_HOLD_MINUTES * 60 * 1000;
-}
-
-/**
- * True while a submit hold is still good. Unlike the grace window this can be
- * true *before* `expiresAt` — it is a floor under the submit deadline, never a
- * ceiling, and it never extends build time (chat/file writes check `expiresAt`).
- */
-export function isWithinSubmitHold(
-  submitHoldAt?: Date | null,
-  now: number = Date.now(),
-): boolean {
-  if (!submitHoldAt) return false;
-  return now <= submitHoldAt.getTime() + getSubmitHoldMs();
 }
 
 /** E2B Hobby/default API rejects sandbox timeouts above 1 hour. */

@@ -18,10 +18,11 @@
  * one-shot trivia (one step), riddles (setup → answer) and knock-knocks
  * (three steps) without special-casing any of them.
  *
- * Game bit shape: `{ id, label, kind: "game", game }` — `game` names a
+ * Game bit shape: `{ id, label, kind: "game", game, weight }` — `game` names a
  * component in `components/workspace/waitGames.jsx`. Games are tiny,
  * touch-first, and confined to the card; `nextWaitBit` deals one in
- * GAME_PROBABILITY of draws so they stay a treat rather than the default.
+ * GAME_PROBABILITY of draws, then picks among them by `weight`, so the pool
+ * share of jokes can never quietly starve them out.
  */
 
 export const BUILD_STATUS_LINES = [
@@ -118,15 +119,19 @@ const TIPS = [
 /**
  * Minigames — rendered by `waitGames.jsx`, one entry per component there.
  * Listed here so the same draw handles a joke and a game.
+ *
+ * The third value is a relative weight within the game pool: the two timed,
+ * one-more-go games carry the wait better than rock paper scissors, which is
+ * a coin flip against a random CPU, so they are dealt twice as often.
  */
 const GAMES = [
-  ["reaction", "Reaction test"],
-  ["shade", "Odd one out"],
-  ["rps", "Rock paper scissors"],
+  ["reaction", "Reaction test", 2],
+  ["shade", "Odd one out", 2],
+  ["rps", "Rock paper scissors", 1],
 ];
 
 /** Fraction of draws that deal a minigame instead of a text bit. */
-const GAME_PROBABILITY = 0.3;
+const GAME_PROBABILITY = 0.5;
 
 /**
  * @typedef {{ id: string, label: string, steps: { text: string, cta?: string }[] }} WaitTextBit
@@ -165,13 +170,30 @@ export const WAIT_BITS = [
     label: "Prompting tip",
     steps: [{ text: tip }],
   })),
-  ...GAMES.map(([game, label]) => ({
+  ...GAMES.map(([game, label, weight]) => ({
     id: `game-${game}`,
     label,
     kind: "game",
     game,
+    weight,
   })),
 ];
+
+/**
+ * Pick one bit from a pool, honouring each bit's relative `weight` (default 1).
+ * @param {WaitBit[]} pool
+ * @returns {WaitBit}
+ */
+function weightedPick(pool) {
+  const total = pool.reduce((sum, bit) => sum + (bit.weight ?? 1), 0);
+  let roll = Math.random() * total;
+  for (const bit of pool) {
+    roll -= bit.weight ?? 1;
+    if (roll < 0) return bit;
+  }
+  // Only reachable through floating-point drift on the final subtraction.
+  return pool[pool.length - 1];
+}
 
 /**
  * Pick a bit at random, never repeating the one currently on screen.
@@ -193,7 +215,7 @@ export function nextWaitBit(previousId = null) {
       : texts.length > 0
         ? texts
         : WAIT_BITS;
-  return pool[Math.floor(Math.random() * pool.length)];
+  return weightedPick(pool);
 }
 
 /**

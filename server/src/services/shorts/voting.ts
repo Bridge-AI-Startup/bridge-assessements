@@ -19,6 +19,7 @@ import {
   getCurrentPeriodKey,
   getPlayChallengeCadence,
 } from "./challengePeriod.js";
+import { getActiveChallengeDate } from "./challenges.js";
 import { getPlayPreviewRevision } from "./preview.js";
 import { filterPlayPublicFiles } from "./sandbox.js";
 
@@ -508,7 +509,7 @@ export async function listPublicSubmissions(options: {
   total: number;
   mine: PublicSubmissionSummary[];
 }> {
-  const challengeDate = options.challengeDate || getCurrentPeriodKey();
+  const challengeDate = options.challengeDate || (await getActiveChallengeDate());
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
   const ranked = await loadRankedForDate(challengeDate);
 
@@ -637,7 +638,7 @@ export async function getLeaderboard(options: {
   total: number;
   you: PublicSubmissionSummary | null;
 }> {
-  const challengeDate = options.challengeDate || getCurrentPeriodKey();
+  const challengeDate = options.challengeDate || (await getActiveChallengeDate());
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 100);
   // One row per submission — every build ranks independently, including
   // multiple entries from the same builder.
@@ -681,7 +682,7 @@ export async function getNextVotePair(input: {
     throw createHttpError(400, "anonymousId is required");
   }
   const includeFiles = input.includeFiles !== false;
-  const challengeDate = input.challengeDate || getCurrentPeriodKey();
+  const challengeDate = input.challengeDate || (await getActiveChallengeDate());
   const votesToday = await countVotesToday(anonymousId, challengeDate);
   const round = buildRoundProgress(votesToday);
 
@@ -920,7 +921,7 @@ export async function castVote(input: {
     throw createHttpError(400, "invalid winner/loser");
   }
 
-  const challengeDate = input.challengeDate || getCurrentPeriodKey();
+  const challengeDate = input.challengeDate || (await getActiveChallengeDate());
   const votesToday = await countVotesToday(anonymousId, challengeDate);
 
   if (!(await hasSubmitted(anonymousId, challengeDate))) {

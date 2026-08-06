@@ -3,7 +3,6 @@
   "title": "Build a Counter",
   "prompt": "Build a simple counter widget that:\n\n- Shows the current count starting at 0\n- Has a + button that increments the count\n- Has a - button that decrements the count\n- Has a Reset button that sets the count back to 0\n- Prevents the count from going below 0\n\n**Preview:** the right-hand preview shows `index.html` from this project (static server — no bundler). Put the app in `index.html` (+ `style.css` / `main.js` or CDN). Vanilla JS or CDN only — no Vite/npm.\n\nYou're done when + / − / Reset work correctly in Preview.",
   "tokenBudget": 50000,
-  "timeLimitMinutes": 10,
   "category": "widget",
   "status": "published"
 }

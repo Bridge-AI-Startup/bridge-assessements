@@ -36,10 +36,6 @@ const ChallengeSchema = new Schema(
       required: true,
       min: 1,
     },
-    timeLimitMinutes: {
-      type: Number,
-      min: 1,
-    },
     category: {
       type: String,
       required: true,
@@ -55,6 +51,20 @@ const ChallengeSchema = new Schema(
     makeMode: {
       type: String,
       enum: CHALLENGE_MAKE_MODES,
+    },
+    /**
+     * Explicit round window override. When both are set, this challenge is
+     * live exactly while now ∈ [windowStartsAt, windowEndsAt] — regardless of
+     * the weekly/daily cadence grid — and the round countdown uses
+     * windowEndsAt. `challengeDate` stays the period key that submissions,
+     * votes and sessions attach to; the window never rekeys existing data.
+     * Unset → the cadence-derived period applies (the normal case).
+     */
+    windowStartsAt: {
+      type: Date,
+    },
+    windowEndsAt: {
+      type: Date,
     },
   },
   { timestamps: true },

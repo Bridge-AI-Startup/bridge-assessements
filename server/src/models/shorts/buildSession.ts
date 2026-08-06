@@ -87,16 +87,8 @@ const BuildSessionSchema = new Schema(
     startedAt: {
       type: Date,
     },
+    /** End of the challenge round. There is no per-build clock. */
     expiresAt: {
-      type: Date,
-    },
-    /**
-     * When the builder opened the submit dialog. Stops the *submit* clock —
-     * the finished work stays submittable for the hold window even if
-     * `expiresAt` passes while they sign in or type a name. Building is not
-     * extended: every build path still checks `expiresAt` on its own.
-     */
-    submitHoldAt: {
       type: Date,
     },
     error: {

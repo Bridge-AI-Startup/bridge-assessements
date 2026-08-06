@@ -33,7 +33,6 @@ function emptyForm(challengeDate, lockedDate = false) {
     title: "",
     prompt: "",
     tokenBudget: 50000,
-    timeLimitMinutes: 30,
     category: "widget",
     status: "draft",
     makeMode: "e2b",
@@ -49,7 +48,6 @@ function formFromChallenge(challenge, lockedDate = false) {
     title: challenge.title,
     prompt: challenge.prompt,
     tokenBudget: challenge.tokenBudget,
-    timeLimitMinutes: challenge.timeLimitMinutes ?? "",
     category: challenge.category,
     status: challenge.status,
     makeMode: challenge.makeMode ?? "e2b",
@@ -231,10 +229,6 @@ export default function Admin() {
         status: form.status,
         makeMode: form.makeMode,
       };
-      if (form.timeLimitMinutes !== "" && form.timeLimitMinutes != null) {
-        payload.timeLimitMinutes = Number(form.timeLimitMinutes);
-      }
-
       let res;
       if (form.isNew) {
         res = await authPost("/admin/challenges", payload);
@@ -582,16 +576,6 @@ export default function Admin() {
                     min={1}
                     className="mt-1 w-full rounded border border-line px-3 py-2 text-sm"
                     required
-                  />
-                </label>
-                <label className="block text-sm">
-                  <span className="font-medium text-fog">Time limit (min)</span>
-                  <input
-                    type="number"
-                    value={form.timeLimitMinutes}
-                    onChange={(e) => updateField("timeLimitMinutes", e.target.value)}
-                    min={1}
-                    className="mt-1 w-full rounded border border-line px-3 py-2 text-sm"
                   />
                 </label>
                 <label className="block text-sm">

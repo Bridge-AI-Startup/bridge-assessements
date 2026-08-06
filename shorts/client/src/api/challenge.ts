@@ -6,7 +6,6 @@ export type TodayChallenge = {
   title: string;
   prompt: string;
   tokenBudget: number;
-  timeLimitMinutes?: number;
   category: string;
   makeMode?: "e2b" | "serverless";
   cadence?: "daily" | "weekly";

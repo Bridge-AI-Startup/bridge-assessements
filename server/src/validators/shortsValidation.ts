@@ -42,7 +42,6 @@ export const createChallengeValidation = [
   body("title").trim().notEmpty().isLength({ max: 120 }),
   body("prompt").trim().notEmpty(),
   body("tokenBudget").isInt({ min: 1 }),
-  body("timeLimitMinutes").optional().isInt({ min: 1 }),
   body("category")
     .trim()
     .isIn(["widget", "game", "tool", "other"])
@@ -72,7 +71,6 @@ export const updateChallengeValidation = [
   body("title").optional().trim().notEmpty().isLength({ max: 120 }),
   body("prompt").optional().trim().notEmpty(),
   body("tokenBudget").optional().isInt({ min: 1 }),
-  body("timeLimitMinutes").optional().isInt({ min: 1 }),
   body("category")
     .optional()
     .trim()

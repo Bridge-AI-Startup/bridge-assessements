@@ -717,7 +717,7 @@ Behavioral grading: `behavioralGradingStatus` (`pending`/`completed`/`failed`), 
 Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`, `{ "interview.conversationId": 1 }` (sparse), `{ "llmWorkflow.trace.sessionId": 1 }` (sparse)
 
 ### PlayChallenge (bridge-play DB)
-Fields: `slug` (unique, lowercase `a-z0-9-`), `challengeDate` (unique, `YYYY-MM-DD` UTC), `title` (max 120), `prompt`, `tokenBudget`, `timeLimitMinutes` (optional), `category` (`widget`/`game`/`tool`/`other`), `status` (`draft`/`published`), `makeMode` (optional `e2b`/`serverless`; unset → `SHORTS_MAKE_MODE` default — the site's Build-mode toggle)
+Fields: `slug` (unique, lowercase `a-z0-9-`), `challengeDate` (unique, `YYYY-MM-DD` UTC), `title` (max 120), `prompt`, `tokenBudget`, `timeLimitMinutes` (optional), `category` (`widget`/`game`/`tool`/`other`), `status` (`draft`/`published`), `makeMode` (optional `e2b`/`serverless`; unset → `SHORTS_MAKE_MODE` default — the site's Build-mode toggle), `windowStartsAt`/`windowEndsAt` (optional Date pair: explicit round window override — the challenge is live exactly while now ∈ [start, end], regardless of the cadence grid, and the round countdown/session-expiry cap use `windowEndsAt`; `challengeDate` stays the key submissions/votes/sessions attach to, so a window never rekeys data. Consumers resolve "the current round" through `getActiveChallengeDate()` in `services/shorts/challenges.ts` (window-aware), not raw `getCurrentPeriodKey()`. Set via Mongo directly — not exposed in the admin UI yet)
 
 Indexes: unique on `slug`, unique on `challengeDate`, `{ status: 1, challengeDate: -1 }`
 

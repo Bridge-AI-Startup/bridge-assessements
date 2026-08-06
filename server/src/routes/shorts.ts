@@ -85,12 +85,6 @@ router.post(
   pauseResumeSessionValidation,
   PlayController.resumeSession,
 );
-// Opening the submit dialog stops the submit clock (not the build clock).
-router.post(
-  "/session/:id/submit-hold",
-  pauseResumeSessionValidation,
-  PlayController.holdSessionSubmit,
-);
 router.get(
   "/session/:id/workspace-revision",
   getSessionValidation,
