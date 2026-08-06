@@ -40,6 +40,21 @@
       "autoPort": true
     },
     {
+      "name": "shorts-client-5173",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "shorts/client",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5173",
+        "--strictPort"
+      ],
+      "port": 5173
+    },
+    {
       "name": "starter-preview",
       "runtimeExecutable": "python3",
       "runtimeArgs": [

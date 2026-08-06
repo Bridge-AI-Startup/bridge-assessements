@@ -14,9 +14,15 @@
       href="/bridge-logo-dark.png"
       media="(prefers-color-scheme: dark)"
     />
+    <!--
+      `interactive-widget=resizes-content` makes the on-screen keyboard shrink
+      the layout viewport instead of scrolling it. Without it the browser scrolls
+      the page to reveal the focused input, which drags the Build header (and its
+      credits meter) off the top of the screen while someone is typing.
+    -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Bridge Shorts</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />

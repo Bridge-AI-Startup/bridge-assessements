@@ -38,6 +38,21 @@ const DEFAULT_LEFT_SIZES = { editor: 55, chat: 45 };
 const OUT_OF_CREDITS_MESSAGE = "You ran out of credits for this build.";
 /** The round itself closed — the only deadline a build has. */
 const ROUND_OVER_MESSAGE = "This round has closed — no more changes can be made.";
+/** Shown only after silent recovery gave up — the prompt is restored to the box. */
+const CONNECTION_LOST_MESSAGE =
+  "Connection dropped — your message is back in the box, tap send to try again.";
+
+/**
+ * How long to keep polling for a turn whose response was lost in transit.
+ * The server keeps working after the client drops (a build turn can run
+ * ~60-100s), so the window has to comfortably outlast a full turn.
+ */
+const DROPPED_TURN_WINDOW_MS = 150_000;
+const DROPPED_TURN_POLL_MS = 4_000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * A 429 the server raised on the token budget — not an upstream rate limit,
@@ -833,31 +848,52 @@ export default function Build() {
     chatBusyRef.current = true;
     setChatBusy(true);
     // Serverless turns tell us directly whether the file was rewritten (a build)
-    // or the model just answered in chat — no sandbox to fingerprint, so skip
-    // the revision probes entirely.
+    // or the model just answered in chat, so the success path only probes the
+    // sandbox revision on E2B. The pre-send revision is still captured in both
+    // modes (serverless is a cheap snapshot-timestamp read) because it is the
+    // only way the dropped-connection recovery below can tell whether the
+    // recovered turn rebuilt the app.
     const serverless = state.session.makeMode === "serverless";
-    const revisionBefore = serverless
-      ? null
-      : await getWorkspaceRevision(state.session.sessionId);
+    const revisionBefore = await getWorkspaceRevision(state.session.sessionId);
     const result = await sendClaudeMessage(state.session.sessionId, prompt, {
       model: modelEffort?.model,
       effort: modelEffort?.effort,
     });
     if (result.status === "error") {
+      // No httpStatus means the request died at the network layer (phone
+      // locked mid-turn, cell blip, tab suspended). The server almost always
+      // finishes the turn anyway and persists the chat pair — so before
+      // admitting failure, quietly poll the session for that pair and render
+      // it as if the response had arrived normally.
+      if (result.httpStatus === undefined) {
+        const recovered = await recoverDroppedTurn(prompt, revisionBefore);
+        if (recovered) {
+          chatBusyRef.current = false;
+          setChatBusy(false);
+          return;
+        }
+      }
       chatBusyRef.current = false;
       setChatBusy(false);
       const outOfCredits = isOutOfCreditsError(result);
       const roundOver = isRoundOverError(result);
+      const networkDrop = result.httpStatus === undefined;
       const message = outOfCredits
         ? OUT_OF_CREDITS_MESSAGE
         : roundOver
           ? ROUND_OVER_MESSAGE
-          : result.message;
+          : networkDrop
+            ? CONNECTION_LOST_MESSAGE
+            : result.message;
       setChatError(message);
       setChatMessages((prev) => [
         ...prev,
-        { role: "assistant", text: `(Error: ${message})` },
+        { role: "assistant", error: true, text: `(${message})` },
       ]);
+      if (networkDrop) {
+        // Put the message back so retrying is one tap, not a re-type.
+        setChatInput(prompt);
+      }
       if (outOfCredits) {
         // Server refused the turn on budget — reflect it in the meter too.
         setUsage((prev) =>
@@ -900,6 +936,73 @@ export default function Build() {
     }
     chatBusyRef.current = false;
     setChatBusy(false);
+  }
+
+  /**
+   * The claude/message POST died at the network layer, but the server keeps
+   * processing the turn and appends the user/assistant pair to the session's
+   * `chatMessages` when it finishes. Poll the session until that pair shows
+   * up, then render it exactly like a normal response (reply bubble, preview
+   * refresh, token meter). Returns true when the turn was recovered.
+   *
+   * The wait card stays up the whole time (chatBusy is still true), so a
+   * successful recovery is invisible to the builder.
+   */
+  async function recoverDroppedTurn(prompt, revisionBefore) {
+    const sentAt = Date.now();
+    const deadline = sentAt + DROPPED_TURN_WINDOW_MS;
+    // The pair is matched by prompt text, so guard against re-sends of an
+    // identical prompt: the reply must postdate this send, minus a modest
+    // allowance for client/server clock skew.
+    const clockSkewMs = 60_000;
+    while (Date.now() < deadline) {
+      await sleep(DROPPED_TURN_POLL_MS);
+      if (state.kind !== "ready") return false;
+      const sessionResult = await getSession(state.session.sessionId);
+      if (sessionResult.status !== "ok") continue;
+      const msgs = sessionResult.session.chatMessages || [];
+      let lastUserIdx = -1;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === "user") {
+          lastUserIdx = i;
+          break;
+        }
+      }
+      if (lastUserIdx === -1 || msgs[lastUserIdx].text !== prompt) continue;
+      const reply = msgs[lastUserIdx + 1];
+      if (!reply || reply.role !== "assistant") continue;
+      const repliedAt = reply.createdAt ? Date.parse(reply.createdAt) : NaN;
+      if (Number.isFinite(repliedAt) && repliedAt < sentAt - clockSkewMs) {
+        continue;
+      }
+
+      const revisionAfter = await getWorkspaceRevision(state.session.sessionId);
+      const workspaceChanged =
+        revisionBefore.status !== "ok" ||
+        revisionAfter.status !== "ok" ||
+        revisionBefore.revision !== revisionAfter.revision;
+      setChatMessages((prev) => {
+        const next = [
+          ...prev,
+          { role: "assistant", text: reply.text || "(No output)" },
+        ];
+        return workspaceChanged
+          ? [...next, { role: "preview", tick: Date.now() }]
+          : next;
+      });
+      const freshUsage = await fetchSessionUsage(state.session.sessionId);
+      if (freshUsage) {
+        setUsage(freshUsage);
+        if (freshUsage.exhausted) openCreditsModal();
+      }
+      if (workspaceChanged) {
+        setPreviewTick((t) => t + 1);
+        setEditorRefreshKey((k) => k + 1);
+      }
+      setChatError(null);
+      return true;
+    }
+    return false;
   }
 
   function openCreditsModal(lastPrompt = null) {

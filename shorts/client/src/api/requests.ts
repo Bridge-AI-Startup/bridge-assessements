@@ -15,6 +15,11 @@ type ErrorField = "message" | "error";
  * and the CORS allowlist in `server/src/server.ts` only covers specific dev
  * origins — a Vite port other than the usual one is rejected, which returns
  * a 500 with no CORS headers that the page never gets to see.
+ *
+ * The dev diagnostic is dev-build-only: in production the same failure is
+ * almost always the *user's* connection (phone locked mid-request, cell
+ * blip), so consumers get one plain sentence instead of instructions to
+ * check a server log they don't have.
  */
 export class ApiNetworkError extends Error {
   readonly url: string;
@@ -22,12 +27,14 @@ export class ApiNetworkError extends Error {
 
   constructor(method: Method, url: string, cause: unknown) {
     super(
-      `No response from the Shorts API (${method} ${url}). Either the backend ` +
-        `is not accepting connections — it restarts for a few seconds after ` +
-        `any server file is saved, so check \`cd server && npm run dev\` is ` +
-        `running — or it rejected this page's origin (${window.location.origin}) ` +
-        `via CORS. Check the server log for a "Blocked request from ` +
-        `unauthorized origin" warning.`,
+      import.meta.env.DEV
+        ? `No response from the Shorts API (${method} ${url}). Either the backend ` +
+            `is not accepting connections — it restarts for a few seconds after ` +
+            `any server file is saved, so check \`cd server && npm run dev\` is ` +
+            `running — or it rejected this page's origin (${window.location.origin}) ` +
+            `via CORS. Check the server log for a "Blocked request from ` +
+            `unauthorized origin" warning.`
+        : "Couldn't reach Bridge Shorts — check your connection and try again.",
     );
     this.name = "ApiNetworkError";
     this.url = url;

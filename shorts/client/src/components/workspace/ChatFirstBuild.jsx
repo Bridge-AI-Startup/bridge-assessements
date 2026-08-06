@@ -140,6 +140,46 @@ function PreviewCard({
 }
 
 /**
+ * Height of the *visible* viewport on mobile, so the Build shell never extends
+ * under the on-screen keyboard.
+ *
+ * `100dvh` is the keyboard-blind height: iOS overlays the keyboard and shifts
+ * the visual viewport, so a `100dvh` shell keeps its full height and the browser
+ * scrolls the layout to reveal the focused input — taking the header, and the
+ * credits meter on it, off the top of the screen. Sizing to
+ * `visualViewport.height` and pinning the window back to 0 keeps the header
+ * where the builder can see it. Returns null when the API is missing, and the
+ * caller falls back to `100dvh`.
+ */
+function useVisualViewportHeight(enabled) {
+  const [height, setHeight] = useState(null);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const vv = window.visualViewport;
+    if (!vv) return undefined;
+
+    const apply = () => {
+      setHeight(vv.height);
+      // The browser may have scrolled the layout viewport to reveal the input.
+      // The shell is exactly viewport-sized and scrolls internally, so any page
+      // scroll here is the keyboard's doing — undo it.
+      if (window.scrollY !== 0) window.scrollTo(0, 0);
+    };
+
+    apply();
+    vv.addEventListener("resize", apply);
+    vv.addEventListener("scroll", apply);
+    return () => {
+      vv.removeEventListener("resize", apply);
+      vv.removeEventListener("scroll", apply);
+    };
+  }, [enabled]);
+
+  return height;
+}
+
+/**
  * Chat-first Build surface (mobile stream, or desktop chat + live preview).
  * @param {{ variant?: "mobile" | "desktop", headerActions?: import("react").ReactNode }} props
  */
@@ -175,6 +215,7 @@ export default function ChatFirstBuild({
   const [challengePrompt, setChallengePrompt] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
   const textareaRef = useRef(null);
+  const mobileViewportHeight = useVisualViewportHeight(!isDesktop);
   const challengeLabel =
     cadence === "daily" ? "Today's challenge" : "This week's challenge";
 
@@ -268,7 +309,9 @@ export default function ChatFirstBuild({
 
           const isUser = message.role === "user";
           const isError =
-            !isUser && /^\(Error:/.test(String(message.text || ""));
+            !isUser &&
+            (message.error === true ||
+              /^\(Error:/.test(String(message.text || "")));
           return (
             <div
               key={`${message.role}-${index}`}
@@ -356,10 +399,18 @@ export default function ChatFirstBuild({
   return (
     <>
       <div
-        className="flex flex-col bg-paper"
-        style={{ height: isDesktop ? "100vh" : "100dvh" }}
+        className="flex flex-col overflow-hidden bg-paper"
+        style={{
+          height: isDesktop
+            ? "100vh"
+            : mobileViewportHeight != null
+              ? `${mobileViewportHeight}px`
+              : "100dvh",
+        }}
       >
-        <header className="flex-shrink-0 border-b border-line bg-paper px-4 py-2.5">
+        {/* Sticky as well as flex-pinned: if anything ever scrolls this column,
+            the credits meter still has to stay in view while building. */}
+        <header className="sticky top-0 z-20 flex-shrink-0 border-b border-line bg-paper px-4 py-2.5">
           <div className="flex items-center gap-3">
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium tracking-tight text-ink">
