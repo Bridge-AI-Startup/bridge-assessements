@@ -11,20 +11,35 @@ import {
   periodPossessive,
 } from "@/lib/challengePeriod";
 
-function formatPeriodHeading(periodKey, cadence) {
+function parseUtcPeriodKey(periodKey) {
   const [year, month, day] = periodKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function formatPeriodHeading({
+  challengeDate,
+  windowStartsAt,
+  periodEndsAt,
+  cadence,
+}) {
   if (cadence === "weekly") {
-    const start = new Date(Date.UTC(year, month - 1, day));
-    const end = new Date(Date.UTC(year, month - 1, day + 6));
+    // windowStartsAt/periodEndsAt reflect an explicit round-window override;
+    // fall back to the Mon-Sun cadence grid derived from challengeDate.
+    const start = windowStartsAt
+      ? new Date(windowStartsAt)
+      : parseUtcPeriodKey(challengeDate);
+    const end = periodEndsAt
+      ? new Date(periodEndsAt)
+      : new Date(parseUtcPeriodKey(challengeDate).getTime() + 6 * 86400000);
     const fmt = (d) =>
       d.toLocaleDateString(undefined, {
         month: "short",
         day: "numeric",
         timeZone: "UTC",
       });
-    return `Week of ${fmt(start)} – ${fmt(end)}, ${year}`;
+    return `Week of ${fmt(start)} – ${fmt(end)}, ${end.getUTCFullYear()}`;
   }
-  const d = new Date(Date.UTC(year, month - 1, day));
+  const d = parseUtcPeriodKey(challengeDate);
   return d.toLocaleDateString(undefined, {
     weekday: "long",
     year: "numeric",
@@ -170,10 +185,12 @@ export default function Home() {
                 <span className="text-fog-light">Ship something small, fast.</span>
               </h1>
               <p className="label-mono mt-5">
-                {formatPeriodHeading(
-                  state.challenge.challengeDate,
-                  state.challenge.cadence || cadence,
-                )}
+                {formatPeriodHeading({
+                  challengeDate: state.challenge.challengeDate,
+                  windowStartsAt: state.challenge.windowStartsAt,
+                  periodEndsAt: state.challenge.periodEndsAt,
+                  cadence: state.challenge.cadence || cadence,
+                })}
               </p>
               <div className="mt-8 hidden gap-3 lg:flex">
                 <Link to="/Build" className="btn-pill px-6 py-3">

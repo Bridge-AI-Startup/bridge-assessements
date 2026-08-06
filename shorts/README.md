@@ -81,7 +81,6 @@ curl http://localhost:5050/api/shorts/today
 | `SHORTS_ADMIN_EMAIL` | `PLAY_ADMIN_EMAIL` | `saaz.m@icloud.com` | Firebase user email allowed to manage challenges |
 | `SHORTS_E2B_TEMPLATE_ID` | `PLAY_E2B_TEMPLATE_ID` | `bridge-play-dev` | E2B custom template name (build via `shorts/e2b-template`) |
 | `SHORTS_MAX_CONCURRENT_SESSIONS` | `PLAY_MAX_CONCURRENT_SESSIONS` | `5` | Soft cap on globally **running** (non-paused) sessions |
-| `SHORTS_BUILD_TIME_LIMIT_MINUTES` | `PLAY_BUILD_TIME_LIMIT_MINUTES` | `10` | Wall-clock build window from start (capped by period end); override per challenge via `timeLimitMinutes` |
 | `SHORTS_CHALLENGE_CADENCE` | `PLAY_CHALLENGE_CADENCE` | `weekly` | `weekly` = one challenge per Mon–Sun UTC week (`challengeDate` = Monday); `daily` = one per UTC day |
 
 ### Shorts client (`shorts/client/.env.local`)
@@ -155,7 +154,7 @@ On session create, Bridge provisions:
 
 **Local testing:** set `SHORTS_LLM_PROXY_PUBLIC_URL` to your Render URL or an ngrok/cloudflared tunnel to `:5050`. Without a public URL, chat Claude cannot reach the proxy.
 
-**Build page:** Left stack (drag-reorder + resize): **Monaco editor** | **Claude Code** chat; **Preview** iframe on the right. Manual edits save to E2B (debounced) and into a session `workspaceSnapshot`; Claude edits refresh that snapshot. Chat turns are stored on the session and restored on reload. Session lasts until **submit** or the **wall-clock build limit** (`timeLimitMinutes` / `SHORTS_BUILD_TIME_LIMIT_MINUTES`, default 10, never past period end). Build UI shows a **Time left** meter. Leaving Build **pauses** the E2B sandbox (after ~45s hidden / on navigate away); paused sessions don’t consume concurrent seats; returning **resumes** it. If the box is gone mid-window, resume recreates it and restores the snapshot. No user-facing terminal — Claude runs shell commands inside the sandbox. code-server is **not** in the Shorts template.
+**Build page:** Left stack (drag-reorder + resize): **Monaco editor** | **Claude Code** chat; **Preview** iframe on the right. Manual edits save to E2B (debounced) and into a session `workspaceSnapshot`; Claude edits refresh that snapshot. Chat turns are stored on the session and restored on reload. Session lasts until **submit** or the end of the challenge **round** — there is no per-build time limit, and the Build UI shows no countdown. Credits are the only budget a builder works against. Leaving Build **pauses** the E2B sandbox (after ~45s hidden / on navigate away); paused sessions don’t consume concurrent seats; returning **resumes** it. If the box is gone mid-window, resume recreates it and restores the snapshot. No user-facing terminal — Claude runs shell commands inside the sandbox. code-server is **not** in the Shorts template.
 
 **Local build flow:** Home → Start building → `/Build` provisions an E2B sandbox, opens editor + Claude + preview. **Submit** asks for a display name, snapshots `/home/user/project` into Mongo (`PlaySubmission`), and kills the sandbox. Admin → **Submissions** tab lists entries with file viewer + iframe preview (API URL by default; still loads `files` for the inspector).
 

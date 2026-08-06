@@ -28,6 +28,8 @@ export type PublicChallenge = {
   /** Present on GET /today — mirrors PLAY_CHALLENGE_CADENCE */
   cadence?: "daily" | "weekly";
   periodEndsAt?: string;
+  /** Present when the round's live window is an explicit override, not the cadence grid. */
+  windowStartsAt?: string;
 };
 
 /** @deprecated Prefer getCurrentPeriodKey — kept for call sites / seeds */
@@ -90,12 +92,15 @@ export async function getTodayChallenge(): Promise<PublicChallenge | null> {
     windowEndsAt: { $gte: now },
   })
     .sort({ windowStartsAt: -1 })
-    .lean()) as (PublicChallenge & { windowEndsAt?: Date }) | null;
+    .lean()) as
+    | (PublicChallenge & { windowStartsAt?: Date; windowEndsAt?: Date })
+    | null;
 
   if (windowed) {
     const challenge = toPublicChallenge(windowed);
     challenge.cadence = getPlayChallengeCadence();
     challenge.periodEndsAt = new Date(windowed.windowEndsAt!).toISOString();
+    challenge.windowStartsAt = new Date(windowed.windowStartsAt!).toISOString();
     return challenge;
   }
 
