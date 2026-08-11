@@ -30,6 +30,10 @@ import {
 } from "./regionDetector.js";
 import { REGION_PROMPTS } from "../../prompts/regionPrompts.js";
 import { ocrRegionBatch } from "./ocrEngine.js";
+import {
+  isGeminiEngineEnabled,
+  generateSegmentsWithGemini,
+} from "./geminiVideoEngine.js";
 import sharp from "sharp";
 import fs from "fs/promises";
 import path from "path";
@@ -95,6 +99,20 @@ export async function generateTranscript(
     "transcript.refinedAt": null,
     "transcript.refinedError": null,
   });
+
+  // Engine dispatch: TRANSCRIPT_ENGINE=gemini sends the merged video straight
+  // to a Gemini video model instead of extracting + OCRing frames. Any failure
+  // falls through to the frames engine below.
+  if (isGeminiEngineEnabled()) {
+    try {
+      return await generateTranscriptViaGemini(sessionId, generationId);
+    } catch (err) {
+      console.error(
+        `[${new Date().toISOString()}] [transcript] Gemini engine failed for ${sessionId}, falling back to frames engine:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
 
   let prepared: PreparedSessionData | undefined;
   try {
@@ -202,6 +220,69 @@ export async function generateTranscript(
   } finally {
     await prepared?.cleanup?.().catch(() => {});
   }
+}
+
+/**
+ * Gemini engine path: merged video → segments → sidecar injection → store.
+ * Reuses the same storage key, status fields, and JSONL shape as the frames engine.
+ */
+async function generateTranscriptViaGemini(
+  sessionId: string,
+  generationId: number
+): Promise<TranscriptResult> {
+  const genStart = Date.now();
+  const session = await ProctoringSessionModel.findById(sessionId).lean();
+  if (!session) throw ProctoringError.SESSION_NOT_FOUND;
+
+  const result = await generateSegmentsWithGemini(sessionId);
+
+  const sidecarEvents = ((session as any).sidecarEvents || [])
+    .map((e: any) => ({
+      type: e.type,
+      timestamp: new Date(e.timestamp),
+      metadata: e.metadata || {},
+    }))
+    .sort((a: any, b: any) => a.timestamp.getTime() - b.timestamp.getTime());
+
+  let jsonl = result.segments.map((seg) => JSON.stringify(seg)).join("\n");
+  jsonl = injectSidecarEvents(jsonl, sidecarEvents);
+
+  const storage = getFrameStorage();
+  const storageKey = `${sessionId}/transcript.jsonl`;
+  await storage.storeTranscript(storageKey, jsonl);
+
+  const tokenUsage = {
+    prompt: result.promptTokens,
+    completion: result.completionTokens,
+    total: result.promptTokens + result.completionTokens,
+  };
+  const frameCount =
+    (session as any).stats?.uniqueFrames ??
+    (session as any).stats?.totalFrames ??
+    result.segments.length;
+
+  await ProctoringSessionModel.findOneAndUpdate(
+    { _id: sessionId, "transcript.generationId": generationId },
+    {
+      "transcript.status": "completed",
+      "transcript.storageKey": storageKey,
+      "transcript.generatedAt": new Date(),
+      "transcript.frameCount": frameCount,
+      "transcript.tokenUsage": tokenUsage,
+      "transcript.progressTotalFrames": null,
+      "transcript.progressFramesProcessed": null,
+      "transcript.progressBatchIndex": null,
+      "transcript.progressTotalBatches": null,
+    }
+  );
+
+  logTs(
+    "transcript",
+    `Gemini engine done: ${result.videoDurationSec.toFixed(0)}s video → ${result.segments.length} segments in ${result.windowCount} window(s) | ${tokenUsage.total} tokens (${result.model})`,
+    Date.now() - genStart
+  );
+
+  return { storageKey, frameCount, tokenUsage };
 }
 
 export interface IncrementalTranscriptResult {
@@ -350,7 +431,7 @@ const TRANSCRIPT_BATCH_CONCURRENCY = (() => {
  * separate JSONL lines per region with different detail levels.
  * Batches are processed with limited concurrency to speed up generation.
  */
-async function processWithPromptOnly(
+export async function processWithPromptOnly(
   frames: Array<{ buffer: Buffer; capturedAt: Date; screenIndex: number }>,
   options?: { sessionId?: string; generationId?: number }
 ): Promise<{
@@ -484,10 +565,10 @@ function getModelForRegion(
   aiChatLocation: "sidebar" | "terminal" | "none"
 ): string {
   if (regionType === "terminal" && aiChatLocation === "terminal") {
-    return process.env.OPENAI_VISION_MODEL || "gpt-4o";
+    return process.env.OPENAI_VISION_MODEL || "gpt-5.6-luna";
   }
   if (HIGH_PRIORITY_REGIONS.has(regionType) || regionType === "browser") {
-    return process.env.OPENAI_VISION_MODEL || "gpt-4o";
+    return process.env.OPENAI_VISION_MODEL || "gpt-5.6-luna";
   }
   return process.env.OPENAI_VISION_MODEL_LITE || "gpt-4o-mini";
 }

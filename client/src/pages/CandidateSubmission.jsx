@@ -1,13 +1,11 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { 
   ArrowLeft, 
-  User, 
   Clock, 
   CheckCircle, 
   XCircle, 
   Code, 
-  FileText, 
   MessageSquare, 
   Star,
   ExternalLink,

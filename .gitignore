@@ -17,3 +17,6 @@ server/config.env
 # Proctoring runtime data (frames, video, transcripts) — use object storage in production
 server/storage/
 .gstack/
+
+# Vitest JSON report (regenerated on every `npm test` run)
+server/test/results/unit-results.json

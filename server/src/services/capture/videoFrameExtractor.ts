@@ -476,7 +476,12 @@ function parseLastTimeFromFfmpegOutput(output: string): number | null {
  * Get video duration in seconds.
  * Tries: (1) ffmpeg probe with grep, (2) ffmpeg decode to null and parse stderr/stdout on success or failure.
  * Merged MediaRecorder WebM chunks often report duration only when decoding; we now parse in both cases.
+ * Exported for the Gemini video engine (window planning needs the duration).
  */
+export async function getVideoDurationSeconds(videoPath: string): Promise<number> {
+  return getVideoDuration(videoPath);
+}
+
 async function getVideoDuration(videoPath: string): Promise<number> {
   let try1Stdout: string | undefined;
   let try1Sec: number | null = null;

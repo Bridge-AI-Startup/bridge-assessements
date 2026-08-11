@@ -236,6 +236,12 @@ See `server/config.env.example` for the full list. Key variables:
 - `TRANSCRIPT_OCR_CACHE_CHANGE_THRESHOLD` -- Thumb-diff threshold for reusing cached OCR (default: `0.6`)
 - `TRANSCRIPT_DEBUG_SAVE_CACHE_THUMBS` -- Save cached region thumbs to disk (default: `false`)
 - `TRANSCRIPT_DEBUG_CACHE_THUMBS_DIR` -- Directory for debug thumbs (default: `{PROCTORING_STORAGE_DIR}/ocr-cache-thumbs`)
+- `TRANSCRIPT_ENGINE` -- `frames` (default) or `gemini`. `gemini` uploads the session's merged WebM to the Gemini Files API and transcribes it natively (one request per ~20-min window) instead of extracting + OCRing frames; falls back to the frames engine on any error or when `GEMINI_API_KEY` is unset. Screen 0 only; incremental mode always uses the frames engine.
+- `TRANSCRIPT_GEMINI_MODEL` -- Video model for the Gemini engine (default: `gemini-3.6-flash`)
+- `TRANSCRIPT_GEMINI_FPS` -- Video sampling rate sent to Gemini (default: `1`)
+- `TRANSCRIPT_GEMINI_MEDIA_RESOLUTION` -- `low`/`medium`/`high` (default: `high`; 280 tok/frame — required for reading dense IDE text)
+- `TRANSCRIPT_GEMINI_CHUNK_MINUTES` -- Window length per Gemini request (default: `20`)
+- `TRANSCRIPT_GEMINI_CHUNK_OVERLAP_SEC` -- Lead-in overlap between windows (default: `30`)
 - `TRANSCRIPT_INCREMENTAL_ENABLED` -- Enable sliding-window incremental transcript for active sessions (default: `false`). Set to `true` in production so transcript is built during the assessment and submit only finalizes.
 - `TRANSCRIPT_INCREMENTAL_INTERVAL_MS` -- Interval for incremental runs in ms (default: `60000`)
 
@@ -290,7 +296,6 @@ server/src/
 │   ├── assessmentChat.ts  # AI chat for assessment editing
 │   ├── interviewGeneration.ts  # RAG-based interview question generation + summary generation
 │   ├── scoring.ts         # Completeness scoring (requirements matching)
-│   ├── assessmentPackage.ts    # ZIP package generation for assessment download
 │   ├── email.ts           # Resend email service for candidate invitations
 │   ├── repoIndexing.ts    # GitHub repo → Pinecone indexing (download, chunk, embed, upsert)
 │   ├── repoRetrieval.ts   # Code chunk retrieval from Pinecone (search, dedup, budget)
@@ -341,8 +346,6 @@ server/src/
 │       └── assessmentGeneration.ts  # Zod schemas for assessment generation structured output
 ├── types/
 │   └── assessmentGeneration.ts  # TypeScript types for assessment generation
-├── middleware/
-│   └── requireSubscription.ts  # Returns 402 if user lacks active subscription
 ├── validators/
 │   ├── auth.ts            # Firebase token verification middleware (verifyAuthToken)
 │   ├── submissionAuth.ts  # Submission access: verifySubmissionAccess (auth OR token), verifySubmissionToken
@@ -372,10 +375,11 @@ server/src/
 │   └── index.ts           # Exports
 ├── ai/
 │   └── transcript/
-│       ├── generator.ts   # Orchestrator: batch → vision → stitch → store; parallel region flushes; generateTranscriptIncremental
+│       ├── generator.ts   # Orchestrator: batch → vision → stitch → store; parallel region flushes; generateTranscriptIncremental; dispatches to geminiVideoEngine when TRANSCRIPT_ENGINE=gemini
+│       ├── geminiVideoEngine.ts # Native-video transcript engine: merged WebM → Gemini Files API → windowed structured segments (no frame extraction)
 │       ├── incrementalScheduler.ts # Sliding-window: run incremental transcript for active sessions on interval
 │       ├── batcher.ts     # Split frames into vision API batches
-│       ├── visionClient.ts # OpenAI GPT-4o-mini vision API calls (detail:high)
+│       ├── visionClient.ts # OpenAI vision API calls (detail:high; OPENAI_VISION_MODEL, default gpt-5.6-luna)
 │       ├── stitcher.ts    # Merge batch outputs into chronological JSONL; parseTranscriptJsonlToSegments for merge
 │       └── manifestInjector.ts  # Inject sidecar events into transcript
 └── scripts/               # Utility/migration scripts
@@ -392,6 +396,7 @@ server/src/
     ├── revertShortsRoundSwap.ts # One-off: reversed that swap on 2026-08-03 so make-time-visible is the live launch week; handles real (non-seeded) docs with +1h stamps instead of ±7d
     ├── dropShortsSubmissionUniqueIndex.ts # One-time: drop legacy unique {anonymousId, challengeDate} on PlaySubmission
     ├── shorts-sandbox-smoke.ts # Create Shorts E2B template sandbox; print preview URL + Claude check
+    ├── transcriptEngineAB.ts # A/B compare transcript engines (gemini vs frames) on one session, no DB writes; list mode + --plan-only cost preview
     ├── replaceSubmissionWithGeneratedMarkdown.ts
     ├── replaceTraceWithMarkdown.ts
     ├── seedDummyInterview.ts
@@ -598,21 +603,15 @@ client/src/
 │   ├── user.ts            # User API: verifyUser (whoami), createUser, deleteAccount
 │   └── proctoring.ts      # Proctoring API: createSession, grantConsent, uploadFrame, events, complete, video
 ├── components/
-│   ├── auth/AuthModal.jsx              # Email/password sign-in via Firebase, backend verification
 │   ├── assessment/
 │   │   ├── AISidebar.jsx               # AI chat sidebar for assessment editing (quick action chips)
-│   │   ├── AssessmentPanel.jsx         # Assessment display panel
-│   │   ├── AssessmentResult.jsx        # Results display after submission
 │   │   ├── CandidatePreviewModal.jsx   # Candidate assessment preview modal
-│   │   ├── ChatInput.jsx              # Input field for AI chat
 │   │   ├── DocumentBlock.jsx          # Reusable content block with edit, auto-resizing textarea
 │   │   └── PresetPills.jsx            # Quick preset job descriptions
 │   ├── BulkInviteModal.jsx            # 3-step CSV upload wizard: upload → review → success
 │   ├── ElevenLabsInterviewClient.jsx  # Voice interview UI (conversation hooks, transcript display)
-│   ├── LLMProxyWrapper/LLMClient.ts   # Client-side LLM proxy (routes all LLM calls through backend)
 │   ├── proctoring/
 │   │   ├── ConsentScreen.jsx          # Consent dialog before screen recording
-│   │   ├── ScreenShareSetup.jsx       # Multi-monitor picker UI
 │   │   ├── RecordingIndicator.jsx     # Floating red recording badge
 │   │   ├── StreamStatusPanel.jsx      # Upload stats panel (frames, uploads, dedup)
 │   │   ├── ResharePrompt.jsx          # Stream-lost recovery modal
@@ -637,7 +636,6 @@ client/src/
 │   ├── PageNotFound.jsx
 │   └── utils.js           # cn() (clsx + tailwind-merge), isIframe
 └── utils/
-    ├── apiClient.js
     └── index.ts           # createPageUrl(pageName) → route path
 ```
 
@@ -650,7 +648,7 @@ client/src/
 
 ### Authentication Flow
 1. User signs up via `GetStarted.jsx`: `createUserWithEmailAndPassword()` + `createUser()` API call → redirect to CreateAssessment
-2. User signs in via `AuthModal.jsx`: `signInWithEmailAndPassword()` + `verifyUser()` (GET /users/whoami) → redirect to Home
+2. User signs in via `Login.jsx`: `signInWithEmailAndPassword()` + `verifyUser()` (GET /users/whoami) → redirect to Home
 3. Firebase ID token is sent as `Authorization: Bearer <token>` header on all authenticated API calls
 4. Server validates token via `verifyAuthToken` middleware using Firebase Admin SDK
 5. Server maps Firebase UID to MongoDB User document via `getUserIdFromFirebaseUid()`
@@ -674,9 +672,9 @@ client/src/
 2. User completes payment on Stripe-hosted page
 3. Stripe sends `checkout.session.completed` webhook → backend updates user's `subscriptionStatus` to `"active"`
 4. Subscription changes (cancel, update, expire) come through as Stripe webhooks
-5. `requireSubscription` middleware gates paid features, returns 402 if not active
-6. `isSubscribed()` checks `user.subscriptionStatus === "active"` (with fallback to legacy nested field)
-7. Free tier limits: 1 assessment, 3 submissions. Paid tier: unlimited.
+5. Paid features are gated **inline in the controllers**, not by middleware: `controllers/assessment.ts` and `controllers/user.ts` read `user.subscriptionStatus || user.subscription?.subscriptionStatus` and compare against `"active"`. There is no `requireSubscription` middleware — it existed but was never mounted on a route, and was deleted.
+6. `utils/subscription.ts` also exports `isSubscribed()` / `getSubscriptionStatus()` with the same top-level-then-legacy-nested fallback, but **nothing currently imports them** — the controllers duplicate that logic inline. Prefer calling the util if you touch this code.
+7. Free tier limits: 1 assessment, 3 submissions. Paid tier: unlimited. The assessment cap is only enforced when `NODE_ENV === "production"` (`shouldEnforceFreeTierAssessmentLimit()`).
 
 ## Database Models
 

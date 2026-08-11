@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import {
@@ -17,7 +17,7 @@ import {
   FileCode,
   ClipboardList,
 } from "lucide-react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,7 +41,6 @@ import { auth } from "@/firebase/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 import DocumentBlock from "@/components/assessment/DocumentBlock";
 import AISidebar from "@/components/assessment/AISidebar";
-import CandidatePreviewModal from "@/components/assessment/CandidatePreviewModal";
 import StarterCodeIDE from "@/components/StarterCodeIDE";
 import { BulkInviteContent } from "@/components/BulkInviteModal";
 

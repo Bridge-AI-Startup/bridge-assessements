@@ -8,7 +8,6 @@ import {
   Loader2,
   CheckCircle,
   AlertCircle,
-  Trash2,
   Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";

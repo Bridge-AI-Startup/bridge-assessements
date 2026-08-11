@@ -1,7 +1,7 @@
 /**
  * OpenAI vision API client for frame analysis.
  * Singleton pattern matching utils/embeddings.ts.
- * Model configurable via OPENAI_VISION_MODEL env var (default: gpt-4o).
+ * Model configurable via OPENAI_VISION_MODEL env var (default: gpt-5.6-luna).
  */
 
 import OpenAI from "openai";
@@ -150,7 +150,7 @@ export async function analyzeFrameBatch(
     });
   }
 
-  const model = modelOverride || process.env.OPENAI_VISION_MODEL || "gpt-4o";
+  const model = modelOverride || process.env.OPENAI_VISION_MODEL || "gpt-5.6-luna";
   logTs("vision", `Calling ${model} with ${frames.length} images (${imageMessages.length} content parts)...`);
 
   const callStart = Date.now();
@@ -158,7 +158,8 @@ export async function analyzeFrameBatch(
     () =>
       client.chat.completions.create({
         model,
-        max_tokens: 16384,
+        // GPT-5.x models reject the legacy max_tokens param; 4o accepts both.
+        max_completion_tokens: 16384,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: imageMessages },
