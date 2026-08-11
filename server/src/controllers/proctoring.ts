@@ -11,9 +11,13 @@ import ProctoringSessionModel from "../models/proctoringSession.js";
 import SubmissionModel from "../models/submission.js";
 import AssessmentModel from "../models/assessment.js";
 import { ProctoringError } from "../errors/proctoring.js";
-import { storeFrame, storeVideoChunk } from "../services/capture/frameStorage.js";
+import {
+  storeFrame,
+  storeVideoChunkFromFile,
+} from "../services/capture/frameStorage.js";
 import {
   buildSessionWebmForPlayback,
+  mergeSessionVideo,
   mergeSessionVideoInBackground,
 } from "../services/capture/sessionVideoMerge.js";
 import { getUserIdFromFirebaseUid } from "../utils/auth.js";
@@ -349,10 +353,12 @@ export const getSessionBySubmission: RequestHandler = async (
 };
 
 // POST /api/proctoring/sessions/:sessionId/video
+// Chunk arrives on disk via multer diskStorage; stream it into storage and always
+// unlink the temp file, including on validation failures and thrown errors.
 export const uploadVideoChunk: RequestHandler = async (req, res, next) => {
+  const file = req.file;
   try {
     const { sessionId } = req.params;
-    const file = req.file;
     if (!file) {
       return res.status(400).json({ error: "No video chunk provided" });
     }
@@ -383,7 +389,7 @@ export const uploadVideoChunk: RequestHandler = async (req, res, next) => {
       return res.status(400).json({ error: "Invalid endTime" });
     }
 
-    const result = await storeVideoChunk(sessionId, file.buffer, {
+    const result = await storeVideoChunkFromFile(sessionId, file.path, {
       screenIndex: parseInt(req.body.screenIndex) || 0,
       startTime,
       endTime,
@@ -392,11 +398,125 @@ export const uploadVideoChunk: RequestHandler = async (req, res, next) => {
     res.json(result);
   } catch (error) {
     next(error);
+  } finally {
+    if (file?.path) {
+      await fs.unlink(file.path).catch(() => {});
+    }
   }
 };
 
+/** Parse an HTTP Range header against a known total size. Returns null when absent/invalid. */
+function parseRangeHeader(
+  rangeHeader: string | undefined,
+  totalSize: number,
+): { start: number; end: number } | null {
+  if (!rangeHeader) return null;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+  if (!m || (m[1] === "" && m[2] === "")) return null;
+  let start: number;
+  let end: number;
+  if (m[1] === "") {
+    // suffix range: last N bytes
+    const suffix = parseInt(m[2], 10);
+    if (suffix === 0) return null;
+    start = Math.max(0, totalSize - suffix);
+    end = totalSize - 1;
+  } else {
+    start = parseInt(m[1], 10);
+    end = m[2] === "" ? totalSize - 1 : parseInt(m[2], 10);
+  }
+  if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= totalSize) {
+    return null;
+  }
+  return { start, end: Math.min(end, totalSize - 1) };
+}
+
+/**
+ * Stream a stored blob to the response with Range support so the HTML5 player
+ * can seek without re-downloading the whole recording.
+ */
+async function streamStoredVideoWithRange(
+  req: Parameters<RequestHandler>[0],
+  res: Parameters<RequestHandler>[1],
+  storage: import("../services/capture/storage.js").IFrameStorage,
+  key: string,
+  contentDisposition: string,
+): Promise<void> {
+  const totalSize = await storage.sizeOf(key);
+  res.setHeader("Content-Type", "video/webm");
+  res.setHeader("Content-Disposition", contentDisposition);
+  res.setHeader("Accept-Ranges", "bytes");
+
+  const range =
+    totalSize != null
+      ? parseRangeHeader(req.headers.range as string | undefined, totalSize)
+      : null;
+  if (range && totalSize != null) {
+    res.status(206);
+    res.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${totalSize}`);
+    res.setHeader("Content-Length", String(range.end - range.start + 1));
+    const stream = await storage.openReadStream(key, range);
+    await pipeline(stream, res);
+    return;
+  }
+
+  if (totalSize != null) {
+    res.setHeader("Content-Length", String(totalSize));
+  }
+  const stream = await storage.openReadStream(key);
+  await pipeline(stream, res);
+}
+
+/**
+ * Make sure the session's eager merge has run (idempotent, slot-queued), then
+ * return the merged playback key if it exists. Persisting the merge here means
+ * an employer viewing before the background merge finished does the work once,
+ * not on every page load.
+ *
+ * Only merges once the session is over (completed/failed): merging while the
+ * candidate is still recording would freeze playback.webm early and orphan
+ * every chunk uploaded afterwards (merge is skipped once status is "ready").
+ */
+async function ensureMergedPlayback(
+  sessionId: string,
+  storage: import("../services/capture/storage.js").IFrameStorage,
+): Promise<string | null> {
+  const fresh = await ProctoringSessionModel.findById(sessionId);
+  const merged = fresh?.mergedVideo as
+    | { status?: string; storageKey?: string | null }
+    | undefined;
+  if (
+    merged?.status === "ready" &&
+    merged.storageKey &&
+    (await storage.exists(merged.storageKey))
+  ) {
+    return merged.storageKey;
+  }
+
+  if (fresh?.status !== "completed" && fresh?.status !== "failed") {
+    return null;
+  }
+
+  await mergeSessionVideo(sessionId);
+
+  const after = await ProctoringSessionModel.findById(sessionId);
+  const mergedAfter = after?.mergedVideo as
+    | { status?: string; storageKey?: string | null }
+    | undefined;
+  if (
+    mergedAfter?.status === "ready" &&
+    mergedAfter.storageKey &&
+    (await storage.exists(mergedAfter.storageKey))
+  ) {
+    return mergedAfter.storageKey;
+  }
+  return null;
+}
+
 // GET /api/proctoring/sessions/:sessionId/playback-video
 // Returns re-muxed WebM for in-page playback (correct duration). Auth required; employer must own the submission.
+// `?format=url` returns JSON `{ url }` — a presigned direct URL on S3 (null on local storage),
+// which the client can put straight into a <video> src for native Range/seek support.
 export const getPlaybackVideo: RequestHandler = async (req, res, next) => {
   const errors = validationResult(req);
   try {
@@ -438,23 +558,21 @@ export const getPlaybackVideo: RequestHandler = async (req, res, next) => {
     const { getFrameStorage } = await import("../services/capture/storage.js");
     const storage = getFrameStorage();
 
-    const merged = session.mergedVideo as
-      | { status?: string; storageKey?: string | null }
-      | undefined;
-    if (
-      merged?.status === "ready" &&
-      merged.storageKey &&
-      (await storage.exists(merged.storageKey))
-    ) {
-      dv("[getPlaybackVideo] step 5: streaming merged file key =", merged.storageKey);
-      res.setHeader("Content-Type", "video/webm");
-      res.setHeader("Content-Disposition", "inline");
-      const stream = await storage.openReadStream(merged.storageKey);
-      await pipeline(stream, res);
+    const mergedKey = await ensureMergedPlayback(sessionId, storage);
+
+    if (req.query.format === "url") {
+      const url = mergedKey ? await storage.getSignedDownloadUrl(mergedKey) : null;
+      dv("[getPlaybackVideo] format=url: mergedKey =", mergedKey, "presigned =", url != null);
+      return res.json({ url });
+    }
+
+    if (mergedKey) {
+      dv("[getPlaybackVideo] step 5: streaming merged file key =", mergedKey);
+      await streamStoredVideoWithRange(req, res, storage, mergedKey, "inline");
       return;
     }
 
-    dv("[getPlaybackVideo] step 5: calling buildSessionWebmForPlayback");
+    dv("[getPlaybackVideo] step 5: merge unavailable, calling buildSessionWebmForPlayback");
     const result = await buildSessionWebmForPlayback(sessionId, session, storage);
     if (!result) {
       dv("[getPlaybackVideo] step 6: buildSessionWebmForPlayback returned null, returning 404");
@@ -465,8 +583,20 @@ export const getPlaybackVideo: RequestHandler = async (req, res, next) => {
       dv("[getPlaybackVideo] step 6: streaming file bytes =", st.size, "remuxed =", result.remuxed);
       res.setHeader("Content-Type", "video/webm");
       res.setHeader("Content-Disposition", "inline");
-      res.setHeader("Content-Length", String(st.size));
-      await pipeline(createReadStream(result.filePath), res);
+      res.setHeader("Accept-Ranges", "bytes");
+      const range = parseRangeHeader(req.headers.range as string | undefined, st.size);
+      if (range) {
+        res.status(206);
+        res.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${st.size}`);
+        res.setHeader("Content-Length", String(range.end - range.start + 1));
+        await pipeline(
+          createReadStream(result.filePath, { start: range.start, end: range.end }),
+          res,
+        );
+      } else {
+        res.setHeader("Content-Length", String(st.size));
+        await pipeline(createReadStream(result.filePath), res);
+      }
     } finally {
       await result.cleanup();
     }
@@ -478,6 +608,7 @@ export const getPlaybackVideo: RequestHandler = async (req, res, next) => {
 
 // GET /api/proctoring/sessions/:sessionId/download-video
 // Returns re-muxed WebM for the session (screen 0) so downloaded file has correct duration. Same pipeline as playback.
+// `?format=url` returns JSON `{ url }` — a presigned S3 URL with attachment disposition (null on local storage).
 export const downloadSessionVideo: RequestHandler = async (req, res, next) => {
   try {
     const { sessionId } = req.params;
@@ -487,21 +618,24 @@ export const downloadSessionVideo: RequestHandler = async (req, res, next) => {
     const session = await ProctoringSessionModel.findById(sessionId);
     if (!session) throw ProctoringError.SESSION_NOT_FOUND;
 
-    const merged = session.mergedVideo as
-      | { status?: string; storageKey?: string | null }
-      | undefined;
-    if (
-      merged?.status === "ready" &&
-      merged.storageKey &&
-      (await storage.exists(merged.storageKey))
-    ) {
-      res.setHeader("Content-Type", "video/webm");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="proctoring-${sessionId}.webm"`
+    const filename = `proctoring-${sessionId}.webm`;
+    const mergedKey = await ensureMergedPlayback(sessionId, storage);
+
+    if (req.query.format === "url") {
+      const url = mergedKey
+        ? await storage.getSignedDownloadUrl(mergedKey, { downloadFilename: filename })
+        : null;
+      return res.json({ url });
+    }
+
+    if (mergedKey) {
+      await streamStoredVideoWithRange(
+        req,
+        res,
+        storage,
+        mergedKey,
+        `attachment; filename="${filename}"`
       );
-      const stream = await storage.openReadStream(merged.storageKey);
-      await pipeline(stream, res);
       return;
     }
 
@@ -516,7 +650,7 @@ export const downloadSessionVideo: RequestHandler = async (req, res, next) => {
       res.setHeader("Content-Type", "video/webm");
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="proctoring-${sessionId}.webm"`
+        `attachment; filename="${filename}"`
       );
       res.setHeader("Content-Length", String(st.size));
       await pipeline(createReadStream(result.filePath), res);
@@ -531,6 +665,9 @@ export const downloadSessionVideo: RequestHandler = async (req, res, next) => {
 // GET /api/proctoring/sessions/:sessionId/debug-frames  (DEV ONLY)
 // Returns extracted frames as base64 thumbnails with region detection bounding boxes.
 export const getDebugFrames: RequestHandler = async (req, res, next) => {
+  let prepared:
+    | Awaited<ReturnType<typeof import("../services/capture/framePrep.js").prepareSessionForTranscript>>
+    | undefined;
   try {
     if (process.env.NODE_ENV === "production") {
       return res.status(404).json({ error: "Not found" });
@@ -549,7 +686,7 @@ export const getDebugFrames: RequestHandler = async (req, res, next) => {
       await import("../ai/transcript/regionDetector.js");
     const sharp = (await import("sharp")).default;
 
-    const prepared = await prepareSessionForTranscript(sessionId);
+    prepared = await prepareSessionForTranscript(sessionId);
 
     if (prepared.frames.length === 0) {
       return res.json({ frames: [], totalFrames: 0 });
@@ -649,6 +786,8 @@ export const getDebugFrames: RequestHandler = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  } finally {
+    await prepared?.cleanup?.().catch(() => {});
   }
 };
 
@@ -687,6 +826,9 @@ export const exportSessionOverlays: RequestHandler = async (
   res,
   next,
 ) => {
+  let prepared:
+    | Awaited<ReturnType<typeof import("../services/capture/framePrep.js").prepareSessionForTranscript>>
+    | undefined;
   try {
     if (process.env.NODE_ENV === "production") {
       return res.status(404).json({ error: "Not found" });
@@ -700,7 +842,7 @@ export const exportSessionOverlays: RequestHandler = async (
     const { renderOverlayPng } =
       await import("../services/capture/overlayPng.js");
 
-    const prepared = await prepareSessionForTranscript(sessionId);
+    prepared = await prepareSessionForTranscript(sessionId);
     if (prepared.frames.length === 0) {
       return res.status(404).json({
         error: "No frames in session. Record at least one frame first.",
@@ -735,6 +877,8 @@ export const exportSessionOverlays: RequestHandler = async (
     res.send(pngBuffer);
   } catch (error) {
     next(error);
+  } finally {
+    await prepared?.cleanup?.().catch(() => {});
   }
 };
 

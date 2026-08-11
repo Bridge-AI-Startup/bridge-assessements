@@ -6,8 +6,11 @@ import {
   HeadObjectCommand,
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { createReadStream } from "fs";
+import fs from "fs/promises";
 import { Readable } from "stream";
-import type { IFrameStorage } from "./storage.js";
+import type { ByteRange, IFrameStorage } from "./storage.js";
 
 function contentTypeForKey(key: string): string | undefined {
   const lower = key.toLowerCase();
@@ -125,14 +128,58 @@ export class S3FrameStorage implements IFrameStorage {
     return bodyToBuffer(out.Body);
   }
 
-  async openReadStream(key: string): Promise<Readable> {
+  async storeBlobFromFile(key: string, filePath: string): Promise<void> {
+    const st = await fs.stat(filePath);
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: createReadStream(filePath),
+        ContentLength: st.size,
+        ContentType: contentTypeForKey(key),
+      })
+    );
+  }
+
+  async openReadStream(key: string, range?: ByteRange): Promise<Readable> {
+    const rangeHeader = range
+      ? `bytes=${range.start}-${range.end != null ? range.end : ""}`
+      : undefined;
     const out = await this.client.send(
-      new GetObjectCommand({ Bucket: this.bucket, Key: key })
+      new GetObjectCommand({ Bucket: this.bucket, Key: key, Range: rangeHeader })
     );
     const body = out.Body;
     if (!body) throw new Error("S3 GetObject: empty body");
     if (body instanceof Readable) return body;
     return Readable.from(body as AsyncIterable<Uint8Array>);
+  }
+
+  async sizeOf(key: string): Promise<number | null> {
+    try {
+      const out = await this.client.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: key })
+      );
+      return out.ContentLength ?? null;
+    } catch (err) {
+      if (isNotFound(err)) return null;
+      throw err;
+    }
+  }
+
+  async getSignedDownloadUrl(
+    key: string,
+    options?: { expiresSeconds?: number; downloadFilename?: string }
+  ): Promise<string | null> {
+    const command = new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      ResponseContentDisposition: options?.downloadFilename
+        ? `attachment; filename="${options.downloadFilename}"`
+        : undefined,
+    });
+    return getSignedUrl(this.client, command, {
+      expiresIn: options?.expiresSeconds ?? 3600,
+    });
   }
 
   /**

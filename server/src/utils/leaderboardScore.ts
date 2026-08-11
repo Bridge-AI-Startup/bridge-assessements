@@ -12,7 +12,10 @@ type SubmissionLike = {
     completeness?: { score?: number | null };
   } | null;
   behavioralGradingStatus?: string | null;
-  behavioralGradingReport?: { cases?: Array<{ verdict?: string }> } | null;
+  behavioralGradingReport?: {
+    cases?: Array<{ verdict?: string }>;
+    failureCategory?: string | null;
+  } | null;
   evaluationReport?: {
     criteria_results?: Array<{ evaluable?: boolean; score?: number }>;
   } | null;
@@ -32,6 +35,9 @@ function getRecordingRubric0to100(sub: SubmissionLike): number | null {
 
 function getBehavioralPass0to100(sub: SubmissionLike): number | null {
   if (sub.behavioralGradingStatus !== "completed") return null;
+  // Setup failure = grading environment problem, not candidate performance;
+  // the mostly-inconclusive verdicts it produces must not average in as ~50%.
+  if (sub.behavioralGradingReport?.failureCategory === "setup") return null;
   const cases = sub.behavioralGradingReport?.cases;
   if (!Array.isArray(cases) || cases.length === 0) return null;
   let pts = 0;

@@ -124,6 +124,9 @@ function hasEvaluableWorkflowReport(sub) {
 /** Behavioral checks → 0–100 (pass=1, inconclusive=0.5, fail=0), when grading completed. */
 function getBehavioralPass0to100(sub) {
   if (sub.behavioralGradingStatus !== "completed") return null;
+  // Setup failure = grading environment problem, not candidate performance;
+  // the mostly-inconclusive verdicts it produces must not average in as ~50%.
+  if (sub.behavioralGradingReport?.failureCategory === "setup") return null;
   const cases = sub.behavioralGradingReport?.cases;
   if (!Array.isArray(cases) || cases.length === 0) return null;
   let pts = 0;

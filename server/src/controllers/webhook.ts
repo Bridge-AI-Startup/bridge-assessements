@@ -232,9 +232,7 @@ export const handleElevenLabsWebhook: RequestHandler = async (
     console.log("\n" + "=".repeat(80));
     console.log("🔍 [webhook] Signature verification debug:");
     console.log("=".repeat(80));
-    console.log(`   Secret length: ${secret.length}`);
-    console.log(`   Secret preview: ${secret.substring(0, 20)}...`);
-    console.log(`   Signature header: ${signatureHeader || "MISSING"}`);
+    console.log(`   Signature header present: ${signatureHeader ? "yes" : "MISSING"}`);
     console.log(`   Raw body type: ${typeof rawBody}`);
     const rawBodyString =
       typeof rawBody === "string" ? rawBody : rawBody.toString("utf-8");

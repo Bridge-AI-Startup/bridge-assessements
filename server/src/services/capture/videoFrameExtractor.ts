@@ -15,6 +15,7 @@
 import { exec } from "child_process";
 import { promisify } from "util";
 import fs from "fs/promises";
+import { readFileSync } from "fs";
 import path from "path";
 import os from "os";
 import sharp from "sharp";
@@ -23,6 +24,39 @@ import ProctoringSessionModel from "../../models/proctoringSession.js";
 import { getFrameStorage } from "./storage.js";
 import { PreparedFrame } from "./framePrep.js";
 import { mergeLocalFilesSequential } from "./videoMerge.js";
+
+/**
+ * PreparedFrame whose pixel data lives on disk and is read on each `.buffer`
+ * access instead of being held in RAM. Holding every kept frame of a long
+ * session in one array is what OOMed the server; consumers touch frames
+ * sequentially (per vision batch / per region crop), so a lazy read keeps
+ * peak memory at one batch instead of the whole session.
+ */
+export function makeDiskBackedFrame(meta: {
+  storageKey: string;
+  filePath: string;
+  screenIndex: number;
+  capturedAt: Date;
+  width: number;
+  height: number;
+}): PreparedFrame {
+  return {
+    storageKey: meta.storageKey,
+    screenIndex: meta.screenIndex,
+    capturedAt: meta.capturedAt,
+    width: meta.width,
+    height: meta.height,
+    get buffer(): Buffer {
+      return readFileSync(meta.filePath);
+    },
+  };
+}
+
+export interface ExtractedFrames {
+  frames: PreparedFrame[];
+  /** Deletes the on-disk kept frames. Call after the transcript pipeline is done with them. */
+  cleanup: () => Promise<void>;
+}
 
 const execAsync = promisify(exec);
 const FFMPEG_PATH = ffmpegInstaller.path;
@@ -68,6 +102,7 @@ async function extractFramesFromVideoPath(
   screenIndex: number,
   videoPath: string,
   realStartTime: number,
+  keepDir: string,
 ): Promise<PreparedFrame[]> {
   const scratchDir = await fs.mkdtemp(
     path.join(os.tmpdir(), `proctoring-${sessionId}-s${screenIndex}-scratch-`),
@@ -146,26 +181,37 @@ async function extractFramesFromVideoPath(
       Date.now() - diffStart,
     );
 
-    const loadStart = Date.now();
+    const keepStart = Date.now();
     for (const idx of keptIndices) {
       const framePath = path.join(candidatesDir, candidateFiles[idx]);
-      const buffer = await fs.readFile(framePath);
       const timeSec = idx * CANDIDATE_INTERVAL;
       const capturedAt = new Date(realStartTime + timeSec * 1000);
-      const dimensions = parsePngDimensions(buffer);
+      const keptPath = path.join(
+        keepDir,
+        `s${screenIndex}-${timeSec.toFixed(2)}.png`,
+      );
+      try {
+        await fs.rename(framePath, keptPath);
+      } catch {
+        // e.g. EXDEV if keepDir ends up on another filesystem
+        await fs.copyFile(framePath, keptPath);
+      }
+      const dimensions = await readPngDimensionsFromFile(keptPath);
 
-      out.push({
-        storageKey: `${sessionId}/extracted/${timeSec.toFixed(2)}-${screenIndex}.png`,
-        buffer,
-        screenIndex,
-        capturedAt,
-        width: dimensions.width,
-        height: dimensions.height,
-      });
+      out.push(
+        makeDiskBackedFrame({
+          storageKey: `${sessionId}/extracted/${timeSec.toFixed(2)}-${screenIndex}.png`,
+          filePath: keptPath,
+          screenIndex,
+          capturedAt,
+          width: dimensions.width,
+          height: dimensions.height,
+        }),
+      );
     }
     log(
-      `Screen ${screenIndex}: loaded ${keptIndices.length} frames into memory`,
-      Date.now() - loadStart,
+      `Screen ${screenIndex}: kept ${keptIndices.length} frames on disk (lazy-loaded)`,
+      Date.now() - keepStart,
     );
     return out;
   } finally {
@@ -175,15 +221,17 @@ async function extractFramesFromVideoPath(
 
 /**
  * Extract frames from session video using pixel-diff smart selection.
- * Returns PreparedFrame[] ready for the transcript pipeline.
+ * Returned frames are disk-backed (lazy `.buffer`); callers own `cleanup()`
+ * and must invoke it once the transcript pipeline is done with the frames.
  */
 export async function extractSmartFrames(
   sessionId: string,
-): Promise<PreparedFrame[]> {
+): Promise<ExtractedFrames> {
+  const noop = async () => {};
   const session = await ProctoringSessionModel.findById(sessionId);
   if (!session) {
     log("No session");
-    return [];
+    return { frames: [], cleanup: noop };
   }
 
   const mergedReady =
@@ -210,61 +258,42 @@ export async function extractSmartFrames(
   const storage = getFrameStorage();
   let screenCountForLog = 0;
 
-  if (mergedReady) {
-    const key = (session as any).mergedVideo.storageKey as string;
-    log(`Using merged video at ${key}`);
-    screenCountForLog = 1;
-    log(
-      `Session start: ${new Date(realStartTime).toISOString()}; 1 screen(s) (merged)`,
-    );
+  const keepDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), `proctoring-${sessionId}-kept-`),
+  );
+  const cleanup = async () => {
+    await fs.rm(keepDir, { recursive: true, force: true }).catch(() => {});
+  };
 
-    const workDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), `proctoring-${sessionId}-merged-`),
-    );
-    try {
-      const videoPath = path.join(workDir, "merged.webm");
-      const { pipeline } = await import("stream/promises");
-      const { createWriteStream } = await import("fs");
-      await pipeline(
-        await storage.openReadStream(key),
-        createWriteStream(videoPath),
-      );
-      const frames = await extractFramesFromVideoPath(
-        sessionId,
-        0,
-        videoPath,
-        realStartTime,
-      );
-      allFrames.push(...frames);
-    } finally {
-      await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
-    }
-  } else if (!session.videoChunks?.length) {
-    log("No video chunks found");
-    return [];
-  } else {
-    const chunksByScreen = new Map<
+  const groupChunksByScreen = (
+    filter?: (screenIndex: number) => boolean,
+  ): Map<number, Array<{ storageKey: string; startTime: Date; screenIndex: number }>> => {
+    const byScreen = new Map<
       number,
       Array<{ storageKey: string; startTime: Date; screenIndex: number }>
     >();
-    for (const chunk of session.videoChunks) {
+    for (const chunk of session.videoChunks ?? []) {
       const c = chunk as any;
-      const screenIndex = c.screenIndex as number;
-      if (!chunksByScreen.has(screenIndex)) {
-        chunksByScreen.set(screenIndex, []);
+      const screenIndex = (c.screenIndex as number) ?? 0;
+      if (filter && !filter(screenIndex)) continue;
+      if (!byScreen.has(screenIndex)) {
+        byScreen.set(screenIndex, []);
       }
-      chunksByScreen.get(screenIndex)!.push({
+      byScreen.get(screenIndex)!.push({
         storageKey: c.storageKey,
         startTime: new Date(c.startTime),
         screenIndex,
       });
     }
+    return byScreen;
+  };
 
-    screenCountForLog = chunksByScreen.size;
-    log(
-      `Session start: ${new Date(realStartTime).toISOString()}; ${chunksByScreen.size} screen(s)`,
-    );
-
+  const processChunkScreens = async (
+    chunksByScreen: Map<
+      number,
+      Array<{ storageKey: string; startTime: Date; screenIndex: number }>
+    >,
+  ): Promise<void> => {
     for (const [screenIndex, chunks] of chunksByScreen) {
       const sortedChunks = [...chunks].sort(
         (a, b) => a.startTime.getTime() - b.startTime.getTime(),
@@ -310,30 +339,85 @@ export async function extractSmartFrames(
           screenIndex,
           videoPath,
           realStartTime,
+          keepDir,
         );
         allFrames.push(...frames);
       } finally {
         await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
       }
     }
+  };
+
+  try {
+    if (mergedReady) {
+      const key = (session as any).mergedVideo.storageKey as string;
+      log(`Using merged video at ${key}`);
+
+      // The eager merge covers screen 0 only; multi-monitor sessions may still
+      // hold chunk references for other screens — process those as well.
+      const remainingScreens = groupChunksByScreen((s) => s !== 0);
+      screenCountForLog = 1 + remainingScreens.size;
+      log(
+        `Session start: ${new Date(realStartTime).toISOString()}; ${screenCountForLog} screen(s) (merged + ${remainingScreens.size} chunk-based)`,
+      );
+
+      const workDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), `proctoring-${sessionId}-merged-`),
+      );
+      try {
+        const videoPath = path.join(workDir, "merged.webm");
+        const { pipeline } = await import("stream/promises");
+        const { createWriteStream } = await import("fs");
+        await pipeline(
+          await storage.openReadStream(key),
+          createWriteStream(videoPath),
+        );
+        const frames = await extractFramesFromVideoPath(
+          sessionId,
+          0,
+          videoPath,
+          realStartTime,
+          keepDir,
+        );
+        allFrames.push(...frames);
+      } finally {
+        await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
+      }
+
+      await processChunkScreens(remainingScreens);
+    } else if (!session.videoChunks?.length) {
+      log("No video chunks found");
+      await cleanup();
+      return { frames: [], cleanup: noop };
+    } else {
+      const chunksByScreen = groupChunksByScreen();
+      screenCountForLog = chunksByScreen.size;
+      log(
+        `Session start: ${new Date(realStartTime).toISOString()}; ${chunksByScreen.size} screen(s)`,
+      );
+      await processChunkScreens(chunksByScreen);
+    }
+
+    allFrames.sort(
+      (a, b) => a.capturedAt.getTime() - b.capturedAt.getTime(),
+    );
+
+    await ProctoringSessionModel.findByIdAndUpdate(sessionId, {
+      "stats.videoStats.extractedFrameCount": allFrames.length,
+      "stats.videoStats.extractionMethod":
+        allFrames.length > 0 ? "fixed_interval" : null,
+    });
+
+    log(
+      `Total: ${allFrames.length} frames from ${screenCountForLog} screen(s)`,
+      Date.now() - extractStart,
+    );
+
+    return { frames: allFrames, cleanup };
+  } catch (err) {
+    await cleanup();
+    throw err;
   }
-
-  allFrames.sort(
-    (a, b) => a.capturedAt.getTime() - b.capturedAt.getTime(),
-  );
-
-  await ProctoringSessionModel.findByIdAndUpdate(sessionId, {
-    "stats.videoStats.extractedFrameCount": allFrames.length,
-    "stats.videoStats.extractionMethod":
-      allFrames.length > 0 ? "fixed_interval" : null,
-  });
-
-  log(
-    `Total: ${allFrames.length} frames from ${screenCountForLog} screen(s)`,
-    Date.now() - extractStart,
-  );
-
-  return allFrames;
 }
 
 /**
@@ -430,6 +514,20 @@ async function getVideoDuration(videoPath: string): Promise<number> {
 
   console.warn(`[${new Date().toISOString()}] [videoExtractor] Could not determine video duration, defaulting to 60s`);
   return 60;
+}
+
+/** Read PNG dimensions from the file header without loading the whole image. */
+async function readPngDimensionsFromFile(
+  filePath: string,
+): Promise<{ width: number; height: number }> {
+  const fh = await fs.open(filePath, "r");
+  try {
+    const header = Buffer.alloc(24);
+    await fh.read(header, 0, 24, 0);
+    return parsePngDimensions(header);
+  } finally {
+    await fh.close();
+  }
 }
 
 /**

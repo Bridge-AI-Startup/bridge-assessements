@@ -345,14 +345,30 @@ export async function getRefinedTranscriptContent(
 }
 
 /**
- * Fetch re-muxed WebM video for in-page playback (correct duration). Returns an object URL;
- * caller must call URL.revokeObjectURL(objectUrl) when done to avoid leaks.
+ * Fetch re-muxed WebM video for in-page playback (correct duration).
+ *
+ * Prefers a direct (presigned S3) URL from `?format=url` — the <video> element
+ * then streams and seeks natively without downloading the whole recording.
+ * Falls back to fetching the binary and returning an object URL (local storage
+ * or unmerged sessions). Revoking with URL.revokeObjectURL is safe in both
+ * cases (it is a no-op for non-blob URLs).
  */
 export async function getProctoringVideoPlaybackUrl(
   sessionId: string,
   authToken: string
 ): Promise<APIResult<string>> {
   try {
+    const urlResponse = await fetch(
+      `${API_BASE_URL}/proctoring/sessions/${sessionId}/playback-video?format=url`,
+      { headers: { Authorization: `Bearer ${authToken}` } }
+    );
+    if (urlResponse.ok) {
+      const data = await urlResponse.json().catch(() => ({}));
+      if (data?.url) {
+        return { success: true, data: data.url };
+      }
+    }
+
     const response = await fetch(
       `${API_BASE_URL}/proctoring/sessions/${sessionId}/playback-video`,
       { headers: { Authorization: `Bearer ${authToken}` } }
@@ -374,11 +390,26 @@ export async function getProctoringVideoPlaybackUrl(
 
 /**
  * Download merged WebM video for a session. Triggers a file download in the browser.
+ * Prefers a presigned direct URL (S3) so the file never streams through the API server.
  */
 export async function downloadProctoringVideo(
   sessionId: string
 ): Promise<APIResult<void>> {
   try {
+    const urlResponse = await fetch(
+      `${API_BASE_URL}/proctoring/sessions/${sessionId}/download-video?format=url`
+    );
+    if (urlResponse.ok) {
+      const data = await urlResponse.json().catch(() => ({}));
+      if (data?.url) {
+        const a = document.createElement("a");
+        a.href = data.url;
+        a.download = `proctoring-${sessionId}.webm`;
+        a.click();
+        return { success: true };
+      }
+    }
+
     const response = await fetch(
       `${API_BASE_URL}/proctoring/sessions/${sessionId}/download-video`
     );

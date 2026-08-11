@@ -1,9 +1,14 @@
+import fs from "fs/promises";
+import os from "os";
+import path from "path";
+
 import ProctoringSessionModel from "../../models/proctoringSession.js";
 import { getFrameStorage } from "./storage.js";
 import { ProctoringError } from "../../errors/proctoring.js";
 import {
   extractSmartFrames,
   isFFmpegAvailable,
+  makeDiskBackedFrame,
 } from "./videoFrameExtractor.js";
 
 const log = (msg: string, elapsedMs?: number) =>
@@ -12,6 +17,10 @@ const log = (msg: string, elapsedMs?: number) =>
 /**
  * Boundary contract consumed by ai/transcript/generator.ts.
  * This is the ONLY interface the AI module knows about.
+ *
+ * `buffer` may be a lazy disk-backed getter (see makeDiskBackedFrame): read it
+ * when needed and let it go out of scope — do NOT collect all frames' buffers
+ * into a long-lived structure, that reintroduces the whole-session-in-RAM OOM.
  */
 export interface PreparedFrame {
   storageKey: string;
@@ -35,6 +44,11 @@ export interface PreparedSessionData {
   screens: Array<{ screenIndex: number; label: string | null }>;
   captureStartedAt: Date | null;
   captureEndedAt: Date | null;
+  /**
+   * Deletes the temp files backing `frames`. The caller that triggered
+   * preparation must invoke this (in a finally) once processing is done.
+   */
+  cleanup?: () => Promise<void>;
 }
 
 /**
@@ -50,6 +64,7 @@ export async function prepareSessionForTranscript(
   if (!session) throw ProctoringError.SESSION_NOT_FOUND;
 
   let preparedFrames: PreparedFrame[] = [];
+  let framesCleanup: (() => Promise<void>) | undefined;
   const hasVideo =
     (session.videoChunks && session.videoChunks.length > 0) ||
     (session as any).mergedVideo?.status === "ready";
@@ -62,7 +77,9 @@ export async function prepareSessionForTranscript(
       );
       try {
         const extractStart = Date.now();
-        preparedFrames = await extractSmartFrames(sessionId);
+        const extracted = await extractSmartFrames(sessionId);
+        preparedFrames = extracted.frames;
+        framesCleanup = extracted.cleanup;
         log(`Video extraction produced ${preparedFrames.length} frames`, Date.now() - extractStart);
       } catch (err) {
         console.error(`[${new Date().toISOString()}] [framePrep] Video extraction failed, falling back to screenshots:`, err);
@@ -74,9 +91,15 @@ export async function prepareSessionForTranscript(
   }
 
   if (preparedFrames.length === 0) {
+    if (framesCleanup) {
+      await framesCleanup().catch(() => {});
+      framesCleanup = undefined;
+    }
     log("Using screenshot-based frames (fallback)");
     const screenshotStart = Date.now();
-    preparedFrames = await loadScreenshotFrames(session);
+    const screenshots = await loadScreenshotFrames(sessionId, session);
+    preparedFrames = screenshots.frames;
+    framesCleanup = screenshots.cleanup;
     log(`Loaded ${preparedFrames.length} screenshot frames`, Date.now() - screenshotStart);
 
     if (hasVideo) {
@@ -110,6 +133,7 @@ export async function prepareSessionForTranscript(
     screens,
     captureStartedAt: session.stats.captureStartedAt || null,
     captureEndedAt: session.stats.captureEndedAt || null,
+    cleanup: framesCleanup,
   };
 }
 
@@ -133,9 +157,13 @@ export async function prepareSessionForTranscriptSince(
 }
 
 /**
- * Load screenshot frames from storage (original behavior).
+ * Load screenshot frames from storage into a temp dir, returning disk-backed
+ * frames (one buffer resident at a time during download, lazy `.buffer` after).
  */
-async function loadScreenshotFrames(session: any): Promise<PreparedFrame[]> {
+async function loadScreenshotFrames(
+  sessionId: string,
+  session: any
+): Promise<{ frames: PreparedFrame[]; cleanup: () => Promise<void> }> {
   const storage = getFrameStorage();
 
   const nonDuplicateFrames = session.frames
@@ -145,22 +173,42 @@ async function loadScreenshotFrames(session: any): Promise<PreparedFrame[]> {
         new Date(a.capturedAt).getTime() - new Date(b.capturedAt).getTime()
     );
 
-  const preparedFrames: PreparedFrame[] = [];
-  for (const frame of nonDuplicateFrames) {
-    try {
-      const buffer = await storage.getFrame(frame.storageKey);
-      preparedFrames.push({
-        storageKey: frame.storageKey,
-        buffer,
-        screenIndex: frame.screenIndex,
-        capturedAt: new Date(frame.capturedAt),
-        width: frame.width || 0,
-        height: frame.height || 0,
-      });
-    } catch (err) {
-      console.warn(`[${new Date().toISOString()}] [framePrep] Failed to load frame ${frame.storageKey}, skipping:`, err);
-    }
-  }
+  const frameDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), `proctoring-${sessionId}-shots-`)
+  );
+  const cleanup = async () => {
+    await fs.rm(frameDir, { recursive: true, force: true }).catch(() => {});
+  };
 
-  return preparedFrames;
+  try {
+    const preparedFrames: PreparedFrame[] = [];
+    for (let i = 0; i < nonDuplicateFrames.length; i++) {
+      const frame = nonDuplicateFrames[i];
+      try {
+        const buffer = await storage.getFrame(frame.storageKey);
+        const filePath = path.join(
+          frameDir,
+          `${String(i).padStart(6, "0")}.png`
+        );
+        await fs.writeFile(filePath, buffer);
+        preparedFrames.push(
+          makeDiskBackedFrame({
+            storageKey: frame.storageKey,
+            filePath,
+            screenIndex: frame.screenIndex,
+            capturedAt: new Date(frame.capturedAt),
+            width: frame.width || 0,
+            height: frame.height || 0,
+          })
+        );
+      } catch (err) {
+        console.warn(`[${new Date().toISOString()}] [framePrep] Failed to load frame ${frame.storageKey}, skipping:`, err);
+      }
+    }
+
+    return { frames: preparedFrames, cleanup };
+  } catch (err) {
+    await cleanup();
+    throw err;
+  }
 }

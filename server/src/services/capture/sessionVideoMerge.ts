@@ -291,23 +291,27 @@ export async function mergeSessionVideo(
       const { remuxWebMFromPaths } = await import("./playbackRemux.js");
       const remuxOk = await remuxWebMFromPaths(mergedPath, remuxedPath);
       const finalPath = remuxOk ? remuxedPath : mergedPath;
-      const finalBuf = await fs.readFile(finalPath);
+      const finalSizeBytes = (await fs.stat(finalPath)).size;
 
-      await storage.storeVideoChunk(playbackKey, finalBuf);
+      await storage.storeBlobFromFile(playbackKey, finalPath);
 
       // Point Mongo at merged file and clear chunk keys BEFORE deleting blobs so
       // concurrent transcript jobs never see chunk keys for missing objects.
+      // Only the merged (screen-0) entries are pulled: other screens' chunks stay
+      // referenced so multi-monitor recordings remain playable and transcribable.
       await ProctoringSessionModel.findByIdAndUpdate(sessionId, {
         $set: {
-          videoChunks: [],
           "mergedVideo.status": "ready",
           "mergedVideo.storageKey": playbackKey,
-          "mergedVideo.sizeBytes": finalBuf.length,
+          "mergedVideo.sizeBytes": finalSizeBytes,
           "mergedVideo.durationSeconds": durationFromChunks,
           "mergedVideo.mergedAt": new Date(),
           "mergedVideo.chunksDeletedAt": new Date(),
           "mergedVideo.error": null,
           "mergedVideo.mergingStartedAt": null,
+        },
+        $pull: {
+          videoChunks: { storageKey: { $in: keysToDelete } },
         },
       });
 

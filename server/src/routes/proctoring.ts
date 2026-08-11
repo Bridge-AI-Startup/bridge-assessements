@@ -1,5 +1,6 @@
 import express from "express";
 import multer from "multer";
+import os from "os";
 
 import * as ProctoringController from "../controllers/proctoring.js";
 import * as ProctoringValidator from "../validators/proctoringValidation.js";
@@ -12,8 +13,11 @@ const frameUpload = multer({
   limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
 }).single("frame");
 
+// Video chunks go to disk, not RAM: a 50MB chunk per in-flight request on the heap
+// is what OOMs the server under concurrent candidates. The controller unlinks the
+// temp file when done.
 const videoUpload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({ destination: os.tmpdir() }),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
 }).single("chunk");
 

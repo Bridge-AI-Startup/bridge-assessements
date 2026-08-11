@@ -1,9 +1,16 @@
 import fs from "fs/promises";
-import { createReadStream } from "fs";
+import { createReadStream, createWriteStream } from "fs";
 import path from "path";
 import type { Readable } from "stream";
+import { pipeline } from "stream/promises";
 
 import { S3FrameStorage } from "./s3FrameStorage.js";
+
+/** Byte range for partial reads; end is inclusive (HTTP Range semantics). */
+export interface ByteRange {
+  start: number;
+  end?: number;
+}
 
 /**
  * Interface for frame/transcript storage.
@@ -17,8 +24,20 @@ export interface IFrameStorage {
   getTranscript(key: string): Promise<string>;
   storeVideoChunk(key: string, buffer: Buffer): Promise<void>;
   getVideoChunk(key: string): Promise<Buffer>;
+  /** Store a large blob by streaming from a local file (never fully in RAM). */
+  storeBlobFromFile(key: string, filePath: string): Promise<void>;
   /** Stream large blobs (e.g. merged playback.webm) without loading fully into RAM. */
-  openReadStream(key: string): Promise<Readable>;
+  openReadStream(key: string, range?: ByteRange): Promise<Readable>;
+  /** Object size in bytes, or null if it doesn't exist. */
+  sizeOf(key: string): Promise<number | null>;
+  /**
+   * Short-lived direct-download URL for the blob (S3 presigned GET), or null when
+   * the backend can't serve blobs directly (local FS) and the API must stream it.
+   */
+  getSignedDownloadUrl(
+    key: string,
+    options?: { expiresSeconds?: number; downloadFilename?: string }
+  ): Promise<string | null>;
   listKeys(prefix: string): Promise<string[]>;
   exists(key: string): Promise<boolean>;
   delete(key: string): Promise<void>;
@@ -72,8 +91,30 @@ export class LocalFrameStorage implements IFrameStorage {
     return fs.readFile(this.resolvePath(key));
   }
 
-  async openReadStream(key: string): Promise<Readable> {
-    return createReadStream(this.resolvePath(key));
+  async storeBlobFromFile(key: string, filePath: string): Promise<void> {
+    const destPath = this.resolvePath(key);
+    await fs.mkdir(path.dirname(destPath), { recursive: true });
+    await pipeline(createReadStream(filePath), createWriteStream(destPath));
+  }
+
+  async openReadStream(key: string, range?: ByteRange): Promise<Readable> {
+    return createReadStream(
+      this.resolvePath(key),
+      range ? { start: range.start, end: range.end } : undefined
+    );
+  }
+
+  async sizeOf(key: string): Promise<number | null> {
+    try {
+      const st = await fs.stat(this.resolvePath(key));
+      return st.size;
+    } catch {
+      return null;
+    }
+  }
+
+  async getSignedDownloadUrl(): Promise<string | null> {
+    return null;
   }
 
   async listKeys(prefix: string): Promise<string[]> {

@@ -13,6 +13,7 @@ import ProctoringSessionModel from "../../models/proctoringSession.js";
 import {
   prepareSessionForTranscript,
   prepareSessionForTranscriptSince,
+  type PreparedSessionData,
 } from "../../services/capture/framePrep.js";
 import { getFrameStorage } from "../../services/capture/storage.js";
 import { ProctoringError } from "../../errors/proctoring.js";
@@ -95,11 +96,12 @@ export async function generateTranscript(
     "transcript.refinedError": null,
   });
 
+  let prepared: PreparedSessionData | undefined;
   try {
     const genStart = Date.now();
     logTs("transcript", `Preparing session ${sessionId}...`);
     const prepStart = Date.now();
-    const prepared = await prepareSessionForTranscript(sessionId);
+    prepared = await prepareSessionForTranscript(sessionId);
     logTs("transcript", `Prepared: ${prepared.frames.length} frames, ${prepared.sidecarEvents.length} sidecar events`, Date.now() - prepStart);
 
     if (prepared.frames.length === 0) {
@@ -197,6 +199,8 @@ export async function generateTranscript(
       }
     );
     throw error;
+  } finally {
+    await prepared?.cleanup?.().catch(() => {});
   }
 }
 
@@ -222,59 +226,63 @@ export async function generateTranscriptIncremental(
   if (!session) throw ProctoringError.SESSION_NOT_FOUND;
 
   const prepared = await prepareSessionForTranscriptSince(sessionId, options.sinceMs);
-  if (prepared.frames.length === 0) {
-    return { mergedSegmentCount: 0, newSegmentCount: 0, frameCount: 0 };
-  }
-
-  logTs("transcript", `Incremental: session ${sessionId}, ${prepared.frames.length} frames since ${new Date(options.sinceMs).toISOString()}`);
-
-  const useRegionDetection = isRegionDetectionEnabled();
-  let batchOutputs: string[];
-  if (useRegionDetection) {
-    const result = await processWithRegionDetection(sessionId, undefined, prepared.frames);
-    batchOutputs = result.batchOutputs;
-  } else {
-    const result = await processWithPromptOnly(prepared.frames);
-    batchOutputs = result.batchOutputs;
-  }
-
-  let jsonl = stitchBatchOutputs(batchOutputs);
-  jsonl = injectSidecarEvents(jsonl, prepared.sidecarEvents);
-
-  const storage = getFrameStorage();
-  const storageKey = `${sessionId}/transcript.jsonl`;
-  let existingJsonl = "";
   try {
-    existingJsonl = await storage.getTranscript(storageKey);
-  } catch {
-    // no existing transcript
+    if (prepared.frames.length === 0) {
+      return { mergedSegmentCount: 0, newSegmentCount: 0, frameCount: 0 };
+    }
+
+    logTs("transcript", `Incremental: session ${sessionId}, ${prepared.frames.length} frames since ${new Date(options.sinceMs).toISOString()}`);
+
+    const useRegionDetection = isRegionDetectionEnabled();
+    let batchOutputs: string[];
+    if (useRegionDetection) {
+      const result = await processWithRegionDetection(sessionId, undefined, prepared.frames);
+      batchOutputs = result.batchOutputs;
+    } else {
+      const result = await processWithPromptOnly(prepared.frames);
+      batchOutputs = result.batchOutputs;
+    }
+
+    let jsonl = stitchBatchOutputs(batchOutputs);
+    jsonl = injectSidecarEvents(jsonl, prepared.sidecarEvents);
+
+    const storage = getFrameStorage();
+    const storageKey = `${sessionId}/transcript.jsonl`;
+    let existingJsonl = "";
+    try {
+      existingJsonl = await storage.getTranscript(storageKey);
+    } catch {
+      // no existing transcript
+    }
+
+    const existingSegments = parseTranscriptJsonlToSegments(existingJsonl);
+    const newSegments = parseTranscriptJsonlToSegments(jsonl);
+    const combined = [...existingSegments, ...newSegments];
+    combined.sort((a, b) => {
+      const ta = new Date(a.ts).getTime();
+      const tb = new Date(b.ts).getTime();
+      if (ta !== tb) return ta - tb;
+      return (a.screen ?? 0) - (b.screen ?? 0);
+    });
+
+    const mergedJsonl = combined.map((seg) => JSON.stringify(seg)).join("\n");
+    await storage.storeTranscript(storageKey, mergedJsonl);
+
+    await ProctoringSessionModel.findByIdAndUpdate(sessionId, {
+      "transcript.lastIncrementalAt": new Date(),
+      "transcript.storageKey": storageKey,
+    });
+
+    logTs("transcript", `Incremental done: ${newSegments.length} new segments, ${combined.length} total merged`);
+
+    return {
+      mergedSegmentCount: combined.length,
+      newSegmentCount: newSegments.length,
+      frameCount: prepared.frames.length,
+    };
+  } finally {
+    await prepared.cleanup?.().catch(() => {});
   }
-
-  const existingSegments = parseTranscriptJsonlToSegments(existingJsonl);
-  const newSegments = parseTranscriptJsonlToSegments(jsonl);
-  const combined = [...existingSegments, ...newSegments];
-  combined.sort((a, b) => {
-    const ta = new Date(a.ts).getTime();
-    const tb = new Date(b.ts).getTime();
-    if (ta !== tb) return ta - tb;
-    return (a.screen ?? 0) - (b.screen ?? 0);
-  });
-
-  const mergedJsonl = combined.map((seg) => JSON.stringify(seg)).join("\n");
-  await storage.storeTranscript(storageKey, mergedJsonl);
-
-  await ProctoringSessionModel.findByIdAndUpdate(sessionId, {
-    "transcript.lastIncrementalAt": new Date(),
-    "transcript.storageKey": storageKey,
-  });
-
-  logTs("transcript", `Incremental done: ${newSegments.length} new segments, ${combined.length} total merged`);
-
-  return {
-    mergedSegmentCount: combined.length,
-    newSegmentCount: newSegments.length,
-    frameCount: prepared.frames.length,
-  };
 }
 
 /**
