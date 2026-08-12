@@ -3,8 +3,25 @@
  */
 
 import { createReadStream, createWriteStream } from "fs";
-import { Readable } from "stream";
-import { finished, pipeline } from "stream/promises";
+import type { Writable } from "stream";
+import { once } from "events";
+import { finished } from "stream/promises";
+
+/**
+ * Write one buffer, respecting backpressure.
+ *
+ * Deliberately NOT `pipeline(src, out, { end: false })` in a loop: pipeline attaches
+ * error/close/finish/end listeners to the destination and does not detach them when
+ * it is told not to end the stream, so N sources leak ~4N listeners on one WriteStream.
+ * A 470-chunk session produced ~1,900 listeners (and a MaxListenersExceededWarning
+ * storm) on every playback rebuild. `once(out, "drain")` self-removes and rejects if
+ * the stream errors.
+ */
+async function writeWithBackpressure(out: Writable, chunk: Buffer): Promise<void> {
+  if (!out.write(chunk)) {
+    await once(out, "drain");
+  }
+}
 
 /**
  * Binary-concatenate local files (e.g. WebM chunk files) into destPath.
@@ -17,7 +34,9 @@ export async function mergeLocalFilesSequential(
   const out = createWriteStream(destPath);
   try {
     for (const p of srcPaths) {
-      await pipeline(createReadStream(p), out, { end: false });
+      for await (const chunk of createReadStream(p)) {
+        await writeWithBackpressure(out, chunk as Buffer);
+      }
     }
     out.end();
     await finished(out);
@@ -37,7 +56,7 @@ export async function appendBuffersSequential(
   const out = createWriteStream(destPath);
   try {
     for await (const buf of buffers) {
-      await pipeline(Readable.from(buf), out, { end: false });
+      await writeWithBackpressure(out, buf);
     }
     out.end();
     await finished(out);

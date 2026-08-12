@@ -26,7 +26,7 @@ export type AIUseCase =
   | "assessment_chat" // Chat with assessment AI assistant
   | "interview_questions" // Generate interview questions from code
   | "interview_summary" // Generate interview summary from transcript
-  | "workflow_evaluation" // LLM workflow evaluation proxy
+  | "workflow_evaluation" // Behavioral grading LLM calls (planner/judge)
   | "transcript_evaluation" // Evaluate candidate screen recording transcripts
   | "suggest_criteria" // Suggest evaluation criteria from a job description
   | "criterion_grounding" // Ground raw criterion into observable behaviors
@@ -89,19 +89,21 @@ export function getModelForProvider(
   // OpenAI per-use-case defaults (env still overrides above)
   if (provider === "openai") {
     const openaiUseCaseDefaults: Partial<Record<AIUseCase, string>> = {
-      assessment_generation: "gpt-4o",
-      interview_questions: "gpt-4o",
+      // Terra = mid tier ($2/$12), successor to the gpt-4o quality slot
+      assessment_generation: "gpt-5.6-terra",
+      interview_questions: "gpt-5.6-terra",
     };
     const useCaseDefault = openaiUseCaseDefaults[useCase];
     if (useCaseDefault) {
       return useCaseDefault;
     }
-    return "gpt-4o-mini";
+    // Luna = fast/cheap tier ($0.20/$1.20), successor to the gpt-4o-mini slot
+    return "gpt-5.6-luna";
   }
 
   // Default models per provider (anthropic, gemini)
   const defaults: Record<AIProvider, string> = {
-    openai: "gpt-4o-mini",
+    openai: "gpt-5.6-luna",
     anthropic: "claude-3-5-sonnet-20241022",
     gemini: "gemini-1.5-pro",
   };
@@ -129,6 +131,15 @@ export function createChatModel(
         throw new Error(
           "OPENAI_API_KEY is required when using OpenAI provider"
         );
+      }
+      // GPT-5.x models only accept the default temperature (1) and reject the
+      // legacy max_tokens param — the cap must go through max_completion_tokens.
+      if (/^gpt-5/.test(model)) {
+        return new ChatOpenAI({
+          modelName: model,
+          openAIApiKey: apiKey,
+          modelKwargs: { max_completion_tokens: maxTokens },
+        });
       }
       return new ChatOpenAI({
         modelName: model,

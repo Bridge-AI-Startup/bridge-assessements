@@ -1,0 +1,55 @@
+{
+  "note": "Quality-bump seeded builds (synthetic anonymousIds).",
+  "challengeDate": "2026-08-03",
+  "challengeSlug": "make-time-visible-2026-08-03",
+  "submissions": [
+    {
+      "id": "6a7beaf6340ee7c9d12e0550",
+      "name": "orbit.desk",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67801",
+      "dir": "orbit-desk"
+    },
+    {
+      "id": "6a7beaf6340ee7c9d12e0554",
+      "name": "sandglass",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67802",
+      "dir": "sandglass"
+    },
+    {
+      "id": "6a7beaf6340ee7c9d12e0558",
+      "name": "chroma.day",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67803",
+      "dir": "chroma-day"
+    },
+    {
+      "id": "6a7beaf6340ee7c9d12e055c",
+      "name": "city pulse",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67804",
+      "dir": "city-pulse"
+    },
+    {
+      "id": "6a7beaf6340ee7c9d12e0561",
+      "name": "word hour",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67805",
+      "dir": "word-hour"
+    },
+    {
+      "id": "6a7beaf6340ee7c9d12e0565",
+      "name": "signal fade",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67806",
+      "dir": "signal-fade"
+    },
+    {
+      "id": "6a7beaf6340ee7c9d12e056a",
+      "name": "tide clock",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67807",
+      "dir": "tide-clock"
+    },
+    {
+      "id": "6a7beaf6340ee7c9d12e056f",
+      "name": "pixel sun",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67808",
+      "dir": "pixel-sun"
+    }
+  ]
+}

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Orbit Desk</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    background: #07090f;
+    color: #e8eefc;
+    font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+    overflow: hidden;
+  }
+  .stage {
+    position: relative;
+    width: min(92vw, 560px);
+    aspect-ratio: 1;
+  }
+  .glow {
+    position: absolute; inset: 12%;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(88,140,255,.22), transparent 70%);
+    filter: blur(8px);
+  }
+  svg { width: 100%; height: 100%; display: block; }
+  .ring { fill: none; stroke: rgba(255,255,255,.08); stroke-width: 1; }
+  .tick { stroke: rgba(255,255,255,.28); stroke-width: 1.5; }
+  .tick.major { stroke: rgba(255,255,255,.55); stroke-width: 2; }
+  .label {
+    fill: rgba(232,238,252,.55);
+    font-size: 11px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    letter-spacing: .08em;
+  }
+  .readout {
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    pointer-events: none;
+  }
+  .hm {
+    font-size: clamp(2.4rem, 8vw, 3.6rem);
+    font-weight: 500;
+    letter-spacing: .04em;
+    font-variant-numeric: tabular-nums;
+  }
+  .sub {
+    margin-top: .35rem;
+    font-size: .85rem;
+    color: rgba(232,238,252,.55);
+    letter-spacing: .18em;
+    text-transform: uppercase;
+  }
+  .planet {
+    position: absolute; width: 14px; height: 14px; border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #fff, #6ea8ff 45%, #2348a8);
+    box-shadow: 0 0 18px rgba(110,168,255,.75);
+    transform: translate(-50%, -50%);
+  }
+  .moon {
+    width: 8px; height: 8px;
+    background: radial-gradient(circle at 30% 30%, #fff, #c9d4e8 55%, #6b778c);
+    box-shadow: 0 0 10px rgba(201,212,232,.6);
+  }
+  .hint {
+    position: absolute; bottom: 4%; left: 0; right: 0;
+    text-align: center;
+    font-size: .72rem;
+    color: rgba(232,238,252,.35);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+  <div class="stage" id="stage">
+    <div class="glow"></div>
+    <svg viewBox="0 0 400 400" aria-hidden="true">
+      <circle class="ring" cx="200" cy="200" r="168" />
+      <circle class="ring" cx="200" cy="200" r="118" />
+      <circle class="ring" cx="200" cy="200" r="68" />
+      <g id="ticks"></g>
+      <text class="label" x="200" y="42" text-anchor="middle">24H ORBIT</text>
+    </svg>
+    <div class="planet" id="hourPlanet"></div>
+    <div class="planet moon" id="minPlanet"></div>
+    <div class="readout">
+      <div class="hm" id="hm">00:00</div>
+      <div class="sub" id="sub">loading</div>
+    </div>
+    <div class="hint">outer ring = hour · inner = minute</div>
+  </div>
+<script>
+const ticks = document.getElementById('ticks');
+for (let i = 0; i < 24; i++) {
+  const a = (i / 24) * Math.PI * 2 - Math.PI / 2;
+  const major = i % 6 === 0;
+  const r1 = 168, r0 = major ? 152 : 158;
+  const x1 = 200 + Math.cos(a) * r0;
+  const y1 = 200 + Math.sin(a) * r0;
+  const x2 = 200 + Math.cos(a) * r1;
+  const y2 = 200 + Math.sin(a) * r1;
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  line.setAttribute('x1', x1); line.setAttribute('y1', y1);
+  line.setAttribute('x2', x2); line.setAttribute('y2', y2);
+  line.setAttribute('class', major ? 'tick major' : 'tick');
+  ticks.appendChild(line);
+  if (major) {
+    const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    t.setAttribute('class', 'label');
+    t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('dominant-baseline', 'middle');
+    t.setAttribute('x', 200 + Math.cos(a) * 140);
+    t.setAttribute('y', 200 + Math.sin(a) * 140);
+    t.textContent = String(i).padStart(2, '0');
+    ticks.appendChild(t);
+  }
+}
+
+function place(el, radius, frac) {
+  const a = frac * Math.PI * 2 - Math.PI / 2;
+  const stage = document.getElementById('stage');
+  const size = stage.clientWidth;
+  const cx = size / 2, cy = size / 2;
+  const r = (radius / 400) * size;
+  el.style.left = (cx + Math.cos(a) * r) + 'px';
+  el.style.top = (cy + Math.sin(a) * r) + 'px';
+}
+
+const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+function tick() {
+  const now = new Date();
+  const h = now.getHours(), m = now.getMinutes(), s = now.getSeconds(), ms = now.getMilliseconds();
+  const hourFrac = (h + m / 60 + s / 3600) / 24;
+  const minFrac = (m + s / 60 + ms / 60000) / 60;
+  place(document.getElementById('hourPlanet'), 168, hourFrac);
+  place(document.getElementById('minPlanet'), 118, minFrac);
+  document.getElementById('hm').textContent =
+    String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+  document.getElementById('sub').textContent =
+    DAYS[now.getDay()] + ' · ' + String(s).padStart(2,'0') + 's';
+  requestAnimationFrame(tick);
+}
+window.addEventListener('resize', () => {});
+tick();
+</script>
+</body>
+</html>

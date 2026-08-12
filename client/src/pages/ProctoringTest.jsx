@@ -20,6 +20,7 @@ import useFrameDedup from "@/hooks/useFrameDedup";
 import useFrameUpload from "@/hooks/useFrameUpload";
 import useVideoRecording from "@/hooks/useVideoRecording";
 import FrameDebugViewer from "@/components/proctoring/FrameDebugViewer";
+import ProctoringCompanionNotch from "@/components/proctoring/ProctoringCompanionNotch";
 import {
   createTestProctoringSession,
   grantConsent,
@@ -27,6 +28,7 @@ import {
   getSession,
   generateTranscript,
   getTranscriptContent,
+  getCompanionTranscript,
   interpretTranscript,
   recordSidecarEvents,
 } from "@/api/proctoring";
@@ -170,7 +172,10 @@ export default function ProctoringTest() {
   const [chunkedResult, setChunkedResult] = useState(null);
   const [statefulResult, setStatefulResult] = useState(null);
   const [showResharePrompt, setShowResharePrompt] = useState(false);
+  const [companionTranscript, setCompanionTranscript] = useState(null);
+  const [companionLoading, setCompanionLoading] = useState(false);
   const sidecarBufferRef = useRef([]);
+  const companionRef = useRef(null);
 
   // Proctoring hooks
   const {
@@ -316,6 +321,10 @@ export default function ProctoringTest() {
 
   const handleStopRecording = async () => {
     setLoading(true);
+    // End the voice check-in first so its final lines are persisted
+    if (companionRef.current?.endAndFlush) {
+      await companionRef.current.endAndFlush();
+    }
     // Stop video recording (flushes final chunk)
     await stopVideoRecording();
     // Final screenshot flush
@@ -390,6 +399,18 @@ export default function ProctoringTest() {
     setChunkedResult(result.data.chunked);
     setStatefulResult(result.data.stateful);
     setInterpretStatus("done");
+  };
+
+  const handleLoadCompanionTranscript = async () => {
+    setCompanionLoading(true);
+    setError(null);
+    const result = await getCompanionTranscript(sessionId, token);
+    setCompanionLoading(false);
+    if (result.success) {
+      setCompanionTranscript(result.data.messages || []);
+    } else {
+      setError(result.error || "Failed to load companion transcript");
+    }
   };
 
   return (
@@ -623,6 +644,68 @@ export default function ProctoringTest() {
               )}
             </div>
 
+            {/* Companion transcript (in-session ElevenLabs voice) */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <div className="flex items-center gap-2 mb-4">
+                <h2 className="text-lg font-semibold text-gray-900">
+                  Voice Check-in Transcript
+                </h2>
+                <span className="text-xs text-gray-400 font-normal">
+                  (in-session ElevenLabs companion)
+                </span>
+              </div>
+              {companionLoading && (
+                <p className="text-sm text-gray-500 flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Loading...
+                </p>
+              )}
+              {!companionLoading && companionTranscript == null && (
+                <div>
+                  <p className="text-sm text-gray-500 mb-4">
+                    Load what the candidate said out loud during the recording.
+                  </p>
+                  <Button
+                    onClick={handleLoadCompanionTranscript}
+                    variant="outline"
+                    className="border-gray-300"
+                  >
+                    Load Voice Transcript
+                  </Button>
+                </div>
+              )}
+              {!companionLoading &&
+                Array.isArray(companionTranscript) &&
+                companionTranscript.length === 0 && (
+                  <p className="text-sm text-gray-400 italic">
+                    No voice messages recorded.
+                  </p>
+                )}
+              {!companionLoading &&
+                companionTranscript &&
+                companionTranscript.length > 0 && (
+                  <div className="space-y-2 max-h-[400px] overflow-auto">
+                    {companionTranscript.map((msg, i) => (
+                      <div
+                        key={i}
+                        className={`rounded-lg border p-3 text-sm ${
+                          msg.role === "agent"
+                            ? "bg-gray-50 border-gray-200"
+                            : "bg-green-50/50 border-green-200"
+                        }`}
+                      >
+                        <span className="text-xs font-medium text-gray-500 block mb-1">
+                          {msg.role === "agent" ? "Companion" : "Candidate"}
+                        </span>
+                        <p className="text-gray-800 whitespace-pre-wrap">
+                          {msg.text}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+            </div>
+
             {/* Raw transcript (VLM output) */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
               <div className="flex items-center gap-2 mb-4">
@@ -836,6 +919,7 @@ export default function ProctoringTest() {
                   setInterpretStatus(null);
                   setChunkedResult(null);
                   setStatefulResult(null);
+                  setCompanionTranscript(null);
                   setError(null);
                 }}
               >
@@ -848,6 +932,16 @@ export default function ProctoringTest() {
 
       {phase === PHASE.RECORDING && isSharing && (
         <RecordingIndicator streamCount={streams.length} />
+      )}
+
+      {/* In-session voice check-in (ElevenLabs) */}
+      {phase === PHASE.RECORDING && sessionId && token && (
+        <ProctoringCompanionNotch
+          ref={companionRef}
+          sessionId={sessionId}
+          token={token}
+          submissionId={submissionId}
+        />
       )}
 
       {/* Reshare prompt */}

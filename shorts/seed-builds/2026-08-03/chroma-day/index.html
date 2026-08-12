@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chroma Day</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    font-family: "Inter", "Segoe UI", sans-serif;
+    transition: background 1.2s linear;
+    color: #111;
+  }
+  .card {
+    width: min(92vw, 480px);
+    padding: 2.2rem 2rem 2rem;
+    border-radius: 28px;
+    background: rgba(255,255,255,.72);
+    backdrop-filter: blur(16px);
+    box-shadow: 0 30px 80px rgba(0,0,0,.18);
+  }
+  .eyebrow {
+    font-size: .72rem;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    opacity: .55;
+    font-weight: 600;
+  }
+  .time {
+    margin-top: .6rem;
+    font-size: clamp(3.2rem, 12vw, 4.8rem);
+    font-weight: 600;
+    letter-spacing: -.03em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  .phrase {
+    margin-top: .85rem;
+    font-size: 1.15rem;
+    line-height: 1.35;
+    opacity: .85;
+  }
+  .bar {
+    margin-top: 1.6rem;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(0,0,0,.08);
+    overflow: hidden;
+  }
+  .fill {
+    height: 100%;
+    width: 0%;
+    border-radius: inherit;
+    background: #111;
+    transition: width .6s linear;
+  }
+  .row {
+    margin-top: .7rem;
+    display: flex;
+    justify-content: space-between;
+    font-size: .8rem;
+    opacity: .55;
+    font-variant-numeric: tabular-nums;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="eyebrow" id="phase">daylight</div>
+    <div class="time" id="time">00:00:00</div>
+    <div class="phrase" id="phrase">Loading the sky…</div>
+    <div class="bar"><div class="fill" id="fill"></div></div>
+    <div class="row"><span>midnight</span><span id="pct">0%</span><span>midnight</span></div>
+  </div>
+<script>
+function lerp(a,b,t){return a+(b-a)*t}
+function hex(c){return '#'+[c[0],c[1],c[2]].map(v=>Math.round(v).toString(16).padStart(2,'0')).join('')}
+function mix(a,b,t){return [lerp(a[0],b[0],t),lerp(a[1],b[1],t),lerp(a[2],b[2],t)]}
+
+const SKY = [
+  {h:0, c:[12,16,40]},
+  {h:5, c:[28,36,78]},
+  {h:6.5, c:[255,140,92]},
+  {h:8, c:[255,196,140]},
+  {h:12, c:[135,196,255]},
+  {h:16, c:[160,200,255]},
+  {h:18.5, c:[255,122,74]},
+  {h:20, c:[88,54,120]},
+  {h:22, c:[24,28,64]},
+  {h:24, c:[12,16,40]},
+];
+
+function skyAt(hour) {
+  for (let i = 0; i < SKY.length - 1; i++) {
+    if (hour >= SKY[i].h && hour <= SKY[i+1].h) {
+      const t = (hour - SKY[i].h) / (SKY[i+1].h - SKY[i].h);
+      return mix(SKY[i].c, SKY[i+1].c, t);
+    }
+  }
+  return SKY[0].c;
+}
+
+function phrase(h, m) {
+  if (h < 5) return 'The city is mostly asleep.';
+  if (h < 7) return 'Blue hour — coffee if you need it.';
+  if (h < 9) return 'Morning light, still soft.';
+  if (h < 12) return 'The day is properly underway.';
+  if (h < 14) return 'High sun. Shadows go short.';
+  if (h < 17) return 'Afternoon stretch — still bright.';
+  if (h < 19) return 'Golden hour is starting to tip.';
+  if (h < 21) return 'Evening color, then the dark.';
+  return 'Night shift. Quiet hours.';
+}
+
+function phaseName(h) {
+  if (h < 5) return 'deep night';
+  if (h < 7) return 'dawn';
+  if (h < 12) return 'morning';
+  if (h < 17) return 'afternoon';
+  if (h < 20) return 'golden hour';
+  return 'night';
+}
+
+function tick() {
+  const now = new Date();
+  const h = now.getHours(), m = now.getMinutes(), s = now.getSeconds();
+  const hour = h + m/60 + s/3600;
+  const c = skyAt(hour);
+  document.body.style.background = `linear-gradient(160deg, ${hex(c)}, ${hex(mix(c,[20,20,30],.35))})`;
+  const dark = (c[0]*0.299 + c[1]*0.587 + c[2]*0.114) < 140;
+  document.body.style.color = dark ? '#f7f4ee' : '#111';
+  document.querySelector('.card').style.background = dark ? 'rgba(10,12,20,.55)' : 'rgba(255,255,255,.72)';
+  document.getElementById('fill').style.background = dark ? '#f7f4ee' : '#111';
+
+  document.getElementById('time').textContent =
+    [h,m,s].map(n => String(n).padStart(2,'0')).join(':');
+  document.getElementById('phrase').textContent = phrase(h, m);
+  document.getElementById('phase').textContent = phaseName(h);
+  const pct = (hour / 24) * 100;
+  document.getElementById('fill').style.width = pct + '%';
+  document.getElementById('pct').textContent = Math.round(pct) + '% through the day';
+  requestAnimationFrame(tick);
+}
+tick();
+</script>
+</body>
+</html>

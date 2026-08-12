@@ -145,7 +145,7 @@ async function runFrames(
     const jsonl = stitchBatchOutputs(batchOutputs);
     const elapsed = Date.now() - start;
     await fs.writeFile(path.join(outDir, "frames.jsonl"), jsonl);
-    const model = process.env.OPENAI_VISION_MODEL || "gpt-4o";
+    const model = process.env.OPENAI_VISION_MODEL || "gpt-5.6-luna";
     const summary = [
       `engine: frames (${model})`,
       `frames: ${frames.length}`,

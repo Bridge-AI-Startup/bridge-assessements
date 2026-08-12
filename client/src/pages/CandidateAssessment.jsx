@@ -37,6 +37,8 @@ import useScreenshotCapture from "@/hooks/useScreenshotCapture";
 import useFrameUpload from "@/hooks/useFrameUpload";
 import useFrameDedup from "@/hooks/useFrameDedup";
 import ResharePrompt from "@/components/proctoring/ResharePrompt";
+import ProctoringCompanionNotch from "@/components/proctoring/ProctoringCompanionNotch";
+import { COMPANION_ENABLED } from "@/config/companion";
 import { createVideoRecorder } from "@/lib/captureUtils";
 import { uploadVideoChunk } from "@/api/proctoring";
 import StarterCodeIDE from "@/components/StarterCodeIDE";
@@ -112,12 +114,22 @@ export default function CandidateAssessment() {
 
   // Proctoring state
   const [showConsent, setShowConsent] = useState(false);
+  // Server-resolved evidence mode: "screen" (default) | "workflow" | "both".
+  // Drives whether we ask for the screen, show the capture-kit command, or both.
+  const evidenceMode = submission?.evidenceMode || "screen";
+  const usesWorkflowCapture =
+    evidenceMode === "workflow" || evidenceMode === "both";
+  const usesScreenRecording =
+    evidenceMode === "screen" || evidenceMode === "both";
+  const [captureCmdCopied, setCaptureCmdCopied] = useState(false);
   const [proctoringEnabled, setProctoringEnabled] = useState(false);
   const [proctoringSessionId, setProctoringSessionId] = useState(null);
   const [proctoringSubmissionId, setProctoringSubmissionId] = useState(null);
   const screenCapture = useScreenCapture();
   const proctoringDeclinedRef = useRef(false);
   const sidecarBufferRef = useRef([]);
+  /** In-session voice companion; endAndFlush() must run before the session completes. */
+  const companionRef = useRef(null);
 
   // Screenshot capture (only when proctoring is active)
   const { consumeFrames } = useScreenshotCapture(screenCapture.streams, {
@@ -134,6 +146,10 @@ export default function CandidateAssessment() {
 
   // Frame dedup
   const { shouldKeepFrame } = useFrameDedup();
+
+  /** Whether the voice overlay is on screen (drives the page's bottom padding). */
+  const companionMounted =
+    COMPANION_ENABLED && proctoringEnabled && !!proctoringSessionId && !!token;
 
   // Stream lost state for reshare prompt
   const [showResharePrompt, setShowResharePrompt] = useState(false);
@@ -290,6 +306,10 @@ export default function CandidateAssessment() {
     timeoutCleanupRunningRef.current = true;
     try {
       if (!proctoringEnabled) return;
+      // End the voice check-in first so its final lines land before the session closes.
+      if (companionRef.current?.endAndFlush) {
+        await companionRef.current.endAndFlush();
+      }
       await flushFrames();
       if (proctoringSessionId) {
         await completeProctoringSession(proctoringSessionId, token);
@@ -520,6 +540,12 @@ export default function CandidateAssessment() {
       alert("No token provided");
       return;
     }
+    // Workflow-only assessments never ask for the screen — the capture kit
+    // carries its own disclosure and consent gate in the terminal.
+    if (!usesScreenRecording) {
+      handleConsentGranted();
+      return;
+    }
     // Show consent screen before starting
     setShowConsent(true);
   };
@@ -624,6 +650,10 @@ export default function CandidateAssessment() {
     setIsSubmitting(true);
     try {
       if (proctoringEnabled) {
+        // End the voice check-in first so its final lines land before the session closes.
+        if (companionRef.current?.endAndFlush) {
+          await companionRef.current.endAndFlush();
+        }
         await flushFrames();
         if (proctoringSessionId) {
           await completeProctoringSession(proctoringSessionId, token);
@@ -956,6 +986,16 @@ export default function CandidateAssessment() {
         <RecordingIndicator streamCount={screenCapture.streams.length} />
       )}
 
+      {/* In-session voice check-in (ElevenLabs) */}
+      {companionMounted && (
+        <ProctoringCompanionNotch
+          ref={companionRef}
+          sessionId={proctoringSessionId}
+          token={token}
+          submissionId={proctoringSubmissionId}
+        />
+      )}
+
       {/* Reshare Prompt */}
       {showResharePrompt && (
         <ResharePrompt
@@ -1018,7 +1058,13 @@ export default function CandidateAssessment() {
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto px-6 py-8">
+      {/* Extra bottom padding when the voice overlay is mounted, so it never
+          sits on top of the submit / opt-out buttons at the end of the page. */}
+      <div
+        className={`max-w-4xl mx-auto px-6 py-8 ${
+          companionMounted ? "pb-44" : ""
+        }`}
+      >
         <div className="space-y-6">
           <motion.div
             initial={{ opacity: 0, y: 10 }}
@@ -1032,6 +1078,41 @@ export default function CandidateAssessment() {
               You&apos;re encouraged to work in your own development environment and use AI coding
               tools if you find them helpful.
             </p>
+
+            {usesWorkflowCapture && (
+              <div className="mb-4 rounded-lg border border-gray-200 bg-white p-4">
+                <h3 className="text-sm font-semibold text-gray-900 mb-1">
+                  Before you start: enable workflow capture
+                </h3>
+                <p className="text-xs text-gray-600 mb-3">
+                  This assessment records your AI assistant conversation and code
+                  changes instead of your screen. Run this once in your project
+                  folder — it will show you exactly what is recorded and ask you
+                  to confirm before anything is captured.
+                </p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 rounded-md bg-gray-900 px-3 py-2 text-xs text-gray-100 font-mono overflow-x-auto whitespace-nowrap">
+                    npx @bridge/capture-kit {token}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigator.clipboard
+                        ?.writeText(`npx @bridge/capture-kit ${token}`)
+                        .then(() => setCaptureCmdCopied(true))
+                        .catch(() => {})
+                    }
+                    className="shrink-0 rounded-md border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    {captureCmdCopied ? "Copied ✓" : "Copy"}
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-gray-500">
+                  You can read everything that was sent at any time by running{" "}
+                  <code className="font-mono">node .bridge/view.js</code>.
+                </p>
+              </div>
+            )}
             <div className="prose prose-sm max-w-none text-gray-700 leading-relaxed">
               <ReactMarkdown
                 components={{

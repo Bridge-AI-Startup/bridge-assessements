@@ -53,6 +53,7 @@ export type UpdateRequest = {
   starterCodeFiles?: Array<{ path: string; content: string }>;
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
+  evidenceMode?: "screen" | "workflow" | "both";
   behavioralChecks?: string[];
   evaluationCriteria?: string[];
   uid: string; // Added by verifyAuthToken middleware
@@ -270,6 +271,7 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
       starterCodeFiles,
       interviewerCustomInstructions,
       isSmartInterviewerEnabled,
+      evidenceMode,
       behavioralChecks,
       evaluationCriteria,
       uid,
@@ -319,6 +321,14 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
     }
     if (isSmartInterviewerEnabled !== undefined) {
       (assessment as any).isSmartInterviewerEnabled = isSmartInterviewerEnabled;
+    }
+    if (evidenceMode !== undefined) {
+      if (!["screen", "workflow", "both"].includes(evidenceMode)) {
+        return res
+          .status(400)
+          .json({ error: "evidenceMode must be 'screen', 'workflow', or 'both'" });
+      }
+      (assessment as any).evidenceMode = evidenceMode;
     }
     if (behavioralChecks !== undefined) {
       const checks = Array.isArray(behavioralChecks)

@@ -4,7 +4,7 @@ import os from "os";
 
 import * as ProctoringController from "../controllers/proctoring.js";
 import * as ProctoringValidator from "../validators/proctoringValidation.js";
-import { verifyAuthToken } from "../validators/auth.js";
+import { verifyAuthToken, optionalAuthToken } from "../validators/auth.js";
 
 const router = express.Router();
 
@@ -93,6 +93,30 @@ router.post(
   "/sessions/:sessionId/video",
   videoUpload,
   ProctoringController.uploadVideoChunk
+);
+
+// Companion (in-session ElevenLabs voice check-in) — candidate token or employer auth
+
+router.post(
+  "/sessions/:sessionId/companion/prompt",
+  ProctoringValidator.companionPromptValidation,
+  ProctoringController.getCompanionPrompt
+);
+router.post(
+  "/sessions/:sessionId/companion/messages",
+  ProctoringValidator.companionMessagesValidation,
+  ProctoringController.recordCompanionMessages
+);
+router.post(
+  "/sessions/:sessionId/companion/complete",
+  ProctoringValidator.companionCompleteValidation,
+  ProctoringController.completeCompanion
+);
+router.get(
+  "/sessions/:sessionId/companion/transcript",
+  optionalAuthToken,
+  ProctoringValidator.getCompanionTranscriptValidation,
+  ProctoringController.getCompanionTranscript
 );
 
 // Shared endpoints (employer or candidate)

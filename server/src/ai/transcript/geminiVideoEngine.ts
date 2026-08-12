@@ -79,6 +79,30 @@ const CHUNK_OVERLAP_SEC = () => {
 const FILE_ACTIVE_TIMEOUT_MS = 5 * 60 * 1000;
 const FILE_POLL_INTERVAL_MS = 3000;
 
+/** Retry transient Gemini errors (429 rate limit, 5xx/UNAVAILABLE) with backoff. */
+async function withGeminiRetry<T>(
+  fn: () => Promise<T>,
+  label: string,
+  maxRetries = 5,
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      const status: number | undefined = err?.status ?? err?.code;
+      const msg = String(err?.message ?? err);
+      const transient =
+        status === 429 ||
+        (typeof status === "number" && status >= 500) ||
+        /"code":\s*(429|5\d\d)|UNAVAILABLE|RESOURCE_EXHAUSTED/.test(msg);
+      if (!transient || attempt >= maxRetries) throw err;
+      const delay = Math.min(2000 * 2 ** attempt, 60000) + Math.random() * 1000;
+      logTs("gemini", `${label}: transient error (${status ?? "?"}), retry ${attempt + 1}/${maxRetries} in ${(delay / 1000).toFixed(1)}s`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Prompt + response schema
 // ---------------------------------------------------------------------------
@@ -92,17 +116,23 @@ const GEMINI_TRANSCRIPT_PROMPT = `You are a screen activity transcription system
 
 Watch the whole clip and divide it into activity segments. A segment is a contiguous period where one region of the screen shows one coherent activity (a chat exchange, a command being run, a block of code being edited, a page being read). Report every segment as an object in the "segments" array.
 
+text_content is a TRANSCRIPTION field, not a description field. It must contain the exact text visible on screen — code, chat messages, terminal output, URLs, search queries, error messages — copied character-for-character. Do NOT narrate ("candidate reads the instructions", "scrolls through the page") in place of the text itself; if you must note an action, put it in square brackets on its own line BEFORE or AFTER the transcribed text, e.g. "[scrolls down]". A segment whose text_content contains no actual on-screen text is a failure unless the region truly shows none.
+
+Because you can see motion, also mark HOW text appeared when it matters:
+- Text typed out gradually: transcribe the final text and append "[typed]".
+- A block of text appearing at once (paste, AI insertion, file open): transcribe it and append "[appeared at once — likely pasted or generated]".
+
 REGION PRIORITY RULES:
-1. ai_chat (HIGHEST): AI assistant panels and tools — Claude Code, Cursor chat, Copilot chat, ChatGPT, Claude.ai, agent output. Transcribe EVERY message VERBATIM, character-for-character, with sender labels (Human/Assistant). Never summarize. If an AI tool is open in a browser, it is region "ai_chat", not "browser".
+1. ai_chat (HIGHEST): AI assistant panels and tools — Claude Code, Cursor chat, Copilot chat, ChatGPT, Claude.ai, agent output. Transcribe EVERY message VERBATIM, character-for-character, with sender labels (Human/Assistant). Never summarize, never paraphrase, never skip messages. If an AI tool is open in a browser, it is region "ai_chat", not "browser".
 2. terminal (HIGH): transcribe commands, prompts, output, errors, and test results verbatim.
-3. editor (MEDIUM): always name the file and language. If code is being actively typed or edited, transcribe the changed code verbatim. If code is only being viewed, give a 1-2 sentence summary of what is visible instead.
-4. browser (MEDIUM): always include the URL. For documentation, give the heading and the key content being read. For searches, give the query and visible results.
+3. editor (HIGH): always name the file and language, then transcribe the visible code verbatim — especially any code that changes during the segment. Only if the exact same code stays fully static for the entire segment may you transcribe the key visible portion once instead of repeating it.
+4. browser (MEDIUM): always transcribe the URL and page headings. For documentation, transcribe the section being read. For searches, transcribe the query and visible result titles. For assessment/instruction pages, transcribe the instruction text itself.
 5. file_tree (LOW): only expanded folders and the selected file.
 6. other (LOW): one short line, or omit.
 
 SKIP entirely: bookmark bars, window chrome, status bars, "sharing your screen" banners, notification popups, and windows unrelated to the coding task (email, music, social) — for unrelated windows emit at most one segment saying "[unrelated window - omitted]".
 
-Also note moments that matter for evaluation: pasting large blocks of code (say where it likely came from if visible), switching apps, long idle periods (report as one segment with region "other", e.g. "[idle - no visible change]").
+Also emit segments for moments that matter for evaluation: app switches, long idle periods (one segment with region "other", text "[idle - no visible change]").
 
 TIMING: "start" and "end" are offsets from the beginning of THIS video clip, in seconds (numbers, e.g. 372.5). They must reflect when the activity was actually visible.
 
@@ -244,13 +274,23 @@ export async function generateSegmentsWithGemini(
       return raw ? new Date(raw).getTime() : Date.now();
     })();
 
-  const video = await materializeSessionVideo(sessionId);
+  let video = await materializeSessionVideo(sessionId);
   if (!video) throw new Error(`Session ${sessionId} has no video to transcribe`);
 
   try {
     let durationSec = await getVideoDurationSeconds(video.filePath);
-    if (options?.maxDurationSec != null) {
-      durationSec = Math.min(durationSec, options.maxDurationSec);
+    if (options?.maxDurationSec != null && options.maxDurationSec < durationSec) {
+      // Trim before upload so a capped test run doesn't ship the whole recording.
+      const trimmed = `${video.filePath}.trimmed.webm`;
+      const { exec } = await import("child_process");
+      const { promisify } = await import("util");
+      const ffmpeg = (await import("@ffmpeg-installer/ffmpeg")).default.path;
+      await promisify(exec)(
+        `"${ffmpeg}" -f matroska -i "${video.filePath}" -t ${options.maxDurationSec} -c copy "${trimmed}" 2>&1`,
+        { maxBuffer: 10 * 1024 * 1024 },
+      );
+      video = { filePath: trimmed, cleanup: video.cleanup };
+      durationSec = options.maxDurationSec;
     }
     const stat = await fs.stat(video.filePath);
     logTs(
@@ -298,7 +338,7 @@ export async function generateSegmentsWithGemini(
         const windowNote = `This clip is the portion of the recording from ${win.requestStartSec}s to ${win.requestEndSec}s (offsets in your output are relative to ${win.requestStartSec}s into the full recording — but report them relative to THIS clip's start; the caller re-bases them).`;
 
         const callStart = Date.now();
-        const res = await ai.models.generateContent({
+        const res = await withGeminiRetry(() => ai.models.generateContent({
           model: GEMINI_MODEL(),
           contents: [
             {
@@ -312,7 +352,7 @@ export async function generateSegmentsWithGemini(
             responseJsonSchema: RESPONSE_JSON_SCHEMA,
             temperature: 0,
           },
-        });
+        }), `window ${w + 1}/${windows.length}`);
 
         const usage = res.usageMetadata;
         promptTokens += usage?.promptTokenCount ?? 0;

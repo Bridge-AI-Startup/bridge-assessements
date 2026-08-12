@@ -21,8 +21,6 @@ import { searchCodeChunks } from "../services/repoRetrieval.js";
 import RepoIndexModel from "../models/repoIndex.js";
 import { deleteNamespace } from "../utils/pinecone.js";
 import { PROMPT_INTERVIEW_AGENT } from "../prompts/index.js";
-import { logLLMEvent } from "../services/llmProxy/logger.js";
-import { executeAllTasks } from "../services/taskRunner/taskRunner.js";
 import ProctoringSessionModel from "../models/proctoringSession.js";
 import { getProctoringTranscriptForSubmission } from "../services/evaluation/proctoringTranscriptAdapter.js";
 import { evaluateTranscript } from "../services/evaluation/orchestrator.js";
@@ -35,6 +33,10 @@ import {
 import { getFrameStorage } from "../services/capture/storage.js";
 import { mergeProctoringVideoForSubmission } from "../services/capture/sessionVideoMerge.js";
 import {
+  resolveEvidenceMode,
+  shouldGenerateVideoTranscript,
+} from "../utils/evidenceMode.js";
+import {
   gradeSubmissionBehavioral,
   inferFailureCategory,
   isBehavioralGradingEnabled,
@@ -45,7 +47,6 @@ import {
   triggerStressDemoBehavioralSimulationInBackground,
 } from "../services/behavioralGrading/stressDemoSimulation.js";
 import { getGradingEvidenceStorage } from "../services/gradingEvidence/storage.js";
-import { calculateAndSaveScores } from "../services/scoring.js";
 import { getSubmissionCodeStorage } from "../services/submissionCode/storage.js";
 import { collectBehavioralArtifactKeys } from "../utils/behavioralEvidenceKeys.js";
 
@@ -189,6 +190,18 @@ async function ensureProctoringTranscriptAndEvaluate(
     await setEvaluationFailed(
       submissionId,
       "Assessment has no evaluation criteria configured."
+    );
+    return;
+  }
+
+  // In "workflow"/"both" mode the analysable record is the hook stream, not the
+  // video. Skip transcript generation entirely — in "both" the recording still
+  // exists for human playback, it just is not OCR'd. This is the whole cost
+  // saving of the workflow approach (~$3-22 of vision spend per session).
+  const evidenceMode = resolveEvidenceMode(assessment);
+  if (!shouldGenerateVideoTranscript(evidenceMode)) {
+    console.log(
+      `[ensureProctoringTranscriptAndEvaluate] evidenceMode=${evidenceMode} for submission ${submissionId}; skipping video transcript (analysis comes from workflow capture).`
     );
     return;
   }
@@ -424,7 +437,8 @@ export const getSubmissionByToken: RequestHandler = async (req, res, next) => {
 
     const submission = await SubmissionModel.findOne({ token }).populate({
       path: "assessmentId",
-      select: "title description timeLimit starterFilesGitHubLink starterCodeFiles isSmartInterviewerEnabled",
+      select:
+        "title description timeLimit starterFilesGitHubLink starterCodeFiles isSmartInterviewerEnabled evidenceMode",
       populate: {
         path: "userId",
         select: "companyName",
@@ -450,6 +464,10 @@ export const getSubmissionByToken: RequestHandler = async (req, res, next) => {
 
     const response: any = submission.toObject();
     response.timeRemaining = timeRemaining;
+    // Effective mode (per-assessment setting ∩ server master switch) so the
+    // candidate client knows whether to ask for the screen, show the
+    // capture-kit command, or both. Never trust the raw field client-side.
+    response.evidenceMode = resolveEvidenceMode(submission.assessmentId as any);
 
     res.status(200).json(response);
   } catch (error) {
@@ -721,47 +739,6 @@ export const submitSubmissionByToken: RequestHandler = async (
       });
     }
 
-    // NEW: Trigger task execution after submission (background); save results so workflow scoring can run
-    if (submission.llmWorkflow?.trace?.events?.length > 0) {
-      executeAllTasks(submission._id.toString())
-        .then(async (results) => {
-          const sub = await SubmissionModel.findById(submission._id);
-          if (!sub) return;
-          if (!sub.llmWorkflow) {
-            sub.llmWorkflow = {
-              trace: {
-                sessionId: "",
-                events: [],
-                totalTokens: 0,
-                totalCost: 0,
-                totalTime: 0,
-                totalCalls: 0,
-              },
-              taskResults: [],
-              scores: {},
-              evaluation: { harnessVersion: "1.0.0", tasksCompleted: 0, tasksTotal: 0 },
-            };
-          }
-          sub.llmWorkflow.taskResults = results;
-          sub.llmWorkflow.evaluation = sub.llmWorkflow.evaluation ?? {
-            harnessVersion: "1.0.0",
-            tasksCompleted: 0,
-            tasksTotal: 0,
-          };
-          sub.llmWorkflow.evaluation.tasksCompleted = results.filter(
-            (r: { status: string }) => r.status === "passed"
-          ).length;
-          sub.llmWorkflow.evaluation.tasksTotal = results.length;
-          await sub.save();
-        })
-        .catch((error) => {
-          console.error(
-            `[submitSubmissionByToken] Failed to execute tasks for submission ${submission._id}:`,
-            error
-          );
-        });
-    }
-
     // Trigger behavioral grading after submission (public repos only in v1)
     if (
       submission.githubRepo &&
@@ -1014,51 +991,6 @@ export const uploadSubmissionByToken: RequestHandler = async (req, res, next) =>
       );
     });
 
-    // Task execution remains conditioned on trace presence.
-    if (submission.llmWorkflow?.trace?.events?.length > 0) {
-      executeAllTasks(submission._id.toString())
-        .then(async (results) => {
-          const sub = await SubmissionModel.findById(submission._id);
-          if (!sub) return;
-          if (!sub.llmWorkflow) {
-            sub.llmWorkflow = {
-              trace: {
-                sessionId: "",
-                events: [],
-                totalTokens: 0,
-                totalCost: 0,
-                totalTime: 0,
-                totalCalls: 0,
-              },
-              taskResults: [],
-              scores: {},
-              evaluation: {
-                harnessVersion: "1.0.0",
-                tasksCompleted: 0,
-                tasksTotal: 0,
-              },
-            };
-          }
-          sub.llmWorkflow.taskResults = results;
-          sub.llmWorkflow.evaluation = sub.llmWorkflow.evaluation ?? {
-            harnessVersion: "1.0.0",
-            tasksCompleted: 0,
-            tasksTotal: 0,
-          };
-          sub.llmWorkflow.evaluation.tasksCompleted = results.filter(
-            (r: { status: string }) => r.status === "passed"
-          ).length;
-          sub.llmWorkflow.evaluation.tasksTotal = results.length;
-          await sub.save();
-        })
-        .catch((error) => {
-          console.error(
-            `[uploadSubmissionByToken] Failed to execute tasks for submission ${submission._id}:`,
-            error
-          );
-        });
-    }
-
     triggerBehavioralGradingInBackground(
       submission._id.toString(),
       "submitSubmissionByToken"
@@ -1228,32 +1160,12 @@ export const getSubmissionsForAssessment: RequestHandler = async (
       throw AuthError.INVALID_AUTH_TOKEN; // Don't reveal if assessment exists
     }
 
-    // Get all submissions for this assessment (lean = plain objects so nested llmWorkflow.trace.events serialize correctly)
     const submissions = await SubmissionModel.find({ assessmentId })
       .sort({
         submittedAt: -1,
         createdAt: -1,
       })
       .lean();
-
-    // Backfill workflow scores when an LLM trace exists but scores were not saved yet
-    const MAX_SCORE_BACKFILL = 8;
-    let scheduled = 0;
-    for (const sub of submissions) {
-      if (scheduled >= MAX_SCORE_BACKFILL) break;
-      if (sub.status !== "submitted" && sub.status !== "expired") continue;
-      const wf = (sub as any).llmWorkflow;
-      if (!wf?.trace?.events?.length) continue;
-      if (wf?.scores?.overall?.score != null) continue;
-
-      scheduled++;
-      calculateAndSaveScores(sub._id.toString()).catch((err) => {
-        console.warn(
-          `[getSubmissionsForAssessment] Workflow score backfill failed for ${sub._id}:`,
-          err
-        );
-      });
-    }
 
     res.status(200).json(submissions);
   } catch (error) {
@@ -2167,111 +2079,6 @@ export const optOutByToken: RequestHandler = async (req, res, next) => {
     ).populate("assessmentId", "title description timeLimit");
 
     res.status(200).json(updatedSubmission);
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Calculate workflow scores for a submission
- * POST /api/submissions/:submissionId/calculate-workflow-scores
- * Employer only (auth required)
- */
-export const calculateWorkflowScoresHandler: RequestHandler = async (
-  req,
-  res,
-  next
-) => {
-  try {
-    const { submissionId } = req.params;
-    const uid = (req as any).user?.uid;
-
-    if (!uid) {
-      return res.status(401).json({ error: "Authentication required" });
-    }
-
-    const userId = await getUserIdFromFirebaseUid(uid);
-
-    // Verify ownership
-    const submission = await SubmissionModel.findById(submissionId).populate(
-      "assessmentId"
-    );
-    if (!submission) {
-      return res.status(404).json({ error: "Submission not found" });
-    }
-
-    const assessment = submission.assessmentId as any;
-    if (assessment.userId.toString() !== userId) {
-      return res.status(403).json({ error: "Access denied" });
-    }
-
-    // Calculate workflow scores
-    const { calculateWorkflowScores } = await import(
-      "../services/workflowScoring/workflowScorer.js"
-    );
-    const scores = await calculateWorkflowScores(submissionId);
-
-    // Save scores to submission
-    submission.llmWorkflow = submission.llmWorkflow || {
-      trace: { sessionId: "", events: [], totalTokens: 0, totalCost: 0, totalTime: 0, totalCalls: 0 },
-      taskResults: [],
-      scores: {},
-      evaluation: { harnessVersion: "1.0.0", tasksCompleted: 0, tasksTotal: 0 },
-    };
-    submission.llmWorkflow.scores = scores;
-    submission.llmWorkflow.scores.calculatedAt = new Date();
-    submission.llmWorkflow.scores.calculationVersion = "1.0.0";
-    const subAny = submission as any;
-    subAny.scores = subAny.scores || {};
-    subAny.scores.overall = scores.overall.score;
-    subAny.scores.calculatedAt = new Date();
-    subAny.scores.calculationVersion = "2.0.0";
-    await submission.save();
-
-    res.json(scores);
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Calculate workflow scores (5D + overall) when an LLM trace exists
- * POST /api/submissions/:submissionId/calculate-scores
- * Employer only (auth required)
- */
-export const calculateScoresHandler: RequestHandler = async (
-  req,
-  res,
-  next
-) => {
-  try {
-    const { submissionId } = req.params;
-    const uid = (req as any).user?.uid;
-
-    if (!uid) {
-      return res.status(401).json({ error: "Authentication required" });
-    }
-
-    const userId = await getUserIdFromFirebaseUid(uid);
-
-    const submission = await SubmissionModel.findById(submissionId).populate(
-      "assessmentId"
-    );
-    if (!submission) {
-      return res.status(404).json({ error: "Submission not found" });
-    }
-
-    const assessment = submission.assessmentId as any;
-    if (assessment.userId.toString() !== userId) {
-      return res.status(403).json({ error: "Access denied" });
-    }
-
-    const { calculateAndSaveScores } = await import(
-      "../services/scoring.js"
-    );
-    const result = await calculateAndSaveScores(submissionId);
-
-    res.json(result);
   } catch (error) {
     next(error);
   }

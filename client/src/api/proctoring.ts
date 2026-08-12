@@ -579,6 +579,90 @@ export async function interpretRawTranscript(
   }
 }
 
+export interface CompanionMessage {
+  role: string;
+  text: string;
+  timestampMs: number;
+}
+
+/**
+ * Get the system prompt + spoken opener for the in-session ElevenLabs companion.
+ */
+export async function getCompanionPrompt(
+  sessionId: string,
+  token: string
+): Promise<APIResult<{ prompt: string; firstMessage?: string }>> {
+  try {
+    const response = await post(
+      `/proctoring/sessions/${sessionId}/companion/prompt`,
+      { token }
+    );
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Record companion transcript messages (batched). Roles: agent, candidate, user, assistant.
+ */
+export async function recordCompanionMessages(
+  sessionId: string,
+  token: string,
+  conversationId: string | undefined,
+  messages: CompanionMessage[]
+): Promise<APIResult<{ stored: number }>> {
+  try {
+    const response = await post(
+      `/proctoring/sessions/${sessionId}/companion/messages`,
+      { token, conversationId, messages }
+    );
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Mark the companion conversation as finished (called after the final flush).
+ */
+export async function completeCompanion(
+  sessionId: string,
+  token: string
+): Promise<APIResult<{ completed: boolean }>> {
+  try {
+    const response = await post(
+      `/proctoring/sessions/${sessionId}/companion/complete`,
+      { token }
+    );
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Get the persisted companion transcript (employer auth or candidate token in query).
+ */
+export async function getCompanionTranscript(
+  sessionId: string,
+  token?: string
+): Promise<APIResult<{ messages: CompanionMessage[] }>> {
+  try {
+    const url = token
+      ? `/proctoring/sessions/${sessionId}/companion/transcript?token=${encodeURIComponent(token)}`
+      : `/proctoring/sessions/${sessionId}/companion/transcript`;
+    const response = await get(url);
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
 /**
  * Upload a video chunk. Uses raw fetch with FormData.
  */

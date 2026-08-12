@@ -123,6 +123,67 @@ export const generateTranscriptValidation = [
     .withMessage("sessionId must be a valid MongoDB ObjectId"),
 ];
 
+/** Shared shape for the companion routes the candidate calls with their token. */
+const companionTokenValidation = [
+  param("sessionId")
+    .isMongoId()
+    .withMessage("sessionId must be a valid MongoDB ObjectId"),
+  body("token")
+    .exists()
+    .withMessage("token is required")
+    .bail()
+    .isString()
+    .withMessage("token must be a string")
+    .bail()
+    .notEmpty()
+    .withMessage("token cannot be empty"),
+];
+
+export const companionPromptValidation = companionTokenValidation;
+
+export const companionCompleteValidation = companionTokenValidation;
+
+export const companionMessagesValidation = [
+  ...companionTokenValidation,
+  body("conversationId")
+    .optional()
+    .isString()
+    .withMessage("conversationId must be a string"),
+  body("messages")
+    .exists()
+    .withMessage("messages is required")
+    .bail()
+    .isArray({ min: 1, max: 100 })
+    .withMessage("messages must be an array of 1-100 items"),
+  body("messages.*.role")
+    .exists()
+    .withMessage("message role is required")
+    .bail()
+    .isIn(["agent", "candidate", "user", "assistant"])
+    .withMessage("role must be agent, candidate, user, or assistant"),
+  body("messages.*.text")
+    .exists()
+    .withMessage("message text is required")
+    .bail()
+    .isString()
+    .withMessage("message text must be a string")
+    .bail()
+    .isLength({ max: 10000 })
+    .withMessage("message text must be at most 10000 characters"),
+  body("messages.*.timestampMs")
+    .exists()
+    .withMessage("message timestampMs is required")
+    .bail()
+    .isInt({ min: 0 })
+    .withMessage("timestampMs must be a non-negative integer"),
+];
+
+export const getCompanionTranscriptValidation = [
+  param("sessionId")
+    .isMongoId()
+    .withMessage("sessionId must be a valid MongoDB ObjectId"),
+];
+
 export const getPlaybackVideoValidation = [
   param("sessionId")
     .isMongoId()

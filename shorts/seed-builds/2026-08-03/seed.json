@@ -1,0 +1,55 @@
+{
+  "challengeSlug": "make-time-visible-2026-08-03",
+  "challengeDate": "2026-08-03",
+  "note": "Additive quality bump for the live Make Time Visible round. Inserted via seedShortsQualityBump.ts; agent voters judge pairs and cast real votes.",
+  "builds": [
+    {
+      "dir": "orbit-desk",
+      "name": "orbit.desk",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67801",
+      "minutes": 9200
+    },
+    {
+      "dir": "sandglass",
+      "name": "sandglass",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67802",
+      "minutes": 9260
+    },
+    {
+      "dir": "chroma-day",
+      "name": "chroma.day",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67803",
+      "minutes": 9320
+    },
+    {
+      "dir": "city-pulse",
+      "name": "city pulse",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67804",
+      "minutes": 9380
+    },
+    {
+      "dir": "word-hour",
+      "name": "word hour",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67805",
+      "minutes": 9440
+    },
+    {
+      "dir": "signal-fade",
+      "name": "signal fade",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67806",
+      "minutes": 9500
+    },
+    {
+      "dir": "tide-clock",
+      "name": "tide clock",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67807",
+      "minutes": 9560
+    },
+    {
+      "dir": "pixel-sun",
+      "name": "pixel sun",
+      "anonymousId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67808",
+      "minutes": 9620
+    }
+  ]
+}

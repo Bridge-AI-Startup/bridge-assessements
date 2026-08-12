@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pixel Sun</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; image-rendering: pixelated; }
+  body {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    background: #1b1430;
+    color: #f4efe6;
+    font-family: "Press Start 2P", "IBM Plex Mono", ui-monospace, monospace;
+  }
+  .wrap { text-align: center; width: min(92vw, 420px); }
+  canvas {
+    width: min(92vw, 360px);
+    height: min(92vw, 360px);
+    background: #0d0a18;
+    border: 4px solid #3a2f5c;
+    box-shadow: 0 0 0 4px #1b1430, 0 12px 0 #0a0714;
+  }
+  .time {
+    margin-top: 1.2rem;
+    font-size: clamp(.9rem, 3.5vw, 1.1rem);
+    letter-spacing: .08em;
+  }
+  .sub {
+    margin-top: .7rem;
+    font-size: .55rem;
+    line-height: 1.6;
+    opacity: .7;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="c" width="160" height="160"></canvas>
+    <div class="time" id="time">00:00</div>
+    <div class="sub" id="sub">sun track · local day</div>
+  </div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 160, H = 160;
+
+function pset(x, y, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, 1, 1);
+}
+
+function draw(now) {
+  ctx.fillStyle = '#0d0a18';
+  ctx.fillRect(0, 0, W, H);
+
+  const h = now.getHours(), m = now.getMinutes(), s = now.getSeconds();
+  const dayFrac = (h + m/60 + s/3600) / 24;
+
+  // sky band by time
+  const night = h < 6 || h >= 20;
+  for (let y = 0; y < 100; y++) {
+    const t = y / 100;
+    let col;
+    if (night) col = `rgb(${20 + t*10},${16 + t*8},${40 + t*20})`;
+    else if (h < 9 || h >= 17) col = `rgb(${180 - t*40},${110 - t*20},${90 + t*40})`;
+    else col = `rgb(${90 + t*40},${160 + t*40},${220})`;
+    ctx.fillStyle = col;
+    ctx.fillRect(0, y, W, 1);
+  }
+
+  // ground
+  ctx.fillStyle = '#2f6b3a';
+  ctx.fillRect(0, 100, W, 60);
+  ctx.fillStyle = '#245530';
+  for (let x = 0; x < W; x += 4) ctx.fillRect(x, 100, 2, 60);
+
+  // sun / moon arc
+  const angle = dayFrac * Math.PI * 2 - Math.PI; // midnight bottom
+  const cx = 80 + Math.cos(angle) * 60;
+  const cy = 100 + Math.sin(angle) * 55;
+  const isSun = h >= 6 && h < 20;
+  ctx.fillStyle = isSun ? '#ffd35a' : '#e8eefc';
+  ctx.fillRect(Math.round(cx) - 4, Math.round(cy) - 4, 8, 8);
+  if (isSun) {
+    ctx.fillStyle = '#ff9f1a';
+    ctx.fillRect(Math.round(cx) - 2, Math.round(cy) - 6, 4, 2);
+    ctx.fillRect(Math.round(cx) - 2, Math.round(cy) + 4, 4, 2);
+    ctx.fillRect(Math.round(cx) - 6, Math.round(cy) - 2, 2, 4);
+    ctx.fillRect(Math.round(cx) + 4, Math.round(cy) - 2, 2, 4);
+  }
+
+  // house
+  ctx.fillStyle = '#6b4f3a';
+  ctx.fillRect(28, 78, 36, 22);
+  ctx.fillStyle = '#a33';
+  ctx.beginPath();
+  ctx.moveTo(26, 78); ctx.lineTo(46, 62); ctx.lineTo(66, 78); ctx.fill();
+  ctx.fillStyle = isSun && h >= 8 && h < 18 ? '#244' : '#ffd35a';
+  ctx.fillRect(40, 86, 8, 8);
+
+  // progress bar
+  ctx.fillStyle = '#3a2f5c';
+  ctx.fillRect(10, 148, 140, 6);
+  ctx.fillStyle = '#7dffb0';
+  ctx.fillRect(10, 148, Math.floor(140 * dayFrac), 6);
+}
+
+function tick() {
+  const now = new Date();
+  draw(now);
+  const h = now.getHours(), m = now.getMinutes();
+  document.getElementById('time').textContent =
+    String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+  const labels = ['deep night','dawn','morning','midday','afternoon','golden hour','evening','night'];
+  const idx = h < 5 ? 0 : h < 7 ? 1 : h < 11 ? 2 : h < 14 ? 3 : h < 17 ? 4 : h < 19 ? 5 : h < 21 ? 6 : 7;
+  document.getElementById('sub').textContent = labels[idx] + ' · sun track';
+  requestAnimationFrame(tick);
+}
+tick();
+</script>
+</body>
+</html>

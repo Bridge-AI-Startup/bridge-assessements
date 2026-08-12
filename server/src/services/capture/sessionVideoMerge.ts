@@ -23,6 +23,57 @@ const MAX_CONCURRENT_MERGES = Number(
   process.env.PROCTORING_VIDEO_MERGE_MAX_CONCURRENT || 2,
 );
 
+function isMissingObjectError(err: unknown): boolean {
+  const e = err as { name?: string; Code?: string; message?: string };
+  const msg = e?.message ?? "";
+  return (
+    e?.name === "NoSuchKey" ||
+    e?.name === "NotFound" ||
+    e?.Code === "NoSuchKey" ||
+    (e as { code?: string })?.code === "ENOENT" ||
+    /specified key does not exist|no such file/i.test(msg)
+  );
+}
+
+/**
+ * Yield each chunk's bytes, skipping blobs that are gone from storage.
+ *
+ * Mongo can hold `videoChunks` references to objects that no longer exist (an earlier
+ * merge deleted the blobs without clearing the refs). Aborting the whole merge on the
+ * first missing key left those sessions permanently unmerged, which meant every
+ * playback request rebuilt the recording from scratch — the exact path that OOMs.
+ * A partial recording beats no recording; only an all-missing set is a real failure.
+ */
+async function* readChunksSkippingMissing(
+  chunks: { storageKey: string }[],
+  storage: Pick<IFrameStorage, "getVideoChunk">,
+  onDone: (stats: { read: number; missing: number }) => void,
+): AsyncGenerator<Buffer> {
+  let read = 0;
+  let missing = 0;
+  for (const c of chunks) {
+    let buf: Buffer;
+    try {
+      buf = await storage.getVideoChunk(c.storageKey);
+    } catch (err) {
+      if (isMissingObjectError(err)) {
+        missing += 1;
+        dv("skipping missing chunk", c.storageKey);
+        continue;
+      }
+      throw err;
+    }
+    read += 1;
+    yield buf;
+  }
+  onDone({ read, missing });
+  if (read === 0) {
+    throw new Error(
+      `all ${chunks.length} video chunk(s) missing from storage`,
+    );
+  }
+}
+
 let activeMerges = 0;
 const mergeQueue: Array<() => void> = [];
 
@@ -137,23 +188,18 @@ export async function buildSessionWebmForPlayback(
   try {
     const { appendBuffersSequential } = await import("./videoMerge.js");
 
-    async function* chunkBuffers(): AsyncGenerator<Buffer> {
-      for (let i = 0; i < chunks.length; i++) {
-        const c = chunks[i];
-        const buf = await storage.getVideoChunk(c.storageKey);
+    await appendBuffersSequential(
+      readChunksSkippingMissing(chunks, storage, ({ read, missing }) => {
         dv(
-          "[buildSessionWebmForPlayback] chunk",
-          i + 1,
-          "/",
-          chunks.length,
-          "size =",
-          buf.length,
+          "[buildSessionWebmForPlayback] read",
+          read,
+          "chunk(s), skipped",
+          missing,
+          "missing",
         );
-        yield buf;
-      }
-    }
-
-    await appendBuffersSequential(chunkBuffers(), mergedPath);
+      }),
+      mergedPath,
+    );
 
     const { remuxWebMFromPaths } = await import("./playbackRemux.js");
     const remuxOk = await remuxWebMFromPaths(mergedPath, remuxedPath);
@@ -282,12 +328,16 @@ export async function mergeSessionVideo(
 
     try {
       const { appendBuffersSequential } = await import("./videoMerge.js");
-      async function* chunkBuffers(): AsyncGenerator<Buffer> {
-        for (const c of chunks) {
-          yield await storage.getVideoChunk(c.storageKey);
-        }
-      }
-      await appendBuffersSequential(chunkBuffers(), mergedPath);
+      await appendBuffersSequential(
+        readChunksSkippingMissing(chunks, storage, ({ read, missing }) => {
+          if (missing > 0) {
+            console.warn(
+              `[sessionVideoMerge] sessionId=${sessionId}: merged ${read} chunk(s), skipped ${missing} missing from storage`,
+            );
+          }
+        }),
+        mergedPath,
+      );
       const { remuxWebMFromPaths } = await import("./playbackRemux.js");
       const remuxOk = await remuxWebMFromPaths(mergedPath, remuxedPath);
       const finalPath = remuxOk ? remuxedPath : mergedPath;

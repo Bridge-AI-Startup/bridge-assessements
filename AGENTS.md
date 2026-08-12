@@ -190,15 +190,6 @@ See `server/config.env.example` for the full list. Key variables:
 **Email:**
 - `RESEND_API_KEY` -- Resend email service key
 
-**LLM Proxy (cost/budget control):**
-- `LLM_PROXY_MAX_COST` -- Max cost in USD per submission (default: 10.00)
-- `LLM_PROXY_MAX_TIME` -- Max time in ms (default: 3600000 = 1 hour)
-- `REQUIRE_LLM_TRACE` -- Require trace upload before submission (default: true)
-
-**Task Execution:**
-- `TASK_EXECUTION_TIMEOUT` -- Task timeout in ms (default: 30000)
-- `TASK_MAX_CONCURRENT` -- Max concurrent tasks (default: 5)
-
 **Proctoring / Screen Capture:**
 - `PROCTORING_STORAGE_DIR` -- Local filesystem root when not using S3 (default: `./storage/proctoring`)
 - `PROCTORING_STORAGE_BACKEND` -- `local` (default) or `s3`. If `PROCTORING_S3_BUCKET` or `AWS_S3_BUCKET` is set, S3 is used even when this is unset.
@@ -243,7 +234,6 @@ server/src/
 │   ├── competition.ts     # Competition / hackathon: slug, assessmentId, rules, registration window, leaderboard flag
 │   ├── submission.ts      # Submission schema (token, candidate info, GitHub repo, interview, scores, LLM workflow)
 │   ├── repoIndex.ts       # Repository indexing metadata for Pinecone
-│   ├── taskConfig.ts      # Task configuration for workflow evaluation
 │   └── proctoringSession.ts  # Proctoring session (frames, events, transcript, video chunks)
 ├── routes/
 │   ├── user.ts            # /api/users/* -- create, whoami, delete
@@ -253,7 +243,6 @@ server/src/
 │   ├── billing.ts         # /api/billing/* -- checkout, status, cancel, reactivate, webhook
 │   ├── agentTools.ts      # /api/agent-tools/* -- ElevenLabs agent context retrieval
 │   ├── webhook.ts         # /webhooks/* -- ElevenLabs post-call webhook
-│   ├── llmProxy.ts        # /api/llm-proxy/* -- LLM chat proxy for workflow evaluation
 │   └── proctoring.ts      # /api/proctoring/* -- screen capture sessions, frames, transcripts
 ├── controllers/
 │   ├── user.ts            # User creation, login (with tier limits), account deletion
@@ -263,26 +252,17 @@ server/src/
 │   ├── billing.ts         # Stripe checkout, status, cancel, reactivate, webhook handler
 │   ├── webhook.ts         # ElevenLabs post-call transcript processing + summary generation
 │   ├── agentTools.ts      # Code context retrieval for ElevenLabs agent (Pinecone search)
-│   ├── taskRunner.ts      # Task execution for workflow evaluation
 │   └── proctoring.ts      # Proctoring: session CRUD, frame upload, consent, sidecar, transcript generation
 ├── services/
 │   ├── langchainAI.ts     # LangChain abstraction: createChatCompletion(), structured output, provider/model selection
 │   ├── assessmentGeneration.ts  # 3-step AI assessment generation (extract reqs → generate → quality review)
 │   ├── assessmentChat.ts  # AI chat for assessment editing
 │   ├── interviewGeneration.ts  # RAG-based interview question generation + summary generation
-│   ├── scoring.ts         # Completeness scoring (requirements matching)
 │   ├── assessmentPackage.ts    # ZIP package generation for assessment download
 │   ├── email.ts           # Resend email service for candidate invitations
 │   ├── repoIndexing.ts    # GitHub repo → Pinecone indexing (download, chunk, embed, upsert)
 │   ├── repoRetrieval.ts   # Code chunk retrieval from Pinecone (search, dedup, budget)
 │   ├── stripe.ts          # Stripe client initialization (API v2024-12-18.acacia)
-│   ├── llmProxy/
-│   │   ├── costCalculator.ts  # Token estimation and cost calculation by provider/model
-│   │   └── logger.ts          # LLM call logging, budget tracking, trace storage
-│   ├── taskRunner/
-│   │   └── taskRunner.ts      # Task execution engine (runs tests, captures git diffs)
-│   ├── workflowScoring/
-│   │   └── workflowScorer.ts  # 5-dimensional workflow scoring (correctness/efficiency/promptQuality/structure/reliability)
 │   ├── behavioralGrading/
 │   │   ├── index.ts           # E2B behavioral grading orchestrator + in-process concurrency queue
 │   │   ├── planner.ts         # LLM: README → runbook plan (install/test/start)
@@ -338,7 +318,6 @@ server/src/
 │   ├── embeddings.ts      # generateEmbedding(), generateEmbeddings() -- OpenAI embeddings
 │   ├── pinecone.ts        # getPineconeClient(), getPineconeIndex(), upsertVectors(), deleteNamespace(), queryPinecone()
 │   ├── repoSnapshot.ts    # downloadAndExtractRepoSnapshot(), cleanupRepoSnapshot()
-│   ├── fileUpload.ts      # LLM trace file upload handling (multer)
 │   └── validationErrorParser.ts  # Express-validator error formatting
 ├── prompts/
 │   └── index.ts           # All AI prompt templates (see Prompts section below)
@@ -347,7 +326,6 @@ server/src/
 │   ├── auth.ts            # AuthError: DECODE_ERROR, TOKEN_NOT_IN_HEADER, INVALID_AUTH_TOKEN
 │   ├── internal.ts        # InternalError class
 │   ├── proctoring.ts      # ProctoringError class (session/consent/frame/transcript errors)
-│   ├── workflow.ts        # WorkflowError class for workflow evaluation errors
 │   ├── handler.ts         # Express error handler middleware (CustomError → JSON response)
 │   └── index.ts           # Exports
 ├── ai/
@@ -444,9 +422,6 @@ server/src/
 - `POST /:submissionId/index-repo` -- Index submitted code snapshot into Pinecone (GitHub or uploaded archive)
 - `GET /:submissionId/repo-index/status` -- Check repo indexing status
 - `POST /:submissionId/search-code` -- Search indexed code (debug)
-- `POST /:submissionId/execute-tasks` -- Execute workflow evaluation tasks
-- `POST /:submissionId/calculate-workflow-scores` -- Calculate 5D workflow scores
-- `POST /:submissionId/calculate-scores` -- Calculate completeness + workflow scores
 - `POST /:submissionId/grade-behavioral` -- Trigger manual behavioral grading re-run (E2B + evidence capture)
 - `GET /:submissionId/behavioral-artifact` -- Retrieve stored behavioral grading artifacts (screenshots/report files)
 - `GET /:submissionId/code-archive` -- Download uploaded candidate archive (upload-source submissions only)
@@ -460,7 +435,6 @@ server/src/
 - `POST /token/:token/upload` -- Submit code by archive upload (`multipart/form-data`, field `archive`), stores upload metadata, starts indexing, auto-triggers behavioral grading; same 5-minute post-time-limit grace window as GitHub submit
 - `POST /token/:token/generate-interview` -- Generate interview questions
 - `POST /token/:token/opt-out` -- Opt out with reason
-- `POST /token/:token/upload-trace` -- Upload LLM interaction trace file (multer)
 - `PATCH /:id` -- Update submission (auto-save)
 - `GET /:id` -- Get submission by ID
 - `POST /:id/submit` -- Final submission (legacy, also auto-triggers behavioral grading)
@@ -475,9 +449,6 @@ server/src/
 - `POST /cancel` -- Cancel subscription at period end (auth required)
 - `POST /reactivate` -- Reactivate canceled subscription (auth required)
 - `POST /webhook` -- Stripe webhook (signature verified, handles checkout.session.completed, subscription.*)
-
-**LLM Proxy routes** (`/api/llm-proxy`):
-- `POST /chat` -- LLM chat proxy with cost/time budgeting (no auth, checks submission status)
 
 **Proctoring routes** (`/api/proctoring`):
 
@@ -581,7 +552,6 @@ client/src/
 │   │   └── PresetPills.jsx            # Quick preset job descriptions
 │   ├── BulkInviteModal.jsx            # 3-step CSV upload wizard: upload → review → success
 │   ├── ElevenLabsInterviewClient.jsx  # Voice interview UI (conversation hooks, transcript display)
-│   ├── LLMProxyWrapper/LLMClient.ts   # Client-side LLM proxy (routes all LLM calls through backend)
 │   ├── proctoring/
 │   │   ├── ConsentScreen.jsx          # Consent dialog before screen recording
 │   │   ├── ScreenShareSetup.jsx       # Multi-monitor picker UI
@@ -682,11 +652,11 @@ Opt-out: `optedOut`, `optOutReason`, `optedOutAt`
 
 Metadata: `metadata` { ipAddress, userAgent }
 
-LLM Workflow: `llmWorkflow` { trace { sessionId (sparse indexed), events[] { timestamp, type (llm_call/tool_call/test_run/file_change), model, provider, prompt, response, tokens { input, output, total }, latency, cost, metadata }, totalTokens, totalCost, totalTime, totalCalls }, taskResults[] { taskId, taskName, status (passed/failed/timeout/error), testResults { passed, failed, total, failures[] }, executionTime, output, gitDiff, fileChanges[] }, scores { correctness (0-40) { breakdown: testPassRate/edgeCaseHandling/reliability, evidence }, efficiency (0-20) { breakdown: costPerTask/timeToGreen/turnEfficiency, evidence }, promptQuality (0-15) { breakdown: clarity/decomposition/feedbackUsage, evidence }, structure (0-20) { breakdown: modularity/configurability/observability/resilience, evidence }, reliability (0-5) { breakdown: failureHandling/safety, evidence }, overall { score (0-100), confidence (0-1), reasonCodes[] } }, evaluation { harnessVersion, tasksCompleted, tasksTotal, startedAt, completedAt } }
+Scores bag may still exist on old docs; Trace/llmWorkflow scoring was removed. Combined ranking uses Screen + Behavioral only.
 
 Behavioral grading: `behavioralGradingStatus` (`pending`/`completed`/`failed`), `behavioralGradingError`, `behavioralGradingReport` (runbook summary, per-check verdict/evidence, artifact keys, timings, sandbox metadata)
 
-Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`, `{ "interview.conversationId": 1 }` (sparse), `{ "llmWorkflow.trace.sessionId": 1 }` (sparse)
+Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`, `{ "interview.conversationId": 1 }` (sparse)
 
 ### PlayChallenge (bridge-play DB)
 Fields: `slug` (unique, lowercase `a-z0-9-`), `challengeDate` (unique, `YYYY-MM-DD` UTC), `title` (max 120), `prompt`, `tokenBudget`, `timeLimitMinutes` (optional), `category` (`widget`/`game`/`tool`/`other`), `status` (`draft`/`published`)
@@ -715,8 +685,6 @@ Fields: `anonymousId`, `challengeDate`, `roundIndex`, `rankSnapshot` (Map of sub
 
 Indexes: unique `{ anonymousId: 1, challengeDate: 1, roundIndex: 1 }`
 
-### TaskConfig
-Fields: `taskId` (unique, indexed), `taskName`, `description`, `files[]` { path, content (base64), isHidden }, `tests` { command, timeout (default 30000), hiddenTests[] { name, test code } }, `weights` { correctness (40), efficiency (20), promptQuality (15), structure (20), reliability (5) }, `language`, `difficulty` (easy/medium/hard), `estimatedTime`
 
 ### ProctoringSession
 Core: `submissionId` (ref Submission, unique index), `token` (indexed), `status` (pending/active/paused/completed/failed)

@@ -3,7 +3,6 @@ import multer from "multer";
 
 import { DEFAULT_SUBMISSION_UPLOAD_MAX_BYTES } from "../config/uploadLimits.js";
 import * as SubmissionController from "../controllers/submission.js";
-import * as TaskRunnerController from "../controllers/taskRunner.js";
 import { verifyAuthToken } from "../validators/auth.js";
 import {
   verifySubmissionAccess,
@@ -162,27 +161,6 @@ router.post(
 
 // Public endpoint - Opt out of assessment by token
 router.post("/token/:token/opt-out", SubmissionController.optOutByToken);
-
-// Employer endpoint - Execute tasks
-router.post(
-  "/:submissionId/execute-tasks",
-  [verifyAuthToken],
-  TaskRunnerController.executeAllTasksForSubmission
-);
-
-// Employer endpoint - Calculate workflow scores
-router.post(
-  "/:submissionId/calculate-workflow-scores",
-  [verifyAuthToken],
-  SubmissionController.calculateWorkflowScoresHandler
-);
-
-// Employer endpoint - Calculate workflow scores (same as calculate-workflow-scores aggregate path)
-router.post(
-  "/:submissionId/calculate-scores",
-  [verifyAuthToken],
-  SubmissionController.calculateScoresHandler
-);
 
 // Employer endpoint - Trigger behavioral grading (manual re-run)
 router.post(

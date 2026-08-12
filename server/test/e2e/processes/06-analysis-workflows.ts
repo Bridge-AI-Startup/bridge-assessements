@@ -1,15 +1,15 @@
 /**
  * P6 - Analysis workflows return to the recruiter.
  * Proves: chunk-based repo indexing (Pinecone), RAG interview-question
- * generation, transcript availability, and scoring all run and surface back to
- * the employer via the submission record.
+ * generation, and analysis fields surface back to the employer via the
+ * submission record. Combined score signals are Screen (recording rubric) +
+ * Behavioral (E2B) — the deprecated Trace/LLM-workflow scorer was removed.
  */
 
 import { expectOk } from "../lib/apiClient.js";
 import { BUDGETS } from "../lib/config.js";
 import { runProcess } from "../lib/runner.js";
 import {
-  directCalculateScores,
   directGenerateInterview,
   directIndexRepo,
 } from "../lib/seed.js";
@@ -24,7 +24,7 @@ export function runP6AnalysisWorkflows(state: SuiteState): Promise<ProcessResult
       id: "P6",
       title: "Analysis Workflows",
       description:
-        "Chunk-based repo indexing, RAG interview questions, transcript, and scoring surfaced to the recruiter.",
+        "Chunk-based repo indexing, RAG interview questions, and analysis fields surfaced to the recruiter.",
       scriptPath: "server/test/e2e/processes/06-analysis-workflows.ts",
     },
     async (ctx) => {
@@ -35,7 +35,7 @@ export function runP6AnalysisWorkflows(state: SuiteState): Promise<ProcessResult
       const submissionId = state.candidate.submissionId;
       ctx.blocked(
         "Employer analysis endpoints via authenticated API",
-        "index-repo / generate-interview / calculate-scores require employer auth, which is blocked by the Firebase Admin credential issue (P1). Invoking the SAME service functions directly so the real analysis still runs against Pinecone/OpenAI."
+        "index-repo / generate-interview require employer auth, which is blocked by the Firebase Admin credential issue (P1). Invoking the SAME service functions directly so the real analysis still runs against Pinecone/OpenAI."
       );
 
       const index = await ctx.step(
@@ -80,20 +80,6 @@ export function runP6AnalysisWorkflows(state: SuiteState): Promise<ProcessResult
       }
 
       await ctx.step(
-        "Scoring (scoring.calculateAndSaveScores)",
-        async (ev) => {
-          const out = await directCalculateScores(submissionId);
-          ev.json("overall", out.overall);
-          ev.json("completeness", out.completeness);
-          ev.json(
-            "note",
-            "Scoring runs. Overall workflow score is null without an in-app LLM workflow trace (upload submissions have none). Completeness scoring was intentionally removed in scoring.ts."
-          );
-        },
-        BUDGETS.scoring
-      );
-
-      await ctx.step(
         "Analysis is readable by recruiter (GET /:id, public)",
         async (ev) => {
           const res = await state.api.get(`/api/submissions/${submissionId}`);
@@ -104,7 +90,10 @@ export function runP6AnalysisWorkflows(state: SuiteState): Promise<ProcessResult
             Boolean((sub as any).evaluationReport)
           );
           ev.json("interviewQuestionCount", sub.interviewQuestions?.length ?? 0);
-          ev.json("scores", sub.scores ?? null);
+          ev.json(
+            "behavioralGradingStatus",
+            sub.behavioralGradingStatus ?? null
+          );
         }
       );
 

@@ -38,7 +38,7 @@ const verifyAuthToken = async (
     const userInfo: DecodedIdToken = await decodeAuthToken(token);
     // Add user info to the request body (used by e.g. assessment controllers)
     req.body.uid = userInfo.uid;
-    // Also set req.user so handlers that read req.user.uid work (e.g. submission, taskRunner)
+    // Also set req.user so handlers that read req.user.uid work (e.g. submission)
     (req as any).user = { uid: userInfo.uid };
 
     next(); // Proceed to the next middleware/route handler

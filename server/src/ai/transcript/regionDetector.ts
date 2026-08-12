@@ -146,7 +146,7 @@ export async function detectRegions(
 ): Promise<DetectedRegion[]> {
   const client = getOpenAIClient();
 
-  const model = process.env.OPENAI_REGION_DETECTION_MODEL || "gpt-4o-mini";
+  const model = process.env.OPENAI_REGION_DETECTION_MODEL || "gpt-5.6-luna";
 
   // Get image dimensions for text sampling (use original buffer)
   let imgWidth = 1920;

@@ -968,6 +968,235 @@ export const interpretRawTranscript: RequestHandler = async (
   }
 };
 
+/**
+ * Companion system prompt: an in-session voice check-in that asks the candidate to
+ * narrate their thinking. Deliberately near-silent — it never gives solutions, hints,
+ * or code, so it captures reasoning without changing the difficulty of the assessment.
+ */
+const COMPANION_PROMPT_BASE = `You are a pair-programming companion during a coding assessment. Your only goal is to listen while the candidate explains their thought process.
+
+You have already introduced yourself once. Do NOT repeat that introduction. Do NOT ask if they are still there, and do not check in on your own — only speak when spoken to.
+
+When the candidate says something, briefly acknowledge it. Ask at most one short follow-up question, and only when it would genuinely help them articulate their reasoning.
+
+Do NOT give solutions, hints, code, debugging help, or opinions about their approach. If they ask for help, say once that you're only here to listen, then stay quiet.
+
+If you have a tool that returns candidate context (their recent activity, what they said earlier, or their code), you may call it silently to make a follow-up question specific to what they are actually doing. Never read tool output aloud, never mention the tool, and never use it to give hints.
+
+Be barely there: one-sentence responses, long silences in between.`;
+
+/** Spoken opener. The agent introduces itself once, then falls back to the prompt above. */
+const COMPANION_FIRST_MESSAGE = `You're about to start a coding problem as part of this assessment. I'm here as a quick check-in so you can talk through what you're doing as you code — it helps capture your thinking. Just explain what you're working on as you go. No pressure, and I won't give hints or answers. Ready when you are.`;
+
+// POST /api/proctoring/sessions/:sessionId/companion/prompt
+export const getCompanionPrompt: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+
+    const { sessionId } = req.params;
+    const { token } = req.body;
+
+    const session = await ProctoringSessionModel.findById(sessionId);
+    if (!session) throw ProctoringError.SESSION_NOT_FOUND;
+    if (session.token !== token) {
+      return res.status(403).json({ error: "Invalid token" });
+    }
+
+    const submission = await SubmissionModel.findById(
+      session.submissionId
+    ).populate("assessmentId");
+
+    let prompt = COMPANION_PROMPT_BASE;
+    if (
+      submission?.assessmentId &&
+      typeof submission.assessmentId === "object"
+    ) {
+      const assessment = submission.assessmentId as { title?: string };
+      if (assessment.title) {
+        // Title only — never the description, or the agent starts leaking the task back.
+        prompt = `${COMPANION_PROMPT_BASE}\n\nContext: The assessment is titled "${assessment.title}". Use it only to keep a follow-up question relevant; never hint at how to solve the task.`;
+      }
+    }
+
+    res.json({ prompt, firstMessage: COMPANION_FIRST_MESSAGE });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /api/proctoring/sessions/:sessionId/companion/messages
+export const recordCompanionMessages: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+
+    const { sessionId } = req.params;
+    const { token, conversationId, messages } = req.body as {
+      token: string;
+      conversationId?: string;
+      messages: Array<{ role: string; text: string; timestampMs: number }>;
+    };
+
+    const session = await ProctoringSessionModel.findById(sessionId);
+    if (!session) throw ProctoringError.SESSION_NOT_FOUND;
+    if (session.token !== token) {
+      return res.status(403).json({ error: "Invalid token" });
+    }
+
+    const { getFrameStorage } = await import("../services/capture/storage.js");
+    const storage = getFrameStorage();
+    // One JSONL blob per flush; the read path lists + sorts them by key (ts-prefixed).
+    const ts = Date.now();
+    const chunkId = crypto.randomBytes(4).toString("hex");
+    const storageKey = `${sessionId}/companion/${ts}-${chunkId}.jsonl`;
+    const content = messages
+      .map((m) =>
+        JSON.stringify({
+          role: m.role,
+          text: m.text,
+          timestampMs: m.timestampMs,
+        })
+      )
+      .join("\n");
+    await storage.storeTranscript(storageKey, content);
+
+    const update: Record<string, unknown> = {
+      "companion.status": "active",
+      "companion.startedAt": session.companion?.startedAt ?? new Date(),
+    };
+    if (conversationId) update["companion.conversationId"] = conversationId;
+
+    await ProctoringSessionModel.findByIdAndUpdate(sessionId, { $set: update });
+
+    res.json({ stored: messages.length });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /api/proctoring/sessions/:sessionId/companion/complete
+export const completeCompanion: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+
+    const { sessionId } = req.params;
+    const { token } = req.body;
+
+    const session = await ProctoringSessionModel.findById(sessionId);
+    if (!session) throw ProctoringError.SESSION_NOT_FOUND;
+    if (session.token !== token) {
+      return res.status(403).json({ error: "Invalid token" });
+    }
+
+    await ProctoringSessionModel.findByIdAndUpdate(sessionId, {
+      $set: { "companion.status": "completed", "companion.endedAt": new Date() },
+    });
+
+    res.json({ completed: true });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /api/proctoring/sessions/:sessionId/companion/transcript
+// Access: employer (Firebase auth) or candidate (query token)
+export const getCompanionTranscript: RequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { sessionId } = req.params;
+    const token = req.query.token as string | undefined;
+    const authUser = (req as any).user;
+
+    const session = await ProctoringSessionModel.findById(sessionId);
+    if (!session) throw ProctoringError.SESSION_NOT_FOUND;
+
+    let allowed = false;
+    if (token && session.token === token) {
+      allowed = true;
+    } else if (authUser?.uid) {
+      try {
+        const userId = await getUserIdFromFirebaseUid(authUser.uid);
+        const submission = await SubmissionModel.findById(
+          session.submissionId
+        ).populate("assessmentId");
+        const assessment = submission?.assessmentId as {
+          userId?: unknown;
+        } | null;
+        if (assessment && String(assessment.userId) === String(userId)) {
+          allowed = true;
+        }
+      } catch {
+        // auth lookup failed; fall through to 403
+      }
+    }
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const { getFrameStorage } = await import("../services/capture/storage.js");
+    const storage = getFrameStorage();
+    const prefix = `${sessionId}/companion`;
+    let keys: string[];
+    try {
+      keys = await storage.listKeys(prefix);
+    } catch {
+      keys = [];
+    }
+    keys.sort();
+
+    const allMessages: Array<{
+      role: string;
+      text: string;
+      timestampMs: number;
+    }> = [];
+    for (const key of keys) {
+      try {
+        const content = await storage.getTranscript(key);
+        for (const line of content.split("\n").filter(Boolean)) {
+          try {
+            const msg = JSON.parse(line);
+            if (
+              msg.role &&
+              msg.text != null &&
+              typeof msg.timestampMs === "number"
+            ) {
+              allMessages.push({
+                role: msg.role,
+                text: msg.text,
+                timestampMs: msg.timestampMs,
+              });
+            }
+          } catch {
+            // skip malformed line
+          }
+        }
+      } catch {
+        // skip unreadable chunk
+      }
+    }
+    allMessages.sort((a, b) => a.timestampMs - b.timestampMs);
+
+    const format = req.query.format === "jsonl" ? "jsonl" : "json";
+    if (format === "jsonl") {
+      res.setHeader("Content-Type", "application/jsonl");
+      res.send(allMessages.map((m) => JSON.stringify(m)).join("\n"));
+      return;
+    }
+    res.json({ messages: allMessages });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // POST /api/proctoring/sessions/test/create  (DEV ONLY)
 export const createTestSession: RequestHandler = async (req, res, next) => {
   try {

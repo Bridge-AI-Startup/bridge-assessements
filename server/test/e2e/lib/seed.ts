@@ -145,10 +145,3 @@ export async function directGenerateInterview(submissionId: string) {
   return result;
 }
 
-/** Scoring via the service layer. */
-export async function directCalculateScores(submissionId: string) {
-  const { calculateAndSaveScores } = await import(
-    "../../../src/services/scoring.js"
-  );
-  return calculateAndSaveScores(submissionId);
-}

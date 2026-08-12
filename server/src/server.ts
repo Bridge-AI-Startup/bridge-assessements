@@ -15,10 +15,10 @@ import submissionRoutes from "./routes/submission.js";
 import agentToolsRoutes from "./routes/agentTools.js";
 import webhookRoutes from "./routes/webhook.js";
 import billingRoutes from "./routes/billing.js";
-import llmProxyRoutes from "./routes/llmProxy.js";
 import evaluationRoutes from "./routes/evaluation.js";
 import proctoringRoutes from "./routes/proctoring.js";
 import competitionRoutes from "./routes/competition.js";
+import workflowCaptureRoutes from "./routes/workflowCapture.js";
 import playRoutes from "./routes/shorts.js";
 import { health as playHealth } from "./controllers/shorts/index.js";
 import { shortsEnabled } from "./utils/shortsEnv.js";
@@ -184,6 +184,20 @@ const playPreviewLimiter = rateLimit({
   message: {
     error:
       "Too many Play preview requests from this IP, please try again later.",
+  },
+  skip: (req) => process.env.NODE_ENV === "development",
+});
+
+// Workflow capture: one request per AI prompt / tool call from every active
+// candidate. Same shape as proctoring traffic (many small posts), so it gets
+// its own high ceiling rather than eating the general API bucket.
+const workflowCaptureLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: "Too many workflow capture requests from this IP, please try again later.",
   },
   skip: (req) => process.env.NODE_ENV === "development",
 });
@@ -391,11 +405,6 @@ console.log("     - POST /api/billing/checkout");
 console.log("     - GET /api/billing/status");
 console.log("     - POST /api/billing/webhook");
 
-app.use("/api/llm-proxy", apiLimiter); // Apply general limit
-app.use("/api/llm-proxy", llmProxyRoutes);
-console.log("  ✅ /api/llm-proxy routes registered");
-console.log("     - POST /api/llm-proxy/chat");
-
 // Shorts (formerly "Play") is served under `/api/shorts`. `/api/play` is kept
 // as a legacy alias so already-deployed clients and in-flight E2B sandboxes
 // (whose ANTHROPIC_BASE_URL may still point at `/api/play`) keep working.
@@ -457,6 +466,22 @@ console.log("     - POST /api/proctoring/sessions/:sessionId/complete");
 console.log(
   "     - POST /api/proctoring/sessions/:sessionId/generate-transcript",
 );
+
+// Experimental: hooks-first capture of the candidate's AI-agent conversation +
+// code changes (the screen-recording alternative). Off unless explicitly enabled.
+if (process.env.WORKFLOW_CAPTURE_ENABLED === "true") {
+  app.use("/api/workflow-capture", workflowCaptureLimiter);
+  app.use("/api/workflow-capture", workflowCaptureRoutes);
+  console.log("  ✅ /api/workflow-capture routes registered (experimental)");
+  console.log("     - POST /api/workflow-capture/sessions");
+  console.log("     - POST /api/workflow-capture/events");
+  console.log("     - POST /api/workflow-capture/snapshot");
+  console.log("     - GET  /api/workflow-capture/agent-context");
+} else {
+  console.log(
+    "  ⏸️  /api/workflow-capture disabled (set WORKFLOW_CAPTURE_ENABLED=true)",
+  );
+}
 
 app.use("/api", apiLimiter);
 app.use("/api", evaluationRoutes);

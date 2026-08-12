@@ -72,6 +72,8 @@ export default function AssessmentEditor() {
   const [emailSent, setEmailSent] = useState(false);
   const [contextSections, setContextSections] = useState([]);
   const [timeLimit, setTimeLimit] = useState({ hours: 4, minutes: 0 });
+  // "screen" (default) | "workflow" | "both" — see server/src/utils/evidenceMode.ts
+  const [evidenceMode, setEvidenceMode] = useState("screen");
   const [startDeadline, setStartDeadline] = useState(7);
   const [timeLimitSaveTimeout, setTimeLimitSaveTimeout] = useState(null);
   const [starterFilesGitHubLink, setStarterFilesGitHubLink] = useState("");
@@ -188,6 +190,9 @@ export default function AssessmentEditor() {
         const hours = Math.floor(totalMinutes / 60);
         const minutes = totalMinutes % 60;
         setTimeLimit({ hours, minutes });
+      }
+      if (assessmentData.evidenceMode) {
+        setEvidenceMode(assessmentData.evidenceMode);
       }
       if (assessmentData.behavioralChecks?.length) {
         setBehavioralChecks(
@@ -811,6 +816,60 @@ export default function AssessmentEditor() {
                       />
                       <span className="text-sm text-gray-500">minutes</span>
                     </div>
+                  </div>
+                </div>
+
+                {/* How we observe the candidate working (experimental) */}
+                <div className="pt-4 border-t border-gray-100">
+                  <label className="text-sm font-medium text-gray-700 mb-2 block">
+                    How we observe the session
+                  </label>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Screen recording is the default. Workflow capture records the
+                    candidate&apos;s AI chat and code changes instead — they run a
+                    short setup command and work in their own environment.
+                  </p>
+                  <div className="space-y-2">
+                    {[
+                      {
+                        value: "screen",
+                        label: "Screen recording",
+                        hint: "Records the screen and transcribes it with AI.",
+                      },
+                      {
+                        value: "workflow",
+                        label: "Workflow capture",
+                        hint: "Records AI prompts, replies, and code changes. No screen share.",
+                      },
+                      {
+                        value: "both",
+                        label: "Both",
+                        hint: "Records the screen for playback; analysis comes from the workflow capture.",
+                      },
+                    ].map((option) => (
+                      <label
+                        key={option.value}
+                        className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:border-gray-300 transition-colors"
+                      >
+                        <input
+                          type="radio"
+                          name="evidenceMode"
+                          value={option.value}
+                          checked={evidenceMode === option.value}
+                          onChange={(e) => {
+                            setEvidenceMode(e.target.value);
+                            saveAssessment({ evidenceMode: e.target.value });
+                          }}
+                          className="mt-1"
+                        />
+                        <span>
+                          <span className="text-sm font-medium text-gray-700 block">
+                            {option.label}
+                          </span>
+                          <span className="text-xs text-gray-500">{option.hint}</span>
+                        </span>
+                      </label>
+                    ))}
                   </div>
                 </div>
 

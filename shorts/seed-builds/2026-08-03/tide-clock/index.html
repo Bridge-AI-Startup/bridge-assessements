@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Tide Clock</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    background: #071820;
+    color: #e8f4f8;
+    font-family: "Nunito", "Segoe UI", sans-serif;
+    overflow: hidden;
+  }
+  .scene {
+    position: relative;
+    width: min(94vw, 520px);
+    height: min(70vh, 420px);
+    border-radius: 24px;
+    overflow: hidden;
+    background: linear-gradient(180deg, #123049 0%, #0a2433 45%, #071820 100%);
+    box-shadow: 0 30px 80px rgba(0,0,0,.35);
+  }
+  .moon {
+    position: absolute;
+    top: 28px; right: 36px;
+    width: 54px; height: 54px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #fff7d6, #e6d39a 55%, #b9a46a);
+    box-shadow: 0 0 40px rgba(255,240,180,.35);
+  }
+  .stars { position: absolute; inset: 0; }
+  .star {
+    position: absolute; width: 2px; height: 2px; border-radius: 50%;
+    background: #fff; opacity: .55;
+  }
+  .water {
+    position: absolute; left: -10%; right: -10%; bottom: 0;
+    height: 45%;
+    background: linear-gradient(180deg, rgba(64,180,220,.85), #0d3a4f);
+    transition: height 1s linear;
+  }
+  .wave {
+    position: absolute; left: -20%; width: 140%; height: 40px;
+    top: -20px;
+    background: radial-gradient(ellipse at center, rgba(180,240,255,.55) 0%, transparent 70%);
+    animation: drift 6s ease-in-out infinite alternate;
+  }
+  @keyframes drift { from { transform: translateX(-4%); } to { transform: translateX(4%); } }
+  .boat {
+    position: absolute; left: 50%;
+    width: 48px; height: 18px;
+    margin-left: -24px;
+    background: #f0d7a8;
+    border-radius: 0 0 18px 18px;
+    transition: bottom 1s linear;
+  }
+  .mast {
+    position: absolute; left: 50%; bottom: 18px; width: 3px; height: 28px;
+    background: #f0d7a8; margin-left: -1px;
+  }
+  .sail {
+    position: absolute; left: 50%; bottom: 28px;
+    width: 0; height: 0;
+    border-left: 16px solid transparent;
+    border-right: 0 solid transparent;
+    border-bottom: 26px solid #fff;
+    margin-left: 2px;
+  }
+  .hud {
+    position: absolute; left: 16px; right: 16px; bottom: 14px;
+    display: flex; justify-content: space-between; align-items: end;
+    font-variant-numeric: tabular-nums;
+  }
+  .time { font-size: 2rem; font-weight: 700; letter-spacing: .02em; }
+  .meta { font-size: .85rem; opacity: .7; text-align: right; }
+</style>
+</head>
+<body>
+  <div class="scene" id="scene">
+    <div class="stars" id="stars"></div>
+    <div class="moon" id="moon"></div>
+    <div class="water" id="water"><div class="wave"></div></div>
+    <div class="boat" id="boat"><div class="mast"></div><div class="sail"></div></div>
+    <div class="hud">
+      <div class="time" id="time">00:00</div>
+      <div class="meta" id="meta">tide rising</div>
+    </div>
+  </div>
+<script>
+const stars = document.getElementById('stars');
+for (let i = 0; i < 40; i++) {
+  const s = document.createElement('div');
+  s.className = 'star';
+  s.style.left = Math.random() * 100 + '%';
+  s.style.top = Math.random() * 55 + '%';
+  s.style.opacity = 0.25 + Math.random() * 0.6;
+  stars.appendChild(s);
+}
+
+function tick() {
+  const now = new Date();
+  const h = now.getHours(), m = now.getMinutes(), s = now.getSeconds();
+  // two tides a day: sine over 12h
+  const t = (h * 3600 + m * 60 + s) / 86400;
+  const tide = 0.5 + 0.5 * Math.sin(t * Math.PI * 4); // 0..1
+  const waterH = 28 + tide * 42; // percent
+  document.getElementById('water').style.height = waterH + '%';
+  document.getElementById('boat').style.bottom = (waterH - 2) + '%';
+
+  // moon opacity / position by night
+  const night = h < 6 || h >= 20;
+  document.getElementById('moon').style.opacity = night ? '1' : String(0.15 + (1 - Math.abs(h - 12) / 12) * 0.2);
+
+  const rising = Math.cos(t * Math.PI * 4) > 0;
+  document.getElementById('time').textContent =
+    String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+  document.getElementById('meta').textContent =
+    (rising ? 'tide rising' : 'tide falling') + ' · ' + Math.round(tide * 100) + '% high';
+  requestAnimationFrame(tick);
+}
+tick();
+</script>
+</body>
+</html>

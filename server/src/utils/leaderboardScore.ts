@@ -2,15 +2,10 @@
  * Public leaderboard score — must stay in sync with client `SubmissionsDashboard.jsx`:
  * `getCombinedScore0to100` + `getCombinedScoreBreakdownParts`.
  *
- * Mean of available signals (0–100 each): screen/recording rubric, behavioral pass rate,
- * trace workflow (`scores.overall` only — same as employer UI, not llmWorkflow nested alone).
+ * Mean of available signals (0–100 each): screen/recording rubric and behavioral pass rate.
  */
 
 type SubmissionLike = {
-  scores?: {
-    overall?: number | null;
-    completeness?: { score?: number | null };
-  } | null;
   behavioralGradingStatus?: string | null;
   behavioralGradingReport?: {
     cases?: Array<{ verdict?: string }>;
@@ -48,22 +43,14 @@ function getBehavioralPass0to100(sub: SubmissionLike): number | null {
   return (pts / cases.length) * 100;
 }
 
-/** Trace / workflow — employer dashboard only uses top-level `scores.overall`. */
-function getLlmWorkflow0to100(sub: SubmissionLike): number | null {
-  const o = sub.scores?.overall;
-  if (typeof o === "number" && !Number.isNaN(o)) return o;
-  return null;
-}
-
 /**
- * Combined 0–100 score: average of whichever of (recording rubric, behavioral, workflow) exist.
+ * Combined 0–100 score: average of whichever of (recording rubric, behavioral) exist.
  * Returns null if none of the signals are available.
  */
 export function getCombinedLeaderboardScore(sub: SubmissionLike): number | null {
   const parts = [
     getRecordingRubric0to100(sub),
     getBehavioralPass0to100(sub),
-    getLlmWorkflow0to100(sub),
   ].filter((v): v is number => v != null && !Number.isNaN(v));
   if (parts.length === 0) return null;
   return parts.reduce((a, b) => a + b, 0) / parts.length;
@@ -74,9 +61,7 @@ export function getCombinedScoreBreakdownParts(sub: SubmissionLike): string[] {
   const segs: string[] = [];
   const rec = getRecordingRubric0to100(sub);
   const beh = getBehavioralPass0to100(sub);
-  const wf = getLlmWorkflow0to100(sub);
   if (rec != null) segs.push(`Screen ${(rec / 10).toFixed(1)}/10`);
   if (beh != null) segs.push(`Behavioral ${Math.round(beh)}%`);
-  if (wf != null) segs.push(`Trace ${Math.round(wf)}`);
   return segs;
 }

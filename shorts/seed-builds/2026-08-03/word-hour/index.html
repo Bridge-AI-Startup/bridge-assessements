@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Word Hour</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    background: #f6f1e7;
+    color: #1c1914;
+    font-family: "Libre Baskerville", Georgia, serif;
+    padding: 1.5rem;
+  }
+  .sheet {
+    width: min(92vw, 560px);
+  }
+  .label {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .72rem;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    opacity: .45;
+    margin-bottom: 1rem;
+  }
+  .sentence {
+    font-size: clamp(1.8rem, 6vw, 2.7rem);
+    line-height: 1.35;
+    font-weight: 400;
+  }
+  .lit { color: #1c1914; }
+  .dim { color: rgba(28,25,20,.22); }
+  .now {
+    background: #1c1914;
+    color: #f6f1e7;
+    padding: 0 .15em;
+    border-radius: 4px;
+  }
+  .digits {
+    margin-top: 2rem;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 1rem;
+    letter-spacing: .18em;
+    opacity: .55;
+  }
+  .grid {
+    margin-top: 1.5rem;
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: .4rem;
+  }
+  .chip {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .68rem;
+    letter-spacing: .04em;
+    text-align: center;
+    padding: .45rem .2rem;
+    border-radius: 999px;
+    border: 1px solid rgba(28,25,20,.12);
+    color: rgba(28,25,20,.35);
+  }
+  .chip.on {
+    background: #1c1914;
+    color: #f6f1e7;
+    border-color: #1c1914;
+  }
+</style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="label">It is roughly</div>
+    <div class="sentence" id="sentence"></div>
+    <div class="digits" id="digits">00:00</div>
+    <div class="grid" id="grid"></div>
+  </div>
+<script>
+const HOURS = ['twelve','one','two','three','four','five','six','seven','eight','nine','ten','eleven'];
+const MINUTES = [
+  [0, 'o\'clock'],
+  [5, 'five past'],
+  [10, 'ten past'],
+  [15, 'a quarter past'],
+  [20, 'twenty past'],
+  [25, 'twenty-five past'],
+  [30, 'half past'],
+  [35, 'twenty-five to'],
+  [40, 'twenty to'],
+  [45, 'a quarter to'],
+  [50, 'ten to'],
+  [55, 'five to'],
+];
+
+function fuzzy(h, m) {
+  let nearest = MINUTES[0], best = 99;
+  for (const row of MINUTES) {
+    const d = Math.abs(m - row[0]);
+    if (d < best) { best = d; nearest = row; }
+  }
+  // also compare wrap to 60
+  if (Math.abs(m - 60) < best) nearest = MINUTES[0];
+
+  let hour = h % 12;
+  const phrase = nearest[1];
+  if (phrase.includes(' to') || (nearest[0] >= 35 && m >= 33)) {
+    hour = (hour + 1) % 12;
+  }
+  if (phrase === "o'clock" && m >= 58) hour = (hour + 1) % 12;
+
+  const ampm = h < 12 ? 'in the morning' : h < 17 ? 'in the afternoon' : h < 21 ? 'in the evening' : 'at night';
+  if (h === 0 && (phrase === "o'clock" || nearest[0] === 0)) return { text: 'midnight', parts: ['midnight'] };
+  if (h === 12 && (phrase === "o'clock" || nearest[0] === 0)) return { text: 'noon', parts: ['noon'] };
+
+  const hourWord = HOURS[hour];
+  if (phrase === "o'clock") {
+    return { text: `${hourWord} o'clock ${ampm}`, parts: [hourWord, "o'clock", ampm] };
+  }
+  if (phrase.includes('past') || phrase.includes('half')) {
+    return { text: `${phrase} ${hourWord} ${ampm}`, parts: [phrase, hourWord, ampm] };
+  }
+  return { text: `${phrase} ${hourWord} ${ampm}`, parts: [phrase, hourWord, ampm] };
+}
+
+const grid = document.getElementById('grid');
+const chips = MINUTES.map(([n, label]) => {
+  const el = document.createElement('div');
+  el.className = 'chip';
+  el.textContent = label;
+  grid.appendChild(el);
+  return { n, el };
+});
+
+function tick() {
+  const now = new Date();
+  const h = now.getHours(), m = now.getMinutes(), s = now.getSeconds();
+  const f = fuzzy(h, m);
+  document.getElementById('sentence').innerHTML = f.parts.map((p, i) =>
+    `<span class="now">${p}</span>` + (i < f.parts.length - 1 ? ' ' : '')
+  ).join('');
+  document.getElementById('digits').textContent =
+    [h,m,s].map(n => String(n).padStart(2,'0')).join(':');
+
+  let active = chips[0];
+  let best = 99;
+  for (const c of chips) {
+    const d = Math.min(Math.abs(m - c.n), Math.abs(m - (c.n + 60)));
+    if (d < best) { best = d; active = c; }
+  }
+  chips.forEach(c => c.el.classList.toggle('on', c === active));
+  setTimeout(tick, 1000);
+}
+tick();
+</script>
+</body>
+</html>

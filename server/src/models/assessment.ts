@@ -72,6 +72,22 @@ const AssessmentSchema = new mongoose.Schema(
       default: false,
     },
 
+    /**
+     * Evidence mode for this assessment — how we observe the candidate working.
+     *   "screen"   — existing screen recording + AI transcript (default; unchanged)
+     *   "workflow" — hooks-first AI-workflow capture via capture-kit (experimental)
+     *   "both"     — record the screen for playback, but analyse the hook stream
+     *
+     * Anything other than "screen" additionally requires the server-side
+     * WORKFLOW_CAPTURE_ENABLED master switch, so an assessment can never
+     * silently depend on an unconfigured deployment.
+     */
+    evidenceMode: {
+      type: String,
+      enum: ["screen", "workflow", "both"],
+      default: "screen",
+    },
+
     // Stack-agnostic observable behaviors (product-level bar for all candidates on this assessment)
     behavioralChecks: {
       type: [String],

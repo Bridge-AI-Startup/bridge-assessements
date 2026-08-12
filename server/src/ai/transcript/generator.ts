@@ -570,7 +570,7 @@ function getModelForRegion(
   if (HIGH_PRIORITY_REGIONS.has(regionType) || regionType === "browser") {
     return process.env.OPENAI_VISION_MODEL || "gpt-5.6-luna";
   }
-  return process.env.OPENAI_VISION_MODEL_LITE || "gpt-4o-mini";
+  return process.env.OPENAI_VISION_MODEL_LITE || "gpt-5.6-luna";
 }
 
 /**

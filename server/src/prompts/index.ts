@@ -801,7 +801,7 @@ DO NOT:
 
 export const PROMPT_DETECT_ACTIVITY_BOUNDARIES = {
   provider: "openai" as AIProvider,
-  model: "gpt-4o-mini",
+  model: "gpt-5.6-luna",
 
   system: `You identify natural activity boundaries in a coding assessment screen recording.
 
@@ -837,7 +837,7 @@ All moments (0 through ${totalMoments - 1}) must be covered with no gaps.`,
 
 export const PROMPT_INTERPRET_CHUNK = {
   provider: "openai" as AIProvider,
-  model: "gpt-4o-mini",
+  model: "gpt-5.6-luna",
 
   system: `${INTERPRET_CORE_INSTRUCTIONS}
 
@@ -877,7 +877,7 @@ Interpret what the candidate is doing in these moments. Each moment includes ts_
 
 export const PROMPT_INTERPRET_BATCH_STATEFUL = {
   provider: "openai" as AIProvider,
-  model: "gpt-4o-mini",
+  model: "gpt-5.6-luna",
 
   system: `${INTERPRET_CORE_INSTRUCTIONS}
 
@@ -917,7 +917,7 @@ Describe what the candidate is doing in these moments. Each moment includes ts_s
 
 export const PROMPT_GENERATE_TEMPORAL_INSIGHTS = {
   provider: "openai" as AIProvider,
-  model: "gpt-4o-mini",
+  model: "gpt-5.6-luna",
 
   system: `You analyze timestamped behavioral events from a coding assessment screen recording and identify multi-step TEMPORAL PATTERNS that span multiple events.
 
@@ -951,7 +951,7 @@ Return JSON only: { "insights": [...] }`,
 
 export const PROMPT_LLM_JUDGE = {
   provider: "openai" as AIProvider,
-  model: "gpt-4o-mini",
+  model: "gpt-5.6-luna",
 
   system: `You are a quality evaluator for an AI system that interprets screen recordings of coding assessments. You receive:
 1. Raw input: the original OCR text from screen captures

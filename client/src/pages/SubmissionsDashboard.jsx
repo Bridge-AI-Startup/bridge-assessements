@@ -137,21 +137,14 @@ function getBehavioralPass0to100(sub) {
   return (pts / cases.length) * 100;
 }
 
-/** In-app LLM workflow overall (0–100) when saved on submission. */
-function getLlmWorkflow0to100(sub) {
-  const o = sub.scores?.overall;
-  return typeof o === "number" && !Number.isNaN(o) ? o : null;
-}
-
 /**
  * Combined employer-facing score (0–100): mean of available signals —
- * screen/recording rubric, behavioral pass rate, trace workflow overall.
+ * screen/recording rubric and behavioral pass rate.
  */
 function getCombinedScore0to100(sub) {
   const parts = [
     getRecordingRubric0to100(sub),
     getBehavioralPass0to100(sub),
-    getLlmWorkflow0to100(sub),
   ].filter((v) => v != null);
   if (parts.length === 0) return null;
   return parts.reduce((a, b) => a + b, 0) / parts.length;
@@ -161,10 +154,8 @@ function getCombinedScoreBreakdownParts(sub) {
   const segs = [];
   const rec = getRecordingRubric0to100(sub);
   const beh = getBehavioralPass0to100(sub);
-  const wf = getLlmWorkflow0to100(sub);
   if (rec != null) segs.push(`Screen ${(rec / 10).toFixed(1)}/10`);
   if (beh != null) segs.push(`Behavioral ${Math.round(beh)}%`);
-  if (wf != null) segs.push(`Trace ${Math.round(wf)}`);
   return segs;
 }
 
@@ -3542,7 +3533,7 @@ export default function SubmissionsDashboard() {
                 <TabsTrigger value="execution">Final code</TabsTrigger>
                 <TabsTrigger
                   value="recording"
-                  title="Screen recording, transcript, and workflow rubric (available before scores finish)"
+                  title="Screen recording, transcript, and recording rubric"
                 >
                   Recording & rubric
                 </TabsTrigger>
@@ -3786,44 +3777,8 @@ export default function SubmissionsDashboard() {
                         )}
                       </div>
 
-                      {/* Real metrics (no placeholder values) */}
+                      {/* Combined + behavioral summary */}
                       {(() => {
-                        const overallScore =
-                          selectedEvaluationSubmission?.scores?.overall;
-                        const taskResults =
-                          selectedEvaluationSubmission?.llmWorkflow
-                            ?.taskResults || [];
-                        const passedTasks = taskResults.filter(
-                          (t) => t.status === "passed"
-                        ).length;
-                        const hasWorkflowTrace =
-                          (selectedEvaluationSubmission?.llmWorkflow?.trace
-                            ?.events?.length ?? 0) > 0;
-
-                        let overallValue = "—";
-                        let overallSub = null;
-                        if (!hasWorkflowTrace) {
-                          overallValue = "Not applicable";
-                          overallSub =
-                            "Only for candidates who used the in-app LLM workflow.";
-                        } else if (typeof overallScore === "number") {
-                          overallValue = `${overallScore}/100`;
-                        } else {
-                          overallSub = "Workflow scores not calculated yet.";
-                        }
-
-                        let workflowTasksValue = "—";
-                        let workflowTasksSub = null;
-                        if (!hasWorkflowTrace) {
-                          workflowTasksValue = "Not applicable";
-                          workflowTasksSub =
-                            "Task runs exist only for the in-app LLM workflow.";
-                        } else if (taskResults.length > 0) {
-                          workflowTasksValue = `${passedTasks}/${taskResults.length}`;
-                        } else {
-                          workflowTasksSub = "No tasks have been executed yet.";
-                        }
-
                         const combinedModal =
                           getCombinedScore0to100(selectedEvaluationSubmission);
                         const combinedModalBreakdown =
@@ -3835,33 +3790,9 @@ export default function SubmissionsDashboard() {
                             ?.cases;
                         const behPassPct =
                           getBehavioralPass0to100(selectedEvaluationSubmission);
-
-                        const cards = [
-                          {
-                            label: "LLM trace overall",
-                            value: overallValue,
-                            sub: overallSub,
-                          },
-                          {
-                            label: "Workflow tasks passed",
-                            value: workflowTasksValue,
-                            sub: workflowTasksSub,
-                          },
-                          {
-                            label: "Behavioral",
-                            value:
-                              behPassPct != null
-                                ? `${Math.round(behPassPct)}%`
-                                : "—",
-                            sub:
-                              Array.isArray(behCases) && behCases.length > 0
-                                ? `${behCases.length} checks`
-                                : selectedEvaluationSubmission?.behavioralGradingStatus ===
-                                    "pending"
-                                  ? "Grading in progress"
-                                  : null,
-                          },
-                        ];
+                        const screenAvg = getRecordingRubricAvg10(
+                          selectedEvaluationSubmission
+                        );
 
                         return (
                           <>
@@ -3880,36 +3811,44 @@ export default function SubmissionsDashboard() {
                                 ) : null}
                               </div>
                             )}
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                              {cards.map((m, i) => (
-                          <div
-                            key={i}
-                            className="rounded-lg border border-gray-200 bg-gray-50 p-3"
-                          >
-                            <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
-                              {m.label}
-                            </p>
-                                  <p className="text-lg font-semibold text-gray-900">
-                              {m.value}
-                            </p>
-                                  {m.sub && (
-                                    <p className="text-[11px] text-gray-500 mt-1 leading-snug">
-                                      {m.sub}
-                                    </p>
-                                  )}
-                          </div>
-                        ))}
-                      </div>
-                            {selectedEvaluationSubmission?.behavioralGradingStatus ===
-                              "completed" &&
-                              !hasWorkflowTrace && (
-                                <p className="text-xs text-gray-500 mt-2 leading-relaxed">
-                                  This submission does not include an LLM trace.
-                                  Use behavioral grading above for automated checks;
-                                  workflow scores apply only when the assessment
-                                  is taken with the built-in LLM workflow trace.
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                                <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
+                                  Screen
                                 </p>
-                              )}
+                                <p className="text-lg font-semibold text-gray-900">
+                                  {screenAvg != null
+                                    ? `${screenAvg.toFixed(1)}/10`
+                                    : "—"}
+                                </p>
+                                {screenAvg == null ? (
+                                  <p className="text-[11px] text-gray-500 mt-1 leading-snug">
+                                    Recording rubric not available yet.
+                                  </p>
+                                ) : null}
+                              </div>
+                              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                                <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
+                                  Behavioral
+                                </p>
+                                <p className="text-lg font-semibold text-gray-900">
+                                  {behPassPct != null
+                                    ? `${Math.round(behPassPct)}%`
+                                    : "—"}
+                                </p>
+                                {Array.isArray(behCases) &&
+                                behCases.length > 0 ? (
+                                  <p className="text-[11px] text-gray-500 mt-1 leading-snug">
+                                    {behCases.length} checks
+                                  </p>
+                                ) : selectedEvaluationSubmission?.behavioralGradingStatus ===
+                                  "pending" ? (
+                                  <p className="text-[11px] text-gray-500 mt-1 leading-snug">
+                                    Grading in progress
+                                  </p>
+                                ) : null}
+                              </div>
+                            </div>
                           </>
                         );
                       })()}
@@ -4035,7 +3974,7 @@ export default function SubmissionsDashboard() {
 
               <TabsContent value="recording" className="mt-4">
                 <div className="max-h-[70vh] overflow-y-auto pr-1 space-y-4">
-                  {/* Screen recording — available once session completes / merged, before workflow scores */}
+                  {/* Screen recording — available once session completes / merged */}
                   {selectedEvaluationSubmission &&
                   recordingSession &&
                   (selectedEvaluationSubmission.evaluationReport ||
@@ -4378,7 +4317,7 @@ export default function SubmissionsDashboard() {
                     <div className="py-8 text-center">
                       <BarChart3 className="w-12 h-12 mx-auto mb-2 text-gray-400" />
                       <p className="text-gray-500 mb-3">
-                        No workflow evaluation data for this submission.
+                        No recording evaluation data for this submission.
                       </p>
                       {selectedEvaluationSubmission.evaluationError && (
                         <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4 max-w-md mx-auto">
@@ -4423,7 +4362,7 @@ export default function SubmissionsDashboard() {
                                 toast({
                                   title: "Evaluation complete",
                                   description:
-                                    "Workflow evaluation has been updated.",
+                                    "Recording evaluation has been updated.",
                                 });
                               }
                             } else {
@@ -4456,7 +4395,7 @@ export default function SubmissionsDashboard() {
                         {evaluatingSubmissionId ===
                         selectedEvaluationSubmission?._id
                           ? "Running…"
-                          : "Run workflow evaluation"}
+                          : "Run recording evaluation"}
                       </Button>
                     </div>
                   ) : null}

@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Monitor, Shield, Eye, CheckCircle, XCircle, AlertTriangle } from "lucide-react";
+import { Monitor, Shield, Eye, Mic, CheckCircle, XCircle, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { COMPANION_ENABLED } from "@/config/companion";
 
 export default function ConsentScreen({ onConsent, onDecline }) {
   const [agreed, setAgreed] = useState(false);
@@ -17,11 +18,14 @@ export default function ConsentScreen({ onConsent, onDecline }) {
           <Monitor className="w-8 h-8 text-blue-600" />
         </div>
         <h2 className="text-xl font-medium tracking-[-0.012em] text-gray-900">
-          Screen Recording Consent
+          {COMPANION_ENABLED
+            ? "Screen & Voice Recording Consent"
+            : "Screen Recording Consent"}
         </h2>
         <p className="text-sm text-gray-500 mt-2">
-          This assessment includes optional screen recording to verify your
-          work.
+          {COMPANION_ENABLED
+            ? "This assessment includes optional screen recording and a voice check-in to capture how you work."
+            : "This assessment includes optional screen recording to verify your work."}
         </p>
       </div>
 
@@ -50,11 +54,22 @@ export default function ConsentScreen({ onConsent, onDecline }) {
             assessment — not continuous video.
           </p>
         </div>
+        {COMPANION_ENABLED && (
+          <div className="flex items-start gap-3">
+            <Mic className="w-5 h-5 text-blue-500 mt-0.5 flex-shrink-0" />
+            <p className="text-sm text-gray-600">
+              A voice check-in listens while you talk through your thinking, so
+              your reasoning is captured alongside your code. It never gives
+              hints or answers, and you can mute it at any time.
+            </p>
+          </div>
+        )}
         <div className="flex items-start gap-3">
           <Shield className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
           <p className="text-sm text-gray-600">
-            Only your shared screen is captured. Your camera and microphone are
-            never accessed.
+            {COMPANION_ENABLED
+              ? "Only your shared screen and your microphone are captured. Your camera is never accessed."
+              : "Only your shared screen is captured. Your camera and microphone are never accessed."}
           </p>
         </div>
         <div className="flex items-start gap-3">
@@ -74,7 +89,9 @@ export default function ConsentScreen({ onConsent, onDecline }) {
           className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
         />
         <span className="text-sm text-gray-700">
-          I consent to screen recording during this assessment
+          {COMPANION_ENABLED
+            ? "I consent to screen and voice recording during this assessment"
+            : "I consent to screen recording during this assessment"}
         </span>
       </label>
 

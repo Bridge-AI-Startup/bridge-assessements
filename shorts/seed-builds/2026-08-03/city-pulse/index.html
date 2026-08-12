@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>City Pulse</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    background: #0b1020;
+    color: #e7eefc;
+    font-family: "DM Sans", "Segoe UI", sans-serif;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+  }
+  .frame {
+    width: min(94vw, 520px);
+    padding: 1.5rem;
+  }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 1rem;
+  }
+  .time {
+    font-size: clamp(2.4rem, 9vw, 3.4rem);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.02em;
+  }
+  .zone {
+    font-size: .75rem;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    opacity: .5;
+  }
+  .skyline {
+    position: relative;
+    height: 220px;
+    border-radius: 18px;
+    background: linear-gradient(180deg, #1a2748, #0b1020 70%);
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,.06);
+  }
+  .building {
+    position: absolute;
+    bottom: 0;
+    background: #152038;
+    border-top: 2px solid rgba(255,255,255,.08);
+  }
+  .win {
+    position: absolute;
+    width: 6px; height: 8px;
+    background: #1c2a4a;
+    border-radius: 1px;
+    transition: background .4s;
+  }
+  .win.on { background: #ffd27a; box-shadow: 0 0 8px rgba(255,210,122,.55); }
+  .street {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 18px;
+    background: #0a0e18;
+  }
+  .car {
+    position: absolute; bottom: 8px; width: 18px; height: 6px;
+    border-radius: 2px; background: #7aa2ff;
+    box-shadow: -6px 0 10px rgba(122,162,255,.5);
+  }
+  .status {
+    margin-top: 1rem;
+    font-size: .95rem;
+    opacity: .75;
+  }
+  .meter {
+    margin-top: .8rem;
+    display: grid;
+    grid-template-columns: repeat(24, 1fr);
+    gap: 3px;
+  }
+  .cell {
+    height: 10px;
+    border-radius: 2px;
+    background: rgba(255,255,255,.08);
+  }
+  .cell.past { background: #5b7cff; }
+  .cell.now { background: #ffd27a; box-shadow: 0 0 8px rgba(255,210,122,.5); }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <header>
+      <div class="time" id="time">00:00</div>
+      <div class="zone" id="zone">local</div>
+    </header>
+    <div class="skyline" id="skyline"><div class="street"></div><div class="car" id="car"></div></div>
+    <div class="status" id="status">City waking up…</div>
+    <div class="meter" id="meter"></div>
+  </div>
+<script>
+const skyline = document.getElementById('skyline');
+const buildings = [];
+const widths = [36,28,44,32,50,24,40,30,46,26,38];
+let x = 12;
+widths.forEach((w, i) => {
+  const h = 70 + ((i * 37) % 120);
+  const b = document.createElement('div');
+  b.className = 'building';
+  b.style.left = x + 'px';
+  b.style.width = w + 'px';
+  b.style.height = h + 'px';
+  const wins = [];
+  for (let r = 0; r < Math.floor(h / 18); r++) {
+    for (let c = 0; c < Math.floor((w - 8) / 12); c++) {
+      const win = document.createElement('div');
+      win.className = 'win';
+      win.style.left = (4 + c * 12) + 'px';
+      win.style.top = (8 + r * 16) + 'px';
+      b.appendChild(win);
+      wins.push(win);
+    }
+  }
+  skyline.appendChild(b);
+  buildings.push({ el: b, wins });
+  x += w + 8;
+});
+
+const meter = document.getElementById('meter');
+const cells = [];
+for (let i = 0; i < 24; i++) {
+  const c = document.createElement('div');
+  c.className = 'cell';
+  meter.appendChild(c);
+  cells.push(c);
+}
+
+function activity(h) {
+  // 0..1 how lit the city is
+  if (h < 5) return 0.12;
+  if (h < 8) return 0.35 + (h - 5) * 0.1;
+  if (h < 18) return 0.55;
+  if (h < 22) return 0.85;
+  return 0.4;
+}
+
+function status(h) {
+  if (h < 5) return 'Most windows dark. A few night owls.';
+  if (h < 8) return 'Kitchens lighting up. Commute starting.';
+  if (h < 12) return 'Offices on. Street traffic steady.';
+  if (h < 17) return 'Afternoon hum — city at work.';
+  if (h < 20) return 'Golden lights. People heading home.';
+  if (h < 23) return 'Evening peak — almost every floor lit.';
+  return 'Bars still on. Towers dimming.';
+}
+
+function tick() {
+  const now = new Date();
+  const h = now.getHours(), m = now.getMinutes(), s = now.getSeconds();
+  document.getElementById('time').textContent =
+    String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+  document.getElementById('zone').textContent = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
+  document.getElementById('status').textContent = status(h);
+
+  const lit = activity(h + m / 60);
+  buildings.forEach((b, bi) => {
+    b.wins.forEach((w, wi) => {
+      const seed = (bi * 17 + wi * 13 + h) % 100;
+      w.classList.toggle('on', seed < lit * 100);
+    });
+  });
+
+  cells.forEach((c, i) => {
+    c.className = 'cell' + (i < h ? ' past' : i === h ? ' now' : '');
+  });
+
+  const car = document.getElementById('car');
+  const prog = ((m * 60 + s) % 120) / 120;
+  car.style.left = (prog * 92 + 2) + '%';
+  requestAnimationFrame(tick);
+}
+tick();
+</script>
+</body>
+</html>
