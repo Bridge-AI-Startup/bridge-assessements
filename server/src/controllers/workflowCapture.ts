@@ -442,6 +442,34 @@ export async function getOwnCaptureRecord(
 }
 
 /**
+ * GET /api/workflow-capture/sessions/by-submission/:submissionId  (employer auth)
+ * The dashboard knows a submission, not a capture session — without this there
+ * is no way to get from one to the other.
+ */
+export async function getCaptureSessionBySubmission(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const session: any = await WorkflowCaptureSessionModel.findOne({
+      submissionId: req.params.submissionId,
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+    const denied = await captureSessionAccessError(req, session);
+    if (denied) {
+      res.status(denied.status).json({ error: denied.error });
+      return;
+    }
+    const { captureToken, ...safe } = session;
+    res.status(200).json({ session: safe });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
  * POST /api/workflow-capture/video/start   (Bearer capture token)
  * Marks the sync origin. Everything else about video alignment derives from
  * this instant, so it is recorded server-side rather than trusting the client.
@@ -620,9 +648,16 @@ export async function streamSessionVideo(
   next: NextFunction
 ): Promise<void> {
   try {
+    // In production this 404'd, which made "both" mode pointless: the screen was
+    // recorded and the timeline stamped with seek offsets, but there was nothing
+    // to seek. Gate on ownership instead, like the proctoring playback route.
     if (process.env.NODE_ENV === "production") {
-      res.status(404).json({ error: "not_found" });
-      return;
+      const session: any = await WorkflowCaptureSessionModel.findById(req.params.id).lean();
+      const denied = await captureSessionAccessError(req, session);
+      if (denied) {
+        res.status(denied.status).json({ error: denied.error });
+        return;
+      }
     }
     const built = await buildPlaybackVideo(req.params.id);
     if (!built) {
@@ -659,6 +694,34 @@ export async function streamSessionVideo(
 }
 
 /**
+ * Employer ownership check for a capture session.
+ *
+ * Fails **closed**: a session with no linked submission belongs to no employer,
+ * so nobody may read it. The earlier `if (session.submissionId)` form meant an
+ * unlinked session — exactly what a local test or a partially-set-up candidate
+ * produces — was readable by any authenticated user.
+ */
+async function captureSessionAccessError(
+  req: Request,
+  session: { submissionId?: unknown } | null
+): Promise<{ status: number; error: string } | null> {
+  if (!session) return { status: 404, error: "capture_session_not_found" };
+  const uid = (req as any).user?.uid || req.body?.uid;
+  if (!uid) return { status: 401, error: "unauthenticated" };
+  if (!session.submissionId) return { status: 403, error: "forbidden" };
+
+  const userId = await getUserIdFromFirebaseUid(uid);
+  const submission: any = await SubmissionModel.findById(session.submissionId)
+    .populate("assessmentId")
+    .lean();
+  const ownerId = submission?.assessmentId?.userId?.toString();
+  if (!ownerId || ownerId !== userId.toString()) {
+    return { status: 403, error: "forbidden" };
+  }
+  return null;
+}
+
+/**
  * GET /api/workflow-capture/sessions/:id/analysis
  * The gradable view of a session: deterministic metrics plus the timeline in
  * the exact `TranscriptEvent[]` shape `services/evaluation/` already consumes,
@@ -671,8 +734,9 @@ export async function getSessionAnalysis(
 ): Promise<void> {
   try {
     const session: any = await WorkflowCaptureSessionModel.findById(req.params.id).lean();
-    if (!session) {
-      res.status(404).json({ error: "capture_session_not_found" });
+    const denied = await captureSessionAccessError(req, session);
+    if (denied) {
+      res.status(denied.status).json({ error: denied.error });
       return;
     }
 
@@ -733,6 +797,14 @@ export async function runScreenClassification(
   try {
     if (!process.env.GEMINI_API_KEY) {
       res.status(400).json({ error: "gemini_not_configured" });
+      return;
+    }
+    // Unauthenticated, this endpoint let anyone with a session id spend money
+    // on Gemini calls against someone else's recording.
+    const session: any = await WorkflowCaptureSessionModel.findById(req.params.id).lean();
+    const denied = await captureSessionAccessError(req, session);
+    if (denied) {
+      res.status(denied.status).json({ error: denied.error });
       return;
     }
     const result = await classifyScreenGaps(req.params.id);
@@ -955,15 +1027,10 @@ export async function getCaptureSessionForReview(
       return;
     }
 
-    if ((session as any).submissionId) {
-      const submission = await SubmissionModel.findById((session as any).submissionId)
-        .populate("assessmentId")
-        .lean();
-      const ownerId = (submission as any)?.assessmentId?.userId?.toString();
-      if (ownerId && ownerId !== userId.toString()) {
-        res.status(403).json({ error: "forbidden" });
-        return;
-      }
+    const denied = await captureSessionAccessError(req, session as any);
+    if (denied) {
+      res.status(denied.status).json({ error: denied.error });
+      return;
     }
 
     const events = await WorkflowEventModel.find({ sessionId: (session as any)._id })

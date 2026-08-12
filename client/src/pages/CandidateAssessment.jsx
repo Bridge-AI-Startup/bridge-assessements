@@ -540,10 +540,14 @@ export default function CandidateAssessment() {
       alert("No token provided");
       return;
     }
-    // Workflow-only assessments never ask for the screen — the capture kit
-    // carries its own disclosure and consent gate in the terminal.
+    // Workflow-only assessments never ask for the screen. Start the assessment
+    // directly — routing through handleConsentGranted would run the whole
+    // screen-recording path (proctoring session, getDisplayMedia picker, frame
+    // and video upload) with no consent screen shown first, which is worse than
+    // the flow it was meant to replace.
     if (!usesScreenRecording) {
-      handleConsentGranted();
+      setIsStarting(true);
+      doStartAssessment();
       return;
     }
     // Show consent screen before starting
