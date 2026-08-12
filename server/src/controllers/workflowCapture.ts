@@ -29,6 +29,13 @@ import {
   offsetIntoVideo,
   nextVideoOffsetStart,
 } from "../services/workflowCapture/video.js";
+import { computeMetrics } from "../services/workflowCapture/metrics.js";
+import {
+  buildTranscriptEvents,
+  videoOffsetForSessionSeconds,
+} from "../services/workflowCapture/timeline.js";
+import { classifyScreenGaps } from "../services/workflowCapture/screenContext.js";
+import { groupIntoEpisodes } from "../services/workflowCapture/episodes.js";
 import { getUserIdFromFirebaseUid } from "../utils/auth.js";
 
 /** Per-event text cap. Long tool results get truncated, never dropped. */
@@ -567,6 +574,19 @@ export async function stopVideo(
       { $set: update }
     );
     res.status(200).json({ ok: true, reason });
+
+    // Classify the recording automatically — there is nothing for a candidate
+    // (or a reviewer) to click. Deliberately after the response and unawaited:
+    // it merges + uploads the video and takes tens of seconds, and the client
+    // stopping a recording must not wait on any of that.
+    if (process.env.GEMINI_API_KEY) {
+      void classifyScreenGaps(session._id.toString()).catch((err) => {
+        console.error(
+          `[workflow-capture] auto screen classification failed for ${session._id}:`,
+          err instanceof Error ? err.message : err
+        );
+      });
+    }
   } catch (error) {
     next(error);
   }
@@ -623,6 +643,90 @@ export async function streamSessionVideo(
 }
 
 /**
+ * GET /api/workflow-capture/sessions/:id/analysis
+ * The gradable view of a session: deterministic metrics plus the timeline in
+ * the exact `TranscriptEvent[]` shape `services/evaluation/` already consumes,
+ * so grounder → evaluator run against it unchanged.
+ */
+export async function getSessionAnalysis(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const session: any = await WorkflowCaptureSessionModel.findById(req.params.id).lean();
+    if (!session) {
+      res.status(404).json({ error: "capture_session_not_found" });
+      return;
+    }
+
+    const events = await WorkflowEventModel.find({ sessionId: session._id })
+      .sort({ at: 1 })
+      .lean();
+    const files = await WorkflowFileStateModel.find({ sessionId: session._id })
+      .select("path sizeBytes origin")
+      .lean();
+
+    const startedAt = session.startedAt || session.createdAt;
+    const metrics = computeMetrics(events as any, files as any, { startedAt });
+    const timeline = buildTranscriptEvents(events as any, { startedAt });
+    const segments = (session.video?.segments ?? []) as any[];
+
+    // Episodes cost an LLM call, so they are opt-in per request rather than
+    // computed on every poll of this endpoint.
+    let episodes: unknown[] = [];
+    if (req.query.episodes === "true") {
+      try {
+        episodes = await groupIntoEpisodes(events as any, { startedAt });
+      } catch (err) {
+        console.error(
+          "[workflow-capture] episode grouping failed:",
+          err instanceof Error ? err.message : err
+        );
+      }
+    }
+
+    res.status(200).json({
+      sessionId: session._id.toString(),
+      startedAt,
+      metrics,
+      // Every timeline row carries where to watch it, so a cited moment is
+      // always one click from the footage.
+      timeline: timeline.map((t) => ({
+        ...t,
+        videoOffsetSeconds: videoOffsetForSessionSeconds(t.ts, startedAt, segments),
+      })),
+      episodes,
+      counts: { events: events.length, files: files.length },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/workflow-capture/sessions/:id/classify-screen
+ * Manual re-run. Classification happens automatically when recording stops;
+ * this exists for re-classifying after a prompt or model change.
+ */
+export async function runScreenClassification(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      res.status(400).json({ error: "gemini_not_configured" });
+      return;
+    }
+    const result = await classifyScreenGaps(req.params.id);
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
  * GET /api/workflow-capture/dev/data   (development only)
  * Backs the live tester page: recent sessions plus the full record of one of
  * them, with no auth. Gated to non-production in the route layer AND here —
@@ -661,6 +765,19 @@ export async function getDevTesterData(
           .select("path sizeBytes origin revision updatedAt")
           .lean();
         const vid = session.video || {};
+        // Continuous screen-state band: what was visible at every moment of the
+        // recording, including observations excluded from grading evidence.
+        const screenBand = events
+          .filter((e: any) => e.type === "screen_context" && e.payload?.videoStart != null)
+          .map((e: any) => ({
+            start: e.payload.videoStart,
+            end: e.payload.videoEnd,
+            label: e.payload.label,
+            detail: e.payload.detail,
+            redundant: !!e.payload.redundant,
+            concurrentWithAgent: !!e.payload.concurrentWithAgent,
+          }))
+          .sort((a: any, b: any) => a.start - b.start);
         current = {
           sessionId: session._id.toString(),
           status: session.status,
@@ -679,6 +796,7 @@ export async function getDevTesterData(
             videoOffsetSeconds: offsetIntoVideo(e.at, vid.segments),
           })),
           files,
+          screenBand,
           video: {
             status: vid.status || "not_started",
             startedAt: vid.startedAt || null,

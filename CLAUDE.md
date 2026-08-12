@@ -162,6 +162,7 @@ See `server/config.env.example` for the full list. Key variables:
 **Authentication:**
 - `FIREBASE_SERVICE_ACCOUNT_JSON` -- Firebase Admin credentials (JSON string, required in prod)
 - `FIREBASE_SERVICE_ACCOUNT_PATH` -- Path to service account file (dev only)
+- `OPS_ADMIN_EMAIL` -- Comma-separated emails allowed to view `GET /api/ops/workload` / `/OpsDashboard` (cross-account workload). Defaults to `HACKATHON_ADMIN_EMAIL`, then `saaz@bridge-jobs.com`
 
 **AI Providers:**
 - `AI_PROVIDER` -- Global default: `openai`, `anthropic`, or `gemini`
@@ -204,8 +205,20 @@ See `server/config.env.example` for the full list. Key variables:
 - `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_PRICE_ID` / `APP_URL` -- Stripe billing
 
 **Voice Interviews:**
-- `AGENT_SECRET` -- Authenticates ElevenLabs agent tool requests
+- `AGENT_SECRET` -- Authenticates ElevenLabs agent tool requests (sent as `X-Agent-Secret`; stored on ElevenLabs as the workspace secret `bridge_agent_secret` so the tool config never holds it in plaintext)
 - `ELEVENLABS_WEBHOOK_SECRET` -- Verifies ElevenLabs webhook signatures
+- `ELEVENLABS_API_KEY` -- Management API key used **only** by `src/scripts/registerElevenLabsContextTool.ts` to create/attach the agent's context tool. Not needed at runtime
+- `ELEVENLABS_AGENT_ID` -- Default agent for that script (falls back to the hardcoded Interview agent)
+
+**Testing the agent tool against localhost.** ElevenLabs calls the tool from its own
+servers, so it cannot reach `localhost` — but you do **not** have to deploy to test. Run
+`ngrok http 5050`, then from `server/`: `npx tsx src/scripts/registerElevenLabsContextTool.ts --local`
+(auto-discovers the tunnel from ngrok's API on :4040 and repoints the tool). Switch back with
+`--prod`. Free ngrok URLs change on every restart, so re-run `--local` after restarting the
+tunnel. The script adds an `ngrok-skip-browser-warning` header on ngrok URLs — without it the
+free tier's HTML interstitial reaches the agent instead of JSON. Note this repoints the
+**shared** agent: while it points at your tunnel, a real candidate's call would hit your
+machine, so switch back to `--prod` when you stop testing.
 
 **Email:**
 - `RESEND_API_KEY` -- Resend email service key
@@ -266,6 +279,7 @@ server/src/
 │   ├── assessment.ts      # /api/assessments/* -- CRUD + generate + chat
 │   ├── submission.ts      # /api/submissions/* -- link generation, token access, submit, interview, grading
 │   ├── competition.ts     # /api/competitions/* -- public competition metadata, self-serve join, leaderboard
+│   ├── ops.ts             # /api/ops/* -- workload dashboard (OPS_ADMIN_EMAIL)
 │   ├── billing.ts         # /api/billing/* -- checkout, status, cancel, reactivate, webhook
 │   ├── agentTools.ts      # /api/agent-tools/* -- ElevenLabs agent context retrieval
 │   ├── webhook.ts         # /webhooks/* -- ElevenLabs post-call webhook
@@ -275,6 +289,7 @@ server/src/
 │   ├── assessment.ts      # Assessment CRUD, AI generation, chat
 │   ├── submission.ts      # All submission handlers (share links, submissions, interviews, grading)
 │   ├── competition.ts     # Public competitions: get by slug, join (creates pending submission), leaderboard
+│   ├── ops.ts             # Ops workload aggregation (employer attribution for heavy jobs)
 │   ├── billing.ts         # Stripe checkout, status, cancel, reactivate, webhook handler
 │   ├── webhook.ts         # ElevenLabs post-call transcript processing + summary generation
 │   ├── agentTools.ts      # Code context retrieval for ElevenLabs agent (Pinecone search)
@@ -339,6 +354,7 @@ server/src/
 ├── utils/
 │   ├── auth.ts            # decodeAuthToken(), getUserIdFromFirebaseUid()
 │   ├── subscription.ts    # isSubscribed(), getSubscriptionStatus() -- checks both top-level and legacy nested fields
+│   ├── opsAdmin.ts        # OPS_ADMIN_EMAIL allowlist helpers
 │   ├── firebase.ts        # Firebase Admin Auth export
 │   ├── github.ts          # parseGithubRepoUrl(), resolvePinnedCommit(), fetchRepoMetadata(), resolveBranchToCommit()
 │   ├── embeddings.ts      # generateEmbedding(), generateEmbeddings() -- OpenAI embeddings
@@ -377,6 +393,7 @@ server/src/
     ├── dropShortsSubmissionUniqueIndex.ts # One-time: drop legacy unique {anonymousId, challengeDate} on PlaySubmission
     ├── shorts-sandbox-smoke.ts # Create Shorts E2B template sandbox; print preview URL + Claude check
     ├── transcriptEngineAB.ts # A/B compare transcript engines (gemini vs frames) on one session, no DB writes; list mode + --plan-only cost preview
+    ├── registerElevenLabsContextTool.ts # Register/update the `get_candidate_context` webhook tool on the ElevenLabs agent and attach it (`--dry-run`, `--local` = point at the running ngrok tunnel, `--prod`, `--url=`, `--agent=`); idempotent
     ├── seedDummyInterview.ts
     ├── behavioral-grading-smoke.ts
     ├── e2b-smoke.ts
@@ -404,6 +421,9 @@ server/src/
 - `GET /:slug` -- Competition + assessment summary for hackathon dashboard (metadata, rules, dates)
 - `POST /:slug/join` -- Self-serve registration: creates a **pending** submission (same as employer generate-link) and returns `token` + `shareLink`; does **not** apply employer free-tier submission limits; stricter rate limit in production (30/hour/IP); duplicate email per assessment returns 409
 - `GET /:slug/leaderboard` -- Public leaderboard for submitted candidates (rank by combined Screen + Behavioral score via `leaderboardScore.ts`); top 50 default, `?limit=` max 100; respects `leaderboardPublic` on the competition document
+
+**Ops routes** (`/api/ops`, Firebase auth + `OPS_ADMIN_EMAIL` allowlist — cross-account):
+- `GET /workload` -- Aggregated heavy/risk workload: active merges, transcript generation, pending behavioral/evaluation, large sessions; attributes employer (email/company), assessment, submission, proctoring stats; includes in-process merge/grading queue depths for this Render instance. Query: `hours` (default 24), `limit` (default 80). Not crash telemetry — correlate with Render logs.
 
 **Shorts routes** (`/api/shorts`, consumer product — requires `SHORTS_ENABLED=true` except health; every route is also served under the legacy `/api/play` alias):
 - `GET /health` -- Always on; smoke check `{ ok: true, product: "shorts" }`
@@ -456,6 +476,10 @@ Hooks-first capture of the candidate's AI-agent conversation + code changes, as 
 - `GET /sessions/:id` -- full timeline for employer review (Firebase auth; ownership-checked via the linked submission; never returns `captureToken`). Each event is stamped with `videoOffsetSeconds` when the submission also has a screen recording, so a reviewer can click a prompt and seek the player to it; response carries a `video` block (merged-recording status/duration). Events outside the recording window get `null`, not a bogus offset
 - `POST /video/start`, `POST /video/chunk` (multipart, field `chunk`), `POST /video/stop` -- optional screen recording attached to the capture session (Bearer `captureToken`). `video/start` stamps `video.startedAt`, which is the **sync origin**: an event's position in the recording is `event.at − video.startedAt`. Chunks go to disk via multer diskStorage, never the heap. This video is **never analysed** — no frames, no OCR, no vision model; it exists so a reviewer can watch the moment a timeline event points at
 - `GET /sessions/:id/video` -- dev-only; merges + **remuxes** chunks on first request (cached to `video.mergedKey`), streams with HTTP Range support. The remux is required, not cosmetic: raw concatenated MediaRecorder output plays but is not seekable, which breaks click-to-jump
+- **Episodes** ([`episodes.ts`](server/src/services/workflowCapture/episodes.ts)) -- `?episodes=true` on the analysis route groups raw events into ~15-40 narrative stretches ("fixing stale summary counts", kind `debugging`), each carrying `evidenceIndices` back to the raw events. Thousands of events are too granular to grade and too big for one context; episodes are the middle layer, and the back-pointers are what keep every downstream claim traceable. Text-only, so cost is independent of session length. Opt-in per request because it costs an LLM call. On very long sessions the prompt **samples with a stride** rather than truncating — keeping the first 400 events would describe only the opening minutes and silently discard the rest of the story
+- **Evidence validator** ([`evidenceValidator.ts`](server/src/services/workflowCapture/evidenceValidator.ts)) -- checks every citation in a criterion verdict against the captured timeline (±30s tolerance, since a judge summarising a stretch may cite its middle) and **drops what cannot be matched**. A judge will happily cite a timestamp that never existed, and once a verdict reaches an employer a fabricated citation is indistinguishable from a real one. When more than half the support is dropped the verdict is marked non-evaluable rather than keeping a score nothing stands behind
+- `GET /sessions/:id/analysis` -- the **gradable** view: deterministic metrics + the timeline as `TranscriptEvent[]`, the exact shape `services/evaluation/` already consumes, so `grounder` → `evaluator` run against a workflow session unchanged (same adapter role as `proctoringTranscriptAdapter`). Every row carries `videoOffsetSeconds` so a cited moment is one click from the footage. Metrics live in [`services/workflowCapture/metrics.ts`](server/src/services/workflowCapture/metrics.ts): read:edit ratio, verified-write ratio, low-effort-prompt ratio, median think time, agent-vs-human authorship, and **token usage** (Claude Code hooks carry no usage, so the kit reads the tail of the `transcript_path` the hook hands it; Codex `token_count` records feed the same field). Counted, never asked of a model — free, reproducible, and it frees the judge for interpretive calls
+- Screen classification ([`screenContext.ts`](server/src/services/workflowCapture/screenContext.ts)) runs **automatically when recording stops** — unawaited after the response, since merging + uploading the video takes tens of seconds and stopping a recording must not block on it. `POST /sessions/:id/classify-screen` re-runs it manually after a prompt/model change; a re-run **replaces** prior `screen_context` events rather than appending, or stop/resume cycles would duplicate every span. Gemini over video time ranges at `MEDIA_RESOLUTION_LOW` (**deliberately the opposite of the transcript engine's HIGH** — identifying a surface needs a quarter of the tokens that reading its text does) and **1 fps**. Note "native video input" does not mean continuous watching: Gemini samples frames and charges per frame, so `fps` sets temporal resolution. This was originally 0.2 in gaps / 0.05 elsewhere to save tokens, which meant a 15-second switch to a running app produced at most one frame and was routinely missed; a 90-min session at 1 fps is ~380k tokens (~10¢). The **whole recording** is swept, not just hook-silent gaps — gaps-only was blind to anything happening *alongside* agent activity, such as a ChatGPT window open while Claude Code works. The gap/active distinction survives only in what counts as evidence: during hook-active stretches, editor/terminal observations are stored flagged `redundant: true` so the coverage band stays unbroken while `buildTranscriptEvents` excludes them from grading. A window straddling a recording break is skipped — its endpoints map to valid offsets with no continuous footage between them
 - `GET /tester` and `GET /dev/data` -- **development only** (not mounted when `NODE_ENV=production`, and `dev/data` re-checks): a self-contained live page that polls every 2s and renders the timeline, stats, and code state as events arrive. Open `http://localhost:5050/api/workflow-capture/tester` while working in Claude Code. Page markup lives in [`services/workflowCapture/testerPage.ts`](server/src/services/workflowCapture/testerPage.ts)
 
 **Submission routes** (`/api/submissions`):
@@ -595,6 +619,7 @@ client/src/
 │   ├── CandidateSubmission.jsx # Shows mock submission data with code review
 │   ├── CandidateSubmitted.jsx  # Post-submission -- polls for interview questions, ElevenLabs voice interview
 │   ├── HackathonDashboard.jsx  # Challenge join + dashboard/leaderboard only; marketing landing may live on Framer (slug: `?slug=` > env > `config/competition.js`)
+│   ├── OpsDashboard.jsx        # Internal ops workload dashboard (OPS_ADMIN_EMAIL); heavy merge/transcript/grading attribution
 │   ├── SubmissionsDashboard.jsx # Employer views submissions -- stats, filtering, dropoff analysis, interview modal, diff viewer
 │   ├── Subscription.jsx        # Billing plans -- Free tier vs Early Access
 │   ├── Pricing.jsx             # Public pricing page
@@ -607,6 +632,7 @@ client/src/
 │   ├── assessment.ts      # Assessment API: create, list, get, update, delete, generate, chat
 │   ├── submission.ts      # Submission API: generateLink, bulk, invites, start, submit, interview, optOut, uploadTrace
 │   ├── competition.ts     # Public competition API: get by slug, join, leaderboard
+│   ├── ops.ts             # Ops workload API (admin allowlist)
 │   ├── billing.ts         # Billing API: checkout, status, cancel, reactivate
 │   ├── user.ts            # User API: verifyUser (whoami), createUser, deleteAccount
 │   └── proctoring.ts      # Proctoring API: createSession, grantConsent, uploadFrame, events, complete, video, companion

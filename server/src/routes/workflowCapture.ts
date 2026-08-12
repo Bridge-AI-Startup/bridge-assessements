@@ -42,6 +42,13 @@ router.post("/video/chunk", videoUpload, WorkflowCaptureController.uploadVideoCh
 router.post("/video/stop", WorkflowCaptureController.stopVideo);
 router.get("/sessions/:id/video", WorkflowCaptureController.streamSessionVideo);
 
+// --- Analysis: deterministic metrics + the gradable timeline ---
+router.get("/sessions/:id/analysis", WorkflowCaptureController.getSessionAnalysis);
+router.post(
+  "/sessions/:id/classify-screen",
+  WorkflowCaptureController.runScreenClassification
+);
+
 // --- Dev-only live tester (never mounted in production) ---
 if (process.env.NODE_ENV !== "production") {
   router.get("/tester", (_req, res) => {

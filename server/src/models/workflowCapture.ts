@@ -20,7 +20,9 @@ export type WorkflowEventType =
   | "tool_result"
   | "assistant_message"
   | "session_end"
-  | "notification";
+  | "notification"
+  /** What was visible on screen — derived from the recording, not the hooks. */
+  | "screen_context";
 
 export interface IWorkflowCaptureSession extends Document {
   _id: Types.ObjectId;
@@ -203,6 +205,7 @@ const workflowEventSchema = new Schema<IWorkflowEvent>({
       "assistant_message",
       "session_end",
       "notification",
+      "screen_context",
     ],
     required: true,
   },

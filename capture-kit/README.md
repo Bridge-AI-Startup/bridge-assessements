@@ -217,8 +217,19 @@ reports whether the expected keys are still present, and extraction degrades to
 returning nothing (falling back to the git snapshot) rather than corrupting the
 timeline.
 
-The adapter reads a **copy** of the database, never the live file, so it cannot
-interfere with Cursor or lock its store.
+**Project scoping is the important part.** Cursor keeps every conversation from
+every project in one global database. The adapter finds this folder's workspace
+via `workspaceStorage/<hash>/workspace.json`, looks up that workspace's
+conversations in `composerHeaders`, and reads **only those** — on a real install
+that was 222 of 517 conversations, with the other 295 never touched. If no
+workspace matches this folder it imports nothing, rather than falling back to
+"recent messages" and hoovering up unrelated work.
+
+The store is opened **read-only** (`file:…?mode=ro`) so a running Cursor is
+unaffected and the candidate's database can never be written or locked. Reading
+in place also matters for speed: the store is multi-gigabyte, and copying it
+first took 43s versus 0.02s read-only. A copy is still used as a fallback if the
+read-only open is refused.
 
 ## Known gaps
 
