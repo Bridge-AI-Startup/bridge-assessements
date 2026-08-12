@@ -74,6 +74,21 @@ export function renderTesterPage(): string {
   .badge { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--line); }
   .badge.agent { color:var(--agent); border-color:#b7e0c2; background:#f0fbf3; }
   .badge.snapshot { color:var(--muted); background:#f6f5ef; }
+  /* episodes */
+  .ep { padding:10px 16px; border-bottom:1px solid #f2f0e8; cursor:pointer; }
+  .ep:last-child { border-bottom:0; }
+  .ep:hover { background:#f6f5ef; }
+  .ep-head { display:flex; gap:10px; align-items:baseline; }
+  .ep-idx { color:var(--muted); font-variant-numeric:tabular-nums; font-size:12px; min-width:22px; }
+  .ep-label { font-weight:600; }
+  .ep-kind { font-size:10px; text-transform:uppercase; letter-spacing:.05em;
+    padding:2px 7px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
+  .ep-time { margin-left:auto; color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+  .ep-sum { color:var(--muted); font-size:13px; margin-top:3px; padding-left:32px; }
+  .ep-evi { font-size:11px; color:#a8a396; padding-left:32px; margin-top:2px; }
+  .k-debugging{color:#cf222e;border-color:#f0c0c4} .k-implementation{color:#1a7f37;border-color:#b7e0c2}
+  .k-verification{color:#1f6feb;border-color:#bcd6fb} .k-research{color:#8250df;border-color:#d8c7f5}
+  .k-planning{color:#9a6700;border-color:#f0d68a} .k-idle{color:#a8a396}
   .hint { color:var(--muted); font-size:12px; margin:0 0 16px; }
   code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 
@@ -149,6 +164,10 @@ export function renderTesterPage(): string {
   <section>
     <h2>Deterministic metrics <span style="text-transform:none;letter-spacing:0">— counted, not judged</span></h2>
     <div id="metrics"><div class="empty">Loading…</div></div>
+  </section>
+  <section>
+    <h2>Episodes <span style="text-transform:none;letter-spacing:0">— what an LLM turns the raw stream into</span></h2>
+    <div id="episodes"><div class="empty">Computed when capture ends.</div></div>
   </section>
   <section>
     <h2>Timeline</h2>
@@ -265,12 +284,31 @@ export function renderTesterPage(): string {
     recorder.onerror = function (e) {
       stopRecording("recorder_error: " + ((e && e.error && e.error.name) || "unknown"));
     };
-    // Ending the share from Chrome's own "Stop sharing" bar, or the shared
-    // surface going away, ends the track. This is the most common cause of a
-    // recording stopping without anyone touching our UI — so say which surface
-    // it was, otherwise the diagnosis is just "it stopped".
+    // A display-capture track can end for reasons that look identical from the
+    // outside: the user hitting Chrome's floating "Stop sharing" bar, the OS
+    // revoking screen-recording permission, the display sleeping or locking, or
+    // the renderer being killed. Record enough state to tell them apart —
+    // otherwise every report is "it randomly stopped", which is undiagnosable.
+    var lastInteractionAt = Date.now();
+    ["click", "keydown", "pointerdown"].forEach(function (evt) {
+      window.addEventListener(evt, function () { lastInteractionAt = Date.now(); }, true);
+    });
+    var muteEvents = 0;
+    track.addEventListener("mute", function () { muteEvents++; });
+    track.addEventListener("unmute", function () { muteEvents--; });
+
     track.addEventListener("ended", function () {
-      stopRecording("share_ended (" + surface + ")");
+      var diag = [
+        "surface=" + surface,
+        "readyState=" + track.readyState,
+        "muted=" + track.muted,
+        "muteEvents=" + muteEvents,
+        "page=" + document.visibilityState,
+        // A click on our page moments before the end points at the sharing bar
+        // (which floats over this page); a long quiet gap points at the system.
+        "sinceClick=" + Math.round((Date.now() - lastInteractionAt) / 1000) + "s",
+      ].join(" ");
+      stopRecording("share_ended (" + diag + ")");
     });
 
     recorder.start(3000);
@@ -491,6 +529,51 @@ export function renderTesterPage(): string {
   });
 
   // ---- timeline --------------------------------------------------------
+  /**
+   * Episodes: the layer between raw events and a grade. Clicking one seeks the
+   * video to where it began, so you can watch the moment the summary describes.
+   */
+  function renderEpisodes(episodes, startedAt) {
+    var el = $("episodes");
+    if (!episodes || !episodes.length) {
+      el.innerHTML =
+        '<div class="empty">No episodes yet — they are computed once capture ends.</div>';
+      return;
+    }
+    el.innerHTML = episodes.map(function (e) {
+      return '<div class="ep" data-start="' + e.startSeconds + '">' +
+        '<div class="ep-head">' +
+          '<span class="ep-idx">' + e.index + "</span>" +
+          '<span class="ep-label">' + esc(e.label) + "</span>" +
+          '<span class="ep-kind k-' + esc(e.kind) + '">' + esc(e.kind) + "</span>" +
+          '<span class="ep-time">' + mmss(e.startSeconds) + " – " + mmss(e.endSeconds) + "</span>" +
+        "</div>" +
+        '<div class="ep-sum">' + esc(e.summary) + "</div>" +
+        '<div class="ep-evi">built from ' + (e.evidenceIndices || []).length +
+          " captured event(s)</div>" +
+      "</div>";
+    }).join("");
+
+    Array.prototype.forEach.call(el.querySelectorAll(".ep"), function (row) {
+      row.addEventListener("click", function () {
+        // Episode times are session-relative; map onto the recording.
+        var sec = Number(row.dataset.start);
+        var segs = (videoMeta && videoMeta.segments) || [];
+        if (!segs.length || !startedAt) return;
+        var wall = new Date(startedAt).getTime() + sec * 1000;
+        for (var i = 0; i < segs.length; i++) {
+          var s = new Date(segs[i].wallStartedAt).getTime();
+          var e2 = segs[i].wallEndedAt ? new Date(segs[i].wallEndedAt).getTime() : Infinity;
+          if (wall >= s && wall <= e2) {
+            seekTo(segs[i].videoOffsetStart + (wall - s) / 1000,
+              "episode: " + row.querySelector(".ep-label").textContent);
+            return;
+          }
+        }
+      });
+    });
+  }
+
   function renderTimeline(events, hasVideo) {
     currentEvents = events;
     if (!events.length) {
@@ -566,6 +649,7 @@ export function renderTesterPage(): string {
     }
 
     renderTimeline(data.current.events || [], !!videoMeta.chunkCount);
+    renderEpisodes(data.current.episodes || [], data.current.startedAt);
     renderScrubber();
 
     var files = data.current.files || [];

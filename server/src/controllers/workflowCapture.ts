@@ -35,7 +35,10 @@ import {
   videoOffsetForSessionSeconds,
 } from "../services/workflowCapture/timeline.js";
 import { classifyScreenGaps } from "../services/workflowCapture/screenContext.js";
-import { groupIntoEpisodes } from "../services/workflowCapture/episodes.js";
+import {
+  groupIntoEpisodes,
+  computeAndStoreEpisodes,
+} from "../services/workflowCapture/episodes.js";
 import { getUserIdFromFirebaseUid } from "../utils/auth.js";
 
 /** Per-event text cap. Long tool results get truncated, never dropped. */
@@ -579,14 +582,27 @@ export async function stopVideo(
     // (or a reviewer) to click. Deliberately after the response and unawaited:
     // it merges + uploads the video and takes tens of seconds, and the client
     // stopping a recording must not wait on any of that.
-    if (process.env.GEMINI_API_KEY) {
-      void classifyScreenGaps(session._id.toString()).catch((err) => {
+    void (async () => {
+      const id = session._id.toString();
+      try {
+        if (process.env.GEMINI_API_KEY) await classifyScreenGaps(id);
+      } catch (err) {
         console.error(
-          `[workflow-capture] auto screen classification failed for ${session._id}:`,
+          `[workflow-capture] auto screen classification failed for ${id}:`,
           err instanceof Error ? err.message : err
         );
-      });
-    }
+      }
+      try {
+        // After classification, so episodes can describe what happened during
+        // stretches the hooks were silent for.
+        await computeAndStoreEpisodes(id);
+      } catch (err) {
+        console.error(
+          `[workflow-capture] episode grouping failed for ${id}:`,
+          err instanceof Error ? err.message : err
+        );
+      }
+    })();
   } catch (error) {
     next(error);
   }
@@ -781,6 +797,7 @@ export async function getDevTesterData(
         current = {
           sessionId: session._id.toString(),
           status: session.status,
+          startedAt: session.startedAt || session.createdAt,
           // Dev-only: the tester page needs this to upload video chunks as the
           // session. Never returned by any non-dev route.
           captureToken: session.captureToken,
@@ -797,6 +814,10 @@ export async function getDevTesterData(
           })),
           files,
           screenBand,
+          // Persisted, so the tester shows the same segmentation the grading
+          // pipeline uses rather than a fresh (and differently-worded) one.
+          episodes: session.episodes || [],
+          episodesComputedAt: session.episodesComputedAt || null,
           video: {
             status: vid.status || "not_started",
             startedAt: vid.startedAt || null,

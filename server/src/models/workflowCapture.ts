@@ -82,6 +82,14 @@ export interface IWorkflowCaptureSession extends Document {
     mergedSizeBytes?: number;
     error?: string | null;
   };
+  /**
+   * Narrative segmentation of the session, computed once when capture ends.
+   * Persisted rather than derived per request because it costs an LLM call —
+   * recomputing on every dashboard poll would be both slow and expensive.
+   */
+  /** Shape produced by `groupIntoEpisodes`; stored Mixed (see schema note). */
+  episodes?: Array<Record<string, unknown>>;
+  episodesComputedAt?: Date | null;
   /** Environment facts the kit reports once, for context in review. */
   environment?: {
     cwd?: string | null;
@@ -156,6 +164,14 @@ const workflowCaptureSessionSchema = new Schema<IWorkflowCaptureSession>(
       mergedSizeBytes: { type: Number, default: 0 },
       error: { type: String, default: null },
     },
+    // Mixed: the shape is produced and validated by groupIntoEpisodes (which
+    // drops anything without usable evidence indices), and a nested subdocument
+    // array here buys nothing but a fight with Mongoose's generics.
+    episodes: {
+      type: Schema.Types.Mixed,
+      default: () => [],
+    },
+    episodesComputedAt: { type: Date, default: null },
     environment: {
       cwd: { type: String, default: null },
       gitBranch: { type: String, default: null },

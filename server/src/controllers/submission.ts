@@ -37,6 +37,10 @@ import {
   shouldGenerateVideoTranscript,
 } from "../utils/evidenceMode.js";
 import {
+  evaluateWorkflowSession,
+  findCaptureSessionForSubmission,
+} from "../services/workflowCapture/evaluate.js";
+import {
   gradeSubmissionBehavioral,
   inferFailureCategory,
   isBehavioralGradingEnabled,
@@ -197,12 +201,15 @@ async function ensureProctoringTranscriptAndEvaluate(
   // In "workflow"/"both" mode the analysable record is the hook stream, not the
   // video. Skip transcript generation entirely — in "both" the recording still
   // exists for human playback, it just is not OCR'd. This is the whole cost
-  // saving of the workflow approach (~$3-22 of vision spend per session).
+  // saving of the workflow approach (~$3-22 of vision spend per session) — and
+  // the captured timeline is graded instead, so these submissions still get a
+  // score rather than silently getting none.
   const evidenceMode = resolveEvidenceMode(assessment);
   if (!shouldGenerateVideoTranscript(evidenceMode)) {
     console.log(
-      `[ensureProctoringTranscriptAndEvaluate] evidenceMode=${evidenceMode} for submission ${submissionId}; skipping video transcript (analysis comes from workflow capture).`
+      `[ensureProctoringTranscriptAndEvaluate] evidenceMode=${evidenceMode} for submission ${submissionId}; grading the workflow capture instead of the video.`
     );
+    await evaluateWorkflowCaptureForSubmission(submissionId, assessment, criteria);
     return;
   }
 
@@ -331,6 +338,57 @@ async function ensureProctoringTranscriptAndEvaluate(
         err instanceof Error ? err.message : "Evaluation failed.";
       await subAfter.save();
     }
+  }
+}
+
+/**
+ * Grade a submission from its captured workflow (hooks + snapshots + screen
+ * context) rather than from a screen-recording transcript. Produces the same
+ * `evaluationReport` shape, so the dashboard, scoring and interview agent need
+ * no changes.
+ */
+async function evaluateWorkflowCaptureForSubmission(
+  submissionId: string,
+  assessment: any,
+  criteria: string[]
+): Promise<void> {
+  const capture: any = await findCaptureSessionForSubmission(submissionId);
+  if (!capture) {
+    await setEvaluationFailed(
+      submissionId,
+      "No workflow capture session for this submission. The candidate may not have run the capture setup."
+    );
+    return;
+  }
+
+  try {
+    const result = await evaluateWorkflowSession(
+      capture._id.toString(),
+      criteria,
+      { groundings: assessment.evaluationCriteriaGroundings }
+    );
+    const sub = await SubmissionModel.findById(submissionId);
+    if (!sub) return;
+    (sub as any).evaluationReport = result.report;
+    (sub as any).evaluationStatus = "completed";
+    (sub as any).evaluationError = null;
+    await sub.save();
+    console.log(
+      `[workflow-eval] submission ${submissionId}: ${result.timelineEvents} timeline events, ` +
+        `${result.citationsKept} citations kept, ${result.citationsDropped} dropped` +
+        (result.invalidatedCriteria.length
+          ? `, invalidated: ${result.invalidatedCriteria.join(", ")}`
+          : "")
+    );
+  } catch (err) {
+    console.error(
+      `[workflow-eval] Evaluation failed for submission ${submissionId}:`,
+      err
+    );
+    await setEvaluationFailed(
+      submissionId,
+      err instanceof Error ? err.message : "Workflow evaluation failed."
+    );
   }
 }
 

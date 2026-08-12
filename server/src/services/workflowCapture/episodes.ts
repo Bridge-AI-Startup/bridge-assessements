@@ -175,6 +175,36 @@ export async function groupIntoEpisodes(
   return episodes;
 }
 
+/**
+ * Compute episodes for a capture session and store them.
+ *
+ * Runs after screen classification so the segmentation sees the whole picture:
+ * without the screen band, a stretch where the candidate was reading docs looks
+ * like an unexplained silence, and the episode describing it would say nothing.
+ */
+export async function computeAndStoreEpisodes(
+  sessionId: string
+): Promise<Episode[]> {
+  const { WorkflowCaptureSessionModel, WorkflowEventModel } = await import(
+    "../../models/workflowCapture.js"
+  );
+  const session: any = await WorkflowCaptureSessionModel.findById(sessionId).lean();
+  if (!session) return [];
+
+  const events = await WorkflowEventModel.find({ sessionId })
+    .sort({ at: 1 })
+    .select("at type toolName text")
+    .lean();
+  const startedAt = session.startedAt || session.createdAt;
+
+  const episodes = await groupIntoEpisodes(events as any, { startedAt });
+  await WorkflowCaptureSessionModel.updateOne(
+    { _id: sessionId },
+    { $set: { episodes, episodesComputedAt: new Date() } }
+  );
+  return episodes;
+}
+
 function normaliseKind(value: unknown): Episode["kind"] {
   const k = String(value || "").toLowerCase();
   const allowed: Episode["kind"][] = [
