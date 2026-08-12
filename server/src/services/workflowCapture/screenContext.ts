@@ -439,14 +439,32 @@ export async function classifyScreenGaps(
         // everything, grading reads only what is not redundant.
         const redundant = w.mode === "active" && !ACTIVE_KEEP.has(String(s.label));
         if (redundant) result.eventsSuppressed++;
-        // Offsets come back relative to the clip; re-base onto wall clock.
-        const atMs = w.startMs + Math.max(0, s.start - w.videoStart) * 1000;
-        const withinGap = Math.min(Math.max(atMs, w.startMs), w.endMs);
-        // Screen context is a SPAN, not an instant — "Chrome was up for four
-        // minutes" is the fact, and a band can only be drawn if we keep the end.
+        // Gemini reports offsets relative to THIS clip, so convert to absolute
+        // video position by adding the window's start. Comparing clip-relative
+        // values against absolute ones collapsed every span in a resumed
+        // segment to a single point (a 10s window at video 133.6s produced
+        // spans of "133.6-133.6"), which is invisible on the band.
         const endSec = typeof s.end === "number" ? s.end : s.start;
-        const segVideoStart = Math.max(w.videoStart, Math.min(s.start, w.videoEnd));
-        const segVideoEnd = Math.max(segVideoStart, Math.min(endSec, w.videoEnd));
+        const clamp = (v: number) =>
+          Math.min(Math.max(w.videoStart + v, w.videoStart), w.videoEnd);
+        const segVideoStart = clamp(Math.max(0, s.start));
+        const segVideoEnd = Math.max(segVideoStart, clamp(Math.max(0, endSec)));
+
+        // The model sometimes reports offsets past the end of the clip it was
+        // given; those clamp to the boundary and become zero-width. They cannot
+        // be drawn on the band or seeked to, so they are noise rather than
+        // evidence — drop them instead of emitting invisible slivers.
+        if (segVideoEnd - segVideoStart < 0.5) {
+          result.eventsSuppressed++;
+          continue;
+        }
+
+        // Wall clock for the same instant, for ordering against hook events.
+        const atMs = Math.min(
+          Math.max(w.startMs + Math.max(0, s.start) * 1000, w.startMs),
+          w.endMs
+        );
+        const withinGap = atMs;
         docs.push({
           sessionId,
           type: "screen_context",
