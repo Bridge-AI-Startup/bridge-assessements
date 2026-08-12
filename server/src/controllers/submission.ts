@@ -751,12 +751,11 @@ export const submitSubmissionByToken: RequestHandler = async (
       });
       ensureProctoringTranscriptAndEvaluate(submissionIdStr)
         .then(async () => {
-          const sub = await SubmissionModel.findById(submissionIdStr);
-          if (!sub) return;
-          (sub as any).evaluationStatus = (sub as any).evaluationReport
-            ? "completed"
-            : "failed";
-          await sub.save();
+          // Deliberately does NOT re-derive evaluationStatus here. The
+          // evaluator already set it, and inferring "completed" from the mere
+          // presence of an evaluationReport flips a failed run back to success
+          // whenever an earlier report is still on the document — presenting
+          // stale results as current while evaluationError says otherwise.
         })
         .catch((err) => {
           console.error(
@@ -876,12 +875,11 @@ export const submitRecordingOnlyByToken: RequestHandler = async (
       });
       ensureProctoringTranscriptAndEvaluate(submissionIdStr)
         .then(async () => {
-          const sub = await SubmissionModel.findById(submissionIdStr);
-          if (!sub) return;
-          (sub as any).evaluationStatus = (sub as any).evaluationReport
-            ? "completed"
-            : "failed";
-          await sub.save();
+          // Deliberately does NOT re-derive evaluationStatus here. The
+          // evaluator already set it, and inferring "completed" from the mere
+          // presence of an evaluationReport flips a failed run back to success
+          // whenever an earlier report is still on the document — presenting
+          // stale results as current while evaluationError says otherwise.
         })
         .catch((err) => {
           console.error(
@@ -1012,12 +1010,11 @@ export const uploadSubmissionByToken: RequestHandler = async (req, res, next) =>
       });
       ensureProctoringTranscriptAndEvaluate(submissionIdStr)
         .then(async () => {
-          const sub = await SubmissionModel.findById(submissionIdStr);
-          if (!sub) return;
-          (sub as any).evaluationStatus = (sub as any).evaluationReport
-            ? "completed"
-            : "failed";
-          await sub.save();
+          // Deliberately does NOT re-derive evaluationStatus here. The
+          // evaluator already set it, and inferring "completed" from the mere
+          // presence of an evaluationReport flips a failed run back to success
+          // whenever an earlier report is still on the document — presenting
+          // stale results as current while evaluationError says otherwise.
         })
         .catch((err) => {
           console.error(

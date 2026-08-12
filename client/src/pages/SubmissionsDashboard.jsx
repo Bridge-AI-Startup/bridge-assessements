@@ -90,6 +90,11 @@ import {
   downloadProctoringVideo,
 } from "@/api/proctoring";
 import { onAuthStateChanged } from "firebase/auth";
+import {
+  getCaptureSessionBySubmission,
+  getWorkflowAnalysis,
+  workflowVideoUrl,
+} from "@/api/workflowCapture";
 import { auth } from "@/firebase/firebase";
 
 /** Format seconds since session start as m:ss (e.g. 65 -> "1:05"). */
@@ -717,6 +722,11 @@ export default function SubmissionsDashboard() {
   const [isDropoffAnalysisExpanded, setIsDropoffAnalysisExpanded] =
     useState(false);
   const [evaluatingSubmissionId, setEvaluatingSubmissionId] = useState(null);
+  // Workflow capture (hooks-first evidence). Separate from the proctoring
+  // state because a submission can have one, both, or neither.
+  const [workflowSession, setWorkflowSession] = useState(null);
+  const [workflowAnalysis, setWorkflowAnalysis] = useState(null);
+  const [workflowLoading, setWorkflowLoading] = useState(false);
   const [recordingSession, setRecordingSession] = useState(null);
   const [recordingTranscript, setRecordingTranscript] = useState(null);
   const [recordingTranscriptLoading, setRecordingTranscriptLoading] = useState(false);
@@ -846,6 +856,47 @@ export default function SubmissionsDashboard() {
           : "recording",
       );
     }
+  }, [showEvaluationModal, selectedEvaluationSubmission?._id]);
+
+  // Load workflow capture (if any) whenever the evaluation modal opens.
+  // Independent of the proctoring load: a workflow submission has no proctoring
+  // session, and a "both" submission has both.
+  useEffect(() => {
+    let cancelled = false;
+    const submissionId = selectedEvaluationSubmission?._id;
+    if (!showEvaluationModal || !submissionId) {
+      setWorkflowSession(null);
+      setWorkflowAnalysis(null);
+      return;
+    }
+    (async () => {
+      setWorkflowLoading(true);
+      try {
+        const user = auth.currentUser;
+        if (!user) return;
+        const token = await user.getIdToken();
+        const session = await getCaptureSessionBySubmission(submissionId, token);
+        if (cancelled) return;
+        setWorkflowSession(session);
+        if (session?._id) {
+          const analysis = await getWorkflowAnalysis(session._id, token);
+          if (!cancelled) setWorkflowAnalysis(analysis);
+        } else {
+          setWorkflowAnalysis(null);
+        }
+      } catch {
+        // No capture is an ordinary state; the panel renders nothing.
+        if (!cancelled) {
+          setWorkflowSession(null);
+          setWorkflowAnalysis(null);
+        }
+      } finally {
+        if (!cancelled) setWorkflowLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [showEvaluationModal, selectedEvaluationSubmission?._id]);
 
   // Load proctoring session, screen transcript, and video when Recording tab is active
@@ -1034,9 +1085,15 @@ export default function SubmissionsDashboard() {
           }, 4000);
         }
       } catch (err) {
-        console.log("[proctoring-video] client CAUGHT ERROR:", err?.message ?? err);
         if (!cancelled) {
-          setRecordingTranscriptError(err?.message ?? "Failed to load screen transcript");
+          // A missing proctoring session is an ordinary state, not an error:
+          // workflow-mode submissions never create one. Surfacing the raw
+          // "404 Not Found: {...}" string to an employer was a bug.
+          const msg = String(err?.message ?? "");
+          const isMissingSession = /404|not found/i.test(msg);
+          setRecordingTranscriptError(
+            isMissingSession ? null : msg || "Failed to load screen transcript"
+          );
         }
       } finally {
         if (!cancelled) setRecordingTranscriptLoading(false);
@@ -4258,6 +4315,116 @@ export default function SubmissionsDashboard() {
                       )}
                     </div>
                   ) : null}
+
+                  {/* Workflow capture: the hooks-first evidence path. Present
+                      for workflow/both submissions; absent for screen-only,
+                      where this renders nothing at all. */}
+                  {workflowSession && (
+                    <div className="mb-6 rounded-xl border border-gray-200 bg-white overflow-hidden">
+                      <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-3">
+                        <h4 className="text-sm font-semibold text-gray-900">
+                          AI workflow capture
+                        </h4>
+                        <span className="text-xs text-gray-500">
+                          {workflowSession.stats?.promptCount ?? 0} prompts ·{" "}
+                          {workflowSession.stats?.toolUseCount ?? 0} tool calls ·{" "}
+                          {workflowSession.stats?.totalEvents ?? 0} events
+                        </span>
+                        {workflowSession.video?.chunks?.length > 0 && (
+                          <a
+                            href={workflowVideoUrl(workflowSession._id)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="ml-auto text-xs font-medium text-blue-600 hover:underline"
+                          >
+                            Open recording
+                          </a>
+                        )}
+                      </div>
+
+                      {workflowLoading && !workflowAnalysis ? (
+                        <div className="flex items-center gap-2 text-sm text-gray-500 px-4 py-4">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Loading captured workflow…
+                        </div>
+                      ) : (
+                        <>
+                          {/* Counted, not judged — the factual floor beside the scores */}
+                          {workflowAnalysis?.metrics && (
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-gray-100 border-b border-gray-100">
+                              {[
+                                [
+                                  "read : edit",
+                                  workflowAnalysis.metrics.readEditRatio == null
+                                    ? "—"
+                                    : `${workflowAnalysis.metrics.readEditRatio} : 1`,
+                                ],
+                                [
+                                  "writes tested",
+                                  workflowAnalysis.metrics.verifiedWriteRatio == null
+                                    ? "—"
+                                    : `${Math.round(workflowAnalysis.metrics.verifiedWriteRatio * 100)}%`,
+                                ],
+                                [
+                                  "low-effort prompts",
+                                  workflowAnalysis.metrics.lowEffortPromptRatio == null
+                                    ? "—"
+                                    : `${Math.round(workflowAnalysis.metrics.lowEffortPromptRatio * 100)}%`,
+                                ],
+                                [
+                                  "code from agent",
+                                  workflowAnalysis.metrics.authorship?.agentShare == null
+                                    ? "—"
+                                    : `${Math.round(workflowAnalysis.metrics.authorship.agentShare * 100)}%`,
+                                ],
+                              ].map(([label, value]) => (
+                                <div key={label} className="bg-white px-3 py-2">
+                                  <div className="text-sm font-semibold text-gray-900">
+                                    {value}
+                                  </div>
+                                  <div className="text-[11px] text-gray-500">{label}</div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Episodes: the narrative layer a reviewer actually reads */}
+                          {workflowAnalysis?.episodes?.length > 0 ? (
+                            <div className="divide-y divide-gray-100 max-h-[40vh] overflow-y-auto">
+                              {workflowAnalysis.episodes.map((ep) => (
+                                <div key={ep.index} className="px-4 py-3">
+                                  <div className="flex items-baseline gap-2">
+                                    <span className="text-xs text-gray-400 tabular-nums">
+                                      {ep.index}
+                                    </span>
+                                    <span className="text-sm font-medium text-gray-900">
+                                      {ep.label}
+                                    </span>
+                                    <span className="text-[10px] uppercase tracking-wide text-gray-500 border border-gray-200 rounded-full px-2 py-0.5">
+                                      {ep.kind}
+                                    </span>
+                                    <span className="ml-auto text-xs text-gray-400 tabular-nums">
+                                      {Math.floor(ep.startSeconds / 60)}:
+                                      {String(Math.floor(ep.startSeconds % 60)).padStart(2, "0")}
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-gray-600 mt-1 pl-6">
+                                    {ep.summary}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-gray-500 px-4 py-4">
+                              {workflowSession.status === "completed"
+                                ? "No episodes were generated for this session."
+                                : "Capture is still in progress — episodes are built when it ends."}
+                            </p>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
 
                   {/* Screen transcript: human-readable enriched (stateful chunked) when available, else raw OCR */}
                   {selectedEvaluationSubmission && (

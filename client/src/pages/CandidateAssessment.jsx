@@ -895,6 +895,44 @@ export default function CandidateAssessment() {
               </div>
             )}
 
+            {/* Workflow capture setup — shown BEFORE the timer starts, since
+                installing the hooks otherwise eats assessment time. */}
+            {usesWorkflowCapture && (
+              <div className="mb-6 rounded-xl border border-gray-200 bg-white p-4">
+                <h3 className="text-sm font-semibold text-gray-900 mb-1">
+                  Set this up before you start
+                </h3>
+                <p className="text-xs text-gray-600 mb-3">
+                  This assessment records your AI assistant conversation and the
+                  code you change, instead of your screen. Run this in your
+                  project folder — it shows exactly what is recorded and asks you
+                  to confirm before anything is captured.
+                </p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 rounded-md bg-gray-900 px-3 py-2 text-xs text-gray-100 font-mono overflow-x-auto whitespace-nowrap">
+                    node capture-kit/setup.js {token}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigator.clipboard
+                        ?.writeText(`node capture-kit/setup.js ${token}`)
+                        .then(() => setCaptureCmdCopied(true))
+                        .catch(() => {})
+                    }
+                    className="shrink-0 rounded-md border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    {captureCmdCopied ? "Copied ✓" : "Copy"}
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-gray-500">
+                  The capture kit ships with your starter files. You can read
+                  everything that was sent at any time with{" "}
+                  <code className="font-mono">node .bridge/view.js</code>.
+                </p>
+              </div>
+            )}
+
             {/* Warning */}
             <div className="flex items-start gap-3 p-4 bg-yellow-50 border border-yellow-200 rounded-xl mb-6">
               <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
@@ -931,6 +969,7 @@ export default function CandidateAssessment() {
             <ConsentScreen
               onConsent={handleConsentGranted}
               onDecline={handleConsentDeclined}
+              evidenceMode={evidenceMode}
             />
           </div>
         )}
@@ -1096,13 +1135,13 @@ export default function CandidateAssessment() {
                 </p>
                 <div className="flex items-center gap-2">
                   <code className="flex-1 rounded-md bg-gray-900 px-3 py-2 text-xs text-gray-100 font-mono overflow-x-auto whitespace-nowrap">
-                    npx @bridge/capture-kit {token}
+                    node capture-kit/setup.js {token}
                   </code>
                   <button
                     type="button"
                     onClick={() =>
                       navigator.clipboard
-                        ?.writeText(`npx @bridge/capture-kit ${token}`)
+                        ?.writeText(`node capture-kit/setup.js ${token}`)
                         .then(() => setCaptureCmdCopied(true))
                         .catch(() => {})
                     }

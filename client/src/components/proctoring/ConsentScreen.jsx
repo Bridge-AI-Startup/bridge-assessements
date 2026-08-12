@@ -4,7 +4,13 @@ import { Monitor, Shield, Eye, Mic, CheckCircle, XCircle, AlertTriangle } from "
 import { Button } from "@/components/ui/button";
 import { COMPANION_ENABLED } from "@/config/companion";
 
-export default function ConsentScreen({ onConsent, onDecline }) {
+/**
+ * `evidenceMode` matters here: in "both" the screen is recorded AND the
+ * candidate's AI conversation and code changes are captured by the capture kit.
+ * Describing only the screen would understate the more invasive of the two.
+ */
+export default function ConsentScreen({ onConsent, onDecline, evidenceMode = "screen" }) {
+  const alsoCapturesWorkflow = evidenceMode === "both";
   const [agreed, setAgreed] = useState(false);
 
   return (
@@ -27,6 +33,15 @@ export default function ConsentScreen({ onConsent, onDecline }) {
             ? "This assessment includes optional screen recording and a voice check-in to capture how you work."
             : "This assessment includes optional screen recording to verify your work."}
         </p>
+        {alsoCapturesWorkflow && (
+          <p className="text-sm text-gray-700 mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-left">
+            This assessment <strong>also records your AI assistant
+            conversation</strong> — the prompts you write, the replies, the
+            commands run on your behalf, and the code you change in the project
+            folder. That is set up separately by a command shown on the next
+            screen, which discloses it again before anything is captured.
+          </p>
+        )}
       </div>
 
       <div
@@ -50,8 +65,8 @@ export default function ConsentScreen({ onConsent, onDecline }) {
         <div className="flex items-start gap-3">
           <Eye className="w-5 h-5 text-blue-500 mt-0.5 flex-shrink-0" />
           <p className="text-sm text-gray-600">
-            Periodic screenshots are captured every few seconds during the
-            assessment — not continuous video.
+            Your shared screen is recorded continuously for the duration of the
+            assessment.
           </p>
         </div>
         {COMPANION_ENABLED && (
