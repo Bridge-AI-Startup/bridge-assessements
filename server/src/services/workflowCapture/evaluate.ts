@@ -24,6 +24,107 @@ import { computeMetrics } from "./metrics.js";
 import { validateAllEvidence } from "./evidenceValidator.js";
 import { logTs } from "../../ai/transcript/logger.js";
 
+/**
+ * Whether the captured record looks complete.
+ *
+ * We cannot stop a candidate deleting the kit from their own machine — anything
+ * running in their environment can be removed. What we can do is make removal
+ * *visible*: capture that never started, or that stopped long before the work
+ * was submitted, is reported rather than silently producing a thin record that
+ * looks like a quiet candidate.
+ *
+ * This is deliberately descriptive, not accusatory. Capture also stops for
+ * innocent reasons — a laptop sleeping, a network drop, someone finishing early
+ * — so it surfaces the facts and leaves the judgement to a human.
+ */
+export type CaptureIntegrityStatus =
+  | "complete"
+  | "stopped_early"
+  | "sparse"
+  | "missing";
+
+export interface CaptureIntegrity {
+  status: CaptureIntegrityStatus;
+  /** Seconds between the last captured event and submission. */
+  silentBeforeSubmitSeconds: number | null;
+  capturedSeconds: number | null;
+  eventCount: number;
+  promptCount: number;
+  note: string;
+}
+
+/** Capture going quiet for this long before submit is worth flagging. */
+const STOPPED_EARLY_THRESHOLD_SECONDS = 10 * 60;
+/** Below this, there is not enough of a record to grade confidently. */
+const SPARSE_PROMPT_THRESHOLD = 3;
+
+export function assessCaptureIntegrity(
+  events: Array<{ at: Date | string; type: string }>,
+  options: { submittedAt?: Date | string | null; startedAt?: Date | string | null }
+): CaptureIntegrity {
+  const times = events
+    .map((e) => new Date(e.at).getTime())
+    .filter((n) => Number.isFinite(n))
+    .sort((a, b) => a - b);
+  const promptCount = events.filter((e) => e.type === "user_prompt").length;
+
+  if (times.length === 0) {
+    return {
+      status: "missing",
+      silentBeforeSubmitSeconds: null,
+      capturedSeconds: null,
+      eventCount: 0,
+      promptCount: 0,
+      note: "No workflow activity was captured. The candidate may not have completed the capture setup, or may not have trusted the folder in their AI tool.",
+    };
+  }
+
+  const first = times[0];
+  const last = times[times.length - 1];
+  const capturedSeconds = Math.round((last - first) / 1000);
+  const submittedMs = options.submittedAt
+    ? new Date(options.submittedAt).getTime()
+    : null;
+  const silentBeforeSubmitSeconds =
+    submittedMs && Number.isFinite(submittedMs)
+      ? Math.max(0, Math.round((submittedMs - last) / 1000))
+      : null;
+
+  if (
+    silentBeforeSubmitSeconds != null &&
+    silentBeforeSubmitSeconds > STOPPED_EARLY_THRESHOLD_SECONDS
+  ) {
+    return {
+      status: "stopped_early",
+      silentBeforeSubmitSeconds,
+      capturedSeconds,
+      eventCount: times.length,
+      promptCount,
+      note: `Capture stopped ${Math.round(silentBeforeSubmitSeconds / 60)} minutes before the work was submitted, so the last stretch of work was not recorded.`,
+    };
+  }
+
+  if (promptCount < SPARSE_PROMPT_THRESHOLD) {
+    return {
+      status: "sparse",
+      silentBeforeSubmitSeconds,
+      capturedSeconds,
+      eventCount: times.length,
+      promptCount,
+      note: `Only ${promptCount} AI prompt(s) were captured. Either little AI assistance was used, or capture was active for only part of the session.`,
+    };
+  }
+
+  return {
+    status: "complete",
+    silentBeforeSubmitSeconds,
+    capturedSeconds,
+    eventCount: times.length,
+    promptCount,
+    note: "Capture ran through to submission.",
+  };
+}
+
 export interface WorkflowEvaluationResult {
   report: unknown;
   timelineEvents: number;
@@ -47,7 +148,7 @@ export async function findCaptureSessionForSubmission(submissionId: string) {
 export async function evaluateWorkflowSession(
   captureSessionId: string,
   criteria: string[],
-  options?: { groundings?: unknown }
+  options?: { groundings?: unknown; submittedAt?: Date | string | null }
 ): Promise<WorkflowEvaluationResult> {
   const session: any = await WorkflowCaptureSessionModel.findById(captureSessionId).lean();
   if (!session) throw new Error("Capture session not found.");
@@ -95,6 +196,12 @@ export async function evaluateWorkflowSession(
         citationsKept: validated.totalKept,
         citationsDropped: validated.totalDropped,
         invalidatedCriteria: validated.invalidatedCriteria,
+        // Whether the record itself is complete — a reviewer needs to know the
+        // difference between "did little" and "we captured little".
+        capture: assessCaptureIntegrity(events as any, {
+          submittedAt: options?.submittedAt ?? null,
+          startedAt,
+        }),
       },
     },
     timelineEvents: timeline.length,

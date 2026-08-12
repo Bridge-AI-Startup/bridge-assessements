@@ -36,6 +36,7 @@ import {
   resolveEvidenceMode,
   shouldGenerateVideoTranscript,
   shouldCaptureWorkflow,
+  shouldEvaluateWorkflow,
 } from "../utils/evidenceMode.js";
 import { withCaptureKit } from "../services/workflowCapture/starterKit.js";
 import {
@@ -206,12 +207,23 @@ async function ensureProctoringTranscriptAndEvaluate(
   // saving of the workflow approach (~$3-22 of vision spend per session) — and
   // the captured timeline is graded instead, so these submissions still get a
   // score rather than silently getting none.
+  // "none" has no observational evidence; clear a pending status rather than
+  // failing as if the candidate skipped capture.
   const evidenceMode = resolveEvidenceMode(assessment);
-  if (!shouldGenerateVideoTranscript(evidenceMode)) {
+  if (shouldEvaluateWorkflow(evidenceMode)) {
     console.log(
       `[ensureProctoringTranscriptAndEvaluate] evidenceMode=${evidenceMode} for submission ${submissionId}; grading the workflow capture instead of the video.`
     );
     await evaluateWorkflowCaptureForSubmission(submissionId, assessment, criteria);
+    return;
+  }
+  if (!shouldGenerateVideoTranscript(evidenceMode)) {
+    console.log(
+      `[ensureProctoringTranscriptAndEvaluate] evidenceMode=${evidenceMode} for submission ${submissionId}; skipping observational evaluation.`
+    );
+    await SubmissionModel.findByIdAndUpdate(submissionId, {
+      $unset: { evaluationStatus: 1, evaluationError: 1 },
+    });
     return;
   }
 
@@ -364,10 +376,16 @@ async function evaluateWorkflowCaptureForSubmission(
   }
 
   try {
+    const submissionDoc: any = await SubmissionModel.findById(submissionId)
+      .select("submittedAt")
+      .lean();
     const result = await evaluateWorkflowSession(
       capture._id.toString(),
       criteria,
-      { groundings: assessment.evaluationCriteriaGroundings }
+      {
+        groundings: assessment.evaluationCriteriaGroundings,
+        submittedAt: submissionDoc?.submittedAt ?? null,
+      }
     );
     const sub = await SubmissionModel.findById(submissionId);
     if (!sub) return;

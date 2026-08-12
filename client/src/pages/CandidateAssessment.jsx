@@ -114,7 +114,7 @@ export default function CandidateAssessment() {
 
   // Proctoring state
   const [showConsent, setShowConsent] = useState(false);
-  // Server-resolved evidence mode: "screen" (default) | "workflow" | "both".
+  // Server-resolved evidence mode: "none" | "workflow" | "both" | legacy "screen".
   // Drives whether we ask for the screen, show the capture-kit command, or both.
   const evidenceMode = submission?.evidenceMode || "screen";
   const usesWorkflowCapture =
@@ -898,38 +898,78 @@ export default function CandidateAssessment() {
             {/* Workflow capture setup — shown BEFORE the timer starts, since
                 installing the hooks otherwise eats assessment time. */}
             {usesWorkflowCapture && (
-              <div className="mb-6 rounded-xl border border-gray-200 bg-white p-4">
+              <div className="mb-6 rounded-xl border border-gray-300 bg-gray-50 p-4">
                 <h3 className="text-sm font-semibold text-gray-900 mb-1">
-                  Set this up before you start
+                  Set up before you start
                 </h3>
                 <p className="text-xs text-gray-600 mb-3">
-                  This assessment records your AI assistant conversation and the
-                  code you change, instead of your screen. Run this in your
-                  project folder — it shows exactly what is recorded and asks you
-                  to confirm before anything is captured.
+                  This assessment records how you work with your AI coding
+                  assistant — your prompts, its replies, and the code that
+                  changes — instead of recording your screen. Three steps, about
+                  a minute.
                 </p>
-                <div className="flex items-center gap-2">
-                  <code className="flex-1 rounded-md bg-gray-900 px-3 py-2 text-xs text-gray-100 font-mono overflow-x-auto whitespace-nowrap">
-                    node capture-kit/setup.js {token}
-                  </code>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      navigator.clipboard
-                        ?.writeText(`node capture-kit/setup.js ${token}`)
-                        .then(() => setCaptureCmdCopied(true))
-                        .catch(() => {})
-                    }
-                    className="shrink-0 rounded-md border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                  >
-                    {captureCmdCopied ? "Copied ✓" : "Copy"}
-                  </button>
+
+                <ol className="space-y-3 text-xs text-gray-700">
+                  <li>
+                    <span className="font-semibold text-gray-900">
+                      1. Download the starter files
+                    </span>{" "}
+                    below and unzip them. They include a{" "}
+                    <code className="font-mono">capture-kit/</code> folder.
+                  </li>
+                  <li>
+                    <span className="font-semibold text-gray-900">
+                      2. Run this from the project folder
+                    </span>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <code className="flex-1 rounded-md bg-gray-900 px-3 py-2 text-xs text-gray-100 font-mono overflow-x-auto whitespace-nowrap">
+                        node capture-kit/setup.js {token}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          navigator.clipboard
+                            ?.writeText(`node capture-kit/setup.js ${token}`)
+                            .then(() => setCaptureCmdCopied(true))
+                            .catch(() => {})
+                        }
+                        className="shrink-0 rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        {captureCmdCopied ? "Copied ✓" : "Copy"}
+                      </button>
+                    </div>
+                    <span className="block mt-1 text-gray-500">
+                      It shows exactly what is recorded and asks you to type
+                      “agree”. Nothing is captured before that.
+                    </span>
+                  </li>
+                  <li>
+                    <span className="font-semibold text-gray-900">
+                      3. Start your AI assistant in that same folder
+                    </span>{" "}
+                    (for example <code className="font-mono">claude</code>). The
+                    first time, it will ask you to trust the folder —{" "}
+                    <span className="font-semibold">you must accept</span>, or
+                    nothing is recorded.
+                  </li>
+                </ol>
+
+                <div className="mt-3 pt-3 border-t border-gray-200 space-y-1">
+                  <p className="text-xs text-gray-600">
+                    <span className="font-semibold">You stay in control.</span>{" "}
+                    Everything sent is mirrored locally — read it any time with{" "}
+                    <code className="font-mono">node .bridge/view.js</code>.
+                    Nothing outside this project folder is recorded, and your{" "}
+                    <code className="font-mono">.env</code> files, keys and
+                    credentials are never uploaded.
+                  </p>
+                  <p className="text-xs text-gray-600">
+                    <span className="font-semibold">Please keep it running.</span>{" "}
+                    Your reviewer sees the recorded work. If capture is removed
+                    or stops early, they see an incomplete record of how you
+                    built this.
+                  </p>
                 </div>
-                <p className="mt-2 text-xs text-gray-500">
-                  The capture kit ships with your starter files. You can read
-                  everything that was sent at any time with{" "}
-                  <code className="font-mono">node .bridge/view.js</code>.
-                </p>
               </div>
             )}
 
