@@ -35,7 +35,9 @@ import { mergeProctoringVideoForSubmission } from "../services/capture/sessionVi
 import {
   resolveEvidenceMode,
   shouldGenerateVideoTranscript,
+  shouldCaptureWorkflow,
 } from "../utils/evidenceMode.js";
+import { withCaptureKit } from "../services/workflowCapture/starterKit.js";
 import {
   evaluateWorkflowSession,
   findCaptureSessionForSubmission,
@@ -525,7 +527,17 @@ export const getSubmissionByToken: RequestHandler = async (req, res, next) => {
     // Effective mode (per-assessment setting ∩ server master switch) so the
     // candidate client knows whether to ask for the screen, show the
     // capture-kit command, or both. Never trust the raw field client-side.
-    response.evidenceMode = resolveEvidenceMode(submission.assessmentId as any);
+    const effectiveMode = resolveEvidenceMode(submission.assessmentId as any);
+    response.evidenceMode = effectiveMode;
+
+    // Ship the capture kit inside the starter files whenever the candidate is
+    // expected to run it. Without this they are told to run
+    // `node capture-kit/setup.js` against a folder that does not contain it.
+    if (shouldCaptureWorkflow(effectiveMode) && response.assessmentId) {
+      response.assessmentId.starterCodeFiles = withCaptureKit(
+        response.assessmentId.starterCodeFiles
+      );
+    }
 
     res.status(200).json(response);
   } catch (error) {
