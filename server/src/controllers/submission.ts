@@ -184,7 +184,7 @@ function triggerBehavioralGradingInBackground(
  * Background: ensure proctoring session has a transcript (generate if needed), then load it,
  * set on submission, and run screen-recording evaluation. Does not block submit response.
  */
-async function ensureProctoringTranscriptAndEvaluate(
+export async function ensureProctoringTranscriptAndEvaluate(
   submissionId: string
 ): Promise<void> {
   const sub = await SubmissionModel.findById(submissionId).populate(
@@ -201,12 +201,10 @@ async function ensureProctoringTranscriptAndEvaluate(
     return;
   }
 
-  // In "workflow"/"both" mode the analysable record is the hook stream, not the
-  // video. Skip transcript generation entirely — in "both" the recording still
-  // exists for human playback, it just is not OCR'd. This is the whole cost
-  // saving of the workflow approach (~$3-22 of vision spend per session) — and
-  // the captured timeline is graded instead, so these submissions still get a
-  // score rather than silently getting none.
+  // In "workflow"/"both" the analysable record is the capture-kit hook stream.
+  // Screen recording in "both" is for human playback + Gemini screen
+  // classification (screenContext), never video OCR / generateTranscript.
+  // Missing capture-kit: fail clearly. Do not fall through to a transcript job.
   // "none" has no observational evidence; clear a pending status rather than
   // failing as if the candidate skipped capture.
   const evidenceMode = resolveEvidenceMode(assessment);
@@ -214,7 +212,16 @@ async function ensureProctoringTranscriptAndEvaluate(
     console.log(
       `[ensureProctoringTranscriptAndEvaluate] evidenceMode=${evidenceMode} for submission ${submissionId}; grading the workflow capture instead of the video.`
     );
-    await evaluateWorkflowCaptureForSubmission(submissionId, assessment, criteria);
+    const gradedWorkflow = await evaluateWorkflowCaptureForSubmission(
+      submissionId,
+      assessment,
+      criteria
+    );
+    if (gradedWorkflow) return;
+    await setEvaluationFailed(
+      submissionId,
+      "No workflow capture session for this submission. The candidate may not have run the capture setup."
+    );
     return;
   }
   if (!shouldGenerateVideoTranscript(evidenceMode)) {
@@ -365,14 +372,10 @@ async function evaluateWorkflowCaptureForSubmission(
   submissionId: string,
   assessment: any,
   criteria: string[]
-): Promise<void> {
+): Promise<boolean> {
   const capture: any = await findCaptureSessionForSubmission(submissionId);
   if (!capture) {
-    await setEvaluationFailed(
-      submissionId,
-      "No workflow capture session for this submission. The candidate may not have run the capture setup."
-    );
-    return;
+    return false;
   }
 
   try {
@@ -388,7 +391,7 @@ async function evaluateWorkflowCaptureForSubmission(
       }
     );
     const sub = await SubmissionModel.findById(submissionId);
-    if (!sub) return;
+    if (!sub) return true;
     (sub as any).evaluationReport = result.report;
     (sub as any).evaluationStatus = "completed";
     (sub as any).evaluationError = null;
@@ -400,6 +403,7 @@ async function evaluateWorkflowCaptureForSubmission(
           ? `, invalidated: ${result.invalidatedCriteria.join(", ")}`
           : "")
     );
+    return true;
   } catch (err) {
     console.error(
       `[workflow-eval] Evaluation failed for submission ${submissionId}:`,
@@ -409,6 +413,7 @@ async function evaluateWorkflowCaptureForSubmission(
       submissionId,
       err instanceof Error ? err.message : "Workflow evaluation failed."
     );
+    return true;
   }
 }
 
@@ -499,6 +504,10 @@ export const startAssessment: RequestHandler = async (req, res, next) => {
 
     const response: any = submission.toObject();
     response.timeRemaining = timeRemaining;
+    // Same resolved mode as GET /token — the in-progress UI shows the
+    // capture-kit command from this field. Omitting it made the client fall
+    // back to "screen" and hide the Node setup right after Start.
+    response.evidenceMode = resolveEvidenceMode(assessment);
 
     res.status(200).json(response);
   } catch (error) {

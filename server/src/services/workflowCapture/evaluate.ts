@@ -13,6 +13,7 @@
  * difference. Unverifiable citations are dropped before the report is stored.
  */
 
+import SubmissionModel from "../../models/submission.js";
 import {
   WorkflowCaptureSessionModel,
   WorkflowEventModel,
@@ -135,7 +136,15 @@ export interface WorkflowEvaluationResult {
 
 /** The capture session for a submission, newest first if several exist. */
 export async function findCaptureSessionForSubmission(submissionId: string) {
-  return WorkflowCaptureSessionModel.findOne({ submissionId })
+  const byId = await WorkflowCaptureSessionModel.findOne({ submissionId })
+    .sort({ createdAt: -1 })
+    .lean();
+  if (byId) return byId;
+  const sub: any = await SubmissionModel.findById(submissionId)
+    .select("token")
+    .lean();
+  if (!sub?.token) return null;
+  return WorkflowCaptureSessionModel.findOne({ submissionToken: sub.token })
     .sort({ createdAt: -1 })
     .lean();
 }

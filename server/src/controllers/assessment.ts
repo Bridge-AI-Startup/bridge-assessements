@@ -15,6 +15,7 @@ import {
 import { processAssessmentChat } from "../services/assessmentChat.js";
 import { groundCriterion } from "../services/evaluation/grounder.js";
 import { shouldEnforceFreeTierAssessmentLimit } from "../utils/subscription.js";
+import { isEvidenceMode } from "../utils/evidenceMode.js";
 
 export type GenerateRequest = {
   description: string;
@@ -53,7 +54,7 @@ export type UpdateRequest = {
   starterCodeFiles?: Array<{ path: string; content: string }>;
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
-  evidenceMode?: "screen" | "workflow" | "both";
+  evidenceMode?: "none" | "workflow" | "both" | "screen";
   behavioralChecks?: string[];
   evaluationCriteria?: string[];
   uid: string; // Added by verifyAuthToken middleware
@@ -323,10 +324,10 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
       (assessment as any).isSmartInterviewerEnabled = isSmartInterviewerEnabled;
     }
     if (evidenceMode !== undefined) {
-      if (!["screen", "workflow", "both"].includes(evidenceMode)) {
-        return res
-          .status(400)
-          .json({ error: "evidenceMode must be 'screen', 'workflow', or 'both'" });
+      if (!isEvidenceMode(evidenceMode)) {
+        return res.status(400).json({
+          error: "evidenceMode must be 'none', 'workflow', 'both', or 'screen'",
+        });
       }
       (assessment as any).evidenceMode = evidenceMode;
     }

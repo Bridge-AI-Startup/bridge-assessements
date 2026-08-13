@@ -51,6 +51,10 @@ export type ProctoringSession = {
     chunksDeletedAt?: string | null;
     mergingStartedAt?: string | null;
   };
+  companion?: {
+    status?: string;
+    conversationId?: string | null;
+  };
   createdAt: string;
   updatedAt: string;
 };
@@ -649,13 +653,18 @@ export async function completeCompanion(
  */
 export async function getCompanionTranscript(
   sessionId: string,
-  token?: string
+  token?: string,
+  authToken?: string
 ): Promise<APIResult<{ messages: CompanionMessage[] }>> {
   try {
     const url = token
       ? `/proctoring/sessions/${sessionId}/companion/transcript?token=${encodeURIComponent(token)}`
       : `/proctoring/sessions/${sessionId}/companion/transcript`;
-    const response = await get(url);
+    const headers: Record<string, string> = {};
+    if (authToken) {
+      headers.Authorization = `Bearer ${authToken}`;
+    }
+    const response = await get(url, headers);
     const data = await response.json();
     return { success: true, data };
   } catch (error) {

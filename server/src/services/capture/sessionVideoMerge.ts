@@ -77,6 +77,19 @@ async function* readChunksSkippingMissing(
 let activeMerges = 0;
 const mergeQueue: Array<() => void> = [];
 
+/** In-process merge concurrency snapshot for ops dashboard (this Render instance only). */
+export function getVideoMergeQueueStats(): {
+  active: number;
+  queued: number;
+  maxConcurrent: number;
+} {
+  return {
+    active: activeMerges,
+    queued: mergeQueue.length,
+    maxConcurrent: MAX_CONCURRENT_MERGES,
+  };
+}
+
 async function withMergeSlot<T>(fn: () => Promise<T>): Promise<T> {
   if (activeMerges >= MAX_CONCURRENT_MERGES) {
     await new Promise<void>((resolve) => mergeQueue.push(resolve));

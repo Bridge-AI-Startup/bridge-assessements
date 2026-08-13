@@ -311,7 +311,14 @@ export const getContextCenter: RequestHandler = async (req, res, next) => {
         : undefined;
     const cleanTopics = Array.isArray(topics)
       ? (topics.filter((t) =>
-          ["assessment", "conversation", "timeline", "code"].includes(t)
+          [
+            "assessment",
+            "conversation",
+            "timeline",
+            "code",
+            "episodes",
+            "metrics",
+          ].includes(t)
         ) as ContextTopic[])
       : undefined;
 
@@ -325,7 +332,14 @@ export const getContextCenter: RequestHandler = async (req, res, next) => {
 
     // Compact one-line log per call (this endpoint fires during live calls).
     const availability = (
-      ["assessment", "conversation", "timeline", "code"] as const
+      [
+        "assessment",
+        "conversation",
+        "timeline",
+        "code",
+        "episodes",
+        "metrics",
+      ] as const
     )
       .map((k) => {
         const section = bundle[k] as { available?: boolean } | undefined;

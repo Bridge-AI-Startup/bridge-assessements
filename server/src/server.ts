@@ -20,6 +20,7 @@ import proctoringRoutes from "./routes/proctoring.js";
 import competitionRoutes from "./routes/competition.js";
 import workflowCaptureRoutes from "./routes/workflowCapture.js";
 import playRoutes from "./routes/shorts.js";
+import opsRoutes from "./routes/ops.js";
 import { health as playHealth } from "./controllers/shorts/index.js";
 import { shortsEnabled } from "./utils/shortsEnv.js";
 import { errorHandler } from "./errors/handler.js";
@@ -355,6 +356,11 @@ console.log("  ✅ /api/users routes registered");
 console.log("     - POST /api/users/create");
 console.log("     - GET /api/users/whoami (rate limited: 5/15min)");
 
+app.use("/api/ops", apiLimiter);
+app.use("/api/ops", opsRoutes);
+console.log("  ✅ /api/ops routes registered");
+console.log("     - GET /api/ops/workload (ops admin allowlist)");
+
 app.use("/api/assessments", apiLimiter); // Apply general limit
 app.use("/api/assessments", assessmentRoutes);
 console.log("  ✅ /api/assessments routes registered");
@@ -478,6 +484,13 @@ if (process.env.WORKFLOW_CAPTURE_ENABLED === "true") {
   console.log("     - POST /api/workflow-capture/snapshot");
   console.log("     - GET  /api/workflow-capture/agent-context");
 } else {
+  app.use("/api/workflow-capture", (_req, res) => {
+    res.status(503).json({
+      error: "workflow_capture_disabled",
+      message:
+        "Set WORKFLOW_CAPTURE_ENABLED=true in config.env (or the host env) and restart the server.",
+    });
+  });
   console.log(
     "  ⏸️  /api/workflow-capture disabled (set WORKFLOW_CAPTURE_ENABLED=true)",
   );

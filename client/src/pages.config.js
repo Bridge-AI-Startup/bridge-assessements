@@ -17,6 +17,7 @@ import ProctoringStorageTest from "./pages/ProctoringStorageTest";
 import DemoReplay from "./pages/DemoReplay";
 import TranscriptPlayground from "./pages/TranscriptPlayground";
 import HackathonDashboard from "./pages/HackathonDashboard";
+import OpsDashboard from "./pages/OpsDashboard";
 
 export const PAGES = {
   CreateAssessment: CreateAssessment,
@@ -38,6 +39,7 @@ export const PAGES = {
   DemoReplay: DemoReplay,
   TranscriptPlayground: TranscriptPlayground,
   HackathonDashboard: HackathonDashboard,
+  OpsDashboard: OpsDashboard,
 };
 
 export const pagesConfig = {

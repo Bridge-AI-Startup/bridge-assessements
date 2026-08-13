@@ -9,6 +9,7 @@ import {
   Link as LinkIcon,
   Send,
   X,
+  Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,12 +40,20 @@ import useFrameDedup from "@/hooks/useFrameDedup";
 import ResharePrompt from "@/components/proctoring/ResharePrompt";
 import ProctoringCompanionNotch from "@/components/proctoring/ProctoringCompanionNotch";
 import { COMPANION_ENABLED } from "@/config/companion";
+import { API_BASE_URL } from "@/config/api";
 import { createVideoRecorder } from "@/lib/captureUtils";
 import { uploadVideoChunk } from "@/api/proctoring";
 import StarterCodeIDE from "@/components/StarterCodeIDE";
 import SubmissionFileDropzone from "@/components/assessment/SubmissionFileDropzone";
+import {
+  buildStarterCodeZipBlob,
+  downloadStarterCodeZip,
+  STARTER_ZIP_FILENAME,
+  triggerBlobDownload,
+} from "@/lib/downloadStarterCode";
 
 const FINAL_SUBMISSION_GRACE_SECONDS = 5 * 60;
+const CAPTURE_API_ORIGIN = API_BASE_URL.replace(/\/api\/?$/, "");
 
 function formatHms(totalSeconds) {
   const safeSeconds = Math.max(0, Math.floor(totalSeconds));
@@ -92,6 +101,9 @@ export default function CandidateAssessment() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const token = searchParams.get("token");
+  const captureSetupCommand = token
+    ? `node capture-kit/setup.js ${token} --api=${CAPTURE_API_ORIGIN}`
+    : "";
 
   const [submission, setSubmission] = useState(null);
   const [assessment, setAssessment] = useState(null);
@@ -122,6 +134,7 @@ export default function CandidateAssessment() {
   const usesScreenRecording =
     evidenceMode === "screen" || evidenceMode === "both";
   const [captureCmdCopied, setCaptureCmdCopied] = useState(false);
+  const starterZipUrlRef = useRef(null);
   const [proctoringEnabled, setProctoringEnabled] = useState(false);
   const [proctoringSessionId, setProctoringSessionId] = useState(null);
   const [proctoringSubmissionId, setProctoringSubmissionId] = useState(null);
@@ -238,6 +251,27 @@ export default function CandidateAssessment() {
 
     loadSubmission();
   }, [token]);
+
+  // Pre-build the starter zip while they read the brief so Start can download
+  // it in the same click (browsers block downloads after an await).
+  useEffect(() => {
+    const files = assessment?.starterCodeFiles;
+    if (!files?.length) return undefined;
+    let revoked = false;
+    let objectUrl = null;
+    buildStarterCodeZipBlob(files).then((blob) => {
+      if (revoked || !blob) return;
+      objectUrl = URL.createObjectURL(blob);
+      starterZipUrlRef.current = objectUrl;
+    });
+    return () => {
+      revoked = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (starterZipUrlRef.current === objectUrl) {
+        starterZipUrlRef.current = null;
+      }
+    };
+  }, [assessment?.starterCodeFiles]);
 
   // Sync time with backend every 30 seconds if assessment is in progress
   // IMPORTANT: Don't poll if opted out to prevent API spam
@@ -535,6 +569,26 @@ export default function CandidateAssessment() {
     }
   };
 
+  const triggerStarterDownload = () => {
+    const files = assessment?.starterCodeFiles;
+    const readyUrl = starterZipUrlRef.current;
+    if (readyUrl) {
+      triggerBlobDownload(readyUrl, STARTER_ZIP_FILENAME);
+      return;
+    }
+    if (files?.length) {
+      void downloadStarterCodeZip(files, STARTER_ZIP_FILENAME);
+      return;
+    }
+    if (assessment?.starterFilesGitHubLink) {
+      window.open(
+        assessment.starterFilesGitHubLink,
+        "_blank",
+        "noopener,noreferrer"
+      );
+    }
+  };
+
   const handleStartClick = () => {
     if (!token) {
       alert("No token provided");
@@ -546,6 +600,7 @@ export default function CandidateAssessment() {
     // and video upload) with no consent screen shown first, which is worse than
     // the flow it was meant to replace.
     if (!usesScreenRecording) {
+      triggerStarterDownload();
       setIsStarting(true);
       doStartAssessment();
       return;
@@ -556,6 +611,7 @@ export default function CandidateAssessment() {
 
   const handleConsentGranted = async () => {
     setShowConsent(false);
+    triggerStarterDownload();
     setIsStarting(true);
     try {
       // Create proctoring session as soon as consent is granted so it exists even if capture fails
@@ -584,6 +640,7 @@ export default function CandidateAssessment() {
 
   const handleConsentDeclined = async () => {
     setShowConsent(false);
+    triggerStarterDownload();
     proctoringDeclinedRef.current = true;
     setIsStarting(true);
     await doStartAssessment();
@@ -593,7 +650,10 @@ export default function CandidateAssessment() {
     try {
       const result = await startAssessment(token);
       if (result.success) {
-        setSubmission(result.data);
+        setSubmission({
+          ...result.data,
+          evidenceMode: result.data.evidenceMode || submission?.evidenceMode,
+        });
         setTimeRemaining(result.data.timeRemaining);
       } else {
         const errorMsg =
@@ -870,106 +930,32 @@ export default function CandidateAssessment() {
               </div>
             </div>
 
-            {/* Starter Files GitHub Link (if available) */}
-            {assessment.starterFilesGitHubLink && (
-              <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-xl">
-                <div className="flex items-start gap-3">
-                  <LinkIcon className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <h3 className="text-sm font-semibold text-blue-900 mb-1">
-                      Starter Files & Instructions
-                    </h3>
-                    <p className="text-sm text-blue-800 mb-2">
-                      Access the starter files and detailed instructions:
-                    </p>
-                    <a
-                      href={assessment.starterFilesGitHubLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:text-blue-800 hover:underline text-sm font-medium break-all"
-                    >
-                      {assessment.starterFilesGitHubLink}
-                    </a>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Workflow capture setup — shown BEFORE the timer starts, since
-                installing the hooks otherwise eats assessment time. */}
-            {usesWorkflowCapture && (
-              <div className="mb-6 rounded-xl border border-gray-300 bg-gray-50 p-4">
-                <h3 className="text-sm font-semibold text-gray-900 mb-1">
-                  Set up before you start
+            {/* Starter files download when they start — don't send them to
+                clone or run capture-kit before they have the zip. */}
+            {(assessment.starterCodeFiles?.length > 0 ||
+              assessment.starterFilesGitHubLink) && (
+              <div className="mb-6 p-4 bg-[#FAF9F2] border border-[#21201C]/15 rounded-xl">
+                <h3 className="text-sm font-semibold text-[#21201C] mb-1">
+                  You must start from the starter files
                 </h3>
-                <p className="text-xs text-gray-600 mb-3">
-                  This assessment records how you work with your AI coding
-                  assistant — your prompts, its replies, and the code that
-                  changes — instead of recording your screen. Three steps, about
-                  a minute.
+                <p className="text-sm text-gray-700">
+                  {assessment.starterCodeFiles?.length > 0 ? (
+                    <>
+                      Clicking Start downloads{" "}
+                      <code className="font-mono text-xs">starter-code.zip</code>{" "}
+                      automatically. Unzip it and work in that folder — don&apos;t
+                      begin from a blank project.
+                    </>
+                  ) : (
+                    <>
+                      When you start, open the starter repository and work from
+                      those files — don&apos;t begin from a blank project.
+                    </>
+                  )}
+                  {usesWorkflowCapture
+                    ? " After you have the files, you will get a short setup command to run from that folder."
+                    : ""}
                 </p>
-
-                <ol className="space-y-3 text-xs text-gray-700">
-                  <li>
-                    <span className="font-semibold text-gray-900">
-                      1. Download the starter files
-                    </span>{" "}
-                    below and unzip them. They include a{" "}
-                    <code className="font-mono">capture-kit/</code> folder.
-                  </li>
-                  <li>
-                    <span className="font-semibold text-gray-900">
-                      2. Run this from the project folder
-                    </span>
-                    <div className="flex items-center gap-2 mt-1.5">
-                      <code className="flex-1 rounded-md bg-gray-900 px-3 py-2 text-xs text-gray-100 font-mono overflow-x-auto whitespace-nowrap">
-                        node capture-kit/setup.js {token}
-                      </code>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          navigator.clipboard
-                            ?.writeText(`node capture-kit/setup.js ${token}`)
-                            .then(() => setCaptureCmdCopied(true))
-                            .catch(() => {})
-                        }
-                        className="shrink-0 rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                      >
-                        {captureCmdCopied ? "Copied ✓" : "Copy"}
-                      </button>
-                    </div>
-                    <span className="block mt-1 text-gray-500">
-                      It shows exactly what is recorded and asks you to type
-                      “agree”. Nothing is captured before that.
-                    </span>
-                  </li>
-                  <li>
-                    <span className="font-semibold text-gray-900">
-                      3. Start your AI assistant in that same folder
-                    </span>{" "}
-                    (for example <code className="font-mono">claude</code>). The
-                    first time, it will ask you to trust the folder —{" "}
-                    <span className="font-semibold">you must accept</span>, or
-                    nothing is recorded.
-                  </li>
-                </ol>
-
-                <div className="mt-3 pt-3 border-t border-gray-200 space-y-1">
-                  <p className="text-xs text-gray-600">
-                    <span className="font-semibold">You stay in control.</span>{" "}
-                    Everything sent is mirrored locally — read it any time with{" "}
-                    <code className="font-mono">node .bridge/view.js</code>.
-                    Nothing outside this project folder is recorded, and your{" "}
-                    <code className="font-mono">.env</code> files, keys and
-                    credentials are never uploaded.
-                  </p>
-                  <p className="text-xs text-gray-600">
-                    <span className="font-semibold">Please keep it running.</span>{" "}
-                    Your reviewer sees the recorded work. If capture is removed
-                    or stops early, they see an incomplete record of how you
-                    built this.
-                  </p>
-                </div>
               </div>
             )}
 
@@ -978,8 +964,9 @@ export default function CandidateAssessment() {
               <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
               <div className="text-sm text-yellow-800">
                 <strong>Important:</strong> Once you start, the timer begins.
-                You'll have {timeLimitDisplay} to complete and submit your work.
-                Make sure you're ready before clicking Start.
+                You&apos;ll have {timeLimitDisplay} to complete and submit your
+                work. Start from the starter files — don&apos;t begin from a
+                blank project.
               </div>
             </div>
 
@@ -992,6 +979,11 @@ export default function CandidateAssessment() {
               <Play className="w-5 h-5 mr-2" />
               {isStarting ? "Starting..." : "Start Assessment"}
             </Button>
+            {assessment.starterCodeFiles?.length > 0 && (
+              <p className="text-center text-xs text-gray-500 -mt-1 mb-3">
+                Starter files download automatically when you start
+              </p>
+            )}
 
             {/* Opt Out Button */}
             <button
@@ -1154,6 +1146,119 @@ export default function CandidateAssessment() {
             animate={{ opacity: 1, y: 0 }}
             className="bg-white rounded-xl border border-gray-200 p-6"
           >
+            {(assessment.starterCodeFiles?.length > 0 ||
+              assessment.starterFilesGitHubLink) && (
+              <div className="mb-6 rounded-xl border border-[#21201C] bg-[#FAF9F2] p-5">
+                <h2 className="text-lg font-semibold text-[#21201C] mb-1">
+                  Do this first
+                </h2>
+                <p className="text-sm text-gray-700 mb-4">
+                  You must start from the starter files — not a blank project.
+                  {assessment.starterCodeFiles?.length > 0
+                    ? " A zip should have downloaded when you clicked Start."
+                    : ""}
+                </p>
+
+                <ol className="space-y-3 text-sm text-gray-800">
+                  <li>
+                    <span className="font-semibold text-[#21201C]">
+                      1. Unzip{" "}
+                      <code className="font-mono text-xs">starter-code.zip</code>{" "}
+                      and open that folder
+                    </span>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {assessment.starterCodeFiles?.length > 0 && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={triggerStarterDownload}
+                          className="h-9 px-3 text-xs"
+                        >
+                          <Download className="w-3.5 h-3.5 mr-1.5" />
+                          Download starter files again
+                        </Button>
+                      )}
+                      {assessment.starterFilesGitHubLink && (
+                        <a
+                          href={assessment.starterFilesGitHubLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 text-xs font-medium text-[#21201C] underline underline-offset-2"
+                        >
+                          <LinkIcon className="w-3.5 h-3.5" />
+                          Starter repo on GitHub
+                        </a>
+                      )}
+                    </div>
+                  </li>
+                  {usesWorkflowCapture && (
+                    <li>
+                      <span className="font-semibold text-[#21201C]">
+                        2. Then run the setup command below from that folder
+                      </span>
+                    </li>
+                  )}
+                </ol>
+              </div>
+            )}
+
+            {usesWorkflowCapture && (
+              <div className="mb-6 rounded-xl border border-[#21201C] bg-[#FAF9F2] p-5">
+                <h2 className="text-lg font-semibold text-[#21201C] mb-1">
+                  Run this in the starter folder
+                </h2>
+                <p className="text-sm text-gray-700 mb-3">
+                  After you unzip the starter files, run this command from that
+                  project folder. It shows exactly what is recorded and asks you
+                  to type “agree” before anything is captured.
+                </p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 rounded-md bg-[#21201C] px-3 py-2 text-xs text-gray-100 font-mono overflow-x-auto whitespace-nowrap">
+                    {captureSetupCommand}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigator.clipboard
+                        ?.writeText(captureSetupCommand)
+                        .then(() => setCaptureCmdCopied(true))
+                        .catch(() => {})
+                    }
+                    className="shrink-0 rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    {captureCmdCopied ? "Copied ✓" : "Copy"}
+                  </button>
+                </div>
+                <p className="mt-3 text-xs text-gray-600">
+                  Then start your AI assistant in that same folder (for example{" "}
+                  <code className="font-mono">claude</code>). The first time, it
+                  will ask you to trust the folder — you must accept, or nothing
+                  is recorded. The zip includes{" "}
+                  <code className="font-mono">capture-kit/</code>, so this only
+                  works after you unzip.
+                </p>
+                <div className="mt-3 pt-3 border-t border-[#21201C]/10 space-y-1">
+                  <p className="text-xs text-gray-600">
+                    <span className="font-semibold text-gray-800">
+                      You stay in control.
+                    </span>{" "}
+                    Everything sent is mirrored locally — read it any time with{" "}
+                    <code className="font-mono">node .bridge/view.js</code>.
+                    Nothing outside this project folder is recorded, and your{" "}
+                    <code className="font-mono">.env</code> files, keys and
+                    credentials are never uploaded.
+                  </p>
+                  <p className="text-xs text-gray-600">
+                    <span className="font-semibold text-gray-800">
+                      Please keep it running.
+                    </span>{" "}
+                    If capture is removed or stops early, your reviewer sees an
+                    incomplete record of how you built this.
+                  </p>
+                </div>
+              </div>
+            )}
+
             <h2 className="text-lg font-semibold text-gray-900 mb-4">
               Project Instructions
             </h2>
@@ -1162,40 +1267,6 @@ export default function CandidateAssessment() {
               tools if you find them helpful.
             </p>
 
-            {usesWorkflowCapture && (
-              <div className="mb-4 rounded-lg border border-gray-200 bg-white p-4">
-                <h3 className="text-sm font-semibold text-gray-900 mb-1">
-                  Before you start: enable workflow capture
-                </h3>
-                <p className="text-xs text-gray-600 mb-3">
-                  This assessment records your AI assistant conversation and code
-                  changes instead of your screen. Run this once in your project
-                  folder — it will show you exactly what is recorded and ask you
-                  to confirm before anything is captured.
-                </p>
-                <div className="flex items-center gap-2">
-                  <code className="flex-1 rounded-md bg-gray-900 px-3 py-2 text-xs text-gray-100 font-mono overflow-x-auto whitespace-nowrap">
-                    node capture-kit/setup.js {token}
-                  </code>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      navigator.clipboard
-                        ?.writeText(`node capture-kit/setup.js ${token}`)
-                        .then(() => setCaptureCmdCopied(true))
-                        .catch(() => {})
-                    }
-                    className="shrink-0 rounded-md border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                  >
-                    {captureCmdCopied ? "Copied ✓" : "Copy"}
-                  </button>
-                </div>
-                <p className="mt-2 text-xs text-gray-500">
-                  You can read everything that was sent at any time by running{" "}
-                  <code className="font-mono">node .bridge/view.js</code>.
-                </p>
-              </div>
-            )}
             <div className="prose prose-sm max-w-none text-gray-700 leading-relaxed">
               <ReactMarkdown
                 components={{
@@ -1244,35 +1315,13 @@ export default function CandidateAssessment() {
               </ReactMarkdown>
             </div>
 
-            {/* Starter Files GitHub Link */}
-            {assessment.starterFilesGitHubLink && (
-              <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                <div className="flex items-start gap-3">
-                  <LinkIcon className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <h3 className="text-sm font-semibold text-blue-900 mb-1">
-                      Starter Files & Instructions
-                    </h3>
-                    <p className="text-sm text-blue-800 mb-2">
-                      Access the starter files and detailed instructions in the
-                      GitHub repository:
-                    </p>
-                    <a
-                      href={assessment.starterFilesGitHubLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:text-blue-800 hover:underline text-sm font-medium break-all"
-                    >
-                      {assessment.starterFilesGitHubLink}
-                    </a>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Starter code files (inline) */}
+            {/* Starter code files (inline preview of the zip they downloaded) */}
             {assessment.starterCodeFiles?.length > 0 && (
               <div className="mt-6">
+                <p className="text-xs text-gray-500 mb-2">
+                  Preview of the starter files in{" "}
+                  <code className="font-mono">starter-code.zip</code>
+                </p>
                 <StarterCodeIDE files={assessment.starterCodeFiles} readOnly={true} />
               </div>
             )}

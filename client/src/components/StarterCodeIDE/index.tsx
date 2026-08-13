@@ -2,7 +2,7 @@ import React, { useState, lazy, Suspense } from "react";
 import { ChevronRight, ChevronDown, File, Folder, Download, Copy, Check, Plus, Trash2 } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
-import JSZip from "jszip";
+import { downloadStarterCodeZip } from "@/lib/downloadStarterCode";
 import { buildFileTree, type FileTreeNode } from "./buildFileTree";
 
 const MonacoEditor = lazy(() =>
@@ -130,15 +130,7 @@ export default function StarterCodeIDE({ files, readOnly, onChange }: StarterCod
   };
 
   const handleDownloadZip = async () => {
-    const zip = new JSZip();
-    files.forEach(({ path, content }) => zip.file(path, content));
-    const blob = await zip.generateAsync({ type: "blob" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "starter-code.zip";
-    a.click();
-    URL.revokeObjectURL(url);
+    await downloadStarterCodeZip(files);
   };
 
   const handleContentChange = (value: string | undefined) => {

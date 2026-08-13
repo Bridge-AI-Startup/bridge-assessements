@@ -2,16 +2,13 @@ import { RequestHandler } from "express";
 import { validationResult } from "express-validator";
 
 import { AuthError } from "../errors/auth.js";
-import AssessmentModel from "../models/assessment.js";
 import SubmissionModel from "../models/submission.js";
-import ProctoringSessionModel from "../models/proctoringSession.js";
 import validationErrorParser from "../utils/validationErrorParser.js";
 import { evaluateTranscript } from "../services/evaluation/orchestrator.js";
-import { getProctoringTranscriptForSubmission } from "../services/evaluation/proctoringTranscriptAdapter.js";
 import { validateCriterion } from "../services/evaluation/validator.js";
 import { suggestCriteria } from "../services/evaluation/suggestCriteria.js";
 import type { TranscriptEvent } from "../types/evaluation.js";
-import { generateTranscript } from "../ai/transcript/generator.js";
+import { ensureProctoringTranscriptAndEvaluate } from "./submission.js";
 
 async function getUserIdFromFirebaseUid(firebaseUid: string): Promise<string> {
   const UserModel = (await import("../models/user.js")).default;
@@ -32,8 +29,9 @@ export type EvaluateRequest = {
 /**
  * POST /api/evaluation/evaluate
  * Body: { submissionId } OR { transcript, criteria } for dry-run.
- * With submissionId: loads transcript from Submission.screenRecordingTranscript,
- * criteria from Assessment.evaluationCriteria, runs orchestrator, persists report.
+ * With submissionId: ownership-checked kickoff of the same background pipeline
+ * submit uses (workflow capture, then screen-recording fallback for "both").
+ * Returns 202 { started: true }; poll the submission for the report.
  * With transcript+criteria: runs orchestrator and returns report (no persist).
  */
 export const evaluate: RequestHandler = async (req, res, next) => {
@@ -60,55 +58,33 @@ export const evaluate: RequestHandler = async (req, res, next) => {
       if (!assessment || assessment.userId?.toString() !== userId) {
         return res.status(403).json({ error: "Access denied" });
       }
-      let screenTranscript = (submission as any).screenRecordingTranscript;
-      if (!Array.isArray(screenTranscript) || screenTranscript.length === 0) {
-        screenTranscript = await getProctoringTranscriptForSubmission(submissionId);
-      }
-      if (!screenTranscript || screenTranscript.length === 0) {
-        const session = await ProctoringSessionModel.findOne({ submissionId });
-        if (session) {
-          const status = session.transcript?.status ?? "not_started";
-          if (status === "not_started" || status === "failed") {
-            try {
-              await generateTranscript(session._id.toString());
-              screenTranscript = await getProctoringTranscriptForSubmission(submissionId);
-            } catch (genErr) {
-              const msg = genErr instanceof Error ? genErr.message : String(genErr);
-              return res.status(400).json({
-                error: `Transcript generation failed: ${msg}. Ensure proctoring captured frames and transcript generation is enabled.`,
-              });
-            }
-          } else if (status === "generating") {
-            return res.status(202).json({
-              error: "Transcript is still being generated. Please try again in a few minutes.",
-            });
-          } else {
-            screenTranscript = await getProctoringTranscriptForSubmission(submissionId);
-          }
-        }
-      }
-      if (!screenTranscript || screenTranscript.length === 0) {
-        return res.status(400).json({
-          error:
-            "No screen recording transcript. The candidate must complete the assessment with proctoring enabled so a transcript can be generated. If proctoring was used, try running evaluation again in a moment.",
-        });
-      }
       const criteriaList = assessment.evaluationCriteria ?? [];
       if (criteriaList.length === 0) {
         return res.status(400).json({
           error: "Assessment has no evaluation criteria configured.",
         });
       }
-      const report = await evaluateTranscript(
-        screenTranscript as TranscriptEvent[],
-        criteriaList,
-        { groundings: assessment.evaluationCriteriaGroundings }
-      );
-      (submission as any).evaluationReport = report;
-      (submission as any).screenRecordingTranscript = screenTranscript;
-      (submission as any).evaluationStatus = "completed";
-      await submission.save();
-      return res.status(200).json({ report });
+
+      // Same pipeline submit already kicks off (workflow, then screen fallback
+      // for "both"). Run it in the background so the dashboard is not blocked
+      // on transcript generation.
+      await SubmissionModel.findByIdAndUpdate(submissionId, {
+        $set: { evaluationStatus: "pending", evaluationError: null },
+      });
+      ensureProctoringTranscriptAndEvaluate(submissionId).catch((err) => {
+        console.error(
+          `[evaluate] ensureProctoringTranscriptAndEvaluate failed for ${submissionId}:`,
+          err
+        );
+        SubmissionModel.findByIdAndUpdate(submissionId, {
+          $set: {
+            evaluationStatus: "failed",
+            evaluationError:
+              err instanceof Error ? err.message : "Evaluation failed.",
+          },
+        }).catch(() => {});
+      });
+      return res.status(202).json({ started: true });
     }
 
     const report = await evaluateTranscript(transcript!, criteria!);

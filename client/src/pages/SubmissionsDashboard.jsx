@@ -88,6 +88,7 @@ import {
   getTranscriptContent,
   getProctoringVideoPlaybackUrl,
   downloadProctoringVideo,
+  getCompanionTranscript,
 } from "@/api/proctoring";
 import { onAuthStateChanged } from "firebase/auth";
 import {
@@ -727,6 +728,8 @@ export default function SubmissionsDashboard() {
   const [workflowSession, setWorkflowSession] = useState(null);
   const [workflowAnalysis, setWorkflowAnalysis] = useState(null);
   const [workflowLoading, setWorkflowLoading] = useState(false);
+  const [companionMessages, setCompanionMessages] = useState(null);
+  const [companionLoading, setCompanionLoading] = useState(false);
   const [recordingSession, setRecordingSession] = useState(null);
   const [recordingTranscript, setRecordingTranscript] = useState(null);
   const [recordingTranscriptLoading, setRecordingTranscriptLoading] = useState(false);
@@ -748,6 +751,7 @@ export default function SubmissionsDashboard() {
   const recordingVideoObjectUrlRef = React.useRef(null);
   const recordingMergePollRef = React.useRef(null);
   const pendingRefetchedRef = React.useRef(false);
+  const autoEvalAttemptedRef = React.useRef(new Set());
   const { toast } = useToast();
 
   const handleOpenRunProjectModal = (githubUrl) => {
@@ -892,6 +896,49 @@ export default function SubmissionsDashboard() {
         }
       } finally {
         if (!cancelled) setWorkflowLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showEvaluationModal, selectedEvaluationSubmission?._id]);
+
+  // In-session voice companion — this is the "agent communication" the
+  // candidate actually had during the assessment, not the post-submit interview.
+  useEffect(() => {
+    let cancelled = false;
+    const submissionId = selectedEvaluationSubmission?._id;
+    if (!showEvaluationModal || !submissionId) {
+      setCompanionMessages(null);
+      return;
+    }
+    (async () => {
+      setCompanionLoading(true);
+      try {
+        const user = auth.currentUser;
+        if (!user) return;
+        const token = await user.getIdToken();
+        const sessionResult = await getSessionBySubmission(submissionId, token);
+        if (cancelled) return;
+        if (!sessionResult.success || !sessionResult.data?._id) {
+          setCompanionMessages([]);
+          return;
+        }
+        const companionResult = await getCompanionTranscript(
+          sessionResult.data._id,
+          undefined,
+          token
+        );
+        if (cancelled) return;
+        setCompanionMessages(
+          companionResult.success
+            ? companionResult.data?.messages || []
+            : []
+        );
+      } catch {
+        if (!cancelled) setCompanionMessages([]);
+      } finally {
+        if (!cancelled) setCompanionLoading(false);
       }
     })();
     return () => {
@@ -1237,6 +1284,87 @@ export default function SubmissionsDashboard() {
 
     return () => clearTimeout(timer);
   }, [submissions, assessmentId, currentUser]);
+
+  const handleRunEvaluation = React.useCallback(
+    async (submission, { silent = false } = {}) => {
+      if (!currentUser || !submission?._id) return;
+      setEvaluatingSubmissionId(submission._id);
+      try {
+        const token = await currentUser.getIdToken();
+        const result = await runSubmissionEvaluation(submission._id, token);
+        if (result.success) {
+          const submissionsResult = await getSubmissionsForAssessment(
+            assessmentId,
+            token
+          );
+          if (submissionsResult.success) {
+            setSubmissions(submissionsResult.data || []);
+            setSelectedEvaluationSubmission((prev) => {
+              if (!prev || prev._id !== submission._id) return prev;
+              return (
+                submissionsResult.data?.find((s) => s._id === submission._id) ??
+                prev
+              );
+            });
+          }
+          if (!silent) {
+            toast({
+              title: "Evaluation started",
+              description: "Scores will show up here when they are ready.",
+            });
+          }
+        } else if (!silent) {
+          toast({
+            title: "Evaluation failed",
+            description:
+              ("error" in result ? result.error : null) || "Evaluation failed",
+            variant: "destructive",
+          });
+        }
+      } catch (error) {
+        if (!silent) {
+          toast({
+            title: "Evaluation failed",
+            description: error?.message || "An unexpected error occurred.",
+            variant: "destructive",
+          });
+        }
+      } finally {
+        setEvaluatingSubmissionId((id) =>
+          id === submission._id ? null : id
+        );
+      }
+    },
+    [currentUser, assessmentId, toast]
+  );
+
+  // Re-kick evaluation for recent or recoverable failures so the employer
+  // never has to click "Run evaluation" after a submit.
+  useEffect(() => {
+    if (!currentUser || !assessmentId || submissions.length === 0) return;
+    const target = submissions.find((s) => {
+      if (autoEvalAttemptedRef.current.has(s._id)) return false;
+      if (s.status !== "submitted") return false;
+      if (hasEvaluableWorkflowReport(s)) return false;
+      if (
+        s.evaluationStatus === "pending" ||
+        s.evaluationStatus === "completed"
+      ) {
+        return false;
+      }
+      const err = s.evaluationError || "";
+      if (/no evaluation criteria/i.test(err)) return false;
+      const recent =
+        s.submittedAt &&
+        Date.now() - new Date(s.submittedAt).getTime() < 15 * 60 * 1000;
+      const recoverable = /workflow capture session/i.test(err);
+      if (s.evaluationStatus === "failed") return recoverable || recent;
+      return Boolean(recent);
+    });
+    if (!target) return;
+    autoEvalAttemptedRef.current.add(target._id);
+    handleRunEvaluation(target, { silent: true });
+  }, [submissions, currentUser, assessmentId, handleRunEvaluation]);
 
   // Calculate stats from real data
   const stats = React.useMemo(() => {
@@ -2307,7 +2435,9 @@ export default function SubmissionsDashboard() {
                             combinedScore == null &&
                             !hasEvaluationReport &&
                             (submission.evaluationStatus === "pending" ||
-                              (submission.evaluationStatus !== "failed" && submittedRecently));
+                              evaluatingSubmissionId === submission._id ||
+                              (submission.evaluationStatus !== "failed" &&
+                                submittedRecently));
                           // Show "Run evaluation" only when evaluation actually failed (user can retry)
                           const showRunEvaluation =
                             submission.status === "submitted" &&
@@ -2373,7 +2503,7 @@ export default function SubmissionsDashboard() {
                             return (
                               <div className="flex flex-col gap-1.5 items-start">
                                 <Button
-                                    onClick={async (e) => {
+                                    onClick={(e) => {
                                       e.stopPropagation();
                                       if (!currentUser) {
                                         toast({
@@ -2383,62 +2513,7 @@ export default function SubmissionsDashboard() {
                                         });
                                         return;
                                       }
-                                      setEvaluatingSubmissionId(submission._id);
-                                      try {
-                                        const token =
-                                          await currentUser.getIdToken();
-                                        const result =
-                                          await runSubmissionEvaluation(
-                                            submission._id,
-                                            token
-                                          );
-                                        if (result.success) {
-                                          const submissionsResult =
-                                            await getSubmissionsForAssessment(
-                                              assessmentId,
-                                              token
-                                            );
-                                          if (submissionsResult.success) {
-                                            setSubmissions(
-                                              submissionsResult.data || []
-                                            );
-                                            setSelectedEvaluationSubmission(
-                                              submissionsResult.data?.find(
-                                                (s) => s._id === submission._id
-                                              ) ?? submission
-                                            );
-                                            toast({
-                                              title: "Evaluation complete",
-                                              description:
-                                                "Workflow evaluation has been updated.",
-                                            });
-                                          }
-                                        } else {
-                                          const errMsg =
-                                            "error" in result
-                                              ? result.error
-                                              : "Evaluation failed";
-                                          toast({
-                                            title: "Evaluation failed",
-                                            description: errMsg,
-                                            variant: "destructive",
-                                          });
-                                        }
-                                      } catch (error) {
-                                        console.error(
-                                          "Error running evaluation:",
-                                          error
-                                        );
-                                        toast({
-                                          title: "Evaluation failed",
-                                          description:
-                                            error?.message ||
-                                            "An unexpected error occurred.",
-                                          variant: "destructive",
-                                        });
-                                      } finally {
-                                        setEvaluatingSubmissionId(null);
-                                      }
+                                      handleRunEvaluation(submission);
                                     }}
                                     size="sm"
                                     variant="outline"
@@ -4480,7 +4555,13 @@ export default function SubmissionsDashboard() {
                     </div>
                   )}
 
-                  {!selectedEvaluationSubmission?.evaluationReport && selectedEvaluationSubmission ? (
+                  {!selectedEvaluationSubmission?.evaluationReport &&
+                  selectedEvaluationSubmission?.evaluationStatus === "pending" ? (
+                    <div className="flex items-center justify-center gap-2 text-sm text-gray-500 py-8">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Evaluation running…
+                    </div>
+                  ) : !selectedEvaluationSubmission?.evaluationReport && selectedEvaluationSubmission ? (
                     <div className="py-8 text-center">
                       <BarChart3 className="w-12 h-12 mx-auto mb-2 text-gray-400" />
                       <p className="text-gray-500 mb-3">
@@ -4493,67 +4574,15 @@ export default function SubmissionsDashboard() {
                       )}
                       {!selectedEvaluationSubmission.evaluationError && (
                         <p className="text-xs text-gray-400 mb-4">
-                          Evaluation runs automatically after submit when the
-                          assessment has evaluation criteria and the candidate
-                          used proctoring. You can run it manually below if
-                          needed.
+                          Evaluation starts automatically after submit. If it
+                          has not appeared yet, the recording transcript may
+                          still be generating.
                         </p>
                       )}
                       <Button
-                        onClick={async () => {
-                          if (!currentUser || !selectedEvaluationSubmission)
-                            return;
-                          setEvaluatingSubmissionId(
-                            selectedEvaluationSubmission._id
-                          );
-                          try {
-                            const token = await currentUser.getIdToken();
-                            const result = await runSubmissionEvaluation(
-                              selectedEvaluationSubmission._id,
-                              token
-                            );
-                            if (result.success) {
-                              const submissionsResult =
-                                await getSubmissionsForAssessment(
-                                  assessmentId,
-                                  token
-                                );
-                              if (submissionsResult.success) {
-                                setSubmissions(submissionsResult.data || []);
-                                const updated = submissionsResult.data?.find(
-                                  (s) =>
-                                    s._id === selectedEvaluationSubmission._id
-                                );
-                                if (updated)
-                                  setSelectedEvaluationSubmission(updated);
-                                toast({
-                                  title: "Evaluation complete",
-                                  description:
-                                    "Recording evaluation has been updated.",
-                                });
-                              }
-                            } else {
-                              const errMsg =
-                                "error" in result
-                                  ? result.error
-                                  : "Evaluation failed";
-                              toast({
-                                title: "Evaluation failed",
-                                description: errMsg,
-                                variant: "destructive",
-                              });
-                            }
-                          } catch (err) {
-                            toast({
-                              title: "Evaluation failed",
-                              description:
-                                err?.message || "An unexpected error occurred.",
-                              variant: "destructive",
-                            });
-                          } finally {
-                            setEvaluatingSubmissionId(null);
-                          }
-                        }}
+                        onClick={() =>
+                          handleRunEvaluation(selectedEvaluationSubmission)
+                        }
                         disabled={
                           evaluatingSubmissionId ===
                           selectedEvaluationSubmission?._id
@@ -4570,81 +4599,143 @@ export default function SubmissionsDashboard() {
               </TabsContent>
 
               <TabsContent value="agent" className="mt-4">
-                <div className="max-h-[70vh] overflow-y-auto pr-1 space-y-4">
-                  {selectedEvaluationSubmission?.interview?.transcript?.turns?.length > 0 ? (
-                    <div className="space-y-4">
-                      <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-                        <MessageSquare className="w-4 h-4 text-[#21201C]" />
-                        Agent communication
-                      </h3>
-                      <p className="text-xs text-gray-500">
-                        Legacy agent transcript (if this submission included a recorded session).
-                      </p>
+                <div className="max-h-[70vh] overflow-y-auto pr-1 space-y-6">
+                  {(() => {
+                    const interviewTurns =
+                      selectedEvaluationSubmission?.interview?.transcript
+                        ?.turns || [];
+                    const workflowPrompts = (
+                      workflowAnalysis?.timeline || []
+                    ).filter(
+                      (row) =>
+                        row.prompt_text ||
+                        row.action_type === "prompt" ||
+                        row.action_type === "ai_chat"
+                    );
+                    const hasCompanion =
+                      Array.isArray(companionMessages) &&
+                      companionMessages.length > 0;
+                    const hasWorkflow = workflowPrompts.length > 0;
+                    const hasInterview = interviewTurns.length > 0;
 
-                      {/* Communication summary & score */}
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 sm:col-span-2">
-                          <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-1.5">Summary</p>
-                          <p className="text-sm text-gray-700">
-                            {selectedEvaluationSubmission.interview.summary || "No summary generated yet."}
+                    if (companionLoading || workflowLoading) {
+                      return (
+                        <div className="flex items-center gap-2 text-sm text-gray-500 py-10 justify-center">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Loading agent communication…
+                        </div>
+                      );
+                    }
+
+                    if (!hasCompanion && !hasWorkflow && !hasInterview) {
+                      return (
+                        <div className="py-10 text-center">
+                          <MessageSquare className="w-12 h-12 mx-auto mb-2 text-gray-400" />
+                          <p className="text-gray-600 text-sm">
+                            No agent communication for this submission.
+                          </p>
+                          <p className="text-xs text-gray-400 mt-1">
+                            Nothing was recorded from the in-session voice
+                            companion, workflow capture, or interview.
                           </p>
                         </div>
-                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                          <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-1">Communication score</p>
-                          <p className="text-lg font-semibold text-emerald-600">
-                            {selectedEvaluationSubmission.interview.analysis?.communicationScore != null
-                              ? `${selectedEvaluationSubmission.interview.analysis.communicationScore}/10`
-                              : "—"}
-                          </p>
-                        </div>
-                      </div>
+                      );
+                    }
 
-                      {/* Transcript */}
-                      <div>
-                        <p className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-2">
-                          Transcript ({selectedEvaluationSubmission.interview.transcript.turns.length} turns)
-                        </p>
-                        <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 space-y-4 max-h-[50vh] overflow-y-auto">
-                          {selectedEvaluationSubmission.interview.transcript.turns.map((turn, index) => (
-                            <div
-                              key={index}
-                              className={`flex gap-3 ${turn.role === "agent" ? "justify-start" : "justify-end"}`}
+                    const bubble = (role, text, key) => {
+                      const isAgent =
+                        role === "agent" ||
+                        role === "assistant" ||
+                        role === "companion";
+                      return (
+                        <div
+                          key={key}
+                          className={`flex gap-3 ${isAgent ? "justify-start" : "justify-end"}`}
+                        >
+                          <div
+                            className={`max-w-[85%] rounded-lg p-3 ${
+                              isAgent
+                                ? "bg-white border border-gray-200"
+                                : "bg-[#21201C] text-white"
+                            }`}
+                          >
+                            <p className="text-xs font-medium mb-1 opacity-70">
+                              {isAgent ? "Agent" : "Candidate"}
+                            </p>
+                            <p
+                              className={
+                                isAgent
+                                  ? "text-sm text-gray-700 whitespace-pre-wrap"
+                                  : "text-sm text-white whitespace-pre-wrap"
+                              }
                             >
-                              <div
-                                className={`max-w-[85%] rounded-lg p-3 ${
-                                  turn.role === "agent"
-                                    ? "bg-white border border-gray-200"
-                                    : "bg-[#21201C] text-white"
-                                }`}
-                              >
-                                <p className="text-xs font-medium mb-1 opacity-70">
-                                  {turn.role === "agent" ? "Agent" : "Candidate"}
-                                </p>
-                                <p className={turn.role === "agent" ? "text-sm text-gray-700" : "text-sm text-white"}>
-                                  {turn.text}
-                                </p>
-                                {(turn.startMs != null || turn.endMs != null) && (
-                                  <p className="text-xs opacity-60 mt-1">
-                                    {turn.startMs != null && `${(turn.startMs / 1000).toFixed(1)}s`}
-                                    {turn.startMs != null && turn.endMs != null && " – "}
-                                    {turn.endMs != null && `${(turn.endMs / 1000).toFixed(1)}s`}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          ))}
+                              {text}
+                            </p>
+                          </div>
                         </div>
+                      );
+                    };
+
+                    return (
+                      <div className="space-y-6">
+                        {hasCompanion && (
+                          <div className="space-y-3">
+                            <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                              <MessageSquare className="w-4 h-4 text-[#21201C]" />
+                              In-session voice companion
+                            </h3>
+                            <p className="text-xs text-gray-500">
+                              What the candidate said out loud while working.
+                            </p>
+                            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 space-y-3">
+                              {companionMessages.map((msg, index) =>
+                                bubble(msg.role, msg.text, `c-${index}`)
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {hasWorkflow && (
+                          <div className="space-y-3">
+                            <h3 className="text-sm font-semibold text-gray-900">
+                              AI workflow capture
+                            </h3>
+                            <p className="text-xs text-gray-500">
+                              Prompts and replies recorded from the candidate&apos;s
+                              coding assistant.
+                            </p>
+                            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 space-y-3">
+                              {workflowPrompts.map((row, index) =>
+                                bubble(
+                                  "candidate",
+                                  row.prompt_text || row.description,
+                                  `w-${index}`
+                                )
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {hasInterview && (
+                          <div className="space-y-3">
+                            <h3 className="text-sm font-semibold text-gray-900">
+                              Post-submit interview
+                            </h3>
+                            {selectedEvaluationSubmission.interview.summary && (
+                              <p className="text-sm text-gray-700 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                                {selectedEvaluationSubmission.interview.summary}
+                              </p>
+                            )}
+                            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 space-y-3">
+                              {interviewTurns.map((turn, index) =>
+                                bubble(turn.role, turn.text, `i-${index}`)
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  ) : (
-                    <div className="py-10 text-center">
-                      <MessageSquare className="w-12 h-12 mx-auto mb-2 text-gray-400" />
-                      <p className="text-gray-600 text-sm">No agent communication for this submission.</p>
-                      <p className="text-xs text-gray-400 mt-1">
-                        Nothing recorded for this submission, or no legacy transcript is stored.
-                      </p>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
               </TabsContent>
             </Tabs>

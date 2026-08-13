@@ -19,10 +19,15 @@ const readline = require("readline");
 const { execSync } = require("child_process");
 
 // `--local` points at a dev server; handy for testing the kit end to end
-// without a real assessment. BRIDGE_API_URL overrides both.
+// without a real assessment. `--api=` (from the candidate page) and
+// BRIDGE_API_URL override the production default.
 const LOCAL_API = `http://localhost:${process.env.PORT || 5050}`;
+const apiFromArg = process.argv
+  .find((a) => a.startsWith("--api="))
+  ?.slice("--api=".length);
 const DEFAULT_API =
   process.env.BRIDGE_API_URL ||
+  apiFromArg ||
   (process.argv.includes("--local")
     ? LOCAL_API
     : "https://bridge-assessements-1.onrender.com");
@@ -196,7 +201,11 @@ async function main() {
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      throw new Error(`HTTP ${res.status} ${body.slice(0, 200)}`);
+      const disabledHint =
+        res.status === 404 || res.status === 503
+          ? "\n  Capture routes are off on this server. For a local test: set WORKFLOW_CAPTURE_ENABLED=true in server/config.env, restart, and pass --local (or --api=http://localhost:5050)."
+          : "";
+      throw new Error(`HTTP ${res.status} ${body.slice(0, 200)}${disabledHint}`);
     }
     session = await res.json();
   } catch (err) {

@@ -144,6 +144,7 @@ See `server/config.env.example` for the full list. Key variables:
 **Authentication:**
 - `FIREBASE_SERVICE_ACCOUNT_JSON` -- Firebase Admin credentials (JSON string, required in prod)
 - `FIREBASE_SERVICE_ACCOUNT_PATH` -- Path to service account file (dev only)
+- `OPS_ADMIN_EMAIL` -- Comma-separated emails allowed to view `GET /api/ops/workload` / `/OpsDashboard` (cross-account workload). Defaults to `HACKATHON_ADMIN_EMAIL`, then `saaz@bridge-jobs.com`
 
 **AI Providers:**
 - `AI_PROVIDER` -- Global default: `openai`, `anthropic`, or `gemini`
@@ -240,6 +241,7 @@ server/src/
 │   ├── assessment.ts      # /api/assessments/* -- CRUD + generate + chat
 │   ├── submission.ts      # /api/submissions/* -- link generation, token access, submit, interview, scoring
 │   ├── competition.ts     # /api/competitions/* -- public competition metadata, self-serve join, leaderboard
+│   ├── ops.ts             # /api/ops/* -- workload dashboard (OPS_ADMIN_EMAIL)
 │   ├── billing.ts         # /api/billing/* -- checkout, status, cancel, reactivate, webhook
 │   ├── agentTools.ts      # /api/agent-tools/* -- ElevenLabs agent context retrieval
 │   ├── webhook.ts         # /webhooks/* -- ElevenLabs post-call webhook
@@ -249,6 +251,7 @@ server/src/
 │   ├── assessment.ts      # Assessment CRUD, AI generation, chat
 │   ├── submission.ts      # All submission handlers (share links, submissions, interviews, scoring)
 │   ├── competition.ts     # Public competitions: get by slug, join (creates pending submission), leaderboard
+│   ├── ops.ts             # Ops workload aggregation (employer attribution for heavy jobs)
 │   ├── billing.ts         # Stripe checkout, status, cancel, reactivate, webhook handler
 │   ├── webhook.ts         # ElevenLabs post-call transcript processing + summary generation
 │   ├── agentTools.ts      # Code context retrieval for ElevenLabs agent (Pinecone search)
@@ -302,7 +305,8 @@ server/src/
 ├── types/
 │   └── assessmentGeneration.ts  # TypeScript types for assessment generation
 ├── middleware/
-│   └── requireSubscription.ts  # Returns 402 if user lacks active subscription
+│   ├── requireSubscription.ts  # Returns 402 if user lacks active subscription
+│   └── requireOpsAdmin.ts      # Firebase + OPS_ADMIN_EMAIL allowlist for /api/ops
 ├── validators/
 │   ├── auth.ts            # Firebase token verification middleware (verifyAuthToken)
 │   ├── submissionAuth.ts  # Submission access: verifySubmissionAccess (auth OR token), verifySubmissionToken
@@ -313,6 +317,7 @@ server/src/
 ├── utils/
 │   ├── auth.ts            # decodeAuthToken(), getUserIdFromFirebaseUid()
 │   ├── subscription.ts    # isSubscribed(), getSubscriptionStatus() -- checks both top-level and legacy nested fields
+│   ├── opsAdmin.ts        # OPS_ADMIN_EMAIL allowlist helpers
 │   ├── firebase.ts        # Firebase Admin Auth export
 │   ├── github.ts          # parseGithubRepoUrl(), resolvePinnedCommit(), fetchRepoMetadata(), resolveBranchToCommit()
 │   ├── embeddings.ts      # generateEmbedding(), generateEmbeddings() -- OpenAI embeddings
@@ -375,6 +380,9 @@ server/src/
 - `GET /:slug` -- Competition + assessment summary for hackathon dashboard (metadata, rules, dates)
 - `POST /:slug/join` -- Self-serve registration: creates a **pending** submission (same as employer generate-link) and returns `token` + `shareLink`; does **not** apply employer free-tier submission limits; stricter rate limit in production (30/hour/IP); duplicate email per assessment returns 409
 - `GET /:slug/leaderboard` -- Public leaderboard for submitted candidates (rank by `scores.overall`, then completeness, then workflow overall score); top 50 default, `?limit=` max 100; respects `leaderboardPublic` on the competition document
+
+**Ops routes** (`/api/ops`, Firebase auth + `OPS_ADMIN_EMAIL` allowlist — cross-account):
+- `GET /workload` -- Aggregated heavy/risk workload: active merges, transcript generation, pending behavioral/evaluation, large sessions; attributes employer (email/company), assessment, submission, proctoring stats; includes in-process merge/grading queue depths for this Render instance. Query: `hours` (default 24), `limit` (default 80). Not crash telemetry — correlate with Render logs.
 
 **Play routes** (`/api/play`, consumer product — requires `PLAY_ENABLED=true` except health):
 - `GET /health` -- Always on; smoke check `{ ok: true, product: "play" }`
@@ -525,6 +533,7 @@ client/src/
 │   ├── CandidateSubmission.jsx # Shows mock submission data with code review
 │   ├── CandidateSubmitted.jsx  # Post-submission -- polls for interview questions, ElevenLabs voice interview
 │   ├── HackathonDashboard.jsx  # Challenge join + dashboard/leaderboard only; marketing landing may live on Framer (slug: `?slug=` > env > `config/competition.js`)
+│   ├── OpsDashboard.jsx        # Internal ops workload dashboard (OPS_ADMIN_EMAIL); heavy merge/transcript/grading attribution
 │   ├── SubmissionsDashboard.jsx # Employer views submissions -- stats, filtering, dropoff analysis, interview modal, diff viewer
 │   ├── Subscription.jsx        # Billing plans -- Free tier vs Early Access
 │   ├── Pricing.jsx             # Public pricing page
@@ -537,6 +546,7 @@ client/src/
 │   ├── assessment.ts      # Assessment API: create, list, get, update, delete, generate, chat
 │   ├── submission.ts      # Submission API: generateLink, bulk, invites, start, submit, interview, optOut, uploadTrace
 │   ├── competition.ts     # Public competition API: get by slug, join, leaderboard
+│   ├── ops.ts             # Ops workload API (admin allowlist)
 │   ├── billing.ts         # Billing API: checkout, status, cancel, reactivate
 │   ├── user.ts            # User API: verifyUser (whoami), createUser, deleteAccount
 │   └── proctoring.ts      # Proctoring API: createSession, grantConsent, uploadFrame, events, complete, video
@@ -630,7 +640,7 @@ Legacy subscription (nested): `subscription.tier` (free/paid), `subscription.str
 Current subscription (top-level): `stripeCustomerId` (sparse indexed), `stripeSubscriptionId` (sparse indexed), `subscriptionStatus` (active/canceled/past_due/trialing/incomplete/incomplete_expired/unpaid/null), `currentPeriodEnd`, `cancelAtPeriodEnd`, `cancellationReason`, `cancellationDate`
 
 ### Assessment
-Fields: `userId` (ref User, indexed), `title` (max 200), `description`, `timeLimit` (minutes, min 1), `numInterviewQuestions` (1-4, default 2), `starterFilesGitHubLink`, `starterCodeFiles[]` { path, content }, `interviewerCustomInstructions`, `isSmartInterviewerEnabled` (default true), `behavioralChecks[]` (plain-language observable product behaviors; stack-agnostic), `evaluationCriteria[]` (proctoring/transcript rubric), `evaluationCriteriaGroundings` (optional)
+Fields: `userId` (ref User, indexed), `title` (max 200), `description`, `timeLimit` (minutes, min 1), `numInterviewQuestions` (1-4, default 2), `starterFilesGitHubLink`, `starterCodeFiles[]` { path, content }, `interviewerCustomInstructions`, `isSmartInterviewerEnabled` (default true), `evidenceMode` (`none` default for new assessments / `workflow` / `both` / legacy `screen`), `behavioralChecks[]` (plain-language observable product behaviors; stack-agnostic), `evaluationCriteria[]` (proctoring/transcript rubric), `evaluationCriteriaGroundings` (optional)
 
 ### Competition
 Fields: `slug` (unique, lowercase), `assessmentId` (ref Assessment), optional `title` / `description` / `rulesMarkdown` (dashboard copy; title/description fall back to assessment), `registrationOpen`, `competitionStartsAt`, `competitionEndsAt`, `leaderboardPublic` (default true). **Ops:** create an assessment in the app, then insert or update a `Competition` document with that `assessmentId` and share `/HackathonDashboard?slug=<slug>`.

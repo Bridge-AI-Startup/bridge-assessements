@@ -77,6 +77,19 @@ const MAX_CONCURRENT_GRADES = Number(process.env.BEHAVIORAL_GRADING_MAX_CONCURRE
 let activeGrades = 0;
 const gradeQueue: Array<() => void> = [];
 
+/** In-process grading concurrency snapshot for ops dashboard (this Render instance only). */
+export function getBehavioralGradingQueueStats(): {
+  active: number;
+  queued: number;
+  maxConcurrent: number;
+} {
+  return {
+    active: activeGrades,
+    queued: gradeQueue.length,
+    maxConcurrent: MAX_CONCURRENT_GRADES,
+  };
+}
+
 /** When unset or false, E2B behavioral grading is disabled (auto-submit and manual re-run). Set BEHAVIORAL_GRADING_ENABLED=true to enable. */
 export function isBehavioralGradingEnabled(): boolean {
   const raw = process.env.BEHAVIORAL_GRADING_ENABLED;

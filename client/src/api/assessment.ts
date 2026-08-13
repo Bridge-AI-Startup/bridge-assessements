@@ -4,6 +4,8 @@ import { API_BASE_URL } from "@/config/api";
 
 export type StarterCodeFile = { path: string; content: string };
 
+export type EvidenceMode = "none" | "workflow" | "both" | "screen";
+
 export type Assessment = {
   _id: string;
   userId: string;
@@ -15,6 +17,7 @@ export type Assessment = {
   starterCodeFiles?: StarterCodeFile[];
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
+  evidenceMode?: EvidenceMode;
   behavioralChecks?: string[];
   evaluationCriteria?: string[];
   createdAt: string;
@@ -42,6 +45,7 @@ export type AssessmentUpdate = {
   starterCodeFiles?: StarterCodeFile[];
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
+  evidenceMode?: EvidenceMode;
   behavioralChecks?: string[];
   evaluationCriteria?: string[];
 };
@@ -236,6 +240,7 @@ export async function updateAssessment(
       starterCodeFiles?: StarterCodeFile[];
       interviewerCustomInstructions?: string;
       isSmartInterviewerEnabled?: boolean;
+      evidenceMode?: EvidenceMode;
       behavioralChecks?: string[];
       evaluationCriteria?: string[];
     } = {};
@@ -264,6 +269,11 @@ export async function updateAssessment(
     }
     if (data.isSmartInterviewerEnabled !== undefined) {
       updateBody.isSmartInterviewerEnabled = data.isSmartInterviewerEnabled;
+    }
+    // Must be copied explicitly — a whitelist body that omits this field is
+    // why the editor radio used to snap back to screen recording.
+    if (data.evidenceMode !== undefined) {
+      updateBody.evidenceMode = data.evidenceMode;
     }
     if (data.behavioralChecks !== undefined) {
       updateBody.behavioralChecks = data.behavioralChecks;
