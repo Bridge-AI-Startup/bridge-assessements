@@ -3,6 +3,7 @@ import {
   validateCriterionEvidence,
   validateAllEvidence,
 } from "../../src/services/workflowCapture/evidenceValidator.js";
+import { validateReportEvidence } from "../../src/services/workflowCapture/evaluate.js";
 import { buildEventIndex } from "../../src/services/workflowCapture/episodes.js";
 import type { TranscriptEvent } from "../../src/types/evaluation.js";
 
@@ -149,5 +150,38 @@ describe("buildEventIndex", () => {
     const { text } = buildEventIndex(long, T0);
     expect(text.length).toBeLessThan(400);
     expect(text).toMatch(/…$/);
+  });
+});
+
+describe("validateReportEvidence (report wiring)", () => {
+  // Regression: this read `report.criteria` while the evaluation orchestrator
+  // returns `criteria_results`, so every workflow submission was graded with
+  // the validator handed an empty array — unchecked citations reached
+  // employers and the integrity block always read "0 kept, 0 dropped".
+  it("reads citations off the field the orchestrator actually returns", () => {
+    const report = {
+      session_summary: "built a summary endpoint",
+      criteria_results: [
+        verdict([
+          { ts: 12, observation: "real moment" },
+          { ts: 600, observation: "fabricated moment" },
+        ]),
+      ],
+    };
+
+    const out = validateReportEvidence(report, timeline);
+
+    expect(out.totalKept).toBe(1);
+    expect(out.totalDropped).toBe(1);
+    expect(out.results[0].evidence).toHaveLength(1);
+  });
+
+  it("returns an empty result rather than throwing on a malformed report", () => {
+    expect(validateReportEvidence(null, timeline).totalKept).toBe(0);
+    expect(validateReportEvidence({}, timeline).totalKept).toBe(0);
+    expect(
+      validateReportEvidence({ criteria_results: "nope" as any }, timeline)
+        .totalDropped
+    ).toBe(0);
   });
 });

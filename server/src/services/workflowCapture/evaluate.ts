@@ -20,6 +20,7 @@ import {
   WorkflowFileStateModel,
 } from "../../models/workflowCapture.js";
 import { evaluateTranscript } from "../evaluation/orchestrator.js";
+import type { TranscriptEvent } from "../../types/evaluation.js";
 import { buildTranscriptEvents } from "./timeline.js";
 import { computeMetrics } from "./metrics.js";
 import { validateAllEvidence } from "./evidenceValidator.js";
@@ -126,6 +127,26 @@ export function assessCaptureIntegrity(
   };
 }
 
+/**
+ * Validate the judge's citations against the timeline they were drawn from.
+ *
+ * Split out and exported purely so the wiring is testable. It was not, and the
+ * field name silently drifted: this read `report.criteria` while the evaluation
+ * orchestrator returns `criteria_results`, so the validator was handed an empty
+ * array on every submission. Nothing failed — reports simply carried unchecked
+ * citations and an integrity block that always read "0 kept, 0 dropped". A
+ * guarantee that degrades to a no-op without a symptom needs a test, not care.
+ */
+export function validateReportEvidence(
+  report: { criteria_results?: unknown } | null | undefined,
+  timeline: TranscriptEvent[]
+) {
+  const results = Array.isArray(report?.criteria_results)
+    ? (report!.criteria_results as Parameters<typeof validateAllEvidence>[0])
+    : [];
+  return validateAllEvidence(results, timeline);
+}
+
 export interface WorkflowEvaluationResult {
   report: unknown;
   timelineEvents: number;
@@ -183,10 +204,7 @@ export async function evaluateWorkflowSession(
     groundings: options?.groundings as any,
   });
 
-  // Drop citations that do not correspond to captured activity. Doing this
-  // after scoring rather than constraining the judge keeps the existing
-  // evaluator untouched, and a dropped citation is visible in the logs.
-  const validated = validateAllEvidence(report?.criteria ?? [], timeline);
+  const validated = validateReportEvidence(report, timeline);
   if (validated.reasons.length > 0) {
     logTs(
       "workflow-eval",
@@ -197,7 +215,7 @@ export async function evaluateWorkflowSession(
   return {
     report: {
       ...report,
-      criteria: validated.results,
+      criteria_results: validated.results,
       // Deterministic counts travel with the report so a reviewer sees the
       // factual floor beside the judged scores.
       workflowMetrics: metrics,
