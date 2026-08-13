@@ -25,6 +25,7 @@ import { shortsEnabled } from "./utils/shortsEnv.js";
 import { errorHandler } from "./errors/handler.js";
 import { isDevLoopbackOrigin } from "./utils/corsOrigins.js";
 import { startIncrementalScheduler } from "./ai/transcript/incrementalScheduler.js";
+import { startRuntimeSetupReaper } from "./services/runtimeSetup/index.js";
 
 // Node 15+ terminates the process on an unhandled rejection. Without these
 // handlers a background async failure (E2B, Mongo, a stray promise) kills the
@@ -381,6 +382,10 @@ console.log("     - GET /api/submissions/assessments/public/:id");
 console.log("     - GET /api/submissions/token/:token");
 console.log("     - POST /api/submissions/token/:token/start");
 console.log("     - POST /api/submissions/token/:token/submit");
+console.log("     - PUT  /api/submissions/token/:token/runtime/config");
+console.log("     - POST /api/submissions/token/:token/runtime/session");
+console.log("     - POST /api/submissions/token/:token/runtime/run");
+console.log("     - GET  /api/submissions/token/:token/runtime/status");
 console.log("     - GET /api/submissions/:id");
 console.log("     - PATCH /api/submissions/:id");
 console.log("     - POST /api/submissions/:id/submit");
@@ -524,6 +529,7 @@ const startServer = async () => {
       console.log(`📡 API base: http://localhost:${PORT}/api`);
       console.log(`${"=".repeat(60)}\n`);
       startIncrementalScheduler();
+      startRuntimeSetupReaper();
     });
   } catch (error) {
     console.error("\n❌ Failed to start server:", error);

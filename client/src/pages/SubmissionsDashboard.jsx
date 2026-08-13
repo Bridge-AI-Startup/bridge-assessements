@@ -61,6 +61,10 @@ import {
 import { runSubmissionEvaluation } from "@/api/evaluation";
 import VideoTimelineWithCriteria from "@/components/proctoring/VideoTimelineWithCriteria";
 import BehavioralGradingLiveTrace from "@/components/submissions/BehavioralGradingLiveTrace";
+import RuntimeReplayPanel, {
+  shouldShowRuntimeReplay,
+} from "@/components/submissions/RuntimeReplayPanel";
+import { stopRuntimeReplay } from "@/api/runtimeSetup";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Sheet,
@@ -3505,6 +3509,10 @@ export default function SubmissionsDashboard() {
           open={showEvaluationModal}
           onOpenChange={(open) => {
             if (!open) {
+              const id = selectedEvaluationSubmission?._id;
+              if (id && shouldShowRuntimeReplay(selectedEvaluationSubmission)) {
+                void stopRuntimeReplay(id);
+              }
               setShowEvaluationModal(false);
               setSelectedEvaluationSubmission(null);
             }
@@ -3580,6 +3588,12 @@ export default function SubmissionsDashboard() {
                           </Button>
                         ) : null}
                       </div>
+
+                      {shouldShowRuntimeReplay(selectedEvaluationSubmission) ? (
+                        <RuntimeReplayPanel
+                          submission={selectedEvaluationSubmission}
+                        />
+                      ) : null}
 
                       {/* Behavioral grading summary (real pipeline data) */}
                       <div className="rounded-lg border border-gray-200 bg-white p-3 space-y-3">

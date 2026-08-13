@@ -185,6 +185,17 @@ See `server/config.env.example` for the full list. Key variables:
 - `BEHAVIORAL_GRADING_MAX_CONCURRENT` -- Max concurrent behavioral grading jobs (default: `2`)
 - `BEHAVIORAL_GRADING_UPLOAD_ENABLED` -- Enable behavioral grading for uploaded archives (default: `true`)
 
+**Runtime setup (post-submit candidate-authored run config):**
+- `RUNTIME_SETUP_ENABLED` -- Gate candidate runtime-setup routes and UI (default: disabled)
+- `RUNTIME_SETUP_MAX_CONCURRENT` -- Cap on **running** (non-paused) setup sandboxes (default: `3`)
+- `RUNTIME_SETUP_SANDBOX_TTL_MS` -- Hard cap per live sandbox (default: `1800000` = 30m)
+- `RUNTIME_SETUP_IDLE_PAUSE_MS` -- Idle → E2B pause (default: `240000` = 4m)
+- `RUNTIME_SETUP_INSTALL_TIMEOUT_MS` / `RUNTIME_SETUP_BUILD_TIMEOUT_MS` / `RUNTIME_SETUP_RUN_MAX_MS`
+- `RUNTIME_SETUP_CPU` / `RUNTIME_SETUP_MEM_MIB` -- sandbox size (default 2 vCPU / 4096 MiB)
+- `RUNTIME_SETUP_DENY_EGRESS_AT_RUNTIME` -- After start, lock outbound traffic except `declaredEgressDomains` (default: `true`; requires E2B `updateNetwork`, SDK ≈2.28+)
+- `RUNTIME_SETUP_RUNS_PER_HOUR` -- Per-submission run cap (default: `12`)
+- `RUNTIME_SETUP_HEALTH_WAIT_MS` -- Poll for app ready after start (default: `90000`)
+
 **Shorts (consumer daily challenge):**
 - `SHORTS_ENABLED` -- Gate `/api/shorts` feature routes (default: disabled); `GET /api/shorts/health` always on
 - `SHORTS_DB_NAME` -- Mongo database for Shorts product (default: `bridge-play`, same Atlas cluster)
@@ -259,6 +270,7 @@ server/src/
 │   ├── assessment.ts      # Assessment schema (title, description, time limit, settings)
 │   ├── competition.ts     # Competition / hackathon: slug, assessmentId, rules, registration window, leaderboard flag
 │   ├── submission.ts      # Submission schema (token, candidate info, GitHub repo, interview, scores, LLM workflow)
+│   ├── runtimeSetupSession.ts # Ephemeral E2B box for candidate runtime setup / recruiter replay
 │   ├── repoIndex.ts       # Repository indexing metadata for Pinecone
 │   └── proctoringSession.ts  # Proctoring session (frames, events, transcript, video chunks)
 ├── routes/
@@ -274,6 +286,7 @@ server/src/
 │   ├── user.ts            # User creation, login (with tier limits), account deletion
 │   ├── assessment.ts      # Assessment CRUD, AI generation, chat
 │   ├── submission.ts      # All submission handlers (share links, submissions, interviews, grading)
+│   ├── runtimeSetup.ts    # Candidate/recruiter runtime setup (config, run, pause, finalize, replay)
 │   ├── competition.ts     # Public competitions: get by slug, join (creates pending submission), leaderboard
 │   ├── billing.ts         # Stripe checkout, status, cancel, reactivate, webhook handler
 │   ├── webhook.ts         # ElevenLabs post-call transcript processing + summary generation
@@ -298,6 +311,12 @@ server/src/
 │   │   ├── judge.ts           # One-shot LLM judge (stdout/source/HTTP seed)
 │   │   ├── agentJudge.ts      # Tool-using judge (run_command/read_file in sandbox, then finish)
 │   │   └── artifacts.ts       # collectJudgeArtifacts + bashLc helpers
+│   ├── runtimeSetup/
+│   │   ├── sessions.ts        # Persistent E2B lifecycle (create/pause/resume/run/finalize)
+│   │   ├── run.ts             # Candidate runtimeConfig → install/build/start + health
+│   │   ├── sandbox.ts         # Long-lived sandbox (does not auto-kill like grader)
+│   │   ├── network.ts         # Two-phase egress via updateNetwork
+│   │   └── schema.ts          # Zod runtimeConfig + secret redaction helpers
 │   ├── play/
 │   │   ├── challenges.ts      # Shorts daily challenge CRUD + UTC today lookup + public past-rounds archive
 │   │   ├── account.ts         # Consumer accounts: claim anonymousIds, cross-round submission history
@@ -369,6 +388,8 @@ server/src/
     ├── backfillInterviewQuestions.ts
     ├── listSubmissions.ts
     ├── seedCompetition.ts   # Link Mongo Competition slug → assessment (hackathon dashboard)
+    ├── seedRuntimeSetupMernDemo.ts # Upsert MERN Notes Board assessment + candidate link under demo@bridgeai-demo.com; submit folder is demos/runtime-setup-mern
+    ├── seedRuntimeSetupPathfinderDemo.ts # Upsert Warehouse Pathfinder (Python A*/TSP) assessment + candidate link; submit folder is demos/runtime-setup-pathfinder
     ├── seedShortsChallenge.ts # Upsert Shorts daily challenge from shorts/challenges/*.json
     ├── seedShortsLaunchRound.ts # Cold-start round seed driven by shorts/seed-builds/<date>/seed.json: upsert challenge, insert seeded builds + simulated vote graph (--date=YYYY-MM-DD, dry-run unless --apply; refuses if the round already has submissions)
     ├── moveShortsLaunchRound.ts # One-off: re-dated the week-1 seeded round from 2026-08-03 onto 2026-07-27 (kept as a template for date moves)
@@ -473,6 +494,10 @@ Hooks-first capture of the candidate's AI-agent conversation + code changes, as 
 - `POST /:submissionId/grade-behavioral` -- Trigger manual behavioral grading re-run (E2B + evidence capture)
 - `GET /:submissionId/behavioral-artifact` -- Retrieve stored behavioral grading artifacts (screenshots/report files)
 - `GET /:submissionId/code-archive` -- Download uploaded candidate archive (upload-source submissions only)
+- `POST /:submissionId/runtime/preview` -- Recruiter replay: accept a **fresh** `kind: "replay"` sandbox job for the **finalized** runtime config (auth + ownership); returns quickly (`accepted`) and runs install/build/start in the background
+- `GET /:submissionId/runtime/preview/status` -- Recruiter poll: session state + redacted config + previewUrl/health (auth + ownership)
+- `GET /:submissionId/runtime/preview/logs` -- Recruiter poll: build/runtime logs (`?after=` seq; auth + ownership)
+- `POST /:submissionId/runtime/preview/stop` -- Kill the recruiter replay sandbox (auth + ownership)
 
 *Candidate endpoints (no auth, token-based):*
 - `GET /assessments/public/:id` -- Get public assessment details
@@ -483,6 +508,14 @@ Hooks-first capture of the candidate's AI-agent conversation + code changes, as 
 - `POST /token/:token/upload` -- Submit code by archive upload (`multipart/form-data`, field `archive`), stores upload metadata, starts indexing, auto-triggers behavioral grading; same 5-minute post-time-limit grace window as GitHub submit
 - `POST /token/:token/generate-interview` -- Generate interview questions
 - `POST /token/:token/opt-out` -- Opt out with reason
+- `PUT /token/:token/runtime/config` -- Autosave runtime config (feature-gated: `RUNTIME_SETUP_ENABLED`)
+- `POST /token/:token/runtime/session` -- Create or resume the setup sandbox (loads snapshot; reconnects paused/running box)
+- `POST /token/:token/runtime/restart` -- Kill the current sandbox (if any) and provision a fresh one from the submitted snapshot
+- `POST /token/:token/runtime/run` -- Install → build → start using saved config; requires a live setup sandbox (`running`/`paused`); **409** if the environment has not been started; returns previewUrl
+- `GET /token/:token/runtime/status` -- Session state + previewUrl + health + last run
+- `GET /token/:token/runtime/logs` -- Poll build/runtime logs (`?after=` seq)
+- `POST /token/:token/runtime/pause` / `.../resume` -- Idle pause / reconnect
+- `POST /token/:token/runtime/finalize` -- Persist config, mark verified, tear down sandbox
 - `PATCH /:id` -- Update submission (auto-save)
 - `GET /:id` -- Get submission by ID
 - `POST /:id/submit` -- Final submission (legacy, also auto-triggers behavioral grading)
@@ -593,9 +626,10 @@ client/src/
 │   ├── AssessmentEditor.jsx    # Edit assessment -- title, desc, time, starter files, smart interviewer, share links, bulk invite
 │   ├── CandidateAssessment.jsx # Candidate views assessment -- read-only details, start timer, submit local folder upload (auto-zipped client-side), opt-out
 │   ├── CandidateSubmission.jsx # Shows mock submission data with code review
-│   ├── CandidateSubmitted.jsx  # Post-submission -- polls for interview questions, ElevenLabs voice interview
+│   ├── CandidateSubmitted.jsx  # Post-submission confirmation; CTA into RuntimeSetup when enabled
+│   ├── RuntimeSetup.jsx        # Candidate runtime config + Run + live preview/logs + Finalize
 │   ├── HackathonDashboard.jsx  # Challenge join + dashboard/leaderboard only; marketing landing may live on Framer (slug: `?slug=` > env > `config/competition.js`)
-│   ├── SubmissionsDashboard.jsx # Employer views submissions -- stats, filtering, dropoff analysis, interview modal, diff viewer
+│   ├── SubmissionsDashboard.jsx # Employer views submissions -- stats, filtering, dropoff analysis, interview modal, runtime replay
 │   ├── Subscription.jsx        # Billing plans -- Free tier vs Early Access
 │   ├── Pricing.jsx             # Public pricing page
 │   ├── BillingSuccess.jsx      # Stripe success redirect
@@ -606,6 +640,7 @@ client/src/
 │   ├── requests.ts        # Base HTTP client (fetch wrapper: get/post/put/patch/del with error handling)
 │   ├── assessment.ts      # Assessment API: create, list, get, update, delete, generate, chat
 │   ├── submission.ts      # Submission API: generateLink, bulk, invites, start, submit, interview, optOut, uploadTrace
+│   ├── runtimeSetup.ts    # Candidate runtime setup + recruiter replay (preview/status/logs/stop)
 │   ├── competition.ts     # Public competition API: get by slug, join, leaderboard
 │   ├── billing.ts         # Billing API: checkout, status, cancel, reactivate
 │   ├── user.ts            # User API: verifyUser (whoami), createUser, deleteAccount
@@ -618,6 +653,9 @@ client/src/
 │   │   └── PresetPills.jsx            # Quick preset job descriptions
 │   ├── BulkInviteModal.jsx            # 3-step CSV upload wizard: upload → review → success
 │   ├── ElevenLabsInterviewClient.jsx  # Voice interview UI (conversation hooks, transcript display)
+│   ├── submissions/
+│   │   ├── BehavioralGradingLiveTrace.jsx # Live behavioral-grading progress in evaluation modal
+│   │   └── RuntimeReplayPanel.jsx     # Recruiter read-only runtime config + Run project preview/logs
 │   ├── proctoring/
 │   │   ├── ConsentScreen.jsx          # Consent dialog before screen recording
 │   │   ├── RecordingIndicator.jsx     # Floating red recording badge
@@ -674,7 +712,7 @@ client/src/
 8. **AI voice interview**: CandidateSubmitted page → ElevenLabs voice interview → agent calls `/api/agent-tools/get-context` for real-time code context
 9. **Post-call processing**: ElevenLabs sends transcript via webhook → stored on submission → AI generates interview summary
 10. **Scoring**: Combined employer/leaderboard score from available signals — Screen (recording/proctoring rubric via `evaluationReport`) and Behavioral (E2B check pass rate). Deprecated Trace / LLM-workflow scoring was removed.
-11. **Employer reviews**: SubmissionsDashboard → stats, filtering, dropoff analysis, evaluation modal (Final code / Recording & rubric / Agent), interview transcript + analysis
+11. **Employer reviews**: SubmissionsDashboard → stats, filtering, dropoff analysis, evaluation modal (Final code with optional runtime replay / Recording & rubric / Agent), interview transcript + analysis
 
 ### Subscription / Billing Flow
 1. User clicks upgrade → `POST /api/billing/checkout` creates Stripe Checkout session
@@ -723,7 +761,16 @@ Metadata: `metadata` { ipAddress, userAgent }
 
 Behavioral grading: `behavioralGradingStatus` (`pending`/`completed`/`failed`), `behavioralGradingError`, `behavioralGradingReport` (runbook summary, per-check verdict/evidence, artifact keys, timings, sandbox metadata), `behavioralGradingProgress`
 
+Runtime setup: `runtimeConfig` { rootDir, runtime (`auto`/`node20`/`python312`), installCommand, buildCommand, startCommand, port, healthPath, executionProfile (`web_server`/`cli_stdout`/`unclear`), envVars[] { key, value, secret }, declaredEgressDomains[] }; `runtimeSetup` { status (`not_started`/`in_progress`/`finalized`), verified, lastRunAt, lastRunResult, finalizedAt, snapshotSha256 }. Secret env values are write-only (never returned on GET).
+
 Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`, `{ "interview.conversationId": 1 }` (sparse)
+
+### RuntimeSetupSession
+Ephemeral E2B box for candidate setup (`kind: setup`) or recruiter replay (`kind: replay`). Durable record is `Submission.runtimeConfig` + the stored code snapshot.
+
+Fields: `submissionId` (indexed), `token`, `kind` (`setup`/`replay`), `e2bSandboxId`, `status` (`provisioning`/`running`/`paused`/`dead`), `runPhase`, `repoPath`, `port`, `previewUrl`, `health`, `startedAt`, `lastActiveAt`, `pausedAt`, `cpu`, `memMiB`, `error`, `logLines[]`, `codeLoaded`
+
+Indexes: unique `{ submissionId: 1, kind: 1 }`
 
 ### PlayChallenge (bridge-play DB)
 Fields: `slug` (unique, lowercase `a-z0-9-`), `challengeDate` (unique, `YYYY-MM-DD` UTC), `title` (max 120), `prompt`, `tokenBudget`, `category` (`widget`/`game`/`tool`/`other`), `status` (`draft`/`published`), `makeMode` (optional `e2b`/`serverless`; unset → `SHORTS_MAKE_MODE` default — the site's Build-mode toggle), `windowStartsAt`/`windowEndsAt` (optional Date pair: explicit round window override — the challenge is live exactly while now ∈ [start, end], regardless of the cadence grid, and the round countdown/session-expiry cap use `windowEndsAt`; `challengeDate` stays the key submissions/votes/sessions attach to, so a window never rekeys data. Consumers resolve "the current round" through `getActiveChallengeDate()` in `services/shorts/challenges.ts` (window-aware), not raw `getCurrentPeriodKey()`. Set via Mongo directly — not exposed in the admin UI yet)

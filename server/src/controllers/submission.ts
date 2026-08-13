@@ -49,6 +49,11 @@ import {
 import { getGradingEvidenceStorage } from "../services/gradingEvidence/storage.js";
 import { getSubmissionCodeStorage } from "../services/submissionCode/storage.js";
 import { collectBehavioralArtifactKeys } from "../utils/behavioralEvidenceKeys.js";
+import {
+  isRuntimeSetupEnabled,
+  markRuntimeSetupInProgress,
+  publicRuntimeConfig,
+} from "../services/runtimeSetup/index.js";
 
 const TRANSCRIPT_POLL_INTERVAL_MS = 15000;
 const TRANSCRIPT_POLL_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
@@ -468,6 +473,10 @@ export const getSubmissionByToken: RequestHandler = async (req, res, next) => {
     // candidate client knows whether to ask for the screen, show the
     // capture-kit command, or both. Never trust the raw field client-side.
     response.evidenceMode = resolveEvidenceMode(submission.assessmentId as any);
+    response.runtimeSetupEnabled = isRuntimeSetupEnabled();
+    if (response.runtimeConfig) {
+      response.runtimeConfig = publicRuntimeConfig(response.runtimeConfig);
+    }
 
     res.status(200).json(response);
   } catch (error) {
@@ -671,6 +680,7 @@ export const submitSubmissionByToken: RequestHandler = async (
     submission.status =
       submission.status === "expired" ? "expired" : "submitted";
     submission.submittedAt = new Date();
+    markRuntimeSetupInProgress(submission);
 
     await submission.save();
 
@@ -933,6 +943,7 @@ export const uploadSubmissionByToken: RequestHandler = async (req, res, next) =>
     submission.status =
       submission.status === "expired" ? "expired" : "submitted";
     submission.submittedAt = new Date();
+    markRuntimeSetupInProgress(submission);
 
     await submission.save();
 
@@ -1080,6 +1091,7 @@ export const submitSubmission: RequestHandler = async (req, res, next) => {
     submission.status =
       submission.status === "expired" ? "expired" : "submitted";
     submission.submittedAt = new Date();
+    markRuntimeSetupInProgress(submission);
 
     await submission.save();
 
@@ -1167,7 +1179,14 @@ export const getSubmissionsForAssessment: RequestHandler = async (
       })
       .lean();
 
-    res.status(200).json(submissions);
+    const runtimeSetupEnabled = isRuntimeSetupEnabled();
+    const shaped = submissions.map((row) => ({
+      ...row,
+      runtimeSetupEnabled,
+      runtimeConfig: publicRuntimeConfig(row.runtimeConfig as never) || row.runtimeConfig,
+    }));
+
+    res.status(200).json(shaped);
   } catch (error) {
     next(error);
   }
