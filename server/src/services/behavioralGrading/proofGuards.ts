@@ -16,7 +16,9 @@
  * A `fail` gets one gate of its own. In a hiring product an unproven fail costs
  * the candidate more than an unproven pass costs the employer, and the grader's
  * own browser automation missing a control looks exactly like the app not having
- * one — so a UI fail where every browser interaction errored is not a finding.
+ * one. Opening the page (`browser_goto`) is not enough: a fill/click timeout
+ * after a successful load is still an automation miss. A UI fail stands only
+ * once a mutating action succeeded *and* a `browser_expect` actually ran.
  *
  * Pure functions — no sandbox, no LLM — so every rule below is unit-tested.
  */
@@ -147,6 +149,34 @@ export function hasFailedBrowserInteraction(trace: TraceEntryLike[]): boolean {
   return trace.some((t) => t.tool.startsWith("browser_") && t.success === false);
 }
 
+const BROWSER_MUTATION_TOOLS = new Set([
+  "browser_fill",
+  "browser_fill_role",
+  "browser_click",
+  "browser_click_role",
+  "browser_click_text",
+]);
+
+/** A fill or click that errored — the selector miss that looks like a product fail. */
+export function hasFailedBrowserMutation(trace: TraceEntryLike[]): boolean {
+  return trace.some(
+    (t) => BROWSER_MUTATION_TOOLS.has(t.tool) && t.success === false
+  );
+}
+
+/**
+ * The agent both drove the page and asserted on it. A fail after that is about
+ * what the page showed, not about a locator the grader invented. `browser_expect`
+ * only has to have *run* — a mismatch is the candidate fail we want to publish.
+ */
+export function hasProvenUiWalkthrough(trace: TraceEntryLike[]): boolean {
+  const mutated = trace.some(
+    (t) => BROWSER_MUTATION_TOOLS.has(t.tool) && t.success !== false
+  );
+  const asserted = trace.some((t) => t.tool === "browser_expect");
+  return mutated && asserted;
+}
+
 /** Normalized for substring comparison; citation quoting is not byte-exact. */
 function normalize(text: string): string {
   return text.replace(/\s+/g, " ").trim().toLowerCase();
@@ -244,23 +274,25 @@ export function checkProofGuards(input: ProofGuardInput): ProofGuardViolation | 
 }
 
 /**
- * A UI fail is only rejected when the browser was tried and *every* attempt
- * errored. A fail resting on source review or CLI evidence, where the browser
- * was never opened, is a real finding and must stand.
+ * A UI fail is rejected when a fill/click timed out and the agent never both
+ * drove the page *and* asserted on it. A successful goto alone is not a
+ * walkthrough — that is the test5 hole, where `input[type=text]` timed out on
+ * an untyped field after the page loaded. A fail resting on source review or
+ * curl, with no browser mutation, still stands.
  */
 function checkFailGuards(input: ProofGuardInput): ProofGuardViolation | null {
   if (
     input.browserBaseUrl?.trim() &&
     checkNeedsUiProof(input.behavioralCheck) &&
-    !hasAnySuccessfulBrowserObservation(input.trace) &&
-    hasFailedBrowserInteraction(input.trace)
+    hasFailedBrowserMutation(input.trace) &&
+    !hasProvenUiWalkthrough(input.trace)
   ) {
     return {
       code: "unproven_ui_fail",
       instruction:
-        "finish rejected: every browser step in this run errored, so nothing was observed about the page — a selector timeout is evidence about your automation, not about the app. Take a `browser_snapshot` first, then drive the page with `browser_click_role` / `browser_fill_role` using a role and accessible name from that snapshot (`browser_click` / `browser_fill` take CSS selectors, not role names). Only finish with fail once you have seen the page and it genuinely lacks the behavior.",
+        "finish rejected: a fill or click timed out, so nothing was proven about the page — a selector timeout is evidence about your automation, not about the app. Take a `browser_snapshot` first, then drive the page with `browser_click_role` / `browser_fill_role` using a role and accessible name from that snapshot (`browser_fill`'s selector is CSS, not a role name; `input[type=text]` does not match an untyped <input>). Only finish with fail after a successful fill or click *and* a `browser_expect` that actually ran.",
       explanation:
-        "Every browser interaction in this run failed, so the fail could not be distinguished from the grader's own browser automation failing to find the control.",
+        "A browser fill or click timed out before the page was asserted, so the fail could not be distinguished from the grader's own automation missing the control.",
     };
   }
 

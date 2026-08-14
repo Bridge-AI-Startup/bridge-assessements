@@ -94,9 +94,45 @@ const cliExpectationSchema = z
     { message: "expectation must assert something" }
   );
 
+/** Roles that Playwright can type into. Specs must not depend on CSS. */
+export const UI_FILL_ROLES = ["textbox", "searchbox", "combobox"] as const;
+
+/** Roles that Playwright can click by accessible name. Prefer over `click_text`. */
+export const UI_CLICK_ROLES = ["button", "link", "checkbox"] as const;
+
 const uiStepSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("goto"), path: requestPathSchema }),
+  z.object({
+    action: z.literal("click_role"),
+    role: z.enum(UI_CLICK_ROLES),
+    name: z.string().min(1).max(200),
+    exact: z.boolean().optional(),
+  }),
+  /** Leftover: resolved through the source catalog at grade time, never via getByText. */
   z.object({ action: z.literal("click_text"), text: z.string().min(1).max(200) }),
+  z.object({
+    action: z.literal("click_in_row"),
+    hasText: z.string().min(1).max(500),
+    role: z.enum(UI_CLICK_ROLES).default("button"),
+    name: z.string().min(1).max(200).optional(),
+    hasNotName: z.string().min(1).max(200).optional(),
+    index: z.number().int().min(0).max(20).optional(),
+    capabilityId: z.string().max(120).optional(),
+    source: z.string().max(200).optional(),
+  }),
+  z.object({ action: z.literal("reload") }),
+  z.object({
+    action: z.literal("fill_role"),
+    role: z.enum(UI_FILL_ROLES),
+    name: z.string().max(200).optional(),
+    exact: z.boolean().optional(),
+    value: z.string().max(2000),
+  }),
+  z.object({
+    action: z.literal("fill_placeholder"),
+    placeholder: z.string().min(1).max(200),
+    value: z.string().max(2000),
+  }),
   z.object({
     action: z.literal("fill"),
     selector: z.string().min(1).max(400),
@@ -106,6 +142,12 @@ const uiStepSchema = z.discriminatedUnion("action", [
     action: z.literal("expect_text"),
     text: z.string().min(1).max(500),
     /** Assert the text is absent instead of present. */
+    absent: z.boolean().optional(),
+  }),
+  z.object({
+    action: z.literal("expect_in_row"),
+    hasText: z.string().min(1).max(500),
+    text: z.string().min(1).max(500),
     absent: z.boolean().optional(),
   }),
 ]);
@@ -154,7 +196,7 @@ export const behavioralCheckSpecSchema = z.discriminatedUnion("kind", [
   z.object({
     ...specBase,
     kind: z.literal("ui"),
-    acceptance: z.object({ steps: z.array(uiStepSchema).min(1).max(12) }),
+    acceptance: z.object({ steps: z.array(uiStepSchema).min(1).max(16) }),
   }),
 ]);
 

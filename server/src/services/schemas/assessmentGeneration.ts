@@ -58,6 +58,46 @@ const suggestedRequestSchema = z.object({
     .describe("Substrings the response body must contain"),
 });
 
+/**
+ * One UI walkthrough step. Flatter than `uiStepSchema` so the generator does
+ * not have to emit a discriminated union.
+ */
+export const suggestedUiStepSchema = z.object({
+  action: z.enum([
+    "goto",
+    "fill_placeholder",
+    "fill_role",
+    "click_role",
+    "click_text",
+    "expect_text",
+  ]),
+  path: z.string().max(500).optional(),
+  placeholder: z.string().max(200).optional(),
+  role: z
+    .enum(["textbox", "searchbox", "combobox", "button", "link", "checkbox"])
+    .optional(),
+  name: z.string().max(200).optional(),
+  exact: z.boolean().optional(),
+  text: z.string().max(500).optional(),
+  value: z.string().max(2000).optional(),
+  absent: z.boolean().optional(),
+});
+
+export const suggestedAcceptanceSchema = z.object({
+  text: z
+    .string()
+    .min(1)
+    .max(400)
+    .describe("Must exactly match one entry in checks"),
+  kind: z
+    .enum(["http", "http_sequence", "restart_persistence", "ui", "agent"])
+    .describe(
+      "ui = drive the page; http* only when the description already names the path"
+    ),
+  requests: z.array(suggestedRequestSchema).max(4).optional(),
+  uiSteps: z.array(suggestedUiStepSchema).max(12).optional(),
+});
+
 /** Plain-language behavioral checks (stack-agnostic, observable). */
 export const behavioralChecksOutputSchema = z.object({
   checks: z
@@ -66,23 +106,11 @@ export const behavioralChecksOutputSchema = z.object({
     .max(18)
     .describe("Observable behaviors any reasonable implementation should satisfy"),
   acceptance: z
-    .array(
-      z.object({
-        text: z
-          .string()
-          .min(1)
-          .max(400)
-          .describe("Must exactly match one entry in checks"),
-        kind: z
-          .enum(["http", "http_sequence", "restart_persistence"])
-          .describe("restart_persistence = write, restart the app, read back"),
-        requests: z.array(suggestedRequestSchema).min(1).max(4),
-      })
-    )
+    .array(suggestedAcceptanceSchema)
     .max(18)
     .optional()
     .describe(
-      "Only for checks whose interface the assessment description pins exactly; omit otherwise"
+      "One entry per check that can be settled by a UI walkthrough or a pinned HTTP contract"
     ),
 });
 
@@ -90,6 +118,7 @@ export type BehavioralChecksOutput = z.infer<typeof behavioralChecksOutputSchema
 export type SuggestedAcceptance = NonNullable<
   BehavioralChecksOutput["acceptance"]
 >[number];
+export type SuggestedUiStep = z.infer<typeof suggestedUiStepSchema>;
 
 /** Step 1: requirements extraction + stack/level with confidence */
 export const requirementsExtractionSchema = z.object({

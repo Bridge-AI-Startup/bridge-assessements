@@ -107,14 +107,18 @@ export async function generateBehavioralChecks(input: {
         behavioralChecksOutputSchema,
         {
           temperature: 0.4,
-          maxTokens: 2000,
+          maxTokens: 4000,
           provider: PROMPT_GENERATE_BEHAVIORAL_CHECKS.provider as "openai" | "anthropic" | "gemini",
           model: PROMPT_GENERATE_BEHAVIORAL_CHECKS.model,
         }
       );
       return {
         checks: result.checks,
-        specs: suggestionsToSpecs(result.checks, result.acceptance),
+        specs: suggestionsToSpecs(
+          result.checks,
+          result.acceptance,
+          input.description
+        ),
       };
     } catch (err) {
       lastError = err;

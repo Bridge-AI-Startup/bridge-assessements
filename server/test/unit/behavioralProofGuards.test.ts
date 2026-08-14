@@ -339,7 +339,7 @@ describe("checkProofGuards", () => {
     expect(violation?.instruction).toContain("browser_fill_role");
   });
 
-  it("lets a UI fail stand once the agent actually saw the page", () => {
+  it("rejects a UI fail when goto succeeded but fill timed out and expect never passed", () => {
     const violation = checkProofGuards(
       guardInput({
         verdict: "fail",
@@ -347,8 +347,40 @@ describe("checkProofGuards", () => {
         browserBaseUrl: "https://sandbox.example/",
         trace: [
           entry({ tool: "browser_goto", detail: "/" }),
-          entry({ tool: "browser_expect", detail: "contains: Buy milk", success: false }),
-          entry({ tool: "browser_fill", detail: "textbox", success: false }),
+          entry({
+            tool: "browser_fill",
+            detail: "input[type='text'] ← 9 chars",
+            outputPreview: "[error] Timeout 20000ms exceeded",
+            success: false,
+          }),
+          entry({
+            tool: "browser_expect",
+            detail: "contains: Test note",
+            success: false,
+          }),
+        ],
+      })
+    );
+    expect(violation?.code).toBe("unproven_ui_fail");
+    expect(violation?.instruction).toContain("input[type=text]");
+    expect(violation?.explanation).toMatch(/automation/i);
+  });
+
+  it("lets a UI fail stand after a successful fill or click and a browser_expect that ran", () => {
+    const violation = checkProofGuards(
+      guardInput({
+        verdict: "fail",
+        behavioralCheck: "Clicking Save adds the note to the list on the page.",
+        browserBaseUrl: "https://sandbox.example/",
+        trace: [
+          entry({ tool: "browser_goto", detail: "/" }),
+          entry({ tool: "browser_fill_role", detail: "textbox ← 8 chars" }),
+          entry({ tool: "browser_click_text", detail: "Add" }),
+          entry({
+            tool: "browser_expect",
+            detail: "contains: Buy milk",
+            success: false,
+          }),
         ],
       })
     );

@@ -282,6 +282,7 @@ server/src/
 │   │   ├── runtimeConfigRunbook.ts # Candidate's finalized+verified runtimeConfig → runbook (skips the LLM planner)
 │   │   ├── schema.ts          # Zod schemas for runbook
 │   │   ├── executor.ts        # Executes runbook commands (optional candidate envVars, secret-scrubbed evidence); saves report JSON; readmeFromSandbox
+│   │   ├── extractUiControls.ts # Source-grounded button/textbox/link catalog; UI locators come from here
 │   │   ├── judge.ts           # One-shot LLM judge (stdout/source/HTTP seed)
 │   │   ├── agentJudge.ts      # Tool-using judge (run_command/read_file in sandbox, then finish)
 │   │   └── artifacts.ts       # collectJudgeArtifacts + bashLc helpers
@@ -528,7 +529,7 @@ Webhook routes (`/webhooks` and `/api/billing/webhook`) use `express.raw()` befo
 ### AI Prompts (`server/src/prompts/index.ts`)
 - `PROMPT_EXTRACT_ASSESSMENT_REQUIREMENTS` -- Extract requirements, infer stack/level from job description
 - `PROMPT_GENERATE_ASSESSMENT_COMPONENTS` -- Generate assessment title, description, timeLimit (with few-shot examples)
-- `PROMPT_GENERATE_BEHAVIORAL_CHECKS` -- Generate stack-agnostic behavioral checks from title, description, and requirements summary
+- `PROMPT_GENERATE_BEHAVIORAL_CHECKS` -- Generate stack-agnostic behavioral checks plus default UI/HTTP acceptance specs (agent is the rare leftover)
 - `PROMPT_ASSESSMENT_QUALITY_REVIEW` -- Review and validate generated assessment quality
 - `PROMPT_ASSESSMENT_CHAT` -- System prompt for AI assistant editing assessments
 - `PROMPT_GENERATE_INTERVIEW_QUESTIONS_RETRIEVAL` -- Generate interview questions from RAG code chunks

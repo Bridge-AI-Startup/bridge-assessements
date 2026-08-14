@@ -15,7 +15,19 @@ import {
   type RunbookSource,
   type StepEvidence,
 } from "./executor.js";
+import {
+  captureAriaSnapshot,
+  compileCheckSpec,
+} from "./compileCheckSpec.js";
 import { runDeterministicCheck } from "./deterministicChecks.js";
+import {
+  deepenUiControlsFromSandbox,
+  type UiControl,
+} from "./extractUiControls.js";
+import {
+  extractCapabilitiesFromSandbox,
+  type Capability,
+} from "./extractCapabilities.js";
 import { secretValuesFromEnvVars } from "../runtimeSetup/secrets.js";
 import {
   candidateGradingEnv,
@@ -486,6 +498,18 @@ export async function gradeSubmissionBehavioral(
         const repoPath = await cloneAndCheckout(ctx.run, submission, ctx.sandbox);
         behavioralInfo("clone_done", { repoPath });
 
+        let uiCatalog: UiControl[] = [];
+        let capabilities: Capability[] = [];
+        try {
+          const extracted = await extractCapabilitiesFromSandbox(ctx, repoPath);
+          uiCatalog = extracted.controls;
+          capabilities = extracted.capabilities;
+        } catch (e) {
+          behavioralInfo("ui_catalog_failed", {
+            error: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200),
+          });
+        }
+
         const readmeText = await readmeFromSandbox(ctx.sandbox, repoPath);
         const repoLayoutProbe = await probeRepoLayoutForRunbook(ctx, repoPath);
         behavioralInfo("repo_layout_probe", {
@@ -711,11 +735,25 @@ export async function gradeSubmissionBehavioral(
             ? new BehavioralBrowserSession()
             : null;
 
+        let ariaSnapshot: string | undefined;
+        if (
+          browserSession &&
+          browserBaseUrl?.trim() &&
+          !resolvedSpecs.downgradedByFlag &&
+          specsByIndex.some((s) => s.kind === "agent")
+        ) {
+          ariaSnapshot = await captureAriaSnapshot({
+            session: browserSession,
+            baseUrl: browserBaseUrl,
+          });
+        }
+
         try {
           for (let ord = 0; ord < orderedChecks.length; ord += 1) {
             const { checkText, originalIndex: checkIndex } =
               orderedChecks[ord];
-            const spec = specsByIndex[checkIndex];
+            let spec = specsByIndex[checkIndex];
+            let compiledAtGrade = false;
             const startedAtJudge = new Date().toISOString();
             const otherBehavioralChecks = behavioralChecks.filter(
               (_, j) => j !== checkIndex
@@ -774,6 +812,64 @@ export async function gradeSubmissionBehavioral(
               await browserSession.resetIsolation();
             }
 
+            // Leftover agent checks compile to a machine-run spec against the
+            // live page. The agent's *choices* must not decide a hiring verdict.
+            if (spec.kind === "agent" && !resolvedSpecs.downgradedByFlag) {
+              await safeProgress(() =>
+                progress.beginCheck(
+                  checkIndex,
+                  checkText,
+                  `Compiling acceptance: ${previewCommand(checkText, 72)}`
+                )
+              );
+              const compiled = await compileCheckSpec({
+                checkText,
+                checkId: spec.id,
+                assessmentDescription,
+                catalog: uiCatalog,
+                capabilities,
+                ariaSnapshot,
+                sandboxAppOrigin,
+              });
+              if (!compiled.ok) {
+                behavioralInfo("compile_spec_undecided", {
+                  index: ord + 1,
+                  checkIndex,
+                  reason: compiled.reason,
+                });
+                await safeProgress(() =>
+                  progress.addCompletedCheck({
+                    checkIndex,
+                    checkText,
+                    verdict: "inconclusive",
+                  })
+                );
+                cases.push({
+                  checkText,
+                  checkIndex,
+                  checkId: spec.id,
+                  verdict: "inconclusive",
+                  artifacts: [],
+                  evidence: [
+                    {
+                      id: randomUUID(),
+                      type: "judge",
+                      startedAt: startedAtJudge,
+                      finishedAt: new Date().toISOString(),
+                      success: false,
+                      verdict: "inconclusive",
+                      rationale: compiled.reason,
+                      citations: [],
+                      input: { compileFailed: true },
+                    },
+                  ],
+                });
+                continue;
+              }
+              spec = compiled.spec;
+              compiledAtGrade = spec.kind !== "agent";
+            }
+
             // A check with an acceptance spec is settled by running it. No LLM
             // call, and the recorded request is the whole justification.
             if (spec.kind !== "agent") {
@@ -793,6 +889,9 @@ export async function gradeSubmissionBehavioral(
                 repoPath,
                 secrets: candidateSecrets,
                 restartApp: restartApp ?? undefined,
+                catalog: uiCatalog,
+                deepenCatalog: (query, existing) =>
+                  deepenUiControlsFromSandbox(ctx, repoPath, query, existing),
               });
               behavioralInfo("deterministic_check_done", {
                 index: ord + 1,
@@ -826,7 +925,11 @@ export async function gradeSubmissionBehavioral(
                     verdict: deterministic.verdict,
                     rationale: deterministic.rationale,
                     citations: deterministic.citations,
-                    input: { verifiedBy: spec.kind, acceptance: spec.acceptance },
+                    input: {
+                      verifiedBy: spec.kind,
+                      acceptance: spec.acceptance,
+                      ...(compiledAtGrade ? { compiledAtGrade: true } : {}),
+                    },
                   },
                 ],
                 ...(browserSession && spec.kind === "ui"

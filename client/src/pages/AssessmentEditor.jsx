@@ -90,6 +90,8 @@ function serializeCheckSpecs(checks, specs) {
       acceptance = parseStep(spec.acceptance);
     } else if (spec.kind === "http_sequence") {
       acceptance = { steps: (spec.acceptance?.steps ?? []).map(parseStep) };
+    } else if (spec.kind === "ui") {
+      acceptance = spec.acceptance;
     } else {
       acceptance = {
         write: parseStep(spec.acceptance?.write),
@@ -1169,7 +1171,24 @@ export default function AssessmentEditor() {
                     size="sm"
                     onClick={() => {
                       setBehavioralChecks((prev) => [...prev, ""]);
-                      setCheckSpecs((prev) => [...prev, null]);
+                      setCheckSpecs((prev) => [
+                        ...prev,
+                        {
+                          kind: "ui",
+                          acceptance: {
+                            steps: [
+                              { action: "goto", path: "/" },
+                              {
+                                action: "fill_placeholder",
+                                placeholder: "",
+                                value: "{{nonce}}",
+                              },
+                              { action: "click_text", text: "" },
+                              { action: "expect_text", text: "{{nonce}}" },
+                            ],
+                          },
+                        },
+                      ]);
                     }}
                     className="text-sm"
                   >

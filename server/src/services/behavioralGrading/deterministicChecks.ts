@@ -14,8 +14,10 @@
  *  - no origin / no browser → `blocked` (nothing could be observed)
  *  - transport error, unparseable response, failed restart → `inconclusive`
  *
- * We never turn "we could not look" into a fail. Anything genuinely ambiguous
- * belongs to the agent judge, which callers reach by leaving `kind: "agent"`.
+ * We never turn "we could not look" into a fail. A missing button, a fill
+ * timeout, or a page that will not load is a harness/procedure error
+ * (`inconclusive`), not a finding about the product. Only an assertion that
+ * actually ran — `expect_text`, status/body rules — can fail a candidate.
  */
 
 import { randomUUID } from "crypto";
@@ -30,6 +32,10 @@ import {
   type HttpStepSpec,
   type UiStepSpec,
 } from "./checkSpecs.js";
+import {
+  bindClickTextToCatalog,
+  type UiControl,
+} from "./extractUiControls.js";
 import type { StepEvidence } from "./executor.js";
 import { behavioralInfo } from "./log.js";
 import { redactSecrets } from "../runtimeSetup/secrets.js";
@@ -66,6 +72,10 @@ export type DeterministicRunInput = {
   secrets?: string[];
   /** Restart the app in place. Required for `restart_persistence`. */
   restartApp?: () => Promise<{ ok: boolean; error?: string }>;
+  /** Source-grounded UI controls. Leftover click_text binds through this. */
+  catalog?: UiControl[];
+  /** One extra source parse when a locator misses. */
+  deepenCatalog?: (query: string, existing: UiControl[]) => Promise<UiControl[]>;
 };
 
 type HttpOutcome =
@@ -203,6 +213,52 @@ function safeRegexTest(pattern: string, value: string): boolean | null {
 
 type AssertionResult = { ok: boolean; failures: string[]; unreadable?: string };
 
+/** Drop insignificant JSON whitespace so `"ok": true` matches `{"ok":true}`. */
+function compactJsonText(value: string): string {
+  return value.replace(/\s+/g, "");
+}
+
+/**
+ * Whether `hay` structurally contains `needle`. Objects match as a subset
+ * (extra fields on the response are fine); arrays match if every needle
+ * element is present in some hay element.
+ */
+export function jsonContainsSubset(hay: unknown, needle: unknown): boolean {
+  if (needle === null || typeof needle !== "object") {
+    return Object.is(hay, needle);
+  }
+  if (Array.isArray(needle)) {
+    if (!Array.isArray(hay)) return false;
+    return needle.every((item) => hay.some((entry) => jsonContainsSubset(entry, item)));
+  }
+  if (typeof hay !== "object" || hay === null || Array.isArray(hay)) return false;
+  const hayObj = hay as Record<string, unknown>;
+  return Object.entries(needle as Record<string, unknown>).every(([key, value]) =>
+    jsonContainsSubset(hayObj[key], value)
+  );
+}
+
+/**
+ * `bodyContains` is a recruiter-readable fragment, not a byte-exact dump of
+ * the response. Compact JSON (`{"ok":true}`) must satisfy a pretty-printed
+ * needle (`"ok": true`), and a small JSON object must match a larger one that
+ * includes those fields — that is the test4 hole, where POST /api/notes
+ * returned 201 with the note and GET /health returned `{"ok":true}` and both
+ * were marked fail.
+ */
+export function responseBodyContains(body: string, needle: string): boolean {
+  if (!needle) return true;
+  if (body.includes(needle)) return true;
+  if (compactJsonText(body).includes(compactJsonText(needle))) return true;
+  try {
+    const parsedNeedle = JSON.parse(needle);
+    if (parsedNeedle === null || typeof parsedNeedle !== "object") return false;
+    return jsonContainsSubset(JSON.parse(body), parsedNeedle);
+  } catch {
+    return false;
+  }
+}
+
 function checkHttpExpectation(
   expectation: HttpExpectation,
   status: number,
@@ -216,7 +272,9 @@ function checkHttpExpectation(
     );
   }
   for (const needle of expectation.bodyContains ?? []) {
-    if (!body.includes(needle)) failures.push(`response is missing "${needle}"`);
+    if (!responseBodyContains(body, needle)) {
+      failures.push(`response is missing "${needle}"`);
+    }
   }
   for (const needle of expectation.bodyNotContains ?? []) {
     if (body.includes(needle)) {
@@ -561,7 +619,10 @@ export async function runDeterministicCheck(
           "No browsable app URL was available, so this behavior could not be observed."
         );
       }
-      return await runUiSpec(spec.acceptance.steps, browserBaseUrl, browserSession, log);
+      return await runUiSpec(spec.acceptance.steps, browserBaseUrl, browserSession, log, {
+        catalog: input.catalog,
+        deepenCatalog: input.deepenCatalog,
+      });
     }
 
     // Everything below drives HTTP against the in-sandbox origin.
@@ -673,15 +734,94 @@ export async function runDeterministicCheck(
   }
 }
 
+const UI_SETTLE_MS = 400;
+const UI_NETWORKIDLE_MS = 800;
+
+type PlaywrightishLocator = {
+  click: (opts?: { timeout?: number }) => Promise<unknown>;
+  fill: (value: string, opts?: { timeout?: number }) => Promise<unknown>;
+  filter?: (opts: {
+    hasText?: string | RegExp;
+    hasNot?: PlaywrightishLocator;
+  }) => PlaywrightishLocator;
+  getByRole?: (
+    role: string,
+    opts?: { name?: string; exact?: boolean }
+  ) => PlaywrightishLocator;
+  nth?: (index: number) => PlaywrightishLocator;
+  innerText?: (opts?: { timeout?: number }) => Promise<string>;
+  _name?: string;
+};
+
+type PlaywrightishPage = {
+  goto: (url: string, opts?: Record<string, unknown>) => Promise<unknown>;
+  reload?: (opts?: Record<string, unknown>) => Promise<unknown>;
+  getByRole: (
+    role: string,
+    opts?: { name?: string; exact?: boolean }
+  ) => PlaywrightishLocator;
+  getByPlaceholder: (placeholder: string) => {
+    fill: (value: string, opts?: { timeout?: number }) => Promise<unknown>;
+  };
+  fill: (selector: string, value: string, opts?: { timeout?: number }) => Promise<unknown>;
+  locator: (sel: string) => {
+    innerText: (opts?: { timeout?: number }) => Promise<string>;
+  };
+  waitForLoadState?: (state: string, opts?: { timeout?: number }) => Promise<unknown>;
+};
+
+async function settleAfterMutation(page: PlaywrightishPage): Promise<void> {
+  if (typeof page.waitForLoadState !== "function") return;
+  await page.waitForLoadState("networkidle", { timeout: UI_NETWORKIDLE_MS }).catch(() => {});
+  await new Promise((r) => setTimeout(r, UI_SETTLE_MS));
+}
+
+function listitemRow(page: PlaywrightishPage, hasText: string): PlaywrightishLocator {
+  const items = page.getByRole("listitem");
+  if (typeof items.filter !== "function") {
+    throw new Error("getByRole('listitem').filter is not available");
+  }
+  return items.filter({ hasText });
+}
+
+async function clickInRow(
+  page: PlaywrightishPage,
+  step: Extract<UiStepSpec, { action: "click_in_row" }>
+): Promise<void> {
+  const row = listitemRow(page, step.hasText);
+  if (typeof row.getByRole !== "function") {
+    throw new Error("row.getByRole is not available");
+  }
+  let target = row.getByRole(step.role, step.name ? { name: step.name, exact: true } : {});
+  if (step.hasNotName) {
+    if (typeof target.filter !== "function") {
+      throw new Error("locator.filter is not available");
+    }
+    const excluded = row.getByRole(step.role, { name: step.hasNotName, exact: true });
+    target = target.filter({ hasNot: excluded });
+  }
+  if (step.index != null) {
+    if (typeof target.nth !== "function") {
+      throw new Error("locator.nth is not available");
+    }
+    target = target.nth(step.index);
+  }
+  await target.click({ timeout: 10_000 });
+}
+
 async function runUiSpec(
   steps: UiStepSpec[],
   baseUrl: string,
   session: BehavioralBrowserSession,
-  log: EvidenceLog
+  log: EvidenceLog,
+  extras: {
+    catalog?: UiControl[];
+    deepenCatalog?: (query: string, existing: UiControl[]) => Promise<UiControl[]>;
+  }
 ): Promise<DeterministicRunResult> {
-  let page;
+  let page: PlaywrightishPage;
   try {
-    page = await session.getPage(baseUrl);
+    page = (await session.getPage(baseUrl)) as unknown as PlaywrightishPage;
   } catch (e) {
     return undecided(
       log,
@@ -690,6 +830,41 @@ async function runUiSpec(
     );
   }
 
+  let catalog: UiControl[] = extras.catalog ? [...extras.catalog] : [];
+  let deepened = false;
+
+  const deepenOnce = async (query: string): Promise<void> => {
+    if (deepened) return;
+    deepened = true;
+    if (!extras.deepenCatalog) return;
+    catalog = await extras.deepenCatalog(query, catalog);
+  };
+
+  const bindClick = async (
+    step: Extract<UiStepSpec, { action: "click_text" | "click_role" }>
+  ): Promise<Extract<UiStepSpec, { action: "click_role" }> | null> => {
+    if (step.action === "click_role") {
+      return { action: "click_role", role: step.role, name: step.name, exact: true };
+    }
+    let bound = bindClickTextToCatalog(step.text, catalog);
+    if (!bound) {
+      await deepenOnce(step.text);
+      bound = bindClickTextToCatalog(step.text, catalog);
+    }
+    return bound;
+  };
+
+  const clickBound = async (
+    bound: Extract<UiStepSpec, { action: "click_role" }>
+  ): Promise<void> => {
+    await page
+      .getByRole(bound.role, { name: bound.name, exact: true })
+      .click({ timeout: 10_000 });
+    await settleAfterMutation(page);
+  };
+
+  let lastUrl = `${baseUrl.replace(/\/$/, "")}/`;
+
   for (let i = 0; i < steps.length; i += 1) {
     const step = steps[i];
     const startedAt = new Date().toISOString();
@@ -697,6 +872,7 @@ async function runUiSpec(
     try {
       if (step.action === "goto") {
         const url = `${baseUrl.replace(/\/$/, "")}${step.path}`;
+        lastUrl = url;
         await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
         behavioralInfo("deterministic_step", {
           kind: "ui",
@@ -706,21 +882,106 @@ async function runUiSpec(
         log.ui({ label, action: "goto", path: step.path }, startedAt, true, `Opened ${url}`);
         continue;
       }
-      if (step.action === "click_text") {
-        await page
-          .getByText(step.text, { exact: false })
-          .first()
-          .click({ timeout: 10_000 });
+      if (step.action === "reload") {
+        if (typeof page.reload === "function") {
+          await page.reload({ waitUntil: "domcontentloaded", timeout: 20_000 });
+        } else {
+          await page.goto(lastUrl, { waitUntil: "domcontentloaded", timeout: 20_000 });
+        }
+        await settleAfterMutation(page);
+        log.ui({ label, action: "reload" }, startedAt, true, "Reloaded the page");
+        continue;
+      }
+      if (step.action === "click_text" || step.action === "click_role") {
+        const bound = await bindClick(step);
+        if (!bound) {
+          log.ui(
+            { label, action: step.action },
+            startedAt,
+            false,
+            "No matching control in the source catalog"
+          );
+          return undecided(
+            log,
+            "inconclusive",
+            `${label} (${step.action}) has no matching button, link, or checkbox in the submitted source, so this behavior could not be observed.`
+          );
+        }
+        try {
+          await clickBound(bound);
+        } catch (first) {
+          await deepenOnce(bound.name);
+          try {
+            await clickBound(bound);
+          } catch {
+            throw first;
+          }
+        }
         log.ui(
-          { label, action: "click_text", text: step.text },
+          { label, action: "click_role", role: bound.role, name: bound.name, exact: true },
           startedAt,
           true,
-          `Clicked "${step.text}"`
+          `Clicked ${bound.role} "${bound.name}"`
+        );
+        continue;
+      }
+      if (step.action === "click_in_row") {
+        await clickInRow(page, step);
+        await settleAfterMutation(page);
+        const where = step.source ? ` in ${step.source}` : "";
+        log.ui(
+          {
+            label,
+            action: "click_in_row",
+            hasText: step.hasText,
+            role: step.role,
+            name: step.name,
+            index: step.index,
+            capabilityId: step.capabilityId,
+            source: step.source,
+          },
+          startedAt,
+          true,
+          `Clicked ${step.role}${step.name ? ` "${step.name}"` : ""} in the row containing "${step.hasText}"${where}`
+        );
+        continue;
+      }
+      if (step.action === "fill_role") {
+        await page
+          .getByRole(step.role, {
+            name: step.name,
+            exact: step.exact,
+          })
+          .fill(step.value, { timeout: 10_000 });
+        await settleAfterMutation(page);
+        log.ui(
+          { label, action: "fill_role", role: step.role, name: step.name },
+          startedAt,
+          true,
+          `Filled ${step.role}${step.name ? ` "${step.name}"` : ""}`
+        );
+        continue;
+      }
+      if (step.action === "fill_placeholder") {
+        await page
+          .getByPlaceholder(step.placeholder)
+          .fill(step.value, { timeout: 10_000 });
+        await settleAfterMutation(page);
+        log.ui(
+          {
+            label,
+            action: "fill_placeholder",
+            placeholder: step.placeholder,
+          },
+          startedAt,
+          true,
+          `Filled placeholder "${step.placeholder}"`
         );
         continue;
       }
       if (step.action === "fill") {
         await page.fill(step.selector, step.value, { timeout: 10_000 });
+        await settleAfterMutation(page);
         log.ui(
           { label, action: "fill", selector: step.selector },
           startedAt,
@@ -730,7 +991,47 @@ async function runUiSpec(
         continue;
       }
 
-      // expect_text — the only step that can produce a fail rather than an error.
+      if (step.action === "expect_in_row") {
+        const row = listitemRow(page, step.hasText);
+        const inner =
+          typeof row.innerText === "function"
+            ? (await row.innerText({ timeout: 10_000 })) || ""
+            : "";
+        const present = inner.includes(step.text);
+        const satisfied = step.absent ? !present : present;
+        log.ui(
+          {
+            label,
+            action: "expect_in_row",
+            hasText: step.hasText,
+            text: step.text,
+            absent: Boolean(step.absent),
+          },
+          startedAt,
+          satisfied,
+          satisfied
+            ? `Row "${step.hasText}" ${step.absent ? "did not show" : "showed"} "${step.text}"`
+            : `Row "${step.hasText}" ${step.absent ? "still showed" : "never showed"} "${step.text}"`
+        );
+        if (!satisfied) {
+          return fail(
+            log,
+            `The row containing "${step.hasText}" ${step.absent ? "still showed" : "never showed"} "${step.text}" after ${i} earlier step(s).`
+          );
+        }
+        continue;
+      }
+
+      if (step.action !== "expect_text") {
+        log.ui({ label, action: step.action }, startedAt, false, "Unknown UI step");
+        return undecided(
+          log,
+          "inconclusive",
+          `${label} (${step.action}) is not a supported walkthrough step, so this behavior could not be observed.`
+        );
+      }
+
+      // expect_text — the only remaining step that can produce a fail rather than an error.
       const body = (await page.locator("body").innerText({ timeout: 10_000 })) || "";
       const present = body.includes(step.text);
       const satisfied = step.absent ? !present : present;
@@ -751,18 +1052,16 @@ async function runUiSpec(
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
       log.ui({ label, action: step.action }, startedAt, false, detail);
-      // A missing button or an unreachable page is the app not offering the
-      // interface the spec describes — a fail, not a harness problem.
-      return step.action === "goto"
-        ? undecided(
-            log,
-            "inconclusive",
-            `The page could not be opened (${log.scrub(detail)}), so this behavior could not be observed.`
-          )
-        : fail(
-            log,
-            `${label} (${step.action}) could not be completed: ${log.scrub(detail)}`
-          );
+      // A timeout finding a control is the grader's procedure failing, not
+      // evidence the product lacks the behavior. Only expect_text (above)
+      // may fail a candidate, and only after the walkthrough actually ran.
+      return undecided(
+        log,
+        "inconclusive",
+        step.action === "goto"
+          ? `The page could not be opened (${log.scrub(detail)}), so this behavior could not be observed.`
+          : `${label} (${step.action}) could not be completed (${log.scrub(detail)}), so this behavior could not be observed.`
+      );
     }
   }
 

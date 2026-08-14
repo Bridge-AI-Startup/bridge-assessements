@@ -313,18 +313,26 @@ Rules:
 - Cover core workflows, persistence where relevant, and error/edge behavior where the assessment implies it.
 - Use varied, concrete wording; avoid duplicating the same idea.
 
-You may also supply machine-checkable acceptance criteria in an optional "acceptance" array. These let a check be settled by making a real request instead of by a reviewer's judgment, so they must never invent an interface.
+You may also supply machine-checkable acceptance criteria in an "acceptance" array. These settle a check by driving the page or making a pinned request, so a model's judgment is not the grade.
 
-Only include an acceptance entry when the assessment description ITSELF pins the exact request — the method, the path, and the response — for example because it says "expose POST /notes returning 201" or gives an API table. If the description leaves the interface to the candidate, omit the entry entirely; the check is still graded, just by observation. It is always correct to return no acceptance entries at all.
+Emit an acceptance entry for every check that can be a UI walkthrough or a pinned HTTP contract. Product-behavior sentences ("add a note", "see it in the list", "delete") MUST be kind "ui". kind "agent" is only for subjective or layout-only checks that cannot be asserted (for example "the layout still works on a phone") — that should be rare.
+
+Do NOT invent API paths. kind "http" / "http_sequence" / "restart_persistence" only when the assessment description itself already names that exact method and path (for example "expose POST /notes returning 201" or an API table). If the description leaves the interface to the candidate, use a UI walkthrough, not a guessed /api/... path.
 
 Each acceptance entry has:
 - "text": the check it verifies, copied EXACTLY from "checks".
-- "kind": "http" (one request), "http_sequence" (ordered requests, e.g. create then list), or "restart_persistence" (write, restart the app, read it back).
-- "requests": each with "method", "path" (path only, starting with /), optional "jsonBody" (a JSON string), and at least one of "expectStatus" (array of status codes) or "expectBodyContains" (array of substrings).
+- "kind": "ui" (drive the page), "http" (one request), "http_sequence" (ordered requests, e.g. create then list), "restart_persistence" (write, restart the app, read it back), or "agent" (subjective leftover only).
+- For kind "ui": "uiSteps" — an ordered walkthrough using only these actions:
+  - goto (path, almost always "/")
+  - fill_placeholder (placeholder copied from a typical form, plus value)
+  - fill_role (role is textbox/searchbox/combobox, optional name, plus value)
+  - click_role (role is button/link/checkbox, name is the accessible name, exact)
+  - click_text (legacy; prefer click_role — name of a button or link, not page prose)
+  - expect_text (substring that must appear; set absent=true to assert it is gone)
+  Never use CSS selectors. Never click lede copy or empty-state text. Put the literal token {{nonce}} in the typed value AND the matching expect_text when the check is about data the user entered.
+- For kind "http" / "http_sequence" / "restart_persistence": "requests" — each with "method", "path" (path only, starting with /), optional "jsonBody" (a JSON string), and at least one of "expectStatus" (array of status codes) or "expectBodyContains" (array of substrings). Use {{nonce}} inside a request body and its expected substring when the check is about stored data.
 
-Use the literal token {{nonce}} inside a request body and its expected substring when the check is about data the candidate's app stored. It is replaced with a value invented at grading time, so an app returning canned fixtures cannot pass by echoing a value it hardcoded.
-
-Output valid JSON only, with key "checks" (array of strings) and optionally "acceptance".`,
+Output valid JSON only, with key "checks" (array of strings) and "acceptance".`,
 
   userTemplate: (input: {
     title: string;
@@ -341,7 +349,7 @@ Project instructions for the candidate (full assessment description):
 ${input.description}
 
 Generate behavioral checks as JSON: { "checks": ["...", ...], "acceptance": [ ... ] }
-Include "acceptance" only for checks whose exact request and response the description above already pins; omit it otherwise.`,
+Give every product-behavior check a UI (or pinned-HTTP) acceptance entry. Do not invent API paths the description above does not already name. Use kind "agent" only for checks that cannot be asserted.`,
 };
 
 // ============================================================================

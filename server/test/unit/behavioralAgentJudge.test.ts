@@ -12,7 +12,11 @@ process.env.BEHAVIORAL_GRADING_LOG = "0";
 
 import { describe, expect, it } from "vitest";
 
-import { isAriaRoleToken } from "../../src/services/behavioralGrading/agentJudge.js";
+import {
+  isAriaRoleToken,
+  isImplicitTextInputSelector,
+  planFillAttempts,
+} from "../../src/services/behavioralGrading/agentJudge.js";
 
 describe("isAriaRoleToken", () => {
   it("recognises a bare ARIA role copied out of an accessibility snapshot", () => {
@@ -48,5 +52,61 @@ describe("isAriaRoleToken", () => {
   it("is false for a word that is not an ARIA role we support", () => {
     expect(isAriaRoleToken("input")).toBe(false);
     expect(isAriaRoleToken("textarea")).toBe(false);
+  });
+});
+
+describe("isImplicitTextInputSelector", () => {
+  it("treats input[type=text] as a textbox, including quoted variants", () => {
+    expect(isImplicitTextInputSelector("input[type='text']")).toBe(true);
+    expect(isImplicitTextInputSelector('input[type="text"]')).toBe(true);
+    expect(isImplicitTextInputSelector("input[type=text]")).toBe(true);
+    expect(isImplicitTextInputSelector("  input[type='text']  ")).toBe(true);
+  });
+
+  it("leaves other selectors alone", () => {
+    expect(isImplicitTextInputSelector("#title")).toBe(false);
+    expect(isImplicitTextInputSelector("input")).toBe(false);
+    expect(isImplicitTextInputSelector("input[type='email']")).toBe(false);
+  });
+});
+
+describe("planFillAttempts", () => {
+  it("coerces input[type=text] to a textbox role from the start", () => {
+    expect(planFillAttempts("input[type='text']")).toEqual([
+      {
+        strategy: "role",
+        role: "textbox",
+        reason:
+          "`input[type=text]` does not match an untyped `<input>`; filled by role=textbox instead.",
+      },
+    ]);
+  });
+
+  it("retries role, placeholder, then the first input after a CSS miss", () => {
+    const attempts = planFillAttempts("#title");
+    expect(attempts.map((a) => a.strategy)).toEqual([
+      "css",
+      "role",
+      "first_input",
+    ]);
+    expect(attempts[0]).toEqual({
+      strategy: "css",
+      selector: "#title",
+      reason: "css",
+    });
+  });
+
+  it("retries getByPlaceholder when the selector looks like a placeholder", () => {
+    const attempts = planFillAttempts("Ship runtime setup…");
+    expect(attempts.map((a) => a.strategy)).toEqual([
+      "css",
+      "role",
+      "placeholder",
+      "first_input",
+    ]);
+    expect(attempts[2]).toMatchObject({
+      strategy: "placeholder",
+      placeholder: "Ship runtime setup…",
+    });
   });
 });

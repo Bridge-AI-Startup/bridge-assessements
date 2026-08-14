@@ -29,6 +29,8 @@ import {
   type BehavioralCheckSpec,
 } from "../../src/services/behavioralGrading/checkSpecs.js";
 import {
+  jsonContainsSubset,
+  responseBodyContains,
   runDeterministicCheck,
   type DeterministicRunResult,
 } from "../../src/services/behavioralGrading/deterministicChecks.js";
@@ -140,7 +142,10 @@ type FakePageOptions = {
   bodyText?: string;
   gotoError?: string;
   clickable?: string[];
+  clickableRoles?: Array<{ role: string; name: string }>;
   fillable?: string[];
+  fillableRoles?: string[];
+  fillablePlaceholders?: string[];
 };
 
 function fakeBrowserSession(options: FakePageOptions): {
@@ -156,12 +161,52 @@ function fakeBrowserSession(options: FakePageOptions): {
     getByText: (text: string) => ({
       first: () => ({
         click: async () => {
-          if (options.clickable && !options.clickable.includes(text)) {
-            throw new Error(`locator.click: no element with text "${text}"`);
-          }
-          actions.push(`click ${text}`);
+          // Substring search — the notes-board lede would win here. The runner
+          // must not call this for control discovery.
+          actions.push(`click_text ${text}`);
         },
       }),
+    }),
+    getByRole: (role: string, opts?: { name?: string; exact?: boolean }) => ({
+      fill: async (value: string) => {
+        if (options.fillableRoles && !options.fillableRoles.includes(role)) {
+          throw new Error(`locator.fill: no ${role}`);
+        }
+        actions.push(`fill_role ${role}=${value}`);
+      },
+      click: async () => {
+        const name = opts?.name ?? "";
+        const exact = opts?.exact !== false;
+        const roles = options.clickableRoles;
+        if (roles) {
+          const hit = roles.some(
+            (r) =>
+              r.role === role &&
+              (exact ? r.name === name : r.name.toLowerCase().includes(name.toLowerCase()))
+          );
+          if (!hit) {
+            throw new Error(
+              `locator.click: Timeout — getByRole(${role}, { name: ${JSON.stringify(name)}, exact: ${exact} })`
+            );
+          }
+        } else if (options.clickable && name) {
+          if (exact ? !options.clickable.includes(name) : !options.clickable.some((c) => c.includes(name))) {
+            throw new Error(`locator.click: no ${role} named "${name}"`);
+          }
+        }
+        actions.push(`click_role ${role} ${name}`);
+      },
+    }),
+    getByPlaceholder: (placeholder: string) => ({
+      fill: async (value: string) => {
+        if (
+          options.fillablePlaceholders &&
+          !options.fillablePlaceholders.includes(placeholder)
+        ) {
+          throw new Error(`locator.fill: no placeholder "${placeholder}"`);
+        }
+        actions.push(`fill_placeholder ${placeholder}=${value}`);
+      },
     }),
     fill: async (selector: string, value: string) => {
       if (options.fillable && !options.fillable.includes(selector)) {
@@ -169,8 +214,13 @@ function fakeBrowserSession(options: FakePageOptions): {
       }
       actions.push(`fill ${selector}=${value}`);
     },
-    locator: () => ({
+    locator: (sel?: string) => ({
       innerText: async () => options.bodyText ?? "",
+      first: () => ({
+        fill: async (value: string) => {
+          actions.push(`fill first ${sel ?? ""}=${value}`);
+        },
+      }),
     }),
   };
   return {
@@ -320,7 +370,16 @@ describe("behavioral check spec parsing", () => {
         id: "f",
         text: "t",
         kind: "ui",
-        acceptance: { steps: [{ action: "expect_text", text: "Notes" }] },
+        acceptance: {
+          steps: [
+            { action: "goto", path: "/" },
+            { action: "fill_placeholder", placeholder: "Title", value: "{{nonce}}" },
+            { action: "fill_role", role: "textbox", value: "{{nonce}}" },
+            { action: "click_role", role: "button", name: "Add", exact: true },
+            { action: "click_text", text: "Add" },
+            { action: "expect_text", text: "{{nonce}}" },
+          ],
+        },
       },
     ];
     for (const spec of specs) {
@@ -525,6 +584,22 @@ describe("nonce substitution", () => {
 });
 
 describe("http acceptance", () => {
+  it("matches JSON regardless of whitespace or extra fields", () => {
+    expect(responseBodyContains('{"ok":true,"store":"memory"}', '"ok": true')).toBe(
+      true
+    );
+    expect(
+      responseBodyContains(
+        '{"_id":"mem_1","title":"Ship runtime setup… bg-245688e2","done":false}',
+        '{"title":"Ship runtime setup… bg-245688e2"}'
+      )
+    ).toBe(true);
+    expect(jsonContainsSubset({ ok: true, store: "memory" }, { ok: true })).toBe(
+      true
+    );
+    expect(responseBodyContains('{"ok":true}', '"ok": false')).toBe(false);
+    expect(responseBodyContains('{"title":"A"}', '{"title":"B"}')).toBe(false);
+  });
   it("passes when the app answers as the criteria require", async () => {
     const sandbox = fakeSandbox({ app: notesApp("complete") });
     const result = await runDeterministicCheck({
@@ -591,6 +666,62 @@ describe("http acceptance", () => {
     });
     expect(present.verdict).toBe("fail");
     expect(present.rationale).toContain("should not contain");
+  });
+
+  it("treats pretty-printed JSON fragments and object subsets as present (test4)", async () => {
+    const sandbox = fakeSandbox({
+      app: {
+        http: ({ method, path }) => {
+          if (method === "GET" && path === "/health") {
+            return { status: 200, body: JSON.stringify({ ok: true, store: "memory" }) };
+          }
+          if (method === "POST" && path === "/api/notes") {
+            return {
+              status: 201,
+              body: JSON.stringify({
+                _id: "mem_1",
+                title: "Ship runtime setup… bg-245688e2",
+                done: false,
+              }),
+            };
+          }
+          return { status: 404, body: JSON.stringify({ error: "Not found" }) };
+        },
+      },
+    });
+
+    const health = await runDeterministicCheck({
+      ctx: sandbox.ctx,
+      spec: httpSpec({
+        acceptance: {
+          request: { method: "GET", path: "/health" },
+          expect: {
+            status: [200],
+            bodyContains: ["{", '"ok": true', "}"],
+          },
+        },
+      } as never),
+      sandboxAppOrigin: ORIGIN,
+      repoPath: REPO,
+    });
+    expect(health.verdict).toBe("pass");
+
+    const created = await runDeterministicCheck({
+      ctx: sandbox.ctx,
+      spec: httpSpec({
+        id: "create",
+        acceptance: {
+          request: { method: "POST", path: "/api/notes", json: { title: "x" } },
+          expect: {
+            status: [201],
+            bodyContains: ['{"title":"Ship runtime setup… bg-245688e2"}'],
+          },
+        },
+      } as never),
+      sandboxAppOrigin: ORIGIN,
+      repoPath: REPO,
+    });
+    expect(created.verdict).toBe("pass");
   });
 
   it("checks JSON paths by equality, containment, and presence", async () => {
@@ -1032,6 +1163,7 @@ describe("ui acceptance", () => {
     const browser = fakeBrowserSession({
       bodyText: "My notes\nBuy milk",
       clickable: ["Add note"],
+      clickableRoles: [{ role: "button", name: "Add note" }],
       fillable: ["#title"],
     });
     const result = await runDeterministicCheck({
@@ -1039,7 +1171,7 @@ describe("ui acceptance", () => {
       spec: uiSpec([
         { action: "goto", path: "/" },
         { action: "fill", selector: "#title", value: "Buy milk" },
-        { action: "click_text", text: "Add note" },
+        { action: "click_role", role: "button", name: "Add note", exact: true },
         { action: "expect_text", text: "Buy milk" },
       ]),
       browserBaseUrl: "https://sandbox.example",
@@ -1050,7 +1182,7 @@ describe("ui acceptance", () => {
     expect(browser.actions).toEqual([
       "goto https://sandbox.example/",
       "fill #title=Buy milk",
-      "click Add note",
+      "click_role button Add note",
     ]);
     expect(result.evidence).toHaveLength(4);
   });
@@ -1098,18 +1230,82 @@ describe("ui acceptance", () => {
     expect(failed.rationale).toContain("still showed");
   });
 
-  it("fails when the interface the check describes is not there to drive", async () => {
+  it("is inconclusive when a fill or click cannot find the control", async () => {
     const sandbox = fakeSandbox();
-    const browser = fakeBrowserSession({ bodyText: "My notes", clickable: [] });
+    const browser = fakeBrowserSession({
+      bodyText: "My notes",
+      clickableRoles: [],
+    });
     const result = await runDeterministicCheck({
       ctx: sandbox.ctx,
-      spec: uiSpec([{ action: "click_text", text: "Add note" }]),
+      spec: uiSpec([{ action: "click_role", role: "button", name: "Add note", exact: true }]),
       browserBaseUrl: "https://sandbox.example",
       browserSession: browser.session,
       repoPath: REPO,
     });
-    expect(result.verdict).toBe("fail");
-    expect(result.rationale).toContain("click_text");
+    expect(result.verdict).toBe("inconclusive");
+    expect(result.rationale).toContain("click_role");
+    expect(result.rationale).toContain("could not be observed");
+
+    const fillMiss = await runDeterministicCheck({
+      ctx: sandbox.ctx,
+      spec: uiSpec([
+        { action: "fill", selector: "input[type='text']", value: "Buy milk" },
+      ]),
+      browserBaseUrl: "https://sandbox.example",
+      browserSession: fakeBrowserSession({
+        bodyText: "My notes",
+        fillable: [],
+      }).session,
+      repoPath: REPO,
+    });
+    expect(fillMiss.verdict).toBe("inconclusive");
+    expect(fillMiss.rationale).toContain("fill");
+  });
+
+  it("fills by placeholder and role without CSS", async () => {
+    const sandbox = fakeSandbox();
+    const browser = fakeBrowserSession({
+      bodyText: "My notes\nBuy milk",
+      clickableRoles: [{ role: "button", name: "Add note" }],
+      fillablePlaceholders: ["Ship runtime setup…"],
+      fillableRoles: ["textbox"],
+    });
+    const byPlaceholder = await runDeterministicCheck({
+      ctx: sandbox.ctx,
+      spec: uiSpec([
+        { action: "goto", path: "/" },
+        {
+          action: "fill_placeholder",
+          placeholder: "Ship runtime setup…",
+          value: "Buy milk",
+        },
+        { action: "click_role", role: "button", name: "Add note", exact: true },
+        { action: "expect_text", text: "Buy milk" },
+      ]),
+      browserBaseUrl: "https://sandbox.example",
+      browserSession: browser.session,
+      repoPath: REPO,
+    });
+    expect(byPlaceholder.verdict).toBe("pass");
+    expect(browser.actions).toContain("fill_placeholder Ship runtime setup…=Buy milk");
+
+    const byRole = fakeBrowserSession({
+      bodyText: "My notes\nBuy milk",
+      fillableRoles: ["textbox"],
+    });
+    const filled = await runDeterministicCheck({
+      ctx: sandbox.ctx,
+      spec: uiSpec([
+        { action: "fill_role", role: "textbox", value: "Buy milk" },
+        { action: "expect_text", text: "Buy milk" },
+      ]),
+      browserBaseUrl: "https://sandbox.example",
+      browserSession: byRole.session,
+      repoPath: REPO,
+    });
+    expect(filled.verdict).toBe("pass");
+    expect(byRole.actions).toEqual(["fill_role textbox=Buy milk"]);
   });
 
   it("is inconclusive when the page cannot be opened at all", async () => {

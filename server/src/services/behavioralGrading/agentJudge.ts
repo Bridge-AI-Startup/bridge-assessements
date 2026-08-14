@@ -189,6 +189,78 @@ export function isAriaRoleToken(selector: string): boolean {
   return (BROWSER_ROLE_VALUES as readonly string[]).includes(trimmed);
 }
 
+/**
+ * `input[type='text']` does not match `<input>` with no type attribute — CSS
+ * requires the attribute to be present. That is the test5 miss: the agent
+ * guessed a typed-text selector, Playwright waited 20s, and the check failed
+ * an app whose field was an untyped textbox.
+ */
+export function isImplicitTextInputSelector(selector: string): boolean {
+  const compact = selector.trim().toLowerCase().replace(/\s+/g, "");
+  return (
+    compact === "input[type='text']" ||
+    compact === 'input[type="text"]' ||
+    compact === "input[type=text]"
+  );
+}
+
+export type FillAttempt =
+  | { strategy: "role"; role: string; reason: string }
+  | { strategy: "css"; selector: string; reason: string }
+  | { strategy: "placeholder"; placeholder: string; reason: string }
+  | { strategy: "first_input"; reason: string };
+
+/**
+ * Ordered locators to try for `browser_fill`. The first attempt is what the
+ * agent asked for (coerced to a role when that is what they actually passed);
+ * later attempts only run after a timeout, so a real CSS selector still wins
+ * when it matches.
+ */
+export function planFillAttempts(selector: string): FillAttempt[] {
+  const trimmed = selector.trim();
+  if (isAriaRoleToken(trimmed)) {
+    return [
+      {
+        strategy: "role",
+        role: trimmed.toLowerCase(),
+        reason: `\`${trimmed}\` is an ARIA role, not a CSS selector — filled by role.`,
+      },
+    ];
+  }
+  if (isImplicitTextInputSelector(trimmed)) {
+    return [
+      {
+        strategy: "role",
+        role: "textbox",
+        reason:
+          "`input[type=text]` does not match an untyped `<input>`; filled by role=textbox instead.",
+      },
+    ];
+  }
+
+  const attempts: FillAttempt[] = [
+    { strategy: "css", selector: trimmed, reason: "css" },
+    {
+      strategy: "role",
+      role: "textbox",
+      reason: "CSS fill missed; retried getByRole('textbox').",
+    },
+  ];
+  // A selector with no CSS grammar is likely a placeholder or accessible name.
+  if (!/[.#\[\]>+~:=]/.test(trimmed)) {
+    attempts.push({
+      strategy: "placeholder",
+      placeholder: trimmed,
+      reason: "CSS fill missed; retried getByPlaceholder.",
+    });
+  }
+  attempts.push({
+    strategy: "first_input",
+    reason: "CSS fill missed; retried the first input/textarea.",
+  });
+  return attempts;
+}
+
 function isSafeShellCommand(cmd: string): boolean {
   if (cmd.length > 5000) return false;
   const dangerous =
@@ -912,38 +984,56 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
       if (result.step === "browser_fill") {
         let outputPreview = "";
         let success = false;
-        const asRole = isAriaRoleToken(result.selector);
+        const attempts = planFillAttempts(result.selector);
         if (!input.baseUrl?.trim()) {
           outputPreview =
             "[error] browser_fill requires a running app URL (web_server profile).";
         } else {
-          try {
-            const pg = await ensureBrowserPage();
-            if (asRole) {
-              await pg
-                .getByRole(result.selector.trim().toLowerCase() as AriaRole)
-                .fill(result.value, { timeout: BROWSER_FILL_TIMEOUT_MS });
-            } else {
-              await pg.fill(result.selector, result.value, {
-                timeout: BROWSER_FILL_TIMEOUT_MS,
-              });
+          const pg = await ensureBrowserPage();
+          const errors: string[] = [];
+          for (let i = 0; i < attempts.length; i += 1) {
+            const attempt = attempts[i];
+            try {
+              if (attempt.strategy === "role") {
+                await pg
+                  .getByRole(attempt.role as AriaRole)
+                  .fill(result.value, { timeout: BROWSER_FILL_TIMEOUT_MS });
+              } else if (attempt.strategy === "placeholder") {
+                await pg
+                  .getByPlaceholder(attempt.placeholder)
+                  .fill(result.value, { timeout: BROWSER_FILL_TIMEOUT_MS });
+              } else if (attempt.strategy === "first_input") {
+                await pg
+                  .locator("input, textarea")
+                  .first()
+                  .fill(result.value, { timeout: BROWSER_FILL_TIMEOUT_MS });
+              } else {
+                await pg.fill(attempt.selector, result.value, {
+                  timeout: BROWSER_FILL_TIMEOUT_MS,
+                });
+              }
+              await delay(200);
+              const note =
+                attempt.reason !== "css"
+                  ? `(${attempt.reason} Use browser_fill_role / fill_placeholder for roles and placeholders; browser_fill's selector is CSS.)\n\n`
+                  : "";
+              outputPreview = `${note}${await snapshotPageText(pg)}`;
+              success = true;
+              break;
+            } catch (e) {
+              errors.push(
+                `${attempt.strategy}: ${e instanceof Error ? e.message : String(e)}`
+              );
             }
-            await delay(200);
-            const roleNote = asRole
-              ? `(\`${result.selector}\` is an ARIA role, not a CSS selector — filled by role this time. Use browser_fill_role for roles, and pass real CSS to browser_fill.)\n\n`
-              : "";
-            outputPreview = `${roleNote}${await snapshotPageText(pg)}`;
-            success = true;
-          } catch (e) {
-            outputPreview = `[error] ${
-              e instanceof Error ? e.message : String(e)
-            }`;
+          }
+          if (!success) {
+            outputPreview = `[error] ${errors[errors.length - 1] ?? "fill failed"}`;
           }
         }
         await pushTrace({
           iteration: iter,
           tool: "browser_fill",
-          detail: `${result.selector}${asRole ? " (read as ARIA role)" : ""} ← ${result.value.length} chars`,
+          detail: `${result.selector} ← ${result.value.length} chars`,
           outputPreview,
           success,
         });
