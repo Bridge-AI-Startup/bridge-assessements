@@ -45,22 +45,49 @@ function header(title: string) {
 async function testValidator() {
   header("PHASE 3: VALIDATOR");
 
-  const cases = [
+  // The same criterion can be scoreable under one evidence profile and pure
+  // guesswork under the other — "reviews AI code before accepting" is visible on
+  // a screen recording but leaves no trace in the hook stream, which records no
+  // accept/reject event and no reading at all. Cases are pinned per profile.
+  const cases: Array<{
+    criterion: string;
+    profile: "workflow" | "screen";
+    expectValid: boolean;
+  }> = [
+    // Workflow capture — the default path.
+    { criterion: "Runs tests after implementing", profile: "workflow", expectValid: true },
     {
-      criterion: "Reviews AI generated code before accepting",
+      criterion: "Edits agent-written code rather than leaving it untouched",
+      profile: "workflow",
       expectValid: true,
     },
-    { criterion: "Runs tests after implementing", expectValid: true },
-    { criterion: "Shows good culture fit", expectValid: false },
-    { criterion: "Is a team player", expectValid: false },
+    {
+      criterion: "Reviews AI generated code before accepting",
+      profile: "workflow",
+      expectValid: false,
+    },
+    {
+      criterion: "Reads the full requirements before starting to code",
+      profile: "workflow",
+      expectValid: false,
+    },
+    { criterion: "Shows good culture fit", profile: "workflow", expectValid: false },
+    { criterion: "Is a team player", profile: "workflow", expectValid: false },
+    // Legacy screen recording.
+    {
+      criterion: "Reviews AI generated code before accepting",
+      profile: "screen",
+      expectValid: true,
+    },
+    { criterion: "Shows good culture fit", profile: "screen", expectValid: false },
   ];
 
   const results = await Promise.allSettled(
-    cases.map((c) => validateCriterion(c.criterion)),
+    cases.map((c) => validateCriterion(c.criterion, c.profile)),
   );
 
   for (let i = 0; i < cases.length; i++) {
-    const { criterion, expectValid } = cases[i];
+    const { criterion, profile, expectValid } = cases[i];
     const outcome = results[i];
     const pass =
       outcome.status === "fulfilled"
@@ -69,7 +96,7 @@ async function testValidator() {
           : "FAIL"
         : "ERROR";
 
-    console.log(`\n[${pass}] "${criterion}"`);
+    console.log(`\n[${pass}] (${profile}) "${criterion}"`);
     if (outcome.status === "fulfilled") {
       console.log(`  valid: ${outcome.value.valid}`);
       if (outcome.value.reason)

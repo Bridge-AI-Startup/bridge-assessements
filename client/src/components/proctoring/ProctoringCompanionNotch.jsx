@@ -14,12 +14,17 @@ import {
   getCompanionPrompt,
   recordCompanionMessages,
   completeCompanion,
+  beaconCompanionShutdown,
 } from "@/api/proctoring";
 import { cn } from "@/lib/utils";
 
 /** Fallback opener if the server response omits `firstMessage`. */
 const FALLBACK_FIRST_MESSAGE =
-  "You're about to start a coding problem as part of this assessment. I'm here as a quick check-in so you can talk through what you're doing as you code. No pressure, and I won't give hints or answers. Ready when you are.";
+  "You're in. I'm here as a quick check-in so you can talk through what you're doing as you code — it helps capture your thinking. No pressure, and I won't give hints or answers. The assignment is on the page. Follow the setup steps there: unzip the starter if you have one, run the Node command shown, then open your AI assistant in that folder.";
+
+/** Injected on every stream loss so the agent speaks — not a candidate transcript line. */
+const SCREEN_SHARE_LOST_UPDATE =
+  "The candidate's screen share just stopped (or needs to be resumed after a refresh). Speak now — do not skip this turn. Tell them they must reshare their entire screen: the full display, not a window or a browser tab. They cannot continue the assessment without sharing. Keep it to one or two sentences.";
 
 /** How often buffered transcript lines are POSTed to the server. */
 const FLUSH_INTERVAL_MS = 10000;
@@ -97,7 +102,7 @@ function LevelMeter({ barsRef, active }) {
 }
 
 const CompanionPanel = forwardRef(function CompanionPanel(
-  { sessionId, token, submissionId, className },
+  { sessionId, token, submissionId, className, reshareRequestId = 0 },
   ref
 ) {
   const [config, setConfig] = useState(null);
@@ -114,9 +119,14 @@ const CompanionPanel = forwardRef(function CompanionPanel(
   const endedRef = useRef(false);
   const conversationRef = useRef(null);
   const barsRef = useRef([]);
+  const pendingReshareRef = useRef(false);
+  const speakResharePromptRef = useRef(() => {});
 
   const agentId = import.meta.env?.VITE_ELEVENLABS_AGENT_ID;
 
+  // @elevenlabs/react 1.x: firstMessage must live on startSession overrides
+  // (`overrides.agent.firstMessage`). Putting it only on useConversation is not
+  // enough — without this field the dashboard default greeting plays instead.
   const overrides = useMemo(() => {
     if (!config?.prompt) return null;
     return {
@@ -127,11 +137,30 @@ const CompanionPanel = forwardRef(function CompanionPanel(
     };
   }, [config]);
 
+  const speakResharePrompt = useCallback(() => {
+    const conv = conversationRef.current;
+    if (!conv || conv.status !== "connected") {
+      pendingReshareRef.current = true;
+      return;
+    }
+    pendingReshareRef.current = false;
+    try {
+      conv.sendContextualUpdate?.(SCREEN_SHARE_LOST_UPDATE);
+    } catch (err) {
+      console.warn("[ProctoringCompanion] reshare contextual update failed:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    speakResharePromptRef.current = speakResharePrompt;
+  }, [speakResharePrompt]);
+
   const conversation = useConversation({
     micMuted: muted,
     onConnect: () => {
       setError(null);
       startTimeRef.current = Date.now();
+      if (pendingReshareRef.current) speakResharePromptRef.current();
     },
     onError: (err) => {
       const msg =
@@ -216,7 +245,13 @@ const CompanionPanel = forwardRef(function CompanionPanel(
       }
 
       try {
-        conversationRef.current?.startSession({
+        const conv = conversationRef.current;
+        if (!conv?.startSession) {
+          startedRef.current = false;
+          setError("Could not start the voice check-in");
+          return;
+        }
+        conv.startSession({
           agentId,
           connectionType: "webrtc",
           overrides,
@@ -304,7 +339,16 @@ const CompanionPanel = forwardRef(function CompanionPanel(
     }
   }, [flushBuffer, sessionId, token]);
 
-  useImperativeHandle(ref, () => ({ endAndFlush }), [endAndFlush]);
+  useEffect(() => {
+    if (!reshareRequestId) return;
+    speakResharePrompt();
+  }, [reshareRequestId, speakResharePrompt]);
+
+  useImperativeHandle(
+    ref,
+    () => ({ endAndFlush, notifyScreenShareLost: speakResharePrompt }),
+    [endAndFlush, speakResharePrompt]
+  );
 
   // Unmount (navigate away, tab close): flush what we have and close the socket.
   // Held in a ref so the cleanup runs on unmount only — keying the effect on
@@ -318,6 +362,30 @@ const CompanionPanel = forwardRef(function CompanionPanel(
       void endAndFlushRef.current?.();
     };
   }, []);
+
+  // Tab close / refresh: sendBeacon so the last lines and hang-up outlive the page.
+  useEffect(() => {
+    if (!sessionId || !token) return undefined;
+    const onPageHide = () => {
+      if (endedRef.current) return;
+      endedRef.current = true;
+      const buf = messageBufferRef.current;
+      messageBufferRef.current = [];
+      beaconCompanionShutdown(
+        sessionId,
+        token,
+        conversationRef.current?.getId?.() || undefined,
+        buf
+      );
+      try {
+        conversationRef.current?.endSession?.();
+      } catch {
+        /* already closed */
+      }
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, [sessionId, token]);
 
   if (!agentId) return null;
 
@@ -489,8 +557,11 @@ const CompanionPanel = forwardRef(function CompanionPanel(
  *
  * Auto-starts when mounted with a proctoring `sessionId` + candidate `token`:
  * fetches the server-side prompt, opens a WebRTC conversation, and buffers the
- * transcript to `/companion/messages` every 10s. The parent should call
- * `ref.current.endAndFlush()` before completing the proctoring session.
+ * transcript to `/companion/messages` every 10s. Pass `reshareRequestId` (a
+ * monotonically increasing tick) so every stream loss / resume-after-refresh
+ * injects a spoken "reshare your entire screen" contextual update. The parent
+ * should call `ref.current.endAndFlush()` before completing the proctoring
+ * session; `notifyScreenShareLost()` is also on the ref.
  *
  * Renders nothing when `VITE_ELEVENLABS_AGENT_ID` is unset.
  */

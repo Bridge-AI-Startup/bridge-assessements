@@ -171,10 +171,6 @@ Mirrors the interactive checklist on the canvas (ordered by severity).
 - [ ] **[minor · P2] Candidate invite emails (Resend).** Add `RESEND_API_KEY` to
   `server/config.env` (and Render) and re-run P2 with the send-invites step.
   Files: `server/config.env`, `server/src/services/email.ts`.
-- [ ] **[minor · P6] ElevenLabs voice interview.** Live voice needs a real mic +
-  agent. Verify the post-call path by POSTing a signed sample payload to
-  `/webhooks/elevenlabs` (see `TESTING_WEBHOOK.md` / `server/test-webhook.js`);
-  do one manual voice run in staging for full coverage.
 
 ---
 

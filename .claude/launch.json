@@ -28,6 +28,21 @@
       "port": 5273
     },
     {
+      "name": "client-alt",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "client",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5283",
+        "--strictPort"
+      ],
+      "port": 5283
+    },
+    {
       "name": "shorts-client",
       "runtimeExecutable": "npm",
       "runtimeArgs": [

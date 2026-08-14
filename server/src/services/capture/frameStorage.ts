@@ -117,6 +117,22 @@ async function recordVideoChunkOnSession(
     { _id: sessionId, "videoChunks.storageKey": { $ne: storageKey } },
     update
   );
+
+  // `$min` does not overwrite BSON null (null < Date), and the schema default
+  // is null — so the first chunk never stamped captureStartedAt. Screen
+  // classification and Review seeks both key off that field.
+  if (startValid) {
+    await ProctoringSessionModel.updateOne(
+      {
+        _id: sessionId,
+        $or: [
+          { "stats.captureStartedAt": null },
+          { "stats.captureStartedAt": { $exists: false } },
+        ],
+      },
+      { $set: { "stats.captureStartedAt": metadata.startTime } },
+    );
+  }
 }
 
 /**

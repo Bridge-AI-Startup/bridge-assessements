@@ -5,8 +5,7 @@ to screen recording. The candidate works in **their own environment** with
 **their own AI tool subscription**; we capture the conversation and the code,
 not the desktop.
 
-Status: **prototype.** Claude Code only. Server routes are off unless
-`WORKFLOW_CAPTURE_ENABLED=true`.
+Status: **prototype.** Claude Code only. `/api/workflow-capture` is always mounted.
 
 ## Why hooks and not a proxy
 
@@ -23,15 +22,7 @@ reviewer. We optimise for a cooperative candidate, not an adversarial one.
 
 ## Live tester (fastest way to see it work)
 
-First put the flag in `server/config.env` (not just inline on one command — an
-already-running dev server will not have it, and every `/api/workflow-capture`
-route including the tester 404s without it):
-
-```
-WORKFLOW_CAPTURE_ENABLED=true
-```
-
-Restart the dev server, then open:
+First restart the dev server if it was already running, then open:
 
 ```
 http://localhost:5050/api/workflow-capture/tester
@@ -61,7 +52,7 @@ seekable, which would defeat the entire point of a clickable timeline.
 ## Try it locally in 3 commands
 
 ```bash
-# 1. terminal one — server (needs WORKFLOW_CAPTURE_ENABLED=true in config.env)
+# 1. terminal one — server
 cd server && npm run dev
 ```
 
@@ -93,6 +84,8 @@ claude                                          # work normally; trust the folde
 |---|---|
 | `.bridge/config.json` | API base + capture token (gitignored) |
 | `.bridge/bridge-capture.js` | the hook script Claude Code invokes |
+| `.bridge/sessionClosed.js` | shared “session ended” flag helper |
+| `.bridge/ended` | written when the server says the attempt is closed; later hooks no-op |
 | `.bridge/sent.jsonl` | **local mirror of everything sent** — candidate-readable |
 | `.bridge/queue.jsonl` | offline queue, flushed on the next hook |
 | `.claude/settings.json` | the hooks themselves; delete to stop capturing |
@@ -111,10 +104,11 @@ candidate re-confirming consent at the tool boundary, in the tool's own UI.
 | `PostToolUse` | `tool_result` | command output, test results, errors |
 | `Stop` | `assistant_message` | the assistant's reply |
 
-On `Stop` the kit also posts a **git-derived snapshot** of changed files, which
-catches work the agent never touched — hand edits, terminal-driven changes.
-That is why code state stays accurate even when the candidate stops using the
-agent entirely.
+On `Stop` the kit also posts a **snapshot** of project files, which catches
+work the agent never touched — hand edits, terminal-driven changes. Git
+status when there is a repo; a bounded walk of the working tree when there
+isn't (unzipped starters often have no `.git`). That is why code state stays
+accurate even when the candidate stops using the agent entirely.
 
 ## Design rules for the hook script
 
@@ -150,30 +144,24 @@ candidate just did while they are still doing it.
 
 ## Turning it on
 
-Two switches, both required:
+Per assessment: the *How we observe the session* setting in the editor —
+`Both` (default for new assessments), `Workflow capture`, or `None`.
 
-1. **Server:** `WORKFLOW_CAPTURE_ENABLED=true` (master switch; off by default).
-2. **Per assessment:** the *How we observe the session* setting in the editor —
-   `Screen recording` (default, unchanged), `Workflow capture`, or `Both`.
-
-The master switch always wins downward: an assessment set to workflow capture on
-a deployment where it is disabled falls back to screen recording rather than
-collecting nothing. Existing assessments are untouched — they have no
-`evidenceMode` field and resolve to `screen`.
+`/api/workflow-capture` is always mounted. Missing `evidenceMode` on old
+documents still resolves to `screen` (legacy video + OCR). New assessments
+default to `both`.
 
 ## Video + timeline sync ("Both" mode)
 
-`Both` keeps the screen recording for human playback but **skips the AI video
-transcript entirely** — no frame extraction, no OCR, no Gemini pass. The
-analysis comes from the hook stream instead, which is both richer and ~$3–22
-cheaper per session.
+`Both` keeps **one** screen recording — the proctoring merged `playback.webm` —
+for human playback and low-res surface classification. It **skips the AI video
+transcript** (no frame OCR, no `TRANSCRIPT_ENGINE=gemini`). The capture-kit
+does not start a second recorder. Analysis comes from the hook stream.
 
-The two records align on wall-clock time, so `GET /sessions/:id` stamps each
-event with `videoOffsetSeconds` — its position in the recording. A reviewer can
-click a prompt in the timeline and seek the player to the moment it happened.
-Events outside the recording window (agent started before screen consent, work
-continued after it stopped) get `null` rather than a bogus seek target, and the
-response carries a `video` block with the merged recording's status and duration.
+The two records align on wall-clock time: `event.at −` proctoring
+`stats.captureStartedAt` (the same origin Review seeks with). `GET /sessions/:id`
+stamps each event with `videoOffsetSeconds`. After merge, `classifyScreenGaps`
+writes `screen_context` from that WebM (MEDIA_RESOLUTION_LOW / 1fps).
 
 ## Other AI tools
 
@@ -217,8 +205,19 @@ reports whether the expected keys are still present, and extraction degrades to
 returning nothing (falling back to the git snapshot) rather than corrupting the
 timeline.
 
-The adapter reads a **copy** of the database, never the live file, so it cannot
-interfere with Cursor or lock its store.
+**Project scoping is the important part.** Cursor keeps every conversation from
+every project in one global database. The adapter finds this folder's workspace
+via `workspaceStorage/<hash>/workspace.json`, looks up that workspace's
+conversations in `composerHeaders`, and reads **only those** — on a real install
+that was 222 of 517 conversations, with the other 295 never touched. If no
+workspace matches this folder it imports nothing, rather than falling back to
+"recent messages" and hoovering up unrelated work.
+
+The store is opened **read-only** (`file:…?mode=ro`) so a running Cursor is
+unaffected and the candidate's database can never be written or locked. Reading
+in place also matters for speed: the store is multi-gigabyte, and copying it
+first took 43s versus 0.02s read-only. A copy is still used as a fallback if the
+read-only open is refused.
 
 ## Known gaps
 

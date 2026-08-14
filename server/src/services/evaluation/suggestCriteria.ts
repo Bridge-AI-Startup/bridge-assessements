@@ -1,20 +1,27 @@
 import { z } from "zod";
-import { PROMPT_SUGGEST_CRITERIA } from "../../prompts/index.js";
+import {
+  PROMPT_SUGGEST_CRITERIA,
+  type CriterionEvidenceProfile,
+} from "../../prompts/index.js";
 import { createChatCompletion } from "../langchainAI.js";
 import { unwrapObject } from "./llmJson.js";
 import { validateCriterion } from "./validator.js";
 
 /**
- * Suggest up to 5 observable evaluation criteria for a given job description.
- * Uses a higher temperature (0.7) to produce varied, creative suggestions.
- * Each suggested criterion is run through the validator; only criteria that
- * pass (evaluable from a screen recording) are returned.
+ * Suggest up to 5 evaluation criteria for a given job description, scoreable
+ * from the record the given evidence profile actually collects.
+ *
+ * Uses a higher temperature (0.7) for varied suggestions, then runs each one
+ * back through the validator under the same profile — the generator will still
+ * occasionally propose a behaviour nothing records, and that second pass is what
+ * keeps it out of the employer's rubric.
  */
 export async function suggestCriteria(
-  jobDescription: string
+  jobDescription: string,
+  profile: CriterionEvidenceProfile = "workflow"
 ): Promise<string[]> {
   const messages = [
-    { role: "system" as const, content: PROMPT_SUGGEST_CRITERIA.system },
+    { role: "system" as const, content: PROMPT_SUGGEST_CRITERIA.system(profile) },
     {
       role: "user" as const,
       content: PROMPT_SUGGEST_CRITERIA.userTemplate(jobDescription),
@@ -44,7 +51,7 @@ export async function suggestCriteria(
   const validationResults = await Promise.all(
     suggested.map(async (criterion) => {
       try {
-        return await validateCriterion(criterion);
+        return await validateCriterion(criterion, profile);
       } catch {
         return { valid: false as const, reason: "Validation failed" };
       }

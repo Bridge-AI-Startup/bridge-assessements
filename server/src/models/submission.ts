@@ -124,43 +124,6 @@ const SubmissionSchema = new mongoose.Schema(
       },
     },
 
-    // Interview questions generated from the candidate's code submission
-    // Stored after repo is pinned to commit and before interviews can start
-    interviewQuestions: [
-      {
-        prompt: {
-          type: String,
-          required: true,
-          trim: true,
-        },
-        anchors: {
-          type: [
-            {
-              path: {
-                type: String,
-                required: true,
-              },
-              startLine: {
-                type: Number,
-                required: true,
-                min: 1,
-              },
-              endLine: {
-                type: Number,
-                required: true,
-                min: 1,
-              },
-            },
-          ],
-          default: [],
-        },
-        createdAt: {
-          type: Date,
-          default: Date.now,
-        },
-      },
-    ],
-
     // Opt-out information
     optedOut: {
       type: Boolean,
@@ -185,92 +148,6 @@ const SubmissionSchema = new mongoose.Schema(
       userAgent: {
         type: String,
         default: null,
-      },
-    },
-
-    // Interview transcription and analysis data
-    interview: {
-      // Provider of the interview service (e.g., "elevenlabs")
-      provider: {
-        type: String,
-        default: "elevenlabs",
-      },
-      // Interview status
-      status: {
-        type: String,
-        enum: ["not_started", "in_progress", "completed", "failed"],
-        default: "not_started",
-      },
-      // ElevenLabs conversation ID (for webhook attribution)
-      conversationId: {
-        type: String,
-        default: null,
-      },
-      // Transcript data
-      transcript: {
-        turns: {
-          type: [
-            {
-              role: {
-                type: String,
-                enum: ["agent", "candidate"],
-                required: true,
-              },
-              text: {
-                type: String,
-                required: true,
-                trim: true,
-              },
-              startMs: {
-                type: Number,
-                default: null,
-              },
-              endMs: {
-                type: Number,
-                default: null,
-              },
-            },
-          ],
-          default: [],
-        },
-      },
-      // Summary of the interview (optional)
-      summary: {
-        type: String,
-        default: null,
-      },
-      // Raw analysis data from provider (optional, mixed type)
-      analysis: {
-        type: mongoose.Schema.Types.Mixed,
-        default: null,
-      },
-      // Timestamps
-      startedAt: {
-        type: Date,
-        default: null,
-      },
-      completedAt: {
-        type: Date,
-        default: null,
-      },
-      updatedAt: {
-        type: Date,
-        default: null,
-      },
-      // Error information (if interview failed)
-      error: {
-        message: {
-          type: String,
-          default: null,
-        },
-        at: {
-          type: Date,
-          default: null, // Only set when there's an actual error
-        },
-        raw: {
-          type: mongoose.Schema.Types.Mixed,
-          default: null,
-        },
       },
     },
 
@@ -366,10 +243,6 @@ const SubmissionSchema = new mongoose.Schema(
 SubmissionSchema.index({ assessmentId: 1, status: 1 });
 SubmissionSchema.index({ assessmentId: 1, candidateEmail: 1 });
 SubmissionSchema.index({ candidateEmail: 1 });
-
-// Sparse index on interview.conversationId for faster lookup/debugging
-// Sparse means it only indexes documents where conversationId exists
-SubmissionSchema.index({ "interview.conversationId": 1 }, { sparse: true });
 
 const SubmissionModel = mongoose.model("Submission", SubmissionSchema);
 export default SubmissionModel;

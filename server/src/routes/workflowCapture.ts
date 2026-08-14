@@ -40,7 +40,37 @@ const videoUpload = multer({
 router.post("/video/start", WorkflowCaptureController.startVideo);
 router.post("/video/chunk", videoUpload, WorkflowCaptureController.uploadVideoChunk);
 router.post("/video/stop", WorkflowCaptureController.stopVideo);
-router.get("/sessions/:id/video", WorkflowCaptureController.streamSessionVideo);
+// Playback is open in dev (the local tester has no login) and employer-auth'd
+// in production, where the handler additionally checks ownership.
+const authInProduction: express.RequestHandler = (req, res, next) =>
+  process.env.NODE_ENV === "production"
+    ? (verifyAuthToken as express.RequestHandler)(req, res, next)
+    : next();
+
+router.get(
+  "/sessions/:id/video",
+  authInProduction,
+  WorkflowCaptureController.streamSessionVideo
+);
+
+// --- Analysis (employer auth + ownership) ---
+// These return the candidate's prompts and code, and trigger paid model calls;
+// they were briefly mounted unauthenticated.
+router.get(
+  "/sessions/:id/analysis",
+  verifyAuthToken,
+  WorkflowCaptureController.getSessionAnalysis
+);
+router.post(
+  "/sessions/:id/classify-screen",
+  verifyAuthToken,
+  WorkflowCaptureController.runScreenClassification
+);
+router.get(
+  "/sessions/by-submission/:submissionId",
+  verifyAuthToken,
+  WorkflowCaptureController.getCaptureSessionBySubmission
+);
 
 // --- Dev-only live tester (never mounted in production) ---
 if (process.env.NODE_ENV !== "production") {

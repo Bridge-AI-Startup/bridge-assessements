@@ -13,18 +13,21 @@ import userRoutes from "./routes/user.js";
 import assessmentRoutes from "./routes/assessment.js";
 import submissionRoutes from "./routes/submission.js";
 import agentToolsRoutes from "./routes/agentTools.js";
-import webhookRoutes from "./routes/webhook.js";
 import billingRoutes from "./routes/billing.js";
 import evaluationRoutes from "./routes/evaluation.js";
 import proctoringRoutes from "./routes/proctoring.js";
 import competitionRoutes from "./routes/competition.js";
 import workflowCaptureRoutes from "./routes/workflowCapture.js";
 import playRoutes from "./routes/shorts.js";
+import opsRoutes from "./routes/ops.js";
 import { health as playHealth } from "./controllers/shorts/index.js";
 import { shortsEnabled } from "./utils/shortsEnv.js";
 import { errorHandler } from "./errors/handler.js";
 import { isDevLoopbackOrigin } from "./utils/corsOrigins.js";
 import { startIncrementalScheduler } from "./ai/transcript/incrementalScheduler.js";
+import { startAttemptReaper } from "./services/submission/finalizeExpired.js";
+import { resumeInterruptedMerges } from "./services/capture/sessionVideoMerge.js";
+import { resumeInterruptedEvaluations } from "./controllers/submission.js";
 
 // Node 15+ terminates the process on an unhandled rejection. Without these
 // handlers a background async failure (E2B, Mongo, a stray promise) kills the
@@ -214,19 +217,6 @@ const authLimiter = rateLimit({
   skip: (req) => process.env.NODE_ENV === "development",
 });
 
-// Stricter rate limit for webhook endpoints - 50 requests per 15 minutes
-// (Webhooks should come from specific services, not random IPs)
-const webhookLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 50,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    error: "Too many webhook requests from this IP, please try again later.",
-  },
-  skip: (req) => process.env.NODE_ENV === "development",
-});
-
 console.log("✅ Rate limiting configured");
 console.log("   - General API: 100 requests per 15 minutes");
 console.log("   - Proctoring uploads: 8000 requests per 15 minutes (separate cap)");
@@ -234,7 +224,6 @@ console.log(
   "   - Play preview assets: 3000 requests per 15 minutes (separate cap)",
 );
 console.log("   - Authentication: 5 requests per 15 minutes");
-console.log("   - Webhooks: 50 requests per 15 minutes");
 console.log("   - Rate limiting disabled in development mode");
 
 console.log("📦 Setting up body parsing middleware...");
@@ -243,7 +232,7 @@ console.log("📦 Setting up body parsing middleware...");
 // This MUST be applied BEFORE express.json() to preserve the raw body stream
 // It stores the raw body in req.rawBody for HMAC verification
 app.use(
-  ["/webhooks", "/api/billing/webhook"],
+  "/api/billing/webhook",
   express.raw({ type: "*/*", limit: "10mb" }),
   (req, res, next) => {
     // Store raw body for signature verification
@@ -355,6 +344,11 @@ console.log("  ✅ /api/users routes registered");
 console.log("     - POST /api/users/create");
 console.log("     - GET /api/users/whoami (rate limited: 5/15min)");
 
+app.use("/api/ops", apiLimiter);
+app.use("/api/ops", opsRoutes);
+console.log("  ✅ /api/ops routes registered");
+console.log("     - GET /api/ops/workload (ops admin allowlist)");
+
 app.use("/api/assessments", apiLimiter); // Apply general limit
 app.use("/api/assessments", assessmentRoutes);
 console.log("  ✅ /api/assessments routes registered");
@@ -391,12 +385,7 @@ console.log(
 app.use("/api/agent-tools", apiLimiter); // Apply general limit
 app.use("/api/agent-tools", agentToolsRoutes);
 console.log("  ✅ /api/agent-tools routes registered");
-console.log("     - POST /api/agent-tools/get-context");
-
-app.use("/webhooks", webhookLimiter); // Apply webhook-specific limit
-app.use("/webhooks", webhookRoutes);
-console.log("  ✅ /webhooks routes registered");
-console.log("     - POST /webhooks/elevenlabs (rate limited: 50/15min)");
+console.log("     - POST /api/agent-tools/context");
 
 app.use("/api/billing", apiLimiter); // Apply general limit
 app.use("/api/billing", billingRoutes);
@@ -467,21 +456,14 @@ console.log(
   "     - POST /api/proctoring/sessions/:sessionId/generate-transcript",
 );
 
-// Experimental: hooks-first capture of the candidate's AI-agent conversation +
-// code changes (the screen-recording alternative). Off unless explicitly enabled.
-if (process.env.WORKFLOW_CAPTURE_ENABLED === "true") {
-  app.use("/api/workflow-capture", workflowCaptureLimiter);
-  app.use("/api/workflow-capture", workflowCaptureRoutes);
-  console.log("  ✅ /api/workflow-capture routes registered (experimental)");
-  console.log("     - POST /api/workflow-capture/sessions");
-  console.log("     - POST /api/workflow-capture/events");
-  console.log("     - POST /api/workflow-capture/snapshot");
-  console.log("     - GET  /api/workflow-capture/agent-context");
-} else {
-  console.log(
-    "  ⏸️  /api/workflow-capture disabled (set WORKFLOW_CAPTURE_ENABLED=true)",
-  );
-}
+// Hooks-first capture of the candidate's AI-agent conversation + code changes.
+app.use("/api/workflow-capture", workflowCaptureLimiter);
+app.use("/api/workflow-capture", workflowCaptureRoutes);
+console.log("  ✅ /api/workflow-capture routes registered");
+console.log("     - POST /api/workflow-capture/sessions");
+console.log("     - POST /api/workflow-capture/events");
+console.log("     - POST /api/workflow-capture/snapshot");
+console.log("     - GET  /api/workflow-capture/agent-context");
 
 app.use("/api", apiLimiter);
 app.use("/api", evaluationRoutes);
@@ -524,6 +506,13 @@ const startServer = async () => {
       console.log(`📡 API base: http://localhost:${PORT}/api`);
       console.log(`${"=".repeat(60)}\n`);
       startIncrementalScheduler();
+      startAttemptReaper();
+      void resumeInterruptedMerges().catch((err) =>
+        console.error("[sessionVideoMerge] resumeInterruptedMerges failed:", err),
+      );
+      void resumeInterruptedEvaluations().catch((err) =>
+        console.error("[eval] resumeInterruptedEvaluations failed:", err),
+      );
     });
   } catch (error) {
     console.error("\n❌ Failed to start server:", error);

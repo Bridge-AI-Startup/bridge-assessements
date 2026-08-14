@@ -25,6 +25,8 @@ const QUEUE_PATH = path.join(BRIDGE_DIR, "queue.jsonl");
 const MIRROR_PATH = path.join(BRIDGE_DIR, "sent.jsonl");
 const SEQ_PATH = path.join(BRIDGE_DIR, "seq");
 
+const { isSessionClosed, applyClosedResponse } = require("./sessionClosed");
+
 const SNAPSHOT_STAMP_PATH = path.join(BRIDGE_DIR, "last-snapshot");
 
 const REQUEST_TIMEOUT_MS = 4000;
@@ -111,6 +113,101 @@ function gitBranch() {
   }
 }
 
+/**
+ * Text of a tool's result.
+ *
+ * The field name varies by tool and version (`tool_response` in current Claude
+ * Code, `tool_result` elsewhere), so try each and return null when there is
+ * genuinely nothing — never `JSON.stringify(undefined)`, which yields the
+ * literal string "null" and silently destroys the evidence it was meant to
+ * carry. Command and test output is some of the most valuable signal we have.
+ */
+function extractToolResult(payload) {
+  const candidates = [
+    payload.tool_response,
+    payload.tool_result,
+    payload.result,
+    payload.output,
+    payload.response,
+  ];
+  for (const c of candidates) {
+    if (c == null) continue;
+    if (typeof c === "string") return c.trim() ? c : null;
+    if (typeof c === "object") {
+      // Common shapes: {stdout, stderr}, {content: "..."}, {content:[{text}]}
+      const stdout = [c.stdout, c.stderr].filter((s) => typeof s === "string" && s).join("\n");
+      if (stdout.trim()) return stdout;
+      if (typeof c.content === "string" && c.content.trim()) return c.content;
+      if (Array.isArray(c.content)) {
+        const joined = c.content
+          .map((p) => (typeof p === "string" ? p : p?.text || ""))
+          .filter(Boolean)
+          .join("");
+        if (joined.trim()) return joined;
+      }
+      try {
+        const json = JSON.stringify(c);
+        if (json && json !== "{}" && json !== "null") return json;
+      } catch {
+        /* circular or otherwise unserialisable */
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Token usage for the turn that just ended, read from the agent's own
+ * transcript file.
+ *
+ * Only the tail is read: these files grow to megabytes over a long session and
+ * this runs inside the candidate's editing loop, where a slow hook is felt.
+ */
+function readUsageFromTranscript(transcriptPath) {
+  if (!transcriptPath || typeof transcriptPath !== "string") return null;
+  const TAIL_BYTES = 256 * 1024;
+  let tail = "";
+  try {
+    const size = fs.statSync(transcriptPath).size;
+    const start = Math.max(0, size - TAIL_BYTES);
+    const fd = fs.openSync(transcriptPath, "r");
+    try {
+      const buf = Buffer.alloc(Math.min(TAIL_BYTES, size));
+      fs.readSync(fd, buf, 0, buf.length, start);
+      tail = buf.toString("utf8");
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+
+  // Walk backwards to the most recent record carrying a usage block.
+  const lines = tail.split("\n").filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let rec;
+    try {
+      rec = JSON.parse(lines[i]);
+    } catch {
+      continue; // a partial first line from slicing mid-record
+    }
+    const u = rec?.message?.usage || rec?.usage;
+    if (!u) continue;
+    const input = Number(u.input_tokens ?? 0) || 0;
+    const output = Number(u.output_tokens ?? 0) || 0;
+    const cacheRead = Number(u.cache_read_input_tokens ?? 0) || 0;
+    const cacheWrite = Number(u.cache_creation_input_tokens ?? 0) || 0;
+    if (!input && !output && !cacheRead) continue;
+    return {
+      input_tokens: input,
+      output_tokens: output,
+      cache_read_input_tokens: cacheRead,
+      cache_creation_input_tokens: cacheWrite,
+    };
+  }
+  return null;
+}
+
 /** One human-readable line describing what a tool call is doing. */
 function summariseToolInput(toolName, input) {
   if (!input || typeof input !== "object") return null;
@@ -176,21 +273,22 @@ function toEvent(eventName, payload) {
         ...base,
         type: "tool_result",
         toolName: payload.tool_name || null,
-        text: truncate(
-          typeof payload.tool_result === "string"
-            ? payload.tool_result
-            : JSON.stringify(payload.tool_result ?? null)
-        ),
+        text: truncate(extractToolResult(payload)),
         payload: {},
       };
 
-    case "Stop":
+    case "Stop": {
+      // Hooks do not carry token counts, but they do hand us the path to the
+      // tool's own transcript — which does. Reading the tail of it is the only
+      // way to get real usage without proxying the API.
+      const usage = readUsageFromTranscript(payload.transcript_path);
       return {
         ...base,
         type: "assistant_message",
         text: truncate(payload.last_assistant_message || ""),
-        payload: {},
+        payload: usage ? { usage } : {},
       };
+    }
 
     case "SessionEnd":
       return { ...base, type: "session_end", text: null, payload: {} };
@@ -257,13 +355,42 @@ async function post(config, route, body) {
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
+  const data = await res.json().catch(() => ({}));
+  applyClosedResponse(data);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json().catch(() => ({}));
+  return data;
+}
+
+/**
+ * Walk the project when `git status` is unavailable (unzipped starters are
+ * often not a git repo). Caps at MAX_SNAPSHOT_FILES; skips secrets / build dirs.
+ */
+function listProjectFiles(dir, prefix, acc) {
+  if (acc.length >= MAX_SNAPSHOT_FILES) return acc;
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return acc;
+  }
+  for (const ent of entries) {
+    if (acc.length >= MAX_SNAPSHOT_FILES) break;
+    const rel = prefix ? `${prefix}/${ent.name}` : ent.name;
+    if (shouldSkipPath(rel)) continue;
+    const full = path.join(dir, ent.name);
+    if (ent.isDirectory()) {
+      listProjectFiles(full, rel, acc);
+    } else if (ent.isFile()) {
+      acc.push(rel);
+    }
+  }
+  return acc;
 }
 
 /**
  * Files changed vs HEAD, so we also capture work the agent did not do —
  * hand edits, terminal-driven changes, anything outside the Write tool.
+ * Unzipped starters often have no git repo; fall back to a bounded walk.
  */
 function collectChangedFiles() {
   let names = [];
@@ -279,7 +406,7 @@ function collectChangedFiles() {
       .map((line) => line.slice(3).trim())
       .filter((p) => p && !shouldSkipPath(p));
   } catch {
-    return [];
+    names = listProjectFiles(process.cwd(), "", []);
   }
 
   const files = [];
@@ -319,6 +446,9 @@ async function sendSnapshot(config, reason) {
 
 async function main() {
   const eventName = process.argv[2] || "Unknown";
+  if (isSessionClosed()) {
+    bail("capture session already closed");
+  }
   const config = readConfig();
   if (!config?.captureToken || !config?.apiBase) {
     bail("no config — run `node .bridge/setup.js` first");

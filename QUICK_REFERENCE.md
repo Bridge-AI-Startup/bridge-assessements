@@ -21,7 +21,7 @@ npm run dev          # Start dev server (port 5173)
 - **Frontend**: http://localhost:5173
 - **Backend API**: http://localhost:5050/api
 - **Health Check**: http://localhost:5050/health
-- **Production Backend**: https://bridge-assessements.onrender.com
+- **Production Backend**: https://bridge-assessements-1.onrender.com
 
 ## 🔑 Key Environment Variables
 

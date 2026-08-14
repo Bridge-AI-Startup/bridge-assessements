@@ -66,8 +66,14 @@ export function summarizeFailedRunbookSteps(
 export function orderChecksForIsolation(
   checks: string[]
 ): Array<{ checkText: string; originalIndex: number }> {
+  // Stems, not whole words: the inflected form is the common one in a check
+  // ("after refreshing the page", "creating a note"), and `\brefresh\b` misses
+  // "refreshing" entirely. That mattered — a persistence check ("notes still
+  // show up after refreshing") counted as read-only and sorted *before* the
+  // check that creates the note, so it ran against an empty app and failed a
+  // candidate whose persistence worked.
   const mutating =
-    /\b(add|create|delete|remove|update|edit|submit|post|save|refresh|register|sign\s*up|log\s*in|logout)\b/i;
+    /\b(add|creat|delet|remov|updat|edit|submit|post|sav|refresh|reload|register|persist|sign\s*up|log\s*in|logout)(e|es|s|ed|ing|ted|ting)?\b/i;
   const indexed = checks.map((checkText, originalIndex) => ({
     checkText,
     originalIndex,

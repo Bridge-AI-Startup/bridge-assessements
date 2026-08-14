@@ -199,7 +199,6 @@ async function main() {
       "primes_up_to(limit). Write tests and make them pass. We evaluate how you " +
       "work, not just the final code.",
     timeLimit: 60,
-    numInterviewQuestions: 2,
     evaluationCriteria: criteria,
     behavioralChecks: [
       "is_prime correctly rejects numbers below 2",

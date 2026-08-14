@@ -151,7 +151,7 @@ A full-stack TypeScript application for creating and managing technical coding a
 3. **Add endpoint**: Click **Add endpoint** button
 4. **Enter production URL**: 
    ```
-   https://bridge-assessements.onrender.com/api/billing/webhook
+   https://bridge-assessements-1.onrender.com/api/billing/webhook
    ```
    ⚠️ **Important**: Use your actual production backend URL if different
 5. **Select events to listen for**:

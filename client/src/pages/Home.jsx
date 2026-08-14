@@ -12,6 +12,7 @@ import {
   AlertTriangle,
   Trophy,
   Loader2,
+  Activity,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -65,6 +66,7 @@ export default function Home() {
   const [hackathonSlugSaving, setHackathonSlugSaving] = useState(false);
   const [hackathonSlugMessage, setHackathonSlugMessage] = useState(null);
   const [showHackathonCard, setShowHackathonCard] = useState(false);
+  const [showOpsLink, setShowOpsLink] = useState(false);
 
   useEffect(() => {
     // Wait for auth state to be ready
@@ -111,8 +113,10 @@ export default function Home() {
           } else {
             setShowHackathonCard(false);
           }
+          setShowOpsLink(Boolean(whoami.success && whoami.data?.opsAdmin));
         } catch {
           setShowHackathonCard(false);
+          setShowOpsLink(false);
         }
       };
 
@@ -267,6 +271,17 @@ export default function Home() {
                 Subscription
               </Button>
             </Link>
+            {showOpsLink && (
+              <Link to={createPageUrl("OpsDashboard")}>
+                <Button
+                  variant="outline"
+                  className="border-[#21201C] text-[#21201C] hover:bg-[#21201C]/5 rounded-full px-5"
+                >
+                  <Activity className="w-4 h-4 mr-2" />
+                  Ops
+                </Button>
+              </Link>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="rounded-full h-9 w-9 p-0">
@@ -320,7 +335,7 @@ export default function Home() {
                 <ul className="list-disc list-inside mt-3 space-y-1 text-sm">
                   <li>All your assessments</li>
                   <li>All candidate submissions</li>
-                  <li>All interview data and transcripts</li>
+                  <li>All session recordings and transcripts</li>
                   <li>Your subscription (if active)</li>
                   <li>All code embeddings and indexed data</li>
                 </ul>

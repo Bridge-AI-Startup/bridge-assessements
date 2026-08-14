@@ -2,7 +2,7 @@
 
 ## What This App Is
 
-BridgeAI is a technical hiring assessment platform. Employers create take-home coding assessments from job descriptions using AI, share unique links with candidates, and then candidates submit their code via GitHub. After submission, an AI-powered voice interview is conducted using ElevenLabs to evaluate the candidate's understanding of their code. Submissions are scored across multiple dimensions. Employers view results through an analytics dashboard with diff analysis, interview transcripts, and scoring breakdowns.
+BridgeAI is a technical hiring assessment platform. Employers create take-home coding assessments from job descriptions using AI, share unique links with candidates, and then candidates submit their code via GitHub or a local archive. While the candidate works, an optional in-session ElevenLabs voice companion can capture their reasoning. Submissions are scored across process (how they worked) and behavioral (does the product pass checks) dimensions. Employers view results through an analytics dashboard with recordings, transcripts, and scoring breakdowns.
 
 ## Monorepo Structure
 
@@ -87,7 +87,7 @@ stripe listen --forward-to localhost:5050/api/billing/webhook
 - **Framer Motion** for animations
 - **Firebase Auth v12** (client SDK) for authentication
 - **Stripe.js + React Stripe** for checkout UI
-- **ElevenLabs React SDK** for voice interview client
+- **ElevenLabs React SDK** for the in-session voice companion
 - **Recharts** for data visualization / charts
 - **React Hook Form** + `@hookform/resolvers` for form state management
 - **React Quill** for rich text editing
@@ -109,8 +109,6 @@ stripe listen --forward-to localhost:5050/api/billing/webhook
 - **LangChain** with pluggable AI providers for:
   - Assessment generation from job descriptions
   - Assessment chat assistant
-  - Interview question generation from candidate code (RAG)
-  - Interview summary generation from transcripts
   - Base code generation
   - Code change / diff analysis
   - Completeness scoring
@@ -119,7 +117,7 @@ stripe listen --forward-to localhost:5050/api/billing/webhook
 - **Pinecone** vector database for code indexing and retrieval
 - **Stripe** for subscription billing (checkout sessions + webhooks)
 - **Resend** for sending candidate invitation emails
-- **ElevenLabs** webhooks for receiving post-call interview transcripts
+- **ElevenLabs** Conversational AI for the in-session voice companion
 - **multer** for file uploads (LLM trace uploads)
 - **unzipper** for ZIP extraction
 - **Zod** for schema validation
@@ -144,10 +142,11 @@ See `server/config.env.example` for the full list. Key variables:
 **Authentication:**
 - `FIREBASE_SERVICE_ACCOUNT_JSON` -- Firebase Admin credentials (JSON string, required in prod)
 - `FIREBASE_SERVICE_ACCOUNT_PATH` -- Path to service account file (dev only)
+- `OPS_ADMIN_EMAIL` -- Comma-separated emails allowed to view `GET /api/ops/workload` / `/OpsDashboard` (cross-account workload). Defaults to `HACKATHON_ADMIN_EMAIL`, then `saaz@bridge-jobs.com`
 
 **AI Providers:**
 - `AI_PROVIDER` -- Global default: `openai`, `anthropic`, or `gemini`
-- `AI_PROVIDER_ASSESSMENT_GENERATION` / `AI_PROVIDER_ASSESSMENT_CHAT` / `AI_PROVIDER_INTERVIEW_QUESTIONS` / `AI_PROVIDER_INTERVIEW_SUMMARY` -- Per-use-case overrides
+- `AI_PROVIDER_ASSESSMENT_GENERATION` / `AI_PROVIDER_ASSESSMENT_CHAT` -- Per-use-case overrides
 - `OPENAI_API_KEY` / `OPENAI_MODEL` -- OpenAI config (default model: `gpt-4o-mini`)
 - `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` -- Anthropic config (default: `Codex-3-5-sonnet-20241022`)
 - `GEMINI_API_KEY` / `GEMINI_MODEL` -- Gemini config (default: `gemini-1.5-pro`)
@@ -183,9 +182,8 @@ See `server/config.env.example` for the full list. Key variables:
 **Billing:**
 - `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_PRICE_ID` / `APP_URL` -- Stripe billing
 
-**Voice Interviews:**
+**In-session voice companion (ElevenLabs):**
 - `AGENT_SECRET` -- Authenticates ElevenLabs agent tool requests
-- `ELEVENLABS_WEBHOOK_SECRET` -- Verifies ElevenLabs webhook signatures
 
 **Email:**
 - `RESEND_API_KEY` -- Resend email service key
@@ -199,6 +197,7 @@ See `server/config.env.example` for the full list. Key variables:
 - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` -- IAM user credentials on hosts like Render (or use default credential chain)
 - One-time migration: `npx tsx src/scripts/migrateProctoringLocalToS3.ts` (see `server/docs/VIDEO_PROCTORING_SYSTEM.md`)
 - Retroactive WebM merge (chunks → `playback.webm`): from `server/`, `npm run backfill:proctoring-video` (same as `npx tsx src/scripts/backfillMergedProctoringVideos.ts`; use `--dry-run` first)
+- Repair unseekable merged recordings (raw concat, no Cues/duration): `npx tsx src/scripts/repairMergedPlaybackVideos.ts` (dry-run default; `--apply` remuxes + overwrites, keeping the original at `{sessionId}/playback-preremux.webm`)
 - `TRANSCRIPT_GENERATION_ENABLED` -- Enable/disable AI transcript generation (default: `true`)
 - `PROCTORING_FRAME_INTERVAL_MS` -- Capture interval in ms (default: `5000`)
 - `PROCTORING_DEDUP_THRESHOLD` -- Pixel diff threshold for dedup (default: `0.03`)
@@ -232,32 +231,31 @@ server/src/
 │   ├── user.ts            # User schema (Firebase UID, company, Stripe subscription fields)
 │   ├── assessment.ts      # Assessment schema (title, description, time limit, settings)
 │   ├── competition.ts     # Competition / hackathon: slug, assessmentId, rules, registration window, leaderboard flag
-│   ├── submission.ts      # Submission schema (token, candidate info, GitHub repo, interview, scores, LLM workflow)
+│   ├── submission.ts      # Submission schema (token, candidate info, GitHub repo, scores)
 │   ├── repoIndex.ts       # Repository indexing metadata for Pinecone
 │   └── proctoringSession.ts  # Proctoring session (frames, events, transcript, video chunks)
 ├── routes/
 │   ├── user.ts            # /api/users/* -- create, whoami, delete
 │   ├── assessment.ts      # /api/assessments/* -- CRUD + generate + chat
-│   ├── submission.ts      # /api/submissions/* -- link generation, token access, submit, interview, scoring
+│   ├── submission.ts      # /api/submissions/* -- link generation, token access, submit, scoring
 │   ├── competition.ts     # /api/competitions/* -- public competition metadata, self-serve join, leaderboard
+│   ├── ops.ts             # /api/ops/* -- workload dashboard (OPS_ADMIN_EMAIL)
 │   ├── billing.ts         # /api/billing/* -- checkout, status, cancel, reactivate, webhook
 │   ├── agentTools.ts      # /api/agent-tools/* -- ElevenLabs agent context retrieval
-│   ├── webhook.ts         # /webhooks/* -- ElevenLabs post-call webhook
 │   └── proctoring.ts      # /api/proctoring/* -- screen capture sessions, frames, transcripts
 ├── controllers/
 │   ├── user.ts            # User creation, login (with tier limits), account deletion
 │   ├── assessment.ts      # Assessment CRUD, AI generation, chat
-│   ├── submission.ts      # All submission handlers (share links, submissions, interviews, scoring)
+│   ├── submission.ts      # All submission handlers (share links, submissions, scoring)
 │   ├── competition.ts     # Public competitions: get by slug, join (creates pending submission), leaderboard
+│   ├── ops.ts             # Ops workload aggregation (employer attribution for heavy jobs)
 │   ├── billing.ts         # Stripe checkout, status, cancel, reactivate, webhook handler
-│   ├── webhook.ts         # ElevenLabs post-call transcript processing + summary generation
 │   ├── agentTools.ts      # Code context retrieval for ElevenLabs agent (Pinecone search)
 │   └── proctoring.ts      # Proctoring: session CRUD, frame upload, consent, sidecar, transcript generation
 ├── services/
 │   ├── langchainAI.ts     # LangChain abstraction: createChatCompletion(), structured output, provider/model selection
 │   ├── assessmentGeneration.ts  # 3-step AI assessment generation (extract reqs → generate → quality review)
 │   ├── assessmentChat.ts  # AI chat for assessment editing
-│   ├── interviewGeneration.ts  # RAG-based interview question generation + summary generation
 │   ├── assessmentPackage.ts    # ZIP package generation for assessment download
 │   ├── email.ts           # Resend email service for candidate invitations
 │   ├── repoIndexing.ts    # GitHub repo → Pinecone indexing (download, chunk, embed, upsert)
@@ -302,7 +300,8 @@ server/src/
 ├── types/
 │   └── assessmentGeneration.ts  # TypeScript types for assessment generation
 ├── middleware/
-│   └── requireSubscription.ts  # Returns 402 if user lacks active subscription
+│   ├── requireSubscription.ts  # Returns 402 if user lacks active subscription
+│   └── requireOpsAdmin.ts      # Firebase + OPS_ADMIN_EMAIL allowlist for /api/ops
 ├── validators/
 │   ├── auth.ts            # Firebase token verification middleware (verifyAuthToken)
 │   ├── submissionAuth.ts  # Submission access: verifySubmissionAccess (auth OR token), verifySubmissionToken
@@ -313,6 +312,7 @@ server/src/
 ├── utils/
 │   ├── auth.ts            # decodeAuthToken(), getUserIdFromFirebaseUid()
 │   ├── subscription.ts    # isSubscribed(), getSubscriptionStatus() -- checks both top-level and legacy nested fields
+│   ├── opsAdmin.ts        # OPS_ADMIN_EMAIL allowlist helpers
 │   ├── firebase.ts        # Firebase Admin Auth export
 │   ├── github.ts          # parseGithubRepoUrl(), resolvePinnedCommit(), fetchRepoMetadata(), resolveBranchToCommit()
 │   ├── embeddings.ts      # generateEmbedding(), generateEmbeddings() -- OpenAI embeddings
@@ -338,17 +338,15 @@ server/src/
 │       └── manifestInjector.ts  # Inject sidecar events into transcript
 └── scripts/               # Utility/migration scripts
     ├── backfillMergedProctoringVideos.ts # Merge legacy WebM chunks → playback.webm + mergedVideo
-    ├── backfillInterviewQuestions.ts
+    ├── repairMergedPlaybackVideos.ts # Re-remux stored playback.webm files that shipped as raw concats (unseekable); dry-run default, --apply backs up original first
     ├── duplicateSubmissionWithTrace.ts
-    ├── generateDummyConversation.ts
     ├── listSubmissions.ts
     ├── seedCompetition.ts   # Link Mongo Competition slug → assessment (hackathon dashboard)
     ├── seedPlayChallenge.ts # Upsert Play daily challenge from play/challenges/*.json
     ├── play-sandbox-smoke.ts # Create Play E2B template sandbox; print preview URL + Codex check
     ├── replaceSubmissionWithGeneratedMarkdown.ts
     ├── replaceTraceWithMarkdown.ts
-    ├── seedDummyInterview.ts
- ├── behavioral-grading-smoke.ts
+    ├── behavioral-grading-smoke.ts
  ├── e2b-smoke.ts
     ├── test-assessment-generation.ts
     └── validateMarkdownTrace.ts
@@ -375,6 +373,9 @@ server/src/
 - `GET /:slug` -- Competition + assessment summary for hackathon dashboard (metadata, rules, dates)
 - `POST /:slug/join` -- Self-serve registration: creates a **pending** submission (same as employer generate-link) and returns `token` + `shareLink`; does **not** apply employer free-tier submission limits; stricter rate limit in production (30/hour/IP); duplicate email per assessment returns 409
 - `GET /:slug/leaderboard` -- Public leaderboard for submitted candidates (rank by `scores.overall`, then completeness, then workflow overall score); top 50 default, `?limit=` max 100; respects `leaderboardPublic` on the competition document
+
+**Ops routes** (`/api/ops`, Firebase auth + `OPS_ADMIN_EMAIL` allowlist — cross-account):
+- `GET /workload` -- Aggregated heavy/risk workload: active merges, transcript generation, pending behavioral/evaluation, large sessions; attributes employer (email/company), assessment, submission, proctoring stats; includes in-process merge/grading queue depths for this Render instance. Query: `hours` (default 24), `limit` (default 80). Not crash telemetry — correlate with Render logs.
 
 **Play routes** (`/api/play`, consumer product — requires `PLAY_ENABLED=true` except health):
 - `GET /health` -- Always on; smoke check `{ ok: true, product: "play" }`
@@ -418,7 +419,6 @@ server/src/
 - `POST /send-invites` -- Send invitation emails to candidates via Resend
 - `GET /assessments/:id/submissions` -- List submissions for assessment
 - `DELETE /:submissionId` -- Delete submission
-- `POST /:submissionId/generate-interview` -- Generate interview questions (requires indexed repo)
 - `POST /:submissionId/index-repo` -- Index submitted code snapshot into Pinecone (GitHub or uploaded archive)
 - `GET /:submissionId/repo-index/status` -- Check repo indexing status
 - `POST /:submissionId/search-code` -- Search indexed code (debug)
@@ -433,15 +433,10 @@ server/src/
 - `POST /token/:token/submit` -- Legacy GitHub URL submit flow (can be disabled via `SUBMISSION_SOURCE_MODE`); accepts late submits within a 5-minute grace period after `timeLimit`, then returns 400 once grace expires
 - `POST /token/:token/submit-recording-only` -- Finalize timed-out attempts with proctoring/screen-recording evidence only (no code repo required); marks submission `expired`
 - `POST /token/:token/upload` -- Submit code by archive upload (`multipart/form-data`, field `archive`), stores upload metadata, starts indexing, auto-triggers behavioral grading; same 5-minute post-time-limit grace window as GitHub submit
-- `POST /token/:token/generate-interview` -- Generate interview questions
 - `POST /token/:token/opt-out` -- Opt out with reason
 - `PATCH /:id` -- Update submission (auto-save)
 - `GET /:id` -- Get submission by ID
 - `POST /:id/submit` -- Final submission (legacy, also auto-triggers behavioral grading)
-
-*Shared endpoints (auth or token):*
-- `GET /:submissionId/interview-agent-prompt` -- Get interview agent prompt
-- `PATCH /:submissionId/interview-conversation-id` -- Set interview conversation ID
 
 **Billing routes** (`/api/billing`):
 - `POST /checkout` -- Create Stripe checkout session (auth required)
@@ -466,30 +461,31 @@ server/src/
 - `GET /sessions/:sessionId/transcript` -- Get JSONL transcript
 
 *Companion (in-session voice transcript; candidate token or employer auth for GET):*
-- `POST /sessions/:sessionId/companion/prompt` -- Get system prompt for ElevenLabs companion (body: token)
+- `POST /sessions/:sessionId/companion/prompt` -- Get system prompt + spoken opener for the ElevenLabs companion (body: token). `firstMessage` is a post-start briefing (check-in, title-only intro, unzip / Node command); resume is a short welcome-back. Prompt includes standing instructions to help with post-start setup if asked, and to tell the candidate to reshare their entire screen whenever capture drops.
 - `POST /sessions/:sessionId/companion/messages` -- Record companion transcript messages (body: token, conversationId?, messages[])
 - `GET /sessions/:sessionId/companion/transcript` -- Get persisted companion transcript (query token or auth)
 
 *Employer endpoints (auth required):*
 - `POST /sessions/:sessionId/generate-transcript` -- Trigger AI transcript generation
 - `GET /sessions/by-submission/:submissionId` -- Get session by submission ID
+- `GET /sessions/:sessionId/playback-video` -- Presigned S3 URL only (auth + ownership; never streams WebM)
+- `GET /sessions/:sessionId/download-video` -- Same as playback (auth + ownership)
+
+**Workflow capture routes** (`/api/workflow-capture` — always mounted; `WORKFLOW_CAPTURE_ENABLED` is unused):
+- Candidate kit ingest (`POST /sessions`, `/events`, `/snapshot`, `/complete`) plus employer review (`GET /sessions/:id`). `both` records **one** movie (proctoring `playback.webm`); kit `POST /video/*` is refused. Classification of that WebM writes `screen_context` after merge. `workflow` has no screen share. Leftover `screen` keeps frames + OCR.
 
 **Agent tools** (`/api/agent-tools`):
-- `POST /get-context` -- ElevenLabs agent retrieves code context from Pinecone (X-Agent-Secret header, max 6 chunks / 16000 chars)
-
-**Webhooks** (`/webhooks`):
-- `POST /elevenlabs` -- ElevenLabs post-call transcript webhook (HMAC signature verified, generates summary)
+- `POST /context` -- Context center for the in-session voice companion (X-Agent-Secret)
 
 ### Rate Limiting (production only, disabled in dev)
 - General API: 100 requests / 15 minutes per IP (shared across most `/api/*` routes; proctoring and Play preview excluded)
 - Proctoring (`/api/proctoring/*`): 8000 requests / 15 minutes per IP (separate limiter; screen capture is high-volume)
 - Play preview (`/api/play/preview/*`): 3000 requests / 15 minutes per IP (separate limiter; gallery iframe assets)
 - Auth endpoints (`/api/users/whoami`): 5 requests / 15 minutes per IP
-- Webhooks: 50 requests / 15 minutes per IP
 - Competition join (`POST /api/competitions/:slug/join`): 30 requests / 60 minutes per IP
 
 ### Raw Body Parsing
-Webhook routes (`/webhooks` and `/api/billing/webhook`) use `express.raw()` before `express.json()` to preserve the raw body for HMAC/Stripe signature verification. This is configured in `server.ts`.
+`/api/billing/webhook` uses `express.raw()` before `express.json()` to preserve the raw body for Stripe signature verification. This is configured in `server.ts`.
 
 ### AI Prompts (`server/src/prompts/index.ts`)
 - `PROMPT_EXTRACT_ASSESSMENT_REQUIREMENTS` -- Extract requirements, infer stack/level from job description
@@ -497,9 +493,6 @@ Webhook routes (`/webhooks` and `/api/billing/webhook`) use `express.raw()` befo
 - `PROMPT_GENERATE_BEHAVIORAL_CHECKS` -- Generate stack-agnostic behavioral checks from title, description, and requirements summary
 - `PROMPT_ASSESSMENT_QUALITY_REVIEW` -- Review and validate generated assessment quality
 - `PROMPT_ASSESSMENT_CHAT` -- System prompt for AI assistant editing assessments
-- `PROMPT_GENERATE_INTERVIEW_QUESTIONS_RETRIEVAL` -- Generate interview questions from RAG code chunks
-- `PROMPT_GENERATE_INTERVIEW_SUMMARY` -- Summarize interview transcript
-- `PROMPT_INTERVIEW_AGENT` -- System prompt for ElevenLabs voice interview agent
 - `LEVEL_INSTRUCTIONS` -- Role-specific guidance for junior/mid/senior difficulty levels
 - `PROMPT_TRANSCRIPT_SYSTEM` -- System prompt for GPT-4o-mini vision: raw observation, character-level text accuracy, JSONL output
 
@@ -520,12 +513,13 @@ client/src/
 │   ├── Home.jsx           # Authenticated dashboard -- lists assessments, create/delete, account dropdown
 │   ├── GetStarted.jsx     # Registration -- email, password, company name
 │   ├── CreateAssessment.jsx    # Assessment creation -- AI generation or manual, reads localStorage pending data
-│   ├── AssessmentEditor.jsx    # Edit assessment -- title, desc, time, starter files, smart interviewer, share links, bulk invite
-│   ├── CandidateAssessment.jsx # Candidate views assessment -- read-only details, start timer, submit local folder upload (auto-zipped client-side), opt-out
+│   ├── AssessmentEditor.jsx    # Edit assessment -- title, desc, time, starter files, share links, bulk invite
+│   ├── CandidateAssessment.jsx # Candidate views assessment -- workspace setup before the timer (Start gated on entire-screen share when recording is required; no skip), then brief + submit local folder upload (auto-zipped client-side), opt-out
 │   ├── CandidateSubmission.jsx # Shows mock submission data with code review
-│   ├── CandidateSubmitted.jsx  # Post-submission -- polls for interview questions, ElevenLabs voice interview
+│   ├── CandidateSubmitted.jsx  # Post-submission confirmation (you're done)
 │   ├── HackathonDashboard.jsx  # Challenge join + dashboard/leaderboard only; marketing landing may live on Framer (slug: `?slug=` > env > `config/competition.js`)
-│   ├── SubmissionsDashboard.jsx # Employer views submissions -- stats, filtering, dropoff analysis, interview modal, diff viewer
+│   ├── OpsDashboard.jsx        # Internal ops workload dashboard (OPS_ADMIN_EMAIL); heavy merge/transcript/grading attribution
+│   ├── SubmissionsDashboard.jsx # Employer views submissions -- stats, filtering, dropoff analysis, Review dialog
 │   ├── Subscription.jsx        # Billing plans -- Free tier vs Early Access
 │   ├── Pricing.jsx             # Public pricing page
 │   ├── BillingSuccess.jsx      # Stripe success redirect
@@ -535,8 +529,9 @@ client/src/
 ├── api/
 │   ├── requests.ts        # Base HTTP client (fetch wrapper: get/post/put/patch/del with error handling)
 │   ├── assessment.ts      # Assessment API: create, list, get, update, delete, generate, chat
-│   ├── submission.ts      # Submission API: generateLink, bulk, invites, start, submit, interview, optOut, uploadTrace
+│   ├── submission.ts      # Submission API: generateLink, bulk, invites, start, submit, optOut, uploadTrace
 │   ├── competition.ts     # Public competition API: get by slug, join, leaderboard
+│   ├── ops.ts             # Ops workload API (admin allowlist)
 │   ├── billing.ts         # Billing API: checkout, status, cancel, reactivate
 │   ├── user.ts            # User API: verifyUser (whoami), createUser, deleteAccount
 │   └── proctoring.ts      # Proctoring API: createSession, grantConsent, uploadFrame, events, complete, video
@@ -546,19 +541,19 @@ client/src/
 │   │   ├── AISidebar.jsx               # AI chat sidebar for assessment editing (quick action chips)
 │   │   ├── AssessmentPanel.jsx         # Assessment display panel
 │   │   ├── AssessmentResult.jsx        # Results display after submission
+│   │   ├── AssessmentSetup.jsx        # Pre-timer gate: entire-screen share required to enable Start when recording is on; zip/brief wait until start
 │   │   ├── CandidatePreviewModal.jsx   # Candidate assessment preview modal
 │   │   ├── ChatInput.jsx              # Input field for AI chat
 │   │   ├── DocumentBlock.jsx          # Reusable content block with edit, auto-resizing textarea
 │   │   └── PresetPills.jsx            # Quick preset job descriptions
 │   ├── BulkInviteModal.jsx            # 3-step CSV upload wizard: upload → review → success
-│   ├── ElevenLabsInterviewClient.jsx  # Voice interview UI (conversation hooks, transcript display)
 │   ├── proctoring/
-│   │   ├── ConsentScreen.jsx          # Consent dialog before screen recording
+│   │   ├── ConsentScreen.jsx          # Consent dialog before screen recording (no Skip when recording is required)
 │   │   ├── ScreenShareSetup.jsx       # Multi-monitor picker UI
 │   │   ├── RecordingIndicator.jsx     # Floating red recording badge
 │   │   ├── StreamStatusPanel.jsx      # Upload stats panel (frames, uploads, dedup)
-│   │   ├── ResharePrompt.jsx          # Stream-lost recovery modal
-│   │   └── ProctoringCompanionNotch.jsx # In-session ElevenLabs voice companion (notch dropdown, transcript flush)
+│   │   ├── ResharePrompt.jsx          # Stream-lost recovery modal (`required` hides continue-without)
+│   │   └── ProctoringCompanionNotch.jsx # In-session ElevenLabs voice companion (mounts after Start; startSession overrides.agent.firstMessage)
 │   └── ui/                             # 60+ Shadcn UI components (auto-generated, rarely edited)
 ├── config/
 │   ├── api.js             # API_BASE_URL: VITE_API_URL || localhost:5050 (dev) || Render URL (prod)
@@ -600,16 +595,13 @@ client/src/
 
 ### Data Flow: Assessment Lifecycle
 1. **Employer creates assessment**: Landing page → enters job description → stored in localStorage → CreateAssessment page auto-fills → AI generates assessment (extract requirements → generate components → quality review → behavioral checks) → saves to DB; manual path calls `generate-behavioral-checks` then create
-2. **Employer edits assessment**: AssessmentEditor page → AI chat sidebar for refinements → configure time limit, interview questions, smart interviewer, starter files, custom instructions
+2. **Employer edits assessment**: AssessmentEditor page → AI chat sidebar for refinements → configure time limit, starter files, custom instructions
 3. **Employer shares link**: Generates unique token-based URL for candidate (single or bulk via CSV upload with email invitations via Resend)
-4. **Candidate accesses assessment**: Opens token URL → CandidateAssessment page → views read-only details → starts timer (status: pending → in-progress, captures IP/user agent)
+4. **Candidate accesses assessment**: Opens token URL → CandidateAssessment page → pre-timer gate (consent + entire-screen share; starter files and the brief stay hidden). When `evidenceMode` records the screen (`both` or leftover `screen`), sharing is mandatory: no skip/continue-without, Start is disabled until they share their entire screen (`displaySurface === "monitor"`, or any share if the browser does not report a surface), and a lost stream must be reshared (no dismiss). The in-session companion tells them to reshare their entire screen on every drop after the timer starts. Observation off (`none`) or leftover `workflow` does not require screen share. Start assessment begins the timer (`in-progress`), downloads the zip, and reveals the assignment
 5. **Candidate submits code**: Uploads project folder (client auto-zips) or submits GitHub link → backend stores source metadata (upload archive or pinned commit SHA) → status: submitted
-6. **Code indexing**: Repo is downloaded, chunked (200 lines/chunk, 40 line overlap), embedded via OpenAI, and upserted to Pinecone
-7. **Interview questions generated**: AI uses retrieved code context (RAG, topK=8, max 30KB) to generate targeted questions with file anchors
-8. **AI voice interview**: CandidateSubmitted page → ElevenLabs voice interview → agent calls `/api/agent-tools/get-context` for real-time code context
-9. **Post-call processing**: ElevenLabs sends transcript via webhook → stored on submission → AI generates interview summary
-10. **Scoring**: Completeness scoring (requirements matching) + optional 5D workflow scoring (correctness/efficiency/promptQuality/structure/reliability)
-11. **Employer reviews**: SubmissionsDashboard → stats, filtering, dropoff analysis, interview modal with transcript + analysis, diff viewer
+6. **Code indexing**: Repo is downloaded, chunked (200 lines/chunk, 40 line overlap), embedded via OpenAI, and upserted to Pinecone (used by the companion context center's code section when the index is ready)
+7. **Scoring**: Combined employer/leaderboard score from available signals — Process (how-they-worked rubric via `evaluationReport`) and Behavioral (E2B check pass rate)
+8. **Employer reviews**: SubmissionsDashboard → stats, filtering, dropoff analysis, and the single candidate Review dialog
 
 ### Subscription / Billing Flow
 1. User clicks upgrade → `POST /api/billing/checkout` creates Stripe Checkout session
@@ -630,7 +622,7 @@ Legacy subscription (nested): `subscription.tier` (free/paid), `subscription.str
 Current subscription (top-level): `stripeCustomerId` (sparse indexed), `stripeSubscriptionId` (sparse indexed), `subscriptionStatus` (active/canceled/past_due/trialing/incomplete/incomplete_expired/unpaid/null), `currentPeriodEnd`, `cancelAtPeriodEnd`, `cancellationReason`, `cancellationDate`
 
 ### Assessment
-Fields: `userId` (ref User, indexed), `title` (max 200), `description`, `timeLimit` (minutes, min 1), `numInterviewQuestions` (1-4, default 2), `starterFilesGitHubLink`, `starterCodeFiles[]` { path, content }, `interviewerCustomInstructions`, `isSmartInterviewerEnabled` (default true), `behavioralChecks[]` (plain-language observable product behaviors; stack-agnostic), `evaluationCriteria[]` (proctoring/transcript rubric), `evaluationCriteriaGroundings` (optional)
+Fields: `userId` (ref User, indexed), `title` (max 200), `description`, `timeLimit` (minutes, min 1), `starterFilesGitHubLink`, `starterCodeFiles[]` { path, content }, `evidenceMode` (`both` default for new assessments / `none` / leftover `workflow` / leftover `screen`; missing field resolves to `screen`; no env fallback), `behavioralChecks[]` (plain-language observable product behaviors; stack-agnostic), `evaluationCriteria[]` (proctoring/transcript rubric), `evaluationCriteriaGroundings` (optional)
 
 ### Competition
 Fields: `slug` (unique, lowercase), `assessmentId` (ref Assessment), optional `title` / `description` / `rulesMarkdown` (dashboard copy; title/description fall back to assessment), `registrationOpen`, `competitionStartsAt`, `competitionEndsAt`, `leaderboardPublic` (default true). **Ops:** create an assessment in the app, then insert or update a `Competition` document with that `assessmentId` and share `/HackathonDashboard?slug=<slug>`.
@@ -642,10 +634,6 @@ Code source: `codeSource` (`github`/`upload`), `codeUpload` { storageKey, origin
 
 GitHub: `githubLink`, `githubRepo` { owner, repo, refType (commit/branch), ref, pinnedCommitSha }
 
-Interview questions: `interviewQuestions[]` { prompt, anchors[] { path, startLine, endLine }, createdAt }
-
-Interview: `interview` { provider (default: elevenlabs), status (not_started/in_progress/completed/failed), conversationId (sparse indexed), transcript { turns[] { role (agent/candidate), text, startMs, endMs } }, summary, analysis, startedAt, completedAt, updatedAt, error { message, at, raw } }
-
 Scores: `scores` { overall (0-100), completeness { score (0-100), breakdown { requirementsMet, totalRequirements, details } }, calculatedAt, calculationVersion }
 
 Opt-out: `optedOut`, `optOutReason`, `optedOutAt`
@@ -656,7 +644,7 @@ Scores bag may still exist on old docs; Trace/llmWorkflow scoring was removed. C
 
 Behavioral grading: `behavioralGradingStatus` (`pending`/`completed`/`failed`), `behavioralGradingError`, `behavioralGradingReport` (runbook summary, per-check verdict/evidence, artifact keys, timings, sandbox metadata)
 
-Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`, `{ "interview.conversationId": 1 }` (sparse)
+Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`
 
 ### PlayChallenge (bridge-play DB)
 Fields: `slug` (unique, lowercase `a-z0-9-`), `challengeDate` (unique, `YYYY-MM-DD` UTC), `title` (max 120), `prompt`, `tokenBudget`, `timeLimitMinutes` (optional), `category` (`widget`/`game`/`tool`/`other`), `status` (`draft`/`published`)
@@ -701,7 +689,7 @@ Transcript: `transcript` { status (not_started/generating/completed/failed), sto
 
 Video: `videoChunks[]` { storageKey, screenIndex, startTime, endTime, sizeBytes } — cleared after a successful eager merge.
 
-Merged recording (screen 0): `mergedVideo` { status (`not_started` / `merging` / `ready` / `failed`), storageKey (typically `{sessionId}/playback.webm`), sizeBytes, durationSeconds, mergedAt, error, chunksDeletedAt, mergingStartedAt }. After **complete**, **submit** (all submit paths), or **opt-out**, the server merges + remuxes chunk WebMs into one file in storage, updates Mongo, then deletes per-chunk objects.
+Merged recording (screen 0): `mergedVideo` { status (`not_started` / `merging` / `ready` / `failed`), storageKey (typically `{sessionId}/playback.webm`), sizeBytes, durationSeconds, mergedAt, error, chunksDeletedAt, mergingStartedAt }. After **complete**, **submit** (all submit paths), or **opt-out**, the server merges + remuxes chunk WebMs into one file in storage, updates Mongo, then deletes per-chunk objects. The remux (`playbackRemux.ts`) is EBML-segment-aware: a recording is often several MediaRecorder sessions back to back (each restart writes a fresh EBML header and resets timestamps to 0), plain `ffmpeg -c copy` on that byte-concat fails with non-monotonic dts, and the old fallback shipped the raw concat — a file with no duration and no Cues that the Review player cannot seek (an evidence-chip jump from Summary stalled on a black frame until a page reload). It now splits at EBML header offsets and feeds the segments to ffmpeg's concat demuxer, which re-stamps timestamps; `repairMergedPlaybackVideos.ts` retrofits already-stored broken files.
 
 Stats: `stats` { totalFrames, uniqueFrames, duplicatesSkipped, totalSizeBytes, captureStartedAt, captureEndedAt }
 
@@ -722,8 +710,6 @@ The app uses LangChain to abstract AI providers. You can configure providers glo
 |--------------------------|-------------------------------------------|---------------------------------------|
 | Assessment generation    | `AI_PROVIDER_ASSESSMENT_GENERATION`       | Varies by provider                    |
 | Assessment chat          | `AI_PROVIDER_ASSESSMENT_CHAT`             | Varies by provider                    |
-| Interview questions      | `AI_PROVIDER_INTERVIEW_QUESTIONS`         | Varies by provider                    |
-| Interview summary        | `AI_PROVIDER_INTERVIEW_SUMMARY`           | Varies by provider                    |
 
 Global default: `AI_PROVIDER` (defaults to `openai`).
 
@@ -741,7 +727,6 @@ Per-provider per-use-case model overrides follow the pattern: `{PROVIDER}_MODEL_
 - **Database**: MongoDB Atlas (cloud).
 - **No CI/CD**: No GitHub Actions or automated pipeline configured. Deployments are triggered via Git pushes to Vercel/Render.
 - **Stripe webhooks**: Production endpoint is `https://bridge-assessements-1.onrender.com/api/billing/webhook`.
-- **ElevenLabs webhooks**: Production endpoint is `https://bridge-assessements-1.onrender.com/webhooks/elevenlabs`.
 
 ## Code Quality & Config
 

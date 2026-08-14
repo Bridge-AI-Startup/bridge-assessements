@@ -13,6 +13,7 @@ export type User = {
 export type WhoamiUser = User & {
   _id?: string;
   hackathonAdmin?: boolean;
+  opsAdmin?: boolean;
   hackathonDefaultSlug?: string | null;
   subscriptionInfo?: Record<string, unknown>;
 };

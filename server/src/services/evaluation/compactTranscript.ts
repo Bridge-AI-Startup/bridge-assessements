@@ -22,6 +22,9 @@ const HIGH_SIGNAL: ReadonlySet<string> = new Set([
   "ai_response",
   "testing",
   "searching",
+  // Spoken reasoning: a session yields dozens of utterances at most, and each
+  // is the candidate explaining intent — never downsample these away.
+  "speaking",
 ]);
 
 function truncate(s: string | null): string | null {

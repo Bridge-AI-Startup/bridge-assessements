@@ -62,7 +62,7 @@ Go to Render Dashboard → Your Backend Service → Environment:
 
 Go to Vercel Dashboard → Your Project → Settings → Environment Variables:
 
-1. **`VITE_API_URL`** = `https://bridge-assessements.onrender.com`
+1. **`VITE_API_URL`** = `https://bridge-assessements-1.onrender.com`
    - ⚠️ **CRITICAL** - Without this, frontend will try to connect to localhost
 
 2. **`VITE_ELEVENLABS_AGENT_ID`** = Your ElevenLabs agent ID
@@ -79,17 +79,17 @@ Go to Vercel Dashboard → Your Project → Settings → Environment Variables:
 ### ElevenLabs Agent Configuration
 
 1. **Agent Tool URL:**
-   - Update from ngrok URL to: `https://bridge-assessements.onrender.com/api/agent-tools/get-context`
+   - Update from ngrok URL to: `https://bridge-assessements-1.onrender.com/api/agent-tools/get-context`
    - Header: `X-Agent-Secret: <your-agent-secret>`
 
 2. **Post-Call Webhook URL:**
-   - Set to: `https://bridge-assessements.onrender.com/webhooks/elevenlabs`
+   - Set to: `https://bridge-assessements-1.onrender.com/webhooks/elevenlabs`
    - Webhook secret must match `ELEVENLABS_WEBHOOK_SECRET` in Render
 
 ### Stripe Dashboard
 
 1. **Webhook Endpoint:**
-   - URL: `https://bridge-assessements.onrender.com/api/billing/webhook`
+   - URL: `https://bridge-assessements-1.onrender.com/api/billing/webhook`
    - Events: `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`
    - Signing secret must match `STRIPE_WEBHOOK_SECRET` in Render
 
@@ -125,7 +125,7 @@ If you see "DEVELOPMENT mode", `NODE_ENV` is not set correctly.
 
 ```bash
 # Health check
-curl https://bridge-assessements.onrender.com/health
+curl https://bridge-assessements-1.onrender.com/health
 
 # Should return: {"status":"ok","timestamp":"..."}
 ```
@@ -135,7 +135,7 @@ curl https://bridge-assessements.onrender.com/health
 1. Open your production frontend
 2. Open browser DevTools → Network tab
 3. Try to sign up or make an API call
-4. Verify requests go to `https://bridge-assessements.onrender.com/api/...`
+4. Verify requests go to `https://bridge-assessements-1.onrender.com/api/...`
 5. Check for CORS errors
 
 ### 4. Test Webhooks
@@ -162,7 +162,7 @@ curl https://bridge-assessements.onrender.com/health
 
 ### Issue: API calls go to localhost
 - **Cause:** `VITE_API_URL` not set in Vercel
-- **Fix:** Set `VITE_API_URL=https://bridge-assessements.onrender.com` in Vercel
+- **Fix:** Set `VITE_API_URL=https://bridge-assessements-1.onrender.com` in Vercel
 
 ### Issue: Webhooks not working
 - **Cause:** Webhook secrets don't match
@@ -172,7 +172,7 @@ curl https://bridge-assessements.onrender.com/health
 
 - [ ] `NODE_ENV=production` set in Render
 - [ ] `FRONTEND_URL` set to production frontend URL in Render
-- [ ] `VITE_API_URL` set to `https://bridge-assessements.onrender.com` in Vercel
+- [ ] `VITE_API_URL` set to `https://bridge-assessements-1.onrender.com` in Vercel
 - [ ] `FIREBASE_SERVICE_ACCOUNT_JSON` set in Render (valid JSON)
 - [ ] `AGENT_SECRET` set in Render and matches ElevenLabs
 - [ ] `ELEVENLABS_WEBHOOK_SECRET` set in Render and matches ElevenLabs

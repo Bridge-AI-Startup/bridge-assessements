@@ -38,13 +38,13 @@
 **Solution:**
 1. **Check Vercel environment variables**:
    - Go to Vercel Dashboard → Your Frontend Project → Settings → Environment Variables
-   - Verify `VITE_API_URL` is set to: `https://bridge-assessements.onrender.com`
+   - Verify `VITE_API_URL` is set to: `https://bridge-assessements-1.onrender.com`
    - If not set, add it and redeploy
 
 2. **Verify the API URL in browser console**:
    - Open browser DevTools → Console
    - Check what URL is being used for API calls
-   - Should be: `https://bridge-assessements.onrender.com/api/...`
+   - Should be: `https://bridge-assessements-1.onrender.com/api/...`
 
 ### 3. **Firebase Admin SDK Not Initialized**
 
@@ -75,7 +75,7 @@
 
 2. **Test backend endpoint directly**:
    ```bash
-   curl https://bridge-assessements.onrender.com/api/users/whoami
+   curl https://bridge-assessements-1.onrender.com/api/users/whoami
    ```
    - Should return an error (401), not a connection error
    - If connection fails, the backend might be down
@@ -112,7 +112,7 @@
 3. Look for the API request to `/api/users/create`
 4. Check:
    - **Status**: Should be 200 or 201 (not 401, 403, 500)
-   - **Request URL**: Should be `https://bridge-assessements.onrender.com/api/users/create`
+   - **Request URL**: Should be `https://bridge-assessements-1.onrender.com/api/users/create`
    - **Response**: Check the response body for error messages
    - **Headers**: Check if CORS headers are present
 
@@ -128,7 +128,7 @@
 ### Step 4: Verify Environment Variables
 
 **Frontend (Vercel):**
-- `VITE_API_URL` = `https://bridge-assessements.onrender.com`
+- `VITE_API_URL` = `https://bridge-assessements-1.onrender.com`
 
 **Backend (Render):**
 - `FRONTEND_URL` = Your production frontend URL

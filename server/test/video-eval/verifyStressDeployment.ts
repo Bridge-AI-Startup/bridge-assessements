@@ -20,6 +20,19 @@ const FIREBASE_KEY =
   "AIzaSyCjMiRlX0HERCvA4qv0o1MO7fM5mzkdkCo";
 const ASSESSMENT_ID = "6a30cb825c1e8969b7c21110";
 
+async function signedPlaybackUrl(
+  sessionId: string,
+  idToken: string
+): Promise<{ status: number; url: string | null }> {
+  const pb = await fetch(
+    `${RENDER_API}/api/proctoring/sessions/${sessionId}/playback-video?format=url`,
+    { headers: { Authorization: `Bearer ${idToken}` } }
+  );
+  if (!pb.ok) return { status: pb.status, url: null };
+  const data = await pb.json().catch(() => ({}));
+  return { status: pb.status, url: typeof data?.url === "string" ? data.url : null };
+}
+
 async function main() {
   await connectMongoose();
   const storage = getFrameStorage();
@@ -116,13 +129,9 @@ async function main() {
       )?._id?.toString();
     let playback = "missing session";
     if (sessId) {
-      const pb = await fetch(
-        `${RENDER_API}/api/proctoring/sessions/${sessId}/playback-video`,
-        { headers: { Authorization: `Bearer ${idToken}` } }
-      );
-      if (pb.ok) {
-        const bytes = (await pb.arrayBuffer()).byteLength;
-        playback = `200 (${(bytes / 1e6).toFixed(1)} MB)`;
+      const pb = await signedPlaybackUrl(sessId, idToken);
+      if (pb.url) {
+        playback = `200 (s3 url)`;
       } else {
         playback = String(pb.status);
         ok = false;

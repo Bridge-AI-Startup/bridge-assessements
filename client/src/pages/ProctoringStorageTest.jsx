@@ -21,6 +21,7 @@ import {
   downloadProctoringVideo,
 } from "@/api/proctoring";
 import FrameDebugViewer from "@/components/proctoring/FrameDebugViewer";
+import { auth } from "@/firebase/firebase";
 
 /**
  * Dev-only test page to run the transcript pipeline (generate → refine → interpret)
@@ -507,7 +508,15 @@ export default function ProctoringStorageTest() {
                     variant="outline"
                     size="sm"
                     onClick={async () => {
-                      const result = await downloadProctoringVideo(selectedSessionId);
+                      const token = await auth.currentUser?.getIdToken();
+                      if (!token) {
+                        setError("Sign in to download recordings");
+                        return;
+                      }
+                      const result = await downloadProctoringVideo(
+                        selectedSessionId,
+                        token
+                      );
                       if (!result.success) setError(result.error || "Video download failed");
                     }}
                   >

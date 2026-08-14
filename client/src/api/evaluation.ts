@@ -3,15 +3,14 @@ import { auth } from "@/firebase/firebase";
 import { API_BASE_URL } from "@/config/api";
 
 /**
- * Run screen recording evaluation for a submission (employer, auth required).
- * Loads transcript from submission or proctoring, runs criteria evaluation, persists report.
+ * Start observational evaluation for a submission (employer, auth required).
+ * Kicks off the same background pipeline submit uses (workflow, then screen
+ * fallback). Returns immediately; poll the submission for the report.
  */
 export async function runSubmissionEvaluation(
   submissionId: string,
   token?: string
-): Promise<
-  APIResult<{ report: { session_summary: string; criteria_results: unknown[] } }>
-> {
+): Promise<APIResult<{ report?: unknown; started?: boolean }>> {
   try {
     let authToken = token;
     if (!authToken) {
@@ -32,6 +31,10 @@ export async function runSubmissionEvaluation(
     });
 
     const result = await response.json();
+
+    if (response.status === 202 && result?.started) {
+      return { success: true, data: { started: true } as any };
+    }
 
     if (!response.ok) {
       return {
@@ -58,7 +61,8 @@ export async function runSubmissionEvaluation(
  */
 export async function suggestCriteria(
   jobDescription: string,
-  token?: string
+  token?: string,
+  evidenceMode?: string
 ): Promise<APIResult<{ suggested_criteria: string[] }>> {
   try {
     let authToken = token;
@@ -76,7 +80,10 @@ export async function suggestCriteria(
         Authorization: `Bearer ${authToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ job_description: jobDescription }),
+      body: JSON.stringify({
+        job_description: jobDescription,
+        ...(evidenceMode ? { evidence_mode: evidenceMode } : {}),
+      }),
     });
 
     const result = await response.json();
@@ -107,7 +114,8 @@ export async function suggestCriteria(
  */
 export async function validateCriterion(
   criterion: string,
-  token?: string
+  token?: string,
+  evidenceMode?: string
 ): Promise<APIResult<{ valid: boolean; reason?: string }>> {
   try {
     let authToken = token;
@@ -125,7 +133,10 @@ export async function validateCriterion(
         Authorization: `Bearer ${authToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ criterion }),
+      body: JSON.stringify({
+        criterion,
+        ...(evidenceMode ? { evidence_mode: evidenceMode } : {}),
+      }),
     });
 
     const result = await response.json();

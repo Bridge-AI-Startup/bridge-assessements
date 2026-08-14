@@ -15,6 +15,7 @@ import {
 import { processAssessmentChat } from "../services/assessmentChat.js";
 import { groundCriterion } from "../services/evaluation/grounder.js";
 import { shouldEnforceFreeTierAssessmentLimit } from "../utils/subscription.js";
+import { isEvidenceMode } from "../utils/evidenceMode.js";
 
 export type GenerateRequest = {
   description: string;
@@ -35,10 +36,8 @@ export type CreateRequest = {
   title: string;
   description: string;
   timeLimit: number;
-  numInterviewQuestions?: number;
   starterFilesGitHubLink?: string;
   starterCodeFiles?: Array<{ path: string; content: string }>;
-  interviewerCustomInstructions?: string;
   behavioralChecks?: string[];
   evaluationCriteria?: string[];
   uid: string; // Added by verifyAuthToken middleware
@@ -48,12 +47,9 @@ export type UpdateRequest = {
   title?: string;
   description?: string;
   timeLimit?: number;
-  numInterviewQuestions?: number;
   starterFilesGitHubLink?: string;
   starterCodeFiles?: Array<{ path: string; content: string }>;
-  interviewerCustomInstructions?: string;
-  isSmartInterviewerEnabled?: boolean;
-  evidenceMode?: "screen" | "workflow" | "both";
+  evidenceMode?: "none" | "workflow" | "both" | "screen";
   behavioralChecks?: string[];
   evaluationCriteria?: string[];
   uid: string; // Added by verifyAuthToken middleware
@@ -80,10 +76,8 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
       title,
       description,
       timeLimit,
-      numInterviewQuestions,
       starterFilesGitHubLink,
       starterCodeFiles,
-      interviewerCustomInstructions,
       behavioralChecks,
       evaluationCriteria,
       uid,
@@ -130,10 +124,8 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
       title: string;
       description: string;
       timeLimit: number;
-      numInterviewQuestions?: number;
       starterFilesGitHubLink?: string;
       starterCodeFiles?: Array<{ path: string; content: string }>;
-      interviewerCustomInstructions?: string;
       behavioralChecks?: string[];
       evaluationCriteria?: string[];
     } = {
@@ -143,11 +135,6 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
       timeLimit,
     };
 
-    // Only include numInterviewQuestions if provided
-    if (numInterviewQuestions !== undefined) {
-      assessmentData.numInterviewQuestions = numInterviewQuestions;
-    }
-
     // Only include starterFilesGitHubLink if provided
     if (starterFilesGitHubLink !== undefined) {
       assessmentData.starterFilesGitHubLink = starterFilesGitHubLink;
@@ -155,12 +142,6 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
 
     if (starterValidation.normalized && starterValidation.normalized.length > 0) {
       assessmentData.starterCodeFiles = starterValidation.normalized;
-    }
-
-    // Only include interviewerCustomInstructions if provided
-    if (interviewerCustomInstructions !== undefined) {
-      assessmentData.interviewerCustomInstructions =
-        interviewerCustomInstructions;
     }
 
     // Only include behavioralChecks if provided (array of strings)
@@ -266,11 +247,8 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
       title,
       description,
       timeLimit,
-      numInterviewQuestions,
       starterFilesGitHubLink,
       starterCodeFiles,
-      interviewerCustomInstructions,
-      isSmartInterviewerEnabled,
       evidenceMode,
       behavioralChecks,
       evaluationCriteria,
@@ -301,9 +279,6 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
     if (timeLimit !== undefined) {
       assessment.timeLimit = timeLimit;
     }
-    if (numInterviewQuestions !== undefined) {
-      assessment.numInterviewQuestions = numInterviewQuestions;
-    }
     if (starterFilesGitHubLink !== undefined) {
       (assessment as any).starterFilesGitHubLink = starterFilesGitHubLink;
     }
@@ -315,18 +290,11 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
       (assessment as any).starterCodeFiles =
         starterValidation.normalized ?? [];
     }
-    if (interviewerCustomInstructions !== undefined) {
-      (assessment as any).interviewerCustomInstructions =
-        interviewerCustomInstructions;
-    }
-    if (isSmartInterviewerEnabled !== undefined) {
-      (assessment as any).isSmartInterviewerEnabled = isSmartInterviewerEnabled;
-    }
     if (evidenceMode !== undefined) {
-      if (!["screen", "workflow", "both"].includes(evidenceMode)) {
-        return res
-          .status(400)
-          .json({ error: "evidenceMode must be 'screen', 'workflow', or 'both'" });
+      if (!isEvidenceMode(evidenceMode)) {
+        return res.status(400).json({
+          error: "evidenceMode must be 'none', 'workflow', 'both', or 'screen'",
+        });
       }
       (assessment as any).evidenceMode = evidenceMode;
     }

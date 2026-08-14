@@ -45,6 +45,21 @@ async function fetchT(url: string, opts: RequestInit, ms: number): Promise<Respo
   }
 }
 
+async function signedPlaybackUrl(
+  sessionId: string,
+  idToken: string,
+  timeoutMs: number
+): Promise<{ status: number; url: string | null }> {
+  const pb = await fetchT(
+    `${RENDER_API}/api/proctoring/sessions/${sessionId}/playback-video?format=url`,
+    { headers: { Authorization: `Bearer ${idToken}` } },
+    timeoutMs
+  );
+  if (!pb.ok) return { status: pb.status, url: null };
+  const data = await pb.json().catch(() => ({}));
+  return { status: pb.status, url: typeof data?.url === "string" ? data.url : null };
+}
+
 async function mintIdToken(): Promise<string> {
   const res = await fetch(
     `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_WEB_API_KEY}`,
@@ -87,15 +102,10 @@ async function main() {
       const token = submission.token;
 
       try {
-        const pre = await fetchT(
-          `${RENDER_API}/api/proctoring/sessions/${sessionId}/playback-video`,
-          { headers: { Authorization: `Bearer ${idToken}` } },
-          30000
-        );
-        if (pre.ok) {
-          const ab = await pre.arrayBuffer();
-          log(`  already playable -> 200 (${ab.byteLength} bytes), skipping`);
-          summary.push({ variant: c.variant, sessionId, playbackStatus: 200, playbackBytes: ab.byteLength });
+        const pre = await signedPlaybackUrl(sessionId, idToken, 30000);
+        if (pre.url) {
+          log(`  already playable via S3, skipping`);
+          summary.push({ variant: c.variant, sessionId, playbackStatus: 200, playbackBytes: 0 });
           continue;
         }
       } catch {
@@ -149,33 +159,28 @@ async function main() {
       }
 
       let playbackStatus = 0;
-      let bytes = 0;
+      let ready = false;
       for (let i = 0; i < 25; i++) {
         await sleep(4000);
         try {
-          const pb = await fetchT(
-            `${RENDER_API}/api/proctoring/sessions/${sessionId}/playback-video`,
-            { headers: { Authorization: `Bearer ${idToken}` } },
-            30000
-          );
+          const pb = await signedPlaybackUrl(sessionId, idToken, 30000);
           playbackStatus = pb.status;
-          if (pb.ok) {
-            const ab = await pb.arrayBuffer();
-            bytes = ab.byteLength;
+          if (pb.url) {
+            ready = true;
             break;
           }
         } catch (e: any) {
           log(`  playback poll ${i} errored: ${e?.message || e}`);
         }
       }
-      log(`  playback-video -> ${playbackStatus} (${bytes} bytes)`);
+      log(`  playback-video -> ${playbackStatus} (s3 ${ready ? "url" : "missing"})`);
       summary.push({
         variant: c.variant,
         sessionId,
         uploadStatus: up.status,
         completeStatus: done.status,
         playbackStatus,
-        playbackBytes: bytes,
+        playbackBytes: ready ? 1 : 0,
       });
     } catch (e: any) {
       log(`  ERROR for ${c.label}: ${e?.message || e}`);

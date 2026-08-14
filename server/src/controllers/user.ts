@@ -13,6 +13,7 @@ import { deleteNamespace } from "../utils/pinecone.js";
 import { stripe } from "../services/stripe.js";
 import { shouldEnforceFreeTierAssessmentLimit } from "../utils/subscription.js";
 import { getHackathonAdminEmail } from "../utils/hackathonAdmin.js";
+import { isOpsAdminEmail } from "../utils/opsAdmin.js";
 
 export type CreateRequest = {
   companyName: string;
@@ -126,6 +127,7 @@ export const loginUser: RequestHandler = async (req, res, next) => {
     const isHackathonAdmin =
       (user.email || "").toLowerCase() === hackathonAdminEmail;
     (userResponse as any).hackathonAdmin = isHackathonAdmin;
+    (userResponse as any).opsAdmin = isOpsAdminEmail(user.email);
     if (isHackathonAdmin) {
       (userResponse as any).hackathonDefaultSlug =
         (user as any).hackathonDefaultSlug ?? null;

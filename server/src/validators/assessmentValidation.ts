@@ -109,6 +109,14 @@ const makeOptionalStarterCodeFilesValidator = () =>
     .isArray()
     .withMessage("starterCodeFiles must be an array");
 
+const makeOptionalEvidenceModeValidator = () =>
+  body("evidenceMode")
+    .optional()
+    .isIn(["none", "workflow", "both", "screen"])
+    .withMessage(
+      "evidenceMode must be 'none', 'workflow', 'both', or 'screen'"
+    );
+
 export const createAssessmentValidation = [
   makeTitleValidator(),
   makeDescriptionValidator(),
@@ -125,6 +133,7 @@ export const updateAssessmentValidation = [
   makeOptionalBehavioralChecksValidator(),
   makeOptionalEvaluationCriteriaValidator(),
   makeOptionalStarterCodeFilesValidator(),
+  makeOptionalEvidenceModeValidator(),
 ];
 
 const makeOptionalStackValidator = () =>

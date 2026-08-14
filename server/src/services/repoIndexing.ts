@@ -15,7 +15,6 @@ import {
 } from "./submissionCode/snapshot.js";
 import { generateEmbeddings } from "../utils/embeddings.js";
 import { upsertVectors } from "../utils/pinecone.js";
-import { generateInterviewQuestionsFromRetrieval } from "./interviewGeneration.js";
 
 /**
  * Chunking configuration constants
@@ -30,7 +29,7 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB per file (increased for complete
 // Removed MAX_CHUNKS_PER_REPO limit to ensure complete indexing
 
 /**
- * File extensions to include (same as interviewGeneration)
+ * File extensions to include
  */
 const CODE_EXTENSIONS = new Set([
   ".js",
@@ -63,7 +62,7 @@ const CODE_EXTENSIONS = new Set([
 ]);
 
 /**
- * Directories to ignore (same as interviewGeneration)
+ * Directories to ignore
  */
 const IGNORE_DIRS = new Set([
   "node_modules",
@@ -601,15 +600,6 @@ export async function indexSubmissionRepo(submissionId: string): Promise<{
       `✅ [repoIndexing] Indexing completed: ${chunks.length} chunks from ${filesProcessed} files (${totalFilesSkipped} skipped)`
     );
 
-    // Automatically generate interview questions after indexing completes
-    // This runs in the background and doesn't block the indexing response
-    generateInterviewQuestionsAfterIndexing(submissionId).catch((error) => {
-      console.error(
-        `[repoIndexing] Failed to auto-generate interview questions for submission ${submissionId}:`,
-        error
-      );
-    });
-
     return {
       status: "ready",
       chunkCount: chunks.length,
@@ -644,133 +634,5 @@ export async function indexSubmissionRepo(submissionId: string): Promise<{
         console.warn("Failed to cleanup temp files:", cleanupError);
       }
     }
-  }
-}
-
-/**
- * Automatically generate interview questions after repository indexing completes
- * This is called asynchronously and doesn't block the indexing response
- */
-async function generateInterviewQuestionsAfterIndexing(
-  submissionId: string
-): Promise<void> {
-  try {
-    console.log(
-      `🔄 [repoIndexing] Auto-generating interview questions for submission ${submissionId}...`
-    );
-
-    // Load submission with assessment
-    const submission = await SubmissionModel.findById(submissionId).populate(
-      "assessmentId"
-    );
-
-    if (!submission) {
-      console.warn(
-        `[repoIndexing] Submission ${submissionId} not found, skipping interview generation`
-      );
-      return;
-    }
-
-    const assessment = submission.assessmentId as any;
-
-    // Verify submission is submitted
-    if (submission.status !== "submitted" && submission.status !== "expired") {
-      console.log(
-        `[repoIndexing] Submission ${submissionId} not submitted yet (status: ${submission.status}), skipping interview generation`
-      );
-      return;
-    }
-
-    // Verify GitHub repo info exists
-    if (
-      !submission.githubRepo ||
-      !submission.githubRepo.owner ||
-      !submission.githubRepo.repo ||
-      !submission.githubRepo.pinnedCommitSha
-    ) {
-      console.warn(
-        `[repoIndexing] GitHub repository information not found for submission ${submissionId}, skipping interview generation`
-      );
-      return;
-    }
-
-    // Validate assessment description exists
-    if (!assessment.description || !assessment.description.trim()) {
-      console.warn(
-        `[repoIndexing] Assessment description not found for submission ${submissionId}, skipping interview generation`
-      );
-      return;
-    }
-
-    // Check if interview questions already exist
-    if (
-      submission.interviewQuestions &&
-      Array.isArray(submission.interviewQuestions) &&
-      submission.interviewQuestions.length > 0
-    ) {
-      console.log(
-        `[repoIndexing] Interview questions already exist for submission ${submissionId}, skipping generation`
-      );
-      return;
-    }
-
-    const isSmartInterviewerEnabled =
-      (assessment as any).isSmartInterviewerEnabled === true;
-
-    if (!isSmartInterviewerEnabled) {
-      console.log(
-        `[repoIndexing] Smart interviewer is disabled for assessment ${assessment._id}, skipping interview question generation`
-      );
-      return;
-    }
-
-    // Generate interview questions using Pinecone retrieval
-    const numQuestions = (assessment as any).numInterviewQuestions ?? 2;
-    const customInstructions = (assessment as any)
-      .interviewerCustomInstructions;
-    const result = await generateInterviewQuestionsFromRetrieval(
-      submission._id.toString(),
-      assessment.description,
-      numQuestions,
-      customInstructions
-    );
-
-    const validatedQuestions = result.questions;
-    const retrievedChunkCount = result.retrievedChunkCount;
-    const chunkPaths = result.chunkPaths;
-
-    console.log(
-      `✅ [repoIndexing] Generated ${validatedQuestions.length} interview questions from ${retrievedChunkCount} code chunks`
-    );
-
-    if (!validatedQuestions || validatedQuestions.length === 0) {
-      console.warn(
-        `[repoIndexing] No questions generated for submission ${submissionId}`
-      );
-      return;
-    }
-
-    // Format questions with timestamps for storage
-    const questionsWithTimestamps = validatedQuestions.map((q) => ({
-      prompt: q.prompt,
-      anchors: q.anchors,
-      createdAt: new Date(),
-    }));
-
-    // Save questions to submission
-    (submission as any).interviewQuestions = questionsWithTimestamps;
-    // Mark the array as modified to ensure Mongoose saves it
-    submission.markModified("interviewQuestions");
-    await submission.save();
-
-    console.log(
-      `✅ [repoIndexing] Saved ${questionsWithTimestamps.length} interview questions to submission ${submissionId}`
-    );
-  } catch (error) {
-    console.error(
-      `❌ [repoIndexing] Error auto-generating interview questions for submission ${submissionId}:`,
-      error
-    );
-    // Don't throw - this is a background operation
   }
 }

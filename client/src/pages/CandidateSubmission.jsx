@@ -7,9 +7,7 @@ import {
   XCircle, 
   Code, 
   MessageSquare, 
-  Star,
   ExternalLink,
-  Play,
   Download,
   ChevronDown,
   ChevronUp
@@ -23,7 +21,6 @@ export default function CandidateSubmission() {
   const [expandedSections, setExpandedSections] = useState({
     code: true,
     tests: true,
-    interview: false
   });
 
   // Mock data - in real app, this would come from URL params and API
@@ -50,32 +47,6 @@ export default function CandidateSubmission() {
     { name: "Database relationships are maintained", type: "integration", passed: false, points: 10, maxPoints: 15 }
   ];
 
-  const interviewQuestions = [
-    { 
-      question: "Walk me through how you structured your database schema and why.", 
-      answer: "I used a normalized structure with users and tasks tables. The tasks table has a foreign key to users for ownership. I chose PostgreSQL for its reliability and JSON support for flexible task metadata.",
-      aiNotes: "Candidate demonstrated solid understanding of relational database design principles.",
-      score: 85,
-      videoUrl: "https://example.com/video1.mp4"
-    },
-    { 
-      question: "How did you handle authentication? What alternatives did you consider?", 
-      answer: "I implemented JWT-based authentication with refresh tokens. I considered session-based auth but chose JWT for stateless scalability. I also looked at OAuth but it was overkill for this scope.",
-      aiNotes: "Good awareness of trade-offs. Could have mentioned security considerations more.",
-      score: 78,
-      videoUrl: "https://example.com/video2.mp4"
-    },
-    { 
-      question: "How would you scale this API to handle 10,000 concurrent users?", 
-      answer: "I'd add Redis for caching frequently accessed data, implement connection pooling, and consider read replicas for the database. For the API layer, horizontal scaling with a load balancer.",
-      aiNotes: "Strong technical knowledge. Mentioned key scaling strategies appropriately.",
-      score: 92,
-      videoUrl: "https://example.com/video3.mp4"
-    }
-  ];
-
-  const interviewAvgScore = Math.round(interviewQuestions.reduce((sum, q) => sum + q.score, 0) / interviewQuestions.length);
-
   const toggleSection = (section) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
   };
@@ -84,12 +55,6 @@ export default function CandidateSubmission() {
     if (score >= 90) return 'text-green-600';
     if (score >= 70) return 'text-yellow-600';
     return 'text-red-600';
-  };
-
-  const getScoreBg = (score) => {
-    if (score >= 90) return 'bg-green-100';
-    if (score >= 70) return 'bg-yellow-100';
-    return 'bg-red-100';
   };
 
   return (
@@ -211,63 +176,6 @@ export default function CandidateSubmission() {
                   <span className={`text-sm font-semibold ${test.passed ? 'text-green-600' : 'text-red-600'}`}>
                     {test.points}/{test.maxPoints} pts
                   </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </motion.div>
-
-        {/* AI Interview Responses */}
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.25 }}
-          className="bg-white rounded-xl border border-gray-200"
-        >
-          <button 
-            onClick={() => toggleSection('interview')}
-            className="w-full flex items-center justify-between p-5 text-left"
-          >
-            <div className="flex items-center gap-4">
-              <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                <MessageSquare className="w-5 h-5 text-[#21201C]" />
-                AI Interview Responses
-              </h2>
-              <div className={`px-2.5 py-1 rounded-full text-sm font-semibold ${getScoreBg(interviewAvgScore)} ${getScoreColor(interviewAvgScore)}`}>
-                Avg: {interviewAvgScore}%
-              </div>
-            </div>
-            {expandedSections.interview ? <ChevronUp className="w-5 h-5 text-gray-400" /> : <ChevronDown className="w-5 h-5 text-gray-400" />}
-          </button>
-          {expandedSections.interview && (
-            <div className="px-5 pb-5 space-y-4">
-              {interviewQuestions.map((item, index) => (
-                <div key={index} className="border border-gray-100 rounded-lg p-4">
-                  <div className="flex items-start justify-between mb-3">
-                    <p className="text-sm font-medium text-gray-900">{item.question}</p>
-                    <div className={`px-2 py-0.5 rounded-full text-xs font-semibold ${getScoreBg(item.score)} ${getScoreColor(item.score)}`}>
-                      {item.score}%
-                    </div>
-                  </div>
-                  
-                  {/* Video Player */}
-                  <div className="mb-3 rounded-lg overflow-hidden bg-gray-900 aspect-video flex items-center justify-center relative group cursor-pointer">
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="w-14 h-14 rounded-full bg-white/90 flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
-                        <Play className="w-6 h-6 text-[#21201C] ml-1" />
-                      </div>
-                    </div>
-                    <p className="text-white/60 text-xs absolute bottom-3 left-3">Video response • 1:24</p>
-                  </div>
-
-                  <div className="bg-gray-50 rounded-lg p-3 mb-3">
-                    <p className="text-xs text-gray-500 mb-1">Transcript</p>
-                    <p className="text-sm text-gray-700 italic">"{item.answer}"</p>
-                  </div>
-                  <div className="flex items-start gap-2 text-xs text-[#21201C] bg-blue-50 rounded-lg p-2">
-                    <Star className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-                    <span>{item.aiNotes}</span>
-                  </div>
                 </div>
               ))}
             </div>

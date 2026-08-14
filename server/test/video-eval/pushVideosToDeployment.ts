@@ -10,7 +10,7 @@
  *
  * For each candidate we: reset merge state, re-upload the webm as a chunk via
  * the candidate `/video` endpoint, call `/complete` (which merges on Render),
- * then poll `/playback-video` until it streams.
+ * then poll `/playback-video?format=url` until S3 can sign a URL.
  *
  * Run: cd server && npx tsx --env-file=config.env test/video-eval/pushVideosToDeployment.ts
  */
@@ -50,6 +50,21 @@ async function fetchT(
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function signedPlaybackUrl(
+  sessionId: string,
+  idToken: string,
+  timeoutMs: number
+): Promise<{ status: number; url: string | null }> {
+  const pb = await fetchT(
+    `${RENDER_API}/api/proctoring/sessions/${sessionId}/playback-video?format=url`,
+    { headers: { Authorization: `Bearer ${idToken}` } },
+    timeoutMs
+  );
+  if (!pb.ok) return { status: pb.status, url: null };
+  const data = await pb.json().catch(() => ({}));
+  return { status: pb.status, url: typeof data?.url === "string" ? data.url : null };
 }
 
 async function mintIdToken(): Promise<string> {
@@ -94,23 +109,18 @@ async function main() {
       }
       const token = submission.token;
 
-      // Skip candidates whose video already streams from the deployment (idempotent re-runs).
+      // Skip candidates whose video already has an S3 playback URL (idempotent re-runs).
       try {
-        const pre = await fetchT(
-          `${RENDER_API}/api/proctoring/sessions/${sessionId}/playback-video`,
-          { headers: { Authorization: `Bearer ${idToken}` } },
-          30000
-        );
-        if (pre.ok) {
-          const ab = await pre.arrayBuffer();
-          log(`  already playable -> 200 (${ab.byteLength} bytes), skipping`);
+        const pre = await signedPlaybackUrl(sessionId, idToken, 30000);
+        if (pre.url) {
+          log(`  already playable via S3, skipping`);
           summary.push({
             name: c.name,
             sessionId,
             uploadStatus: "skip",
             completeStatus: "skip",
             playbackStatus: 200,
-            playbackBytes: ab.byteLength,
+            playbackBytes: 0,
           });
           continue;
         }
@@ -158,35 +168,30 @@ async function main() {
       );
       log(`  complete -> ${done.status}`);
 
-      // 3) Poll playback until the deployed merge finishes and streams bytes.
+      // 3) Poll until the deployed merge finishes and S3 can sign a URL.
       let playbackStatus = 0;
-      let bytes = 0;
+      let ready = false;
       for (let i = 0; i < 20; i++) {
         await sleep(4000);
         try {
-          const pb = await fetchT(
-            `${RENDER_API}/api/proctoring/sessions/${sessionId}/playback-video`,
-            { headers: { Authorization: `Bearer ${idToken}` } },
-            30000
-          );
+          const pb = await signedPlaybackUrl(sessionId, idToken, 30000);
           playbackStatus = pb.status;
-          if (pb.ok) {
-            const ab = await pb.arrayBuffer();
-            bytes = ab.byteLength;
+          if (pb.url) {
+            ready = true;
             break;
           }
         } catch (e: any) {
           log(`  playback poll ${i} errored: ${e?.message || e}`);
         }
       }
-      log(`  playback-video -> ${playbackStatus} (${bytes} bytes)`);
+      log(`  playback-video -> ${playbackStatus} (s3 ${ready ? "url" : "missing"})`);
       summary.push({
         name: c.name,
         sessionId,
         uploadStatus: up.status,
         completeStatus: done.status,
         playbackStatus,
-        playbackBytes: bytes,
+        playbackBytes: ready ? 1 : 0,
       });
     } catch (e: any) {
       log(`  ERROR for ${c.name}: ${e?.message || e}`);

@@ -9,7 +9,7 @@ This guide explains how to switch from using Stripe CLI (for local development) 
 
 ## Prerequisites
 
-- Your backend is deployed and accessible (e.g., `https://bridge-assessements.onrender.com`)
+- Your backend is deployed and accessible (e.g., `https://bridge-assessements-1.onrender.com`)
 - You have access to your Stripe Dashboard
 - You have access to your production environment variables (e.g., Render dashboard)
 
@@ -19,7 +19,7 @@ This guide explains how to switch from using Stripe CLI (for local development) 
 
 Your webhook endpoint will be:
 ```
-https://bridge-assessements.onrender.com/api/billing/webhook
+https://bridge-assessements-1.onrender.com/api/billing/webhook
 ```
 
 ⚠️ **Note**: Replace with your actual production backend URL if different.
@@ -35,7 +35,7 @@ https://bridge-assessements.onrender.com/api/billing/webhook
 4. **Configure Endpoint**:
    - **Endpoint URL**: Enter your production webhook URL:
      ```
-     https://bridge-assessements.onrender.com/api/billing/webhook
+     https://bridge-assessements-1.onrender.com/api/billing/webhook
      ```
    - **Description** (optional): "BridgeAI Production Webhooks"
 5. **Select Events**:
@@ -138,7 +138,7 @@ Once production webhooks are working, you can stop using Stripe CLI for local de
 **Solutions**:
 1. Verify your backend URL is accessible:
    ```bash
-   curl https://bridge-assessements.onrender.com/api/billing/webhook
+   curl https://bridge-assessements-1.onrender.com/api/billing/webhook
    ```
    (Should return an error, but confirms the endpoint exists)
 

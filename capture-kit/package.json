@@ -1,0 +1,27 @@
+{
+  "name": "@bridge/capture-kit",
+  "version": "0.1.0",
+  "description": "Consent-first capture of a candidate's AI coding workflow for a Bridge assessment",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "commonjs",
+  "bin": {
+    "capture-kit": "setup.js"
+  },
+  "main": "setup.js",
+  "files": [
+    "setup.js",
+    "bridge-capture.js",
+    "cursor-adapter.js",
+    "codex-adapter.js",
+    "view.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "check": "node -e \"['setup.js','bridge-capture.js','cursor-adapter.js','codex-adapter.js','view.js'].forEach(f=>require('fs').accessSync(f))\" && echo kit files present"
+  },
+  "dependencies": {}
+}

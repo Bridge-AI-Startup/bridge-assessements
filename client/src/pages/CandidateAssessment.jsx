@@ -9,6 +9,7 @@ import {
   Link as LinkIcon,
   Send,
   X,
+  Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,6 +33,9 @@ import {
   grantConsent,
   recordSidecarEvents,
   completeSession as completeProctoringSession,
+  beaconSidecarEvents,
+  beaconCompleteSession,
+  uploadVideoChunk,
 } from "@/api/proctoring";
 import useScreenshotCapture from "@/hooks/useScreenshotCapture";
 import useFrameUpload from "@/hooks/useFrameUpload";
@@ -39,12 +43,24 @@ import useFrameDedup from "@/hooks/useFrameDedup";
 import ResharePrompt from "@/components/proctoring/ResharePrompt";
 import ProctoringCompanionNotch from "@/components/proctoring/ProctoringCompanionNotch";
 import { COMPANION_ENABLED } from "@/config/companion";
+import { API_BASE_URL } from "@/config/api";
 import { createVideoRecorder } from "@/lib/captureUtils";
-import { uploadVideoChunk } from "@/api/proctoring";
 import StarterCodeIDE from "@/components/StarterCodeIDE";
 import SubmissionFileDropzone from "@/components/assessment/SubmissionFileDropzone";
+import AssessmentSetup, {
+  CaptureSetupCommand,
+} from "@/components/assessment/AssessmentSetup";
+import {
+  buildStarterCodeZipBlob,
+  downloadStarterCodeZip,
+  STARTER_ZIP_FILENAME,
+  triggerBlobDownload,
+} from "@/lib/downloadStarterCode";
 
-const FINAL_SUBMISSION_GRACE_SECONDS = 5 * 60;
+const SETUP_STORAGE_PREFIX = "bridge-assessment-setup:";
+
+const FINAL_SUBMISSION_GRACE_SECONDS = 5 * 60; // keep in lockstep with server FINAL_SUBMISSION_GRACE_MINUTES
+const CAPTURE_API_ORIGIN = API_BASE_URL.replace(/\/api\/?$/, "");
 
 function formatHms(totalSeconds) {
   const safeSeconds = Math.max(0, Math.floor(totalSeconds));
@@ -92,6 +108,9 @@ export default function CandidateAssessment() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const token = searchParams.get("token");
+  const captureSetupCommand = token
+    ? `node capture-kit/setup.js ${token} --api=${CAPTURE_API_ORIGIN}`
+    : "";
 
   const [submission, setSubmission] = useState(null);
   const [assessment, setAssessment] = useState(null);
@@ -114,26 +133,37 @@ export default function CandidateAssessment() {
 
   // Proctoring state
   const [showConsent, setShowConsent] = useState(false);
-  // Server-resolved evidence mode: "screen" (default) | "workflow" | "both".
+  // Client-only: consent + workspace setup happen while status is still pending.
+  const [inSetup, setInSetup] = useState(false);
+  // Server-resolved evidence mode: "none" | "workflow" | "both" | legacy "screen".
   // Drives whether we ask for the screen, show the capture-kit command, or both.
   const evidenceMode = submission?.evidenceMode || "screen";
   const usesWorkflowCapture =
     evidenceMode === "workflow" || evidenceMode === "both";
   const usesScreenRecording =
     evidenceMode === "screen" || evidenceMode === "both";
+  // PNG frames only feed the OCR transcript (legacy `screen`). `both` keeps
+  // video + sidecar; skip the screenshot pipeline.
+  const usesFrameCapture = evidenceMode === "screen";
+  const hasStarterZip = (assessment?.starterCodeFiles?.length ?? 0) > 0;
+  const hasStarterRepo = Boolean(assessment?.starterFilesGitHubLink);
+  const needsWorkspaceSetup =
+    usesScreenRecording || usesWorkflowCapture || hasStarterZip || hasStarterRepo;
   const [captureCmdCopied, setCaptureCmdCopied] = useState(false);
+  const starterZipUrlRef = useRef(null);
   const [proctoringEnabled, setProctoringEnabled] = useState(false);
   const [proctoringSessionId, setProctoringSessionId] = useState(null);
   const [proctoringSubmissionId, setProctoringSubmissionId] = useState(null);
   const screenCapture = useScreenCapture();
-  const proctoringDeclinedRef = useRef(false);
   const sidecarBufferRef = useRef([]);
   /** In-session voice companion; endAndFlush() must run before the session completes. */
   const companionRef = useRef(null);
+  /** True while the attempt is in-progress — stream-loss companion prompts only then. */
+  const inProgressRef = useRef(false);
 
-  // Screenshot capture (only when proctoring is active)
+  // Screenshot capture (legacy `screen` only — OCR transcript input)
   const { consumeFrames } = useScreenshotCapture(screenCapture.streams, {
-    enabled: proctoringEnabled && screenCapture.isSharing,
+    enabled: usesFrameCapture && proctoringEnabled && screenCapture.isSharing,
   });
 
   // Frame upload pipeline
@@ -141,7 +171,7 @@ export default function CandidateAssessment() {
     sessionId: proctoringSessionId,
     token,
     consumeFrames,
-    enabled: proctoringEnabled && !!proctoringSessionId,
+    enabled: usesFrameCapture && proctoringEnabled && !!proctoringSessionId,
   });
 
   // Frame dedup
@@ -155,10 +185,15 @@ export default function CandidateAssessment() {
   const [showResharePrompt, setShowResharePrompt] = useState(false);
   /** True when prompting because of page reload / remount (stream was never started this visit). */
   const [reshareIsResume, setReshareIsResume] = useState(false);
+  /** Incremented on every in-progress stream loss / resume so the companion speaks each time. */
+  const [companionReshareTick, setCompanionReshareTick] = useState(0);
   const timeoutTriggeredRef = useRef(false);
-  const timeoutCleanupRunningRef = useRef(false);
+  const stopProctoringPromiseRef = useRef(null);
   const buzzerPlayedRef = useRef(false);
   const recordingOnlySubmitTriggeredRef = useRef(false);
+  const proctoringStoppedRef = useRef(false);
+  const timeRemainingRef = useRef(null);
+  const [recorderEpoch, setRecorderEpoch] = useState(0);
 
   // Video recording refs
   const videoRecordersRef = useRef([]);
@@ -198,6 +233,47 @@ export default function CandidateAssessment() {
             return;
           }
 
+          if (result.data.status === "pending") {
+            // Setup is client-side (timer has not started). Resume it after a
+            // refresh so they are not dumped back on the landing card.
+            let setupMarked = false;
+            try {
+              setupMarked =
+                sessionStorage.getItem(`${SETUP_STORAGE_PREFIX}${token}`) ===
+                "1";
+            } catch {
+              setupMarked = false;
+            }
+            if (setupMarked) {
+              setInSetup(true);
+              const mode = result.data.evidenceMode || "screen";
+              const screenOn = mode === "screen" || mode === "both";
+              if (screenOn) {
+                try {
+                  const pRes = await getSessionByCandidateToken(token);
+                  if (pRes.success && pRes.data) {
+                    const sess = pRes.data;
+                    const resumable =
+                      sess.consent?.granted &&
+                      (sess.status === "active" ||
+                        sess.status === "paused" ||
+                        sess.status === "pending");
+                    if (resumable) {
+                      setProctoringSessionId(sess._id);
+                      setProctoringSubmissionId(String(result.data._id));
+                      setProctoringEnabled(true);
+                      setReshareIsResume(true);
+                      setShowResharePrompt(true);
+                      // Companion is not mounted during setup — UI reshare is enough.
+                    }
+                  }
+                } catch (e) {
+                  console.warn("Could not resume setup recording:", e);
+                }
+              }
+            }
+          }
+
           if (result.data.status === "in-progress") {
             setTimeRemaining(result.data.timeRemaining);
             // Reattach to an existing proctoring session after reload (browser ends screen share on refresh).
@@ -214,6 +290,7 @@ export default function CandidateAssessment() {
                   setProctoringEnabled(true);
                   setReshareIsResume(true);
                   setShowResharePrompt(true);
+                  setCompanionReshareTick((n) => n + 1);
                 }
               }
             } catch (e) {
@@ -239,6 +316,27 @@ export default function CandidateAssessment() {
     loadSubmission();
   }, [token]);
 
+  // Pre-build the starter zip while they read the landing card so setup can
+  // download it in the same click (browsers block downloads after an await).
+  useEffect(() => {
+    const files = assessment?.starterCodeFiles;
+    if (!files?.length) return undefined;
+    let revoked = false;
+    let objectUrl = null;
+    buildStarterCodeZipBlob(files).then((blob) => {
+      if (revoked || !blob) return;
+      objectUrl = URL.createObjectURL(blob);
+      starterZipUrlRef.current = objectUrl;
+    });
+    return () => {
+      revoked = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (starterZipUrlRef.current === objectUrl) {
+        starterZipUrlRef.current = null;
+      }
+    };
+  }, [assessment?.starterCodeFiles]);
+
   // Sync time with backend every 30 seconds if assessment is in progress
   // IMPORTANT: Don't poll if opted out to prevent API spam
   useEffect(() => {
@@ -254,7 +352,17 @@ export default function CandidateAssessment() {
     const syncTime = async () => {
       try {
         const result = await getSubmissionByToken(token);
-        if (result.success && result.data.timeRemaining !== null) {
+        if (!result.success) return;
+        const status = result.data.status;
+        if (status === "submitted" || status === "expired") {
+          navigate(`${createPageUrl("CandidateSubmitted")}?token=${token}`);
+          return;
+        }
+        if (status === "opted-out") {
+          setSubmission(result.data);
+          return;
+        }
+        if (result.data.timeRemaining !== null) {
           setTimeRemaining(result.data.timeRemaining);
         }
       } catch (error) {
@@ -268,7 +376,7 @@ export default function CandidateAssessment() {
     // Then sync every 30 seconds
     const interval = setInterval(syncTime, 30000);
     return () => clearInterval(interval);
-  }, [token, submission]);
+  }, [token, submission, navigate]);
 
   // Update time display every second
   useEffect(() => {
@@ -301,27 +409,71 @@ export default function CandidateAssessment() {
     return () => clearInterval(interval);
   }, [timeRemaining]);
 
-  const stopProctoringForTimeout = useCallback(async () => {
-    if (timeoutCleanupRunningRef.current) return;
-    timeoutCleanupRunningRef.current = true;
-    try {
-      if (!proctoringEnabled) return;
-      // End the voice check-in first so its final lines land before the session closes.
-      if (companionRef.current?.endAndFlush) {
-        await companionRef.current.endAndFlush();
+  timeRemainingRef.current = timeRemaining;
+
+  /** Stop recorders and flush sidecar/frames. Leaves the session open so a
+   *  failed submit can keep recording. */
+  const flushPendingCapture = useCallback(async () => {
+    const recorders = videoRecordersRef.current;
+    videoRecordersRef.current = [];
+    await Promise.all(
+      recorders.map(async (r) => {
+        try {
+          await r.stop();
+        } catch {
+          /* already stopped */
+        }
+        try {
+          await r.uploads;
+        } catch {
+          /* upload failure already logged */
+        }
+      })
+    );
+    await flushFrames();
+    const sidecar = sidecarBufferRef.current.splice(0);
+    if (sidecar.length > 0 && proctoringSessionId) {
+      try {
+        await recordSidecarEvents(proctoringSessionId, token, sidecar);
+      } catch {
+        /* session may already be closed */
       }
-      await flushFrames();
-      if (proctoringSessionId) {
-        await completeProctoringSession(proctoringSessionId, token);
-      }
-      screenCapture.stopCapture();
-      setProctoringEnabled(false);
-    } catch (error) {
-      console.error("Failed to stop proctoring at timeout:", error);
-    } finally {
-      timeoutCleanupRunningRef.current = false;
     }
-  }, [proctoringEnabled, flushFrames, proctoringSessionId, token, screenCapture]);
+  }, [flushFrames, proctoringSessionId, token]);
+
+  const stopProctoringCapture = useCallback(() => {
+    if (stopProctoringPromiseRef.current) return stopProctoringPromiseRef.current;
+    if (!proctoringEnabled && !proctoringSessionId) return Promise.resolve();
+
+    const run = (async () => {
+      proctoringStoppedRef.current = true;
+      try {
+        // End the voice check-in first so its final lines land before the session closes.
+        if (companionRef.current?.endAndFlush) {
+          await companionRef.current.endAndFlush();
+        }
+        await flushPendingCapture();
+        if (proctoringSessionId) {
+          await completeProctoringSession(proctoringSessionId, token);
+        }
+      } catch (error) {
+        console.error("Failed to stop proctoring:", error);
+        stopProctoringPromiseRef.current = null;
+      } finally {
+        screenCapture.stopCapture();
+        setProctoringEnabled(false);
+      }
+    })();
+
+    stopProctoringPromiseRef.current = run;
+    return run;
+  }, [
+    proctoringEnabled,
+    flushPendingCapture,
+    proctoringSessionId,
+    token,
+    screenCapture,
+  ]);
 
   // Timeout handling: buzzer + stop recording + 5-minute final submission grace.
   useEffect(() => {
@@ -341,7 +493,7 @@ export default function CandidateAssessment() {
       setIsGracePeriodActive(false);
       setGraceSecondsRemaining(0);
       setHasMissedGracePeriod(true);
-      stopProctoringForTimeout();
+      stopProctoringCapture();
       return;
     }
 
@@ -351,7 +503,7 @@ export default function CandidateAssessment() {
         buzzerPlayedRef.current = true;
         playBuzzerSound();
       }
-      stopProctoringForTimeout();
+      stopProctoringCapture();
     }
 
     setHasMissedGracePeriod(false);
@@ -363,7 +515,7 @@ export default function CandidateAssessment() {
     timeRemaining,
     isGracePeriodActive,
     hasMissedGracePeriod,
-    stopProctoringForTimeout,
+    stopProctoringCapture,
   ]);
 
   useEffect(() => {
@@ -391,6 +543,7 @@ export default function CandidateAssessment() {
 
     const finalizeRecordingOnly = async () => {
       try {
+        await stopProctoringCapture();
         const result = await submitRecordingOnlyAssessment(token);
         if (result.success) {
           navigate(`${createPageUrl("CandidateSubmitted")}?token=${token}`);
@@ -408,7 +561,7 @@ export default function CandidateAssessment() {
     };
 
     finalizeRecordingOnly();
-  }, [hasMissedGracePeriod, token, navigate]);
+  }, [hasMissedGracePeriod, token, navigate, stopProctoringCapture]);
 
   // Sidecar event capture: blur/focus/visibilitychange/copy/paste
   useEffect(() => {
@@ -457,6 +610,9 @@ export default function CandidateAssessment() {
     screenCapture.onStreamLost(() => {
       setReshareIsResume(false);
       setShowResharePrompt(true);
+      if (inProgressRef.current) {
+        setCompanionReshareTick((n) => n + 1);
+      }
       sidecarBufferRef.current.push({
         type: "stream_lost",
         timestamp: Date.now(),
@@ -475,6 +631,10 @@ export default function CandidateAssessment() {
     });
   }, [proctoringEnabled, screenCapture]);
 
+  useEffect(() => {
+    inProgressRef.current = submission?.status === "in-progress";
+  }, [submission?.status]);
+
   // Video recording — start MediaRecorder for each stream
   useEffect(() => {
     if (!proctoringEnabled || !proctoringSessionId || !token) return;
@@ -489,17 +649,30 @@ export default function CandidateAssessment() {
 
       try {
         const { recorder, chunks, stop } = createVideoRecorder(stream, 30000);
-        const recorderEntry = { screenIndex, recorder, chunks, stop };
+        const recorderEntry = {
+          screenIndex,
+          recorder,
+          chunks,
+          stop,
+          uploads: Promise.resolve(),
+        };
 
-        // Upload chunks as they arrive
-        recorder.ondataavailable = async (e) => {
-          if (e.data.size > 0 && proctoringSessionId) {
-            await uploadVideoChunk(proctoringSessionId, token, e.data, {
-              screenIndex,
-              startTime: Date.now() - 30000,
-              endTime: Date.now(),
+        // Upload chunks as they arrive. Chain uploads so stop can await the last one
+        // before POST /complete — otherwise the final 30s lands after the session
+        // is closed and is rejected.
+        recorder.ondataavailable = (e) => {
+          if (e.data.size === 0 || !proctoringSessionId) return;
+          recorderEntry.uploads = recorderEntry.uploads
+            .then(() =>
+              uploadVideoChunk(proctoringSessionId, token, e.data, {
+                screenIndex,
+                startTime: Date.now() - 30000,
+                endTime: Date.now(),
+              })
+            )
+            .catch((err) => {
+              console.warn("Video chunk upload failed:", err);
             });
-          }
         };
 
         videoRecordersRef.current.push(recorderEntry);
@@ -513,11 +686,39 @@ export default function CandidateAssessment() {
       videoRecordersRef.current.forEach((r) => r.stop());
       videoRecordersRef.current = [];
     };
-  }, [proctoringEnabled, proctoringSessionId, token, screenCapture.streams]);
+  }, [proctoringEnabled, proctoringSessionId, token, screenCapture.streams, recorderEpoch]);
 
-  // beforeunload — flush remaining frames
+  // pagehide: flush JSON we can (sidecar) and complete recording only if the
+  // main timer is already up. Do not complete mid-attempt — reload must resume.
   useEffect(() => {
-    if (!proctoringEnabled) return;
+    if (!proctoringEnabled || !proctoringSessionId || !token) return undefined;
+
+    const onPageHide = () => {
+      const sidecar = sidecarBufferRef.current.splice(0);
+      if (sidecar.length > 0) {
+        beaconSidecarEvents(proctoringSessionId, token, sidecar);
+      }
+      videoRecordersRef.current.forEach((r) => {
+        try {
+          r.stop();
+        } catch {
+          /* page is dying */
+        }
+      });
+      videoRecordersRef.current = [];
+      const remaining = timeRemainingRef.current;
+      if (remaining !== null && remaining <= 0) {
+        beaconCompleteSession(proctoringSessionId, token);
+      }
+    };
+
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, [proctoringEnabled, proctoringSessionId, token]);
+
+  // beforeunload — flush remaining frames (legacy screen OCR only)
+  useEffect(() => {
+    if (!proctoringEnabled || !usesFrameCapture) return;
 
     const onBeforeUnload = () => {
       flushFrames();
@@ -525,7 +726,7 @@ export default function CandidateAssessment() {
 
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [proctoringEnabled, flushFrames]);
+  }, [proctoringEnabled, usesFrameCapture, flushFrames]);
 
   const handleReshare = async () => {
     const stream = await screenCapture.startCapture();
@@ -535,24 +736,72 @@ export default function CandidateAssessment() {
     }
   };
 
+  const triggerStarterDownload = () => {
+    const files = assessment?.starterCodeFiles;
+    const readyUrl = starterZipUrlRef.current;
+    if (readyUrl) {
+      triggerBlobDownload(readyUrl, STARTER_ZIP_FILENAME);
+      return;
+    }
+    if (files?.length) {
+      void downloadStarterCodeZip(files, STARTER_ZIP_FILENAME);
+      return;
+    }
+    if (assessment?.starterFilesGitHubLink) {
+      window.open(
+        assessment.starterFilesGitHubLink,
+        "_blank",
+        "noopener,noreferrer"
+      );
+    }
+  };
+
+  const enterSetup = () => {
+    if (token) {
+      try {
+        sessionStorage.setItem(`${SETUP_STORAGE_PREFIX}${token}`, "1");
+      } catch {
+        /* private mode / blocked storage */
+      }
+    }
+    setInSetup(true);
+  };
+
+  const clearSetup = () => {
+    if (token) {
+      try {
+        sessionStorage.removeItem(`${SETUP_STORAGE_PREFIX}${token}`);
+      } catch {
+        /* ignore */
+      }
+    }
+    setInSetup(false);
+  };
+
   const handleStartClick = () => {
     if (!token) {
       alert("No token provided");
       return;
     }
-    // Workflow-only assessments never ask for the screen — the capture kit
-    // carries its own disclosure and consent gate in the terminal.
-    if (!usesScreenRecording) {
-      handleConsentGranted();
+    // No screen, capture-kit, or starters — nothing to set up. Start now.
+    if (!needsWorkspaceSetup) {
+      setIsStarting(true);
+      doStartAssessment();
       return;
     }
-    // Show consent screen before starting
-    setShowConsent(true);
+    if (usesScreenRecording) {
+      setShowConsent(true);
+      return;
+    }
+    // Workflow-only (or starters with observation off): skip the screen
+    // picker and go straight to the orientation screen. Do not start the
+    // timer or hand over starter files yet.
+    enterSetup();
   };
 
   const handleConsentGranted = async () => {
     setShowConsent(false);
-    setIsStarting(true);
+    enterSetup();
     try {
       // Create proctoring session as soon as consent is granted so it exists even if capture fails
       const sessionResult = await createProctoringSession(token);
@@ -562,34 +811,69 @@ export default function CandidateAssessment() {
         setProctoringSessionId(sid);
         if (subId) setProctoringSubmissionId(subId);
         await grantConsent(sid, token, 1);
+        proctoringStoppedRef.current = false;
+        stopProctoringPromiseRef.current = null;
         setProctoringEnabled(true);
       }
 
-      const stream = await screenCapture.startCapture();
-      if (stream && sessionResult?.success) {
-        // Capture started; session already created above
-      }
-      // Start the assessment regardless of capture/session success
-      await doStartAssessment();
+      await screenCapture.startCapture();
     } catch (err) {
       console.error("Error starting screen capture or proctoring session:", err);
-      // Still start the assessment even if something fails
-      await doStartAssessment();
     }
   };
 
-  const handleConsentDeclined = async () => {
+  const handleConsentBack = () => {
     setShowConsent(false);
-    proctoringDeclinedRef.current = true;
+  };
+
+  const handleSetupShareScreen = async () => {
+    try {
+      // Replacing a window/tab share needs a fresh picker; stop first so
+      // they aren't left recording the wrong surface.
+      if (screenCapture.isSharing) {
+        screenCapture.stopCapture();
+      }
+      const stream = await screenCapture.startCapture();
+      if (!stream) return;
+      if (!proctoringSessionId && token) {
+        const sessionResult = await createProctoringSession(token);
+        if (sessionResult.success) {
+          const sid = sessionResult.data._id;
+          const subId = sessionResult.data.submissionId;
+          setProctoringSessionId(sid);
+          if (subId) setProctoringSubmissionId(subId);
+          await grantConsent(sid, token, 1);
+          proctoringStoppedRef.current = false;
+          stopProctoringPromiseRef.current = null;
+          setProctoringEnabled(true);
+        }
+      }
+    } catch (err) {
+      console.error("Error starting screen share during setup:", err);
+    }
+  };
+
+  const handleFinishSetup = () => {
+    if (usesScreenRecording) {
+      const hasValidShare =
+        screenCapture.isSharingFullScreen ||
+        (screenCapture.isSharing && !screenCapture.displaySurface);
+      if (!hasValidShare) return;
+    }
+    triggerStarterDownload();
     setIsStarting(true);
-    await doStartAssessment();
+    doStartAssessment();
   };
 
   const doStartAssessment = async () => {
     try {
       const result = await startAssessment(token);
       if (result.success) {
-        setSubmission(result.data);
+        clearSetup();
+        setSubmission({
+          ...result.data,
+          evidenceMode: result.data.evidenceMode || submission?.evidenceMode,
+        });
         setTimeRemaining(result.data.timeRemaining);
       } else {
         const errorMsg =
@@ -649,22 +933,13 @@ export default function CandidateAssessment() {
 
     setIsSubmitting(true);
     try {
-      if (proctoringEnabled) {
-        // End the voice check-in first so its final lines land before the session closes.
-        if (companionRef.current?.endAndFlush) {
-          await companionRef.current.endAndFlush();
-        }
-        await flushFrames();
-        if (proctoringSessionId) {
-          await completeProctoringSession(proctoringSessionId, token);
-        }
-        screenCapture.stopCapture();
-      }
+      await flushPendingCapture();
 
       const result = uploadArchive
         ? await uploadAssessmentArchive(token, uploadArchive)
         : await submitAssessment(token, githubUrl.trim());
       if (result.success) {
+        await stopProctoringCapture();
         navigate(`${createPageUrl("CandidateSubmitted")}?token=${token}`);
       } else {
         const errorMsg =
@@ -675,12 +950,16 @@ export default function CandidateAssessment() {
         ) {
           setIsGracePeriodActive(false);
           setHasMissedGracePeriod(true);
+          await stopProctoringCapture();
+        } else {
+          setRecorderEpoch((n) => n + 1);
         }
         alert(errorMsg);
         setIsSubmitting(false);
       }
     } catch (error) {
       console.error("Error submitting assessment:", error);
+      setRecorderEpoch((n) => n + 1);
       alert("Failed to submit assessment");
       setIsSubmitting(false);
     }
@@ -694,22 +973,26 @@ export default function CandidateAssessment() {
 
     setIsOptingOut(true);
     try {
+      await flushPendingCapture();
       const result = await optOutAssessment(
         token,
         optOutReason.trim() || undefined
       );
       if (result.success) {
+        await stopProctoringCapture();
         // Update local state to show opted out screen
         setSubmission(result.data);
         setShowOptOutModal(false);
         setOptOutReason("");
       } else {
+        setRecorderEpoch((n) => n + 1);
         const errorMsg = "error" in result ? result.error : "Failed to opt out";
         alert(errorMsg);
         setIsOptingOut(false);
       }
     } catch (error) {
       console.error("Error opting out:", error);
+      setRecorderEpoch((n) => n + 1);
       alert("Failed to opt out");
       setIsOptingOut(false);
     }
@@ -826,6 +1109,114 @@ export default function CandidateAssessment() {
   const shouldGrayOut = isGracePeriodActive || hasMissedGracePeriod;
   const graceCountdownDisplay = formatHms(graceSecondsRemaining);
 
+  const copyCaptureCommand = () => {
+    navigator.clipboard
+      ?.writeText(captureSetupCommand)
+      .then(() => setCaptureCmdCopied(true))
+      .catch(() => {});
+  };
+
+  const reshareModal =
+    showResharePrompt && usesScreenRecording ? (
+      <ResharePrompt
+        required
+        onReshare={handleReshare}
+        title={reshareIsResume ? "Resume screen sharing" : undefined}
+        subtitle={
+          reshareIsResume
+            ? hasStarted
+              ? "Your session is still active — pick your entire screen again to continue recording."
+              : "Your setup is still in progress — pick your entire screen again to continue recording."
+            : undefined
+        }
+        body={
+          reshareIsResume
+            ? "After a page refresh the browser stops screen capture. Reshare your entire screen (full display), not a window or tab."
+            : undefined
+        }
+      />
+    ) : showResharePrompt ? (
+      <ResharePrompt
+        onReshare={handleReshare}
+        onDismiss={() => {
+          setShowResharePrompt(false);
+          setReshareIsResume(false);
+        }}
+      />
+    ) : null;
+
+  const optOutModal = showOptOutModal ? (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="bg-white rounded-xl shadow-xl max-w-md w-full p-6"
+      >
+        <h2 className="text-xl font-medium tracking-[-0.012em] text-gray-900 mb-2">
+          Opt Out of Assessment
+        </h2>
+        <p className="text-sm text-gray-600 mb-4">
+          Are you sure you want to opt out of this assessment? Please let us
+          know why (optional):
+        </p>
+        <Textarea
+          value={optOutReason}
+          onChange={(e) => setOptOutReason(e.target.value)}
+          placeholder="E.g., Time constraints, technical issues, not interested..."
+          className="min-h-[100px] mb-4"
+        />
+        <div className="flex gap-3">
+          <Button
+            onClick={handleOptOut}
+            disabled={isOptingOut}
+            className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+          >
+            {isOptingOut ? "Opting Out..." : "Confirm Opt Out"}
+          </Button>
+          <Button
+            onClick={() => {
+              setShowOptOutModal(false);
+              setOptOutReason("");
+            }}
+            variant="outline"
+            disabled={isOptingOut}
+          >
+            Cancel
+          </Button>
+        </div>
+      </motion.div>
+    </div>
+  ) : null;
+
+  if (!hasStarted && inSetup) {
+    return (
+      <div className="min-h-screen bg-[#FAF9F2] relative">
+        {proctoringEnabled && screenCapture.isSharing && (
+          <RecordingIndicator streamCount={screenCapture.streams.length} />
+        )}
+        {reshareModal}
+        <AssessmentSetup
+          title={assessment.title}
+          companyName={assessment.userId?.companyName}
+          timeLimitDisplay={timeLimitDisplay}
+          usesScreenRecording={usesScreenRecording}
+          recordingSkipped={false}
+          isSharing={screenCapture.isSharing}
+          isSharingFullScreen={screenCapture.isSharingFullScreen}
+          displaySurface={screenCapture.displaySurface}
+          onShareScreen={handleSetupShareScreen}
+          hasStarterZip={hasStarterZip}
+          hasStarterRepo={hasStarterRepo}
+          usesWorkflowCapture={usesWorkflowCapture}
+          isFinishing={isStarting}
+          onFinishSetup={handleFinishSetup}
+          onOptOut={() => setShowOptOutModal(true)}
+        />
+        {optOutModal}
+      </div>
+    );
+  }
+
   if (!hasStarted) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#FAF9F2] to-[#F4F2E9] flex items-center justify-center p-6">
@@ -866,28 +1257,30 @@ export default function CandidateAssessment() {
               </div>
             </div>
 
-            {/* Starter Files GitHub Link (if available) */}
-            {assessment.starterFilesGitHubLink && (
-              <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-xl">
-                <div className="flex items-start gap-3">
-                  <LinkIcon className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <h3 className="text-sm font-semibold text-blue-900 mb-1">
-                      Starter Files & Instructions
-                    </h3>
-                    <p className="text-sm text-blue-800 mb-2">
-                      Access the starter files and detailed instructions:
-                    </p>
-                    <a
-                      href={assessment.starterFilesGitHubLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:text-blue-800 hover:underline text-sm font-medium break-all"
-                    >
-                      {assessment.starterFilesGitHubLink}
-                    </a>
-                  </div>
-                </div>
+            {(hasStarterZip || hasStarterRepo) && (
+              <div className="mb-6 p-4 bg-[#FAF9F2] border border-[#21201C]/15 rounded-xl">
+                <h3 className="text-sm font-semibold text-[#21201C] mb-1">
+                  You must start from the starter files
+                </h3>
+                <p className="text-sm text-gray-700">
+                  {hasStarterZip ? (
+                    <>
+                      Starter files download when the assessment starts. Unzip{" "}
+                      <code className="font-mono text-xs">starter-code.zip</code>{" "}
+                      and work in that folder — don&apos;t begin from a blank
+                      project.
+                    </>
+                  ) : (
+                    <>
+                      When the assessment starts, open the starter repository
+                      and work from those files — don&apos;t begin from a blank
+                      project.
+                    </>
+                  )}
+                  {usesWorkflowCapture
+                    ? " You will also run a short setup command from that folder after you start."
+                    : ""}
+                </p>
               </div>
             )}
 
@@ -895,9 +1288,19 @@ export default function CandidateAssessment() {
             <div className="flex items-start gap-3 p-4 bg-yellow-50 border border-yellow-200 rounded-xl mb-6">
               <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
               <div className="text-sm text-yellow-800">
-                <strong>Important:</strong> Once you start, the timer begins.
-                You'll have {timeLimitDisplay} to complete and submit your work.
-                Make sure you're ready before clicking Start.
+                {needsWorkspaceSetup ? (
+                  <>
+                    <strong>Next:</strong> share your entire screen. The timer
+                    does not start — and you will not see the assignment or
+                    starter files — until you start the assessment.
+                  </>
+                ) : (
+                  <>
+                    <strong>Important:</strong> Once you start, the timer
+                    begins. You&apos;ll have {timeLimitDisplay} to complete and
+                    submit your work.
+                  </>
+                )}
               </div>
             </div>
 
@@ -908,7 +1311,11 @@ export default function CandidateAssessment() {
               className="w-full bg-[#21201C] hover:bg-[#35332D] text-white py-6 text-lg rounded-full disabled:opacity-50 mb-3"
             >
               <Play className="w-5 h-5 mr-2" />
-              {isStarting ? "Starting..." : "Start Assessment"}
+              {isStarting
+                ? "Starting..."
+                : needsWorkspaceSetup
+                  ? "Continue to setup"
+                  : "Start Assessment"}
             </Button>
 
             {/* Opt Out Button */}
@@ -926,54 +1333,14 @@ export default function CandidateAssessment() {
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <ConsentScreen
               onConsent={handleConsentGranted}
-              onDecline={handleConsentDeclined}
+              onDecline={handleConsentBack}
+              allowSkip={false}
+              evidenceMode={evidenceMode}
             />
           </div>
         )}
 
-        {/* Opt Out Modal - Available in both states */}
-        {showOptOutModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="bg-white rounded-xl shadow-xl max-w-md w-full p-6"
-            >
-              <h2 className="text-xl font-medium tracking-[-0.012em] text-gray-900 mb-2">
-                Opt Out of Assessment
-              </h2>
-              <p className="text-sm text-gray-600 mb-4">
-                Are you sure you want to opt out of this assessment? Please let
-                us know why (optional):
-              </p>
-              <Textarea
-                value={optOutReason}
-                onChange={(e) => setOptOutReason(e.target.value)}
-                placeholder="E.g., Time constraints, technical issues, not interested..."
-                className="min-h-[100px] mb-4"
-              />
-              <div className="flex gap-3">
-                <Button
-                  onClick={handleOptOut}
-                  disabled={isOptingOut}
-                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
-                >
-                  {isOptingOut ? "Opting Out..." : "Confirm Opt Out"}
-                </Button>
-                <Button
-                  onClick={() => {
-                    setShowOptOutModal(false);
-                    setOptOutReason("");
-                  }}
-                  variant="outline"
-                  disabled={isOptingOut}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </motion.div>
-          </div>
-        )}
+        {optOutModal}
       </div>
     );
   }
@@ -993,30 +1360,11 @@ export default function CandidateAssessment() {
           sessionId={proctoringSessionId}
           token={token}
           submissionId={proctoringSubmissionId}
+          reshareRequestId={companionReshareTick}
         />
       )}
 
-      {/* Reshare Prompt */}
-      {showResharePrompt && (
-        <ResharePrompt
-          onReshare={handleReshare}
-          onDismiss={() => {
-            setShowResharePrompt(false);
-            setReshareIsResume(false);
-          }}
-          title={reshareIsResume ? "Resume screen sharing" : undefined}
-          subtitle={
-            reshareIsResume
-              ? "Your session is still active — pick your screen again to continue recording."
-              : undefined
-          }
-          body={
-            reshareIsResume
-              ? "After a page refresh the browser stops screen capture. Reshare your monitor to keep recording, or dismiss to continue the assessment without recording."
-              : undefined
-          }
-        />
-      )}
+      {reshareModal}
 
       {/* Top Bar */}
       <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
@@ -1071,6 +1419,80 @@ export default function CandidateAssessment() {
             animate={{ opacity: 1, y: 0 }}
             className="bg-white rounded-xl border border-gray-200 p-6"
           >
+            {(hasStarterZip || hasStarterRepo || usesWorkflowCapture) && (
+              <div className="mb-6 rounded-xl border border-[#21201C] bg-[#FAF9F2] p-5">
+                <h2 className="text-lg font-semibold text-[#21201C] mb-1">
+                  Do this now
+                </h2>
+                <p className="text-sm text-gray-700 mb-4">
+                  The timer is running. Set up your workspace, then read the
+                  assignment below.
+                </p>
+                <ol className="space-y-3 text-sm text-gray-800">
+                  {(hasStarterZip || hasStarterRepo) && (
+                    <li>
+                      <span className="font-semibold text-[#21201C]">
+                        {hasStarterZip
+                          ? "Unzip starter-code.zip and open that folder"
+                          : "Open the starter repository"}
+                      </span>
+                      <p className="mt-1 text-gray-700">
+                        Work from those files — not a blank project.
+                        {hasStarterZip
+                          ? " A zip should have downloaded when you started."
+                          : ""}
+                      </p>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        {hasStarterZip && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={triggerStarterDownload}
+                            className="h-9 px-3 text-xs"
+                          >
+                            <Download className="w-3.5 h-3.5 mr-1.5" />
+                            Download starter files again
+                          </Button>
+                        )}
+                        {hasStarterRepo && (
+                          <a
+                            href={assessment.starterFilesGitHubLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 text-xs font-medium text-[#21201C] underline underline-offset-2"
+                          >
+                            <LinkIcon className="w-3.5 h-3.5" />
+                            Starter repo on GitHub
+                          </a>
+                        )}
+                      </div>
+                    </li>
+                  )}
+                  {usesWorkflowCapture && (
+                    <li>
+                      <span className="font-semibold text-[#21201C]">
+                        Run this from that folder
+                      </span>
+                      <p className="mt-1 mb-3 text-gray-700">
+                        It shows exactly what is recorded and asks you to type
+                        “agree” before anything is captured.
+                      </p>
+                      <CaptureSetupCommand
+                        command={captureSetupCommand}
+                        copied={captureCmdCopied}
+                        onCopy={copyCaptureCommand}
+                      />
+                      <p className="mt-3 text-xs text-gray-600">
+                        Then start Claude Code, Cursor, or Codex in the same
+                        folder. The first time, it will ask you to trust the
+                        folder — you must accept, or nothing is recorded.
+                      </p>
+                    </li>
+                  )}
+                </ol>
+              </div>
+            )}
+
             <h2 className="text-lg font-semibold text-gray-900 mb-4">
               Project Instructions
             </h2>
@@ -1079,40 +1501,6 @@ export default function CandidateAssessment() {
               tools if you find them helpful.
             </p>
 
-            {usesWorkflowCapture && (
-              <div className="mb-4 rounded-lg border border-gray-200 bg-white p-4">
-                <h3 className="text-sm font-semibold text-gray-900 mb-1">
-                  Before you start: enable workflow capture
-                </h3>
-                <p className="text-xs text-gray-600 mb-3">
-                  This assessment records your AI assistant conversation and code
-                  changes instead of your screen. Run this once in your project
-                  folder — it will show you exactly what is recorded and ask you
-                  to confirm before anything is captured.
-                </p>
-                <div className="flex items-center gap-2">
-                  <code className="flex-1 rounded-md bg-gray-900 px-3 py-2 text-xs text-gray-100 font-mono overflow-x-auto whitespace-nowrap">
-                    npx @bridge/capture-kit {token}
-                  </code>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      navigator.clipboard
-                        ?.writeText(`npx @bridge/capture-kit ${token}`)
-                        .then(() => setCaptureCmdCopied(true))
-                        .catch(() => {})
-                    }
-                    className="shrink-0 rounded-md border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                  >
-                    {captureCmdCopied ? "Copied ✓" : "Copy"}
-                  </button>
-                </div>
-                <p className="mt-2 text-xs text-gray-500">
-                  You can read everything that was sent at any time by running{" "}
-                  <code className="font-mono">node .bridge/view.js</code>.
-                </p>
-              </div>
-            )}
             <div className="prose prose-sm max-w-none text-gray-700 leading-relaxed">
               <ReactMarkdown
                 components={{
@@ -1161,35 +1549,13 @@ export default function CandidateAssessment() {
               </ReactMarkdown>
             </div>
 
-            {/* Starter Files GitHub Link */}
-            {assessment.starterFilesGitHubLink && (
-              <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                <div className="flex items-start gap-3">
-                  <LinkIcon className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <h3 className="text-sm font-semibold text-blue-900 mb-1">
-                      Starter Files & Instructions
-                    </h3>
-                    <p className="text-sm text-blue-800 mb-2">
-                      Access the starter files and detailed instructions in the
-                      GitHub repository:
-                    </p>
-                    <a
-                      href={assessment.starterFilesGitHubLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:text-blue-800 hover:underline text-sm font-medium break-all"
-                    >
-                      {assessment.starterFilesGitHubLink}
-                    </a>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Starter code files (inline) */}
+            {/* Starter code files (inline preview of the zip they downloaded) */}
             {assessment.starterCodeFiles?.length > 0 && (
               <div className="mt-6">
+                <p className="text-xs text-gray-500 mb-2">
+                  Preview of the starter files in{" "}
+                  <code className="font-mono">starter-code.zip</code>
+                </p>
                 <StarterCodeIDE files={assessment.starterCodeFiles} readOnly={true} />
               </div>
             )}
@@ -1379,49 +1745,7 @@ export default function CandidateAssessment() {
         </div>
       )}
 
-      {/* Opt Out Modal - Available in both states */}
-      {showOptOutModal && !shouldGrayOut && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="bg-white rounded-xl shadow-xl max-w-md w-full p-6"
-          >
-            <h2 className="text-xl font-medium tracking-[-0.012em] text-gray-900 mb-2">
-              Opt Out of Assessment
-            </h2>
-            <p className="text-sm text-gray-600 mb-4">
-              Are you sure you want to opt out of this assessment? Please let us
-              know why (optional):
-            </p>
-            <Textarea
-              value={optOutReason}
-              onChange={(e) => setOptOutReason(e.target.value)}
-              placeholder="E.g., Time constraints, technical issues, not interested..."
-              className="min-h-[100px] mb-4"
-            />
-            <div className="flex gap-3">
-              <Button
-                onClick={handleOptOut}
-                disabled={isOptingOut}
-                className="flex-1 bg-red-600 hover:bg-red-700 text-white"
-              >
-                {isOptingOut ? "Opting Out..." : "Confirm Opt Out"}
-              </Button>
-              <Button
-                onClick={() => {
-                  setShowOptOutModal(false);
-                  setOptOutReason("");
-                }}
-                variant="outline"
-                disabled={isOptingOut}
-              >
-                Cancel
-              </Button>
-            </div>
-          </motion.div>
-        </div>
-      )}
+      {!shouldGrayOut && optOutModal}
     </div>
   );
 }

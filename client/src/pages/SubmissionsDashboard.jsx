@@ -33,6 +33,7 @@ import {
   Pencil,
   MoreHorizontal,
   RefreshCw,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -61,14 +62,10 @@ import {
 import { runSubmissionEvaluation } from "@/api/evaluation";
 import VideoTimelineWithCriteria from "@/components/proctoring/VideoTimelineWithCriteria";
 import BehavioralGradingLiveTrace from "@/components/submissions/BehavioralGradingLiveTrace";
+import EvidenceMomentChips from "@/components/submissions/EvidenceMomentChips";
+import WorkflowActivityTimeline from "@/components/submissions/WorkflowActivityTimeline";
+import CommunicationCard from "@/components/submissions/CommunicationCard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -88,8 +85,14 @@ import {
   getTranscriptContent,
   getProctoringVideoPlaybackUrl,
   downloadProctoringVideo,
+  getCompanionTranscript,
 } from "@/api/proctoring";
 import { onAuthStateChanged } from "firebase/auth";
+import {
+  getCaptureSessionBySubmission,
+  getWorkflowAnalysis,
+  workflowVideoUrl,
+} from "@/api/workflowCapture";
 import { auth } from "@/firebase/firebase";
 
 /** Format seconds since session start as m:ss (e.g. 65 -> "1:05"). */
@@ -98,6 +101,27 @@ function formatSecondsSinceStart(s) {
   const sec = Math.floor(s % 60);
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
+
+/**
+ * After this long, an evaluation still marked "pending" is assumed abandoned
+ * rather than slow. Comfortably past the server's own worst case (an ~8 minute
+ * transcript budget plus ~4 minutes of grading), so a genuinely long run is
+ * never restarted underneath itself.
+ */
+const STALE_PENDING_MS = 20 * 60 * 1000;
+
+/**
+ * Headline for a capture that did not run cleanly through to submission.
+ *
+ * Deliberately descriptive rather than accusatory — capture also stops because
+ * a laptop slept or a network dropped, and the reviewer is the one who decides
+ * what it means. The server's own `note` carries the specifics.
+ */
+const CAPTURE_STATUS_LABEL = {
+  stopped_early: "Capture stopped before the work was submitted",
+  sparse: "Only part of this session appears to have been captured",
+  missing: "No workflow activity was captured",
+};
 
 /** Proctoring / recording rubric average on 0–10; null if no evaluable criteria. */
 function getRecordingRubricAvg10(sub) {
@@ -113,12 +137,65 @@ function getRecordingRubric0to100(sub) {
   return avg == null ? null : avg * 10;
 }
 
+/**
+ * True when there is anything to open the review surface for. A candidate who
+ * never started has no recording, no code and no scores, so the row stays inert
+ * rather than opening an empty dialog.
+ */
+function hasReviewableEvidence(sub) {
+  if (!sub) return false;
+  return Boolean(
+    sub.startedAt ||
+      sub.submittedAt ||
+      sub.status === "submitted" ||
+      sub.status === "in-progress" ||
+      sub.status === "expired" ||
+      sub.optedOut ||
+      sub.evaluationReport ||
+      sub.behavioralGradingStatus
+  );
+}
+
 /** True when workflow rubric scores exist (used to default the evaluation modal tab). */
 function hasEvaluableWorkflowReport(sub) {
   const n =
     sub?.evaluationReport?.criteria_results?.filter((r) => r.evaluable)
       ?.length ?? 0;
   return n > 0;
+}
+
+const EVALUATION_RECENT_MS = 15 * 60 * 1000;
+
+/** Process scoring is still in flight — surfaces should say so, not look empty. */
+function isEvaluationInProgress(sub, evaluatingId) {
+  if (!sub) return false;
+  if (hasEvaluableWorkflowReport(sub)) return false;
+  if (evaluatingId && evaluatingId === sub._id) return true;
+  if (sub.evaluationStatus === "pending") return true;
+  if (sub.evaluationStatus === "failed") return false;
+  if (sub.status !== "submitted") return false;
+  if (sub.evaluationReport?.criteria_results?.length) return false;
+  return Boolean(
+    sub.submittedAt &&
+      Date.now() - new Date(sub.submittedAt).getTime() < EVALUATION_RECENT_MS
+  );
+}
+
+function isBehavioralGradingInProgress(sub, gradingId) {
+  if (!sub) return false;
+  if (gradingId && gradingId === sub._id) return true;
+  return sub.behavioralGradingStatus === "pending";
+}
+
+function ScoringPendingNote({ children, className = "" }) {
+  return (
+    <div
+      className={`flex items-center gap-2 text-sm text-gray-500 ${className}`}
+    >
+      <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+      <span>{children}</span>
+    </div>
+  );
 }
 
 /** Behavioral checks → 0–100 (pass=1, inconclusive=0.5, fail=0), when grading completed. */
@@ -139,7 +216,7 @@ function getBehavioralPass0to100(sub) {
 
 /**
  * Combined employer-facing score (0–100): mean of available signals —
- * screen/recording rubric and behavioral pass rate.
+ * process rubric (how they worked) and behavioral pass rate (did the thing work).
  */
 function getCombinedScore0to100(sub) {
   const parts = [
@@ -154,9 +231,173 @@ function getCombinedScoreBreakdownParts(sub) {
   const segs = [];
   const rec = getRecordingRubric0to100(sub);
   const beh = getBehavioralPass0to100(sub);
-  if (rec != null) segs.push(`Screen ${(rec / 10).toFixed(1)}/10`);
+  if (rec != null) segs.push(`Process ${(rec / 10).toFixed(1)}/10`);
   if (beh != null) segs.push(`Behavioral ${Math.round(beh)}%`);
   return segs;
+}
+
+/** Failed / passed behavioral checks for the Summary "did it work" card. */
+function getBehavioralCheckHighlights(sub) {
+  const status = sub?.behavioralGradingStatus;
+  if (!status) return null;
+  if (status === "pending") return { status: "pending" };
+  if (status === "failed") {
+    return { status: "failed", error: sub.behavioralGradingError || null };
+  }
+  if (status !== "completed") return { status };
+  if (sub.behavioralGradingReport?.failureCategory === "setup") {
+    return { status: "setup" };
+  }
+  const cases = sub.behavioralGradingReport?.cases;
+  if (!Array.isArray(cases) || cases.length === 0) return { status: "empty" };
+  const failed = cases
+    .filter((c) => c.verdict === "fail")
+    .map((c) => c.checkText)
+    .filter(Boolean);
+  const passed = cases.filter((c) => c.verdict === "pass").length;
+  const inconclusive = cases.filter((c) => c.verdict === "inconclusive").length;
+  return {
+    status: "completed",
+    passed,
+    failed,
+    inconclusive,
+    total: cases.length,
+  };
+}
+
+/**
+ * Capture-trust warning. Silent when the record is clean. Lives above the
+ * rubric so a reviewer cannot read an 8 and only then learn citations dropped.
+ */
+function EvidenceIntegrityBanner({ report }) {
+  const integrity = report?.evidenceIntegrity;
+  if (!integrity) return null;
+  const capture = integrity.capture;
+  const incomplete = capture && capture.status !== "complete";
+  const dropped = integrity.citationsDropped ?? 0;
+  const invalidated = integrity.invalidatedCriteria ?? [];
+  if (!incomplete && dropped === 0) return null;
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 space-y-2">
+      {incomplete && (
+        <div className="flex gap-2">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-700 shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-amber-900">
+              {CAPTURE_STATUS_LABEL[capture.status] ??
+                "Capture may be incomplete"}
+            </p>
+            <p className="text-xs text-amber-800 leading-relaxed">
+              {capture.note}
+            </p>
+          </div>
+        </div>
+      )}
+      {dropped > 0 && (
+        <div className="flex gap-2">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-700 shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-amber-900">
+              {dropped} cited moment
+              {dropped === 1 ? "" : "s"} could not be matched to captured
+              activity
+            </p>
+            <p className="text-xs text-amber-800 leading-relaxed">
+              {integrity.citationsKept ?? 0} citation
+              {(integrity.citationsKept ?? 0) === 1 ? "" : "s"} verified and
+              kept.
+              {invalidated.length > 0
+                ? ` Scores withheld for: ${invalidated.join(", ")}.`
+                : ""}
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Compact product result on Summary — which checks failed, without the sandbox log. */
+function BehavioralProductCard({ highlights, onSeeCode }) {
+  if (!highlights) return null;
+  const failed = highlights.failed || [];
+  const shown = failed.slice(0, 3);
+  const extra = failed.length - shown.length;
+
+  let body = null;
+  if (highlights.status === "pending") {
+    body = (
+      <ScoringPendingNote>Checks are still running.</ScoringPendingNote>
+    );
+  } else if (highlights.status === "failed") {
+    body = (
+      <p className="text-sm text-amber-800">
+        {highlights.error || "Product checks could not finish."}
+      </p>
+    );
+  } else if (highlights.status === "setup") {
+    body = (
+      <p className="text-sm text-amber-800">
+        Checks could not be run — the grading environment failed to start the
+        project.
+      </p>
+    );
+  } else if (highlights.status === "empty") {
+    body = (
+      <p className="text-sm text-gray-600">No product checks on this assessment.</p>
+    );
+  } else if (highlights.status === "completed") {
+    body = (
+      <>
+        <p className="text-sm text-gray-800">
+          {highlights.passed} of {highlights.total} check
+          {highlights.total === 1 ? "" : "s"} passed
+          {highlights.inconclusive > 0
+            ? ` · ${highlights.inconclusive} inconclusive`
+            : ""}
+        </p>
+        {shown.length > 0 ? (
+          <ul className="mt-2 space-y-1">
+            {shown.map((text) => (
+              <li key={text} className="text-xs text-gray-700 leading-snug">
+                <span className="text-red-700 font-medium">Failed · </span>
+                {text}
+              </li>
+            ))}
+            {extra > 0 ? (
+              <li className="text-xs text-gray-500">
+                +{extra} more on Code
+              </li>
+            ) : null}
+          </ul>
+        ) : (
+          <p className="mt-1 text-xs text-gray-500">All checks passed.</p>
+        )}
+      </>
+    );
+  } else {
+    return null;
+  }
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
+          What they built
+        </p>
+        {typeof onSeeCode === "function" ? (
+          <button
+            type="button"
+            onClick={onSeeCode}
+            className="text-[11px] font-medium text-gray-600 hover:text-gray-900 hover:underline shrink-0"
+          >
+            Details on Code
+          </button>
+        ) : null}
+      </div>
+      <div className="mt-2">{body}</div>
+    </div>
+  );
 }
 
 /** True if agent ran inline / heredoc style commands — compare citations to read_file / seed, not probe stdout alone. */
@@ -666,6 +907,31 @@ function CopyBehavioralReportButton({
   );
 }
 
+/** S3 signed URLs last 1h; refresh a bit early, never on a timer while playing. */
+const PLAYBACK_URL_TTL_MS = 50 * 60 * 1000;
+const PLAYBACK_ERROR_REFRESH_MIN_MS = 15 * 1000;
+
+function revokeIfBlobUrl(url) {
+  if (typeof url === "string" && url.startsWith("blob:")) {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function sessionIdString(session) {
+  if (!session?._id) return "";
+  if (typeof session._id === "string") return session._id;
+  return session._id.toString?.() ?? String(session._id);
+}
+
+function playbackCacheFresh(cache, submissionId) {
+  return Boolean(
+    cache &&
+      cache.submissionId === submissionId &&
+      cache.url &&
+      Date.now() - cache.fetchedAt < PLAYBACK_URL_TTL_MS
+  );
+}
+
 export default function SubmissionsDashboard() {
   const buildStackBlitzUrl = (githubUrl) => {
     try {
@@ -705,18 +971,25 @@ export default function SubmissionsDashboard() {
   const [exportingEvidence, setExportingEvidence] = useState(false);
   const [error, setError] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
-  const [selectedInterview, setSelectedInterview] = useState(null);
-  const [showInterviewModal, setShowInterviewModal] = useState(false);
   const [selectedEvaluationSubmission, setSelectedEvaluationSubmission] =
     useState(null);
   const [showEvaluationModal, setShowEvaluationModal] = useState(false);
   const [showRunProjectModal, setShowRunProjectModal] = useState(false);
   const [runProjectPreviewUrl, setRunProjectPreviewUrl] = useState("");
-  const [evaluationTab, setEvaluationTab] = useState("execution");
-  const [expandedEvidenceCriteria, setExpandedEvidenceCriteria] = useState(new Set());
+  const [evaluationTab, setEvaluationTab] = useState("summary");
   const [isDropoffAnalysisExpanded, setIsDropoffAnalysisExpanded] =
     useState(false);
   const [evaluatingSubmissionId, setEvaluatingSubmissionId] = useState(null);
+  // Workflow capture (hooks-first evidence). Separate from the proctoring
+  // state because a submission can have one, both, or neither.
+  const [workflowSession, setWorkflowSession] = useState(null);
+  const [workflowAnalysis, setWorkflowAnalysis] = useState(null);
+  const [workflowLoading, setWorkflowLoading] = useState(false);
+  const [episodesBuilding, setEpisodesBuilding] = useState(false);
+  // Seek requested from the activity timeline; consumed by the video player.
+  const [recordingSeekSec, setRecordingSeekSec] = useState(null);
+  const [companionMessages, setCompanionMessages] = useState(null);
+  const [companionLoading, setCompanionLoading] = useState(false);
   const [recordingSession, setRecordingSession] = useState(null);
   const [recordingTranscript, setRecordingTranscript] = useState(null);
   const [recordingTranscriptLoading, setRecordingTranscriptLoading] = useState(false);
@@ -724,9 +997,6 @@ export default function SubmissionsDashboard() {
   const [recordingTranscriptError, setRecordingTranscriptError] = useState(null);
   const [recordingVideoObjectUrl, setRecordingVideoObjectUrl] = useState(null);
   const [behavioralGradingSubmissionId, setBehavioralGradingSubmissionId] =
-    useState(null);
-  const [showBehavioralModal, setShowBehavioralModal] = useState(false);
-  const [selectedBehavioralSubmission, setSelectedBehavioralSubmission] =
     useState(null);
   const [behavioralArtifactUrls, setBehavioralArtifactUrls] = useState({});
   const [behavioralArtifactsLoading, setBehavioralArtifactsLoading] =
@@ -736,9 +1006,24 @@ export default function SubmissionsDashboard() {
   );
   const behavioralArtifactsLoadedForIdRef = React.useRef(null);
   const recordingVideoObjectUrlRef = React.useRef(null);
+  const recordingPlaybackRef = React.useRef(null);
+  const recordingPlaybackRefreshAtRef = React.useRef(0);
+  const refreshRecordingPlaybackRef = React.useRef(null);
   const recordingMergePollRef = React.useRef(null);
   const pendingRefetchedRef = React.useRef(false);
+  const autoEvalAttemptedRef = React.useRef(new Set());
+  const reviewTabOverrideRef = React.useRef(false);
   const { toast } = useToast();
+
+  // Resolved on the assessment (all rows on this page share it). Leftover
+  // `workflow` / `none` have no screen to watch, so the Recording tab stays off.
+  const evidenceModeForReview =
+    selectedEvaluationSubmission?.evidenceMode ||
+    assessment?.evidenceMode ||
+    "screen";
+  const recordsScreen =
+    evidenceModeForReview !== "workflow" && evidenceModeForReview !== "none";
+  const activityTimelineOnRecording = evidenceModeForReview === "both";
 
   const handleOpenRunProjectModal = (githubUrl) => {
     const previewUrl = buildStackBlitzUrl(githubUrl);
@@ -816,9 +1101,8 @@ export default function SubmissionsDashboard() {
     }
   };
 
-  // Reset expanded evidence and behavioral artifact cache when evaluation target changes
+  // Reset behavioral artifact cache when evaluation target changes
   useEffect(() => {
-      setExpandedEvidenceCriteria(new Set());
     setExpandedBehavioralCases(new Set());
     behavioralArtifactsLoadedForIdRef.current = null;
     setBehavioralArtifactUrls((prev) => {
@@ -837,32 +1121,130 @@ export default function SubmissionsDashboard() {
     };
   }, [behavioralArtifactUrls]);
 
-  // Default evaluation modal tab: rubric scores → Final code; otherwise screen recording first
+  // Review always opens on Summary — the scores and the verdict are what a
+  // reviewer came for. Deep links (openReview(sub, "recording")) set the tab
+  // themselves; the ref keeps this reset from stomping on them.
   useEffect(() => {
     if (showEvaluationModal && selectedEvaluationSubmission?._id) {
-      setEvaluationTab(
-        hasEvaluableWorkflowReport(selectedEvaluationSubmission)
-          ? "execution"
-          : "recording",
-      );
+      if (reviewTabOverrideRef.current) {
+        reviewTabOverrideRef.current = false;
+        return;
+      }
+      setEvaluationTab("summary");
     }
   }, [showEvaluationModal, selectedEvaluationSubmission?._id]);
 
-  // Load proctoring session, screen transcript, and video when Recording tab is active
+  // Load workflow capture (if any) whenever the evaluation modal opens.
+  // Independent of the proctoring load: a workflow submission has no proctoring
+  // session, and a "both" submission has both. Re-fetch when scoring finishes
+  // so screen-context beats and episodes appear without closing the dialog.
+  useEffect(() => {
+    let cancelled = false;
+    const submissionId = selectedEvaluationSubmission?._id;
+    if (!showEvaluationModal || !submissionId) {
+      setWorkflowSession(null);
+      setWorkflowAnalysis(null);
+      return;
+    }
+    (async () => {
+      setWorkflowLoading(true);
+      try {
+        const user = auth.currentUser;
+        if (!user) return;
+        const token = await user.getIdToken();
+        const session = await getCaptureSessionBySubmission(submissionId, token);
+        if (cancelled) return;
+        setWorkflowSession(session);
+        if (session?._id) {
+          const analysis = await getWorkflowAnalysis(session._id, token);
+          if (!cancelled) setWorkflowAnalysis(analysis);
+        } else {
+          setWorkflowAnalysis(null);
+        }
+      } catch {
+        // No capture is an ordinary state; the panel renders nothing.
+        if (!cancelled) {
+          setWorkflowSession(null);
+          setWorkflowAnalysis(null);
+        }
+      } finally {
+        if (!cancelled) setWorkflowLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    showEvaluationModal,
+    selectedEvaluationSubmission?._id,
+    selectedEvaluationSubmission?.evaluationStatus,
+  ]);
+
+  // In-session voice companion — this is the "agent communication" the
+  // candidate actually had during the assessment.
+  useEffect(() => {
+    let cancelled = false;
+    const submissionId = selectedEvaluationSubmission?._id;
+    if (!showEvaluationModal || !submissionId) {
+      setCompanionMessages(null);
+      return;
+    }
+    (async () => {
+      setCompanionLoading(true);
+      try {
+        const user = auth.currentUser;
+        if (!user) return;
+        const token = await user.getIdToken();
+        const sessionResult = await getSessionBySubmission(submissionId, token);
+        if (cancelled) return;
+        if (!sessionResult.success || !sessionResult.data?._id) {
+          setCompanionMessages([]);
+          return;
+        }
+        const companionResult = await getCompanionTranscript(
+          sessionResult.data._id,
+          undefined,
+          token
+        );
+        if (cancelled) return;
+        setCompanionMessages(
+          companionResult.success
+            ? companionResult.data?.messages || []
+            : []
+        );
+      } catch {
+        if (!cancelled) setCompanionMessages([]);
+      } finally {
+        if (!cancelled) setCompanionLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showEvaluationModal, selectedEvaluationSubmission?._id]);
+
+  // Load proctoring session + signed playback URL when Review opens, not only
+  // when the Recording tab is selected. Evidence chips on Summary switch to
+  // Recording and seek; if the URL is fetched only after that tab mounts, the
+  // player is still empty. Bytes still load only when <video> mounts.
+  // Playback URL is fetched once per submission (cached ~50 min) — never on an
+  // interval. A previous version re-ran this effect when the list poll replaced
+  // `evaluationReport`, revoked the URL, and pulled the whole WebM again.
+  const handleRecordingPlaybackError = React.useCallback(() => {
+    refreshRecordingPlaybackRef.current?.();
+  }, []);
+
   useEffect(() => {
     if (
-      evaluationTab !== "recording" ||
+      !showEvaluationModal ||
+      !recordsScreen ||
       !selectedEvaluationSubmission?._id ||
       !currentUser
     ) {
-      if (recordingVideoObjectUrlRef.current) {
-        URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
-        recordingVideoObjectUrlRef.current = null;
+      if (recordingMergePollRef.current) {
+        clearInterval(recordingMergePollRef.current);
+        recordingMergePollRef.current = null;
       }
-      setRecordingVideoObjectUrl(null);
-      setRecordingSession(null);
-      setRecordingTranscript(null);
-      setRecordingTranscriptError(null);
       return;
     }
     const submissionId = String(selectedEvaluationSubmission?._id ?? "");
@@ -870,42 +1252,90 @@ export default function SubmissionsDashboard() {
       setRecordingTranscriptLoading(false);
       return;
     }
-    console.log("[proctoring-video] client step 1: submissionId =", submissionId, "type:", typeof submissionId, "selectedEvaluationSubmission._id =", selectedEvaluationSubmission._id);
-    if (recordingVideoObjectUrlRef.current) {
-      URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
+
+    const applyPlaybackUrl = (url) => {
+      recordingVideoObjectUrlRef.current = url;
+      setRecordingVideoObjectUrl(url);
+    };
+
+    const fetchPlaybackUrl = async (sessionIdForVideo, token, { force = false } = {}) => {
+      if (
+        !force &&
+        playbackCacheFresh(recordingPlaybackRef.current, submissionId)
+      ) {
+        applyPlaybackUrl(recordingPlaybackRef.current.url);
+        return recordingPlaybackRef.current.url;
+      }
+      const videoResult = await getProctoringVideoPlaybackUrl(
+        sessionIdForVideo,
+        token
+      );
+      if (videoResult.success && videoResult.data) {
+        recordingPlaybackRef.current = {
+          submissionId,
+          sessionId: sessionIdForVideo,
+          url: videoResult.data,
+          fetchedAt: Date.now(),
+        };
+        applyPlaybackUrl(videoResult.data);
+        return videoResult.data;
+      }
+      return null;
+    };
+
+    refreshRecordingPlaybackRef.current = async () => {
+      const now = Date.now();
+      if (now - recordingPlaybackRefreshAtRef.current < PLAYBACK_ERROR_REFRESH_MIN_MS) {
+        return;
+      }
+      recordingPlaybackRefreshAtRef.current = now;
+      const cached = recordingPlaybackRef.current;
+      if (cached?.submissionId !== submissionId || !cached.sessionId) return;
+      const sessionIdForVideo = cached.sessionId;
+      if (!currentUser) return;
+      try {
+        const token = await currentUser.getIdToken();
+        await fetchPlaybackUrl(sessionIdForVideo, token, { force: true });
+      } catch (e) {
+        console.warn("[proctoring-video] playback URL refresh failed:", e?.message ?? e);
+      }
+    };
+
+    if (playbackCacheFresh(recordingPlaybackRef.current, submissionId)) {
+      applyPlaybackUrl(recordingPlaybackRef.current.url);
+    } else if (recordingPlaybackRef.current?.submissionId !== submissionId) {
+      revokeIfBlobUrl(recordingVideoObjectUrlRef.current);
       recordingVideoObjectUrlRef.current = null;
+      setRecordingVideoObjectUrl(null);
+      setRecordingSession(null);
     }
+
     if (recordingMergePollRef.current) {
       clearInterval(recordingMergePollRef.current);
       recordingMergePollRef.current = null;
     }
-    setRecordingVideoObjectUrl(null);
-    setRecordingSession(null);
-    setRecordingTranscript(null);
     setRecordingTranscriptError(null);
     setRecordingTranscriptLoading(true);
     let cancelled = false;
     (async () => {
       try {
         const token = await currentUser.getIdToken();
-        console.log("[proctoring-video] client step 2: calling getSessionBySubmission with submissionId =", submissionId);
         const sessionResult = await getSessionBySubmission(submissionId, token);
         if (cancelled) return;
-        console.log("[proctoring-video] client step 3: sessionResult.success =", sessionResult.success, "sessionResult.data present =", !!sessionResult.data, "sessionResult.error =", sessionResult.error);
         if (!sessionResult.success || !sessionResult.data) {
           setRecordingTranscriptLoading(false);
           return;
         }
         const session = sessionResult.data;
-        const idsMatch = String(session.submissionId) === String(submissionId);
-        console.log("[proctoring-video] client step 4: session._id =", session._id, "type:", typeof session._id, "session.submissionId =", session.submissionId, "type:", typeof session.submissionId, "sessionSubmissionId === submissionId =", idsMatch, "String(session.submissionId) =", String(session.submissionId), "submissionId =", submissionId);
         if (String(session.submissionId) !== String(submissionId)) {
-          console.log("[proctoring-video] client step 4 FAIL: ids do not match, returning early (no session/video set)");
           setRecordingTranscriptLoading(false);
           return;
         }
         setRecordingSession(session);
+        // Video OCR only exists for leftover `screen` assessments. `both`
+        // never transcribes — the hook stream is the text index of the footage.
         if (
+          evidenceModeForReview === "screen" &&
           session.transcript?.status === "completed" &&
           session.transcript?.storageKey &&
           !selectedEvaluationSubmission?.enrichedTranscript
@@ -934,63 +1364,22 @@ export default function SubmissionsDashboard() {
           }
         }
         const employerCanWatchRecording =
-          Boolean(selectedEvaluationSubmission?.evaluationReport) ||
           session.status === "completed" ||
           session.mergedVideo?.status === "ready";
         const mergeInFlight = session.mergedVideo?.status === "merging";
+        const sessionIdForVideo = sessionIdString(session);
 
-        if (employerCanWatchRecording && !mergeInFlight) {
-          const sessionIdForVideo =
-            session._id != null && typeof session._id === "string"
-              ? session._id
-              : session._id && typeof session._id.toString === "function"
-                ? session._id.toString()
-                : String(session._id);
-          setRecordingVideoLoading(true);
-          console.log(
-            "[proctoring-video] client step 5: calling getProctoringVideoPlaybackUrl with session._id =",
-            sessionIdForVideo
-          );
-          const videoResult = await getProctoringVideoPlaybackUrl(
-            sessionIdForVideo,
-            token
-          );
-          if (cancelled) {
-            if (videoResult.success && videoResult.data) {
-              URL.revokeObjectURL(videoResult.data);
-            }
-            setRecordingVideoLoading(false);
-            return;
+        if (employerCanWatchRecording && !mergeInFlight && sessionIdForVideo) {
+          if (!playbackCacheFresh(recordingPlaybackRef.current, submissionId)) {
+            setRecordingVideoLoading(true);
+            await fetchPlaybackUrl(sessionIdForVideo, token);
           }
-          console.log(
-            "[proctoring-video] client step 6: videoResult.success =",
-            videoResult.success,
-            videoResult.error,
-            !!videoResult.data
-          );
-          if (videoResult.success && videoResult.data) {
-            recordingVideoObjectUrlRef.current = videoResult.data;
-            setRecordingVideoObjectUrl(videoResult.data);
-          }
-          setRecordingVideoLoading(false);
+          if (!cancelled) setRecordingVideoLoading(false);
         } else {
           setRecordingVideoLoading(false);
-          if (mergeInFlight) {
-            console.log(
-              "[proctoring-video] client step 5 SKIP: merged video is still being prepared"
-            );
-          } else {
-            console.log(
-              "[proctoring-video] client step 5 SKIP: recording not ready for playback yet"
-            );
-          }
         }
 
         if (!cancelled && mergeInFlight) {
-          if (recordingMergePollRef.current) {
-            clearInterval(recordingMergePollRef.current);
-            recordingMergePollRef.current = null;
-          }
           recordingMergePollRef.current = setInterval(async () => {
             if (cancelled) return;
             try {
@@ -999,34 +1388,18 @@ export default function SubmissionsDashboard() {
               if (!sr.success || !sr.data || cancelled) return;
               setRecordingSession(sr.data);
               const stillMerging = sr.data.mergedVideo?.status === "merging";
-              if (!stillMerging) {
-                if (recordingMergePollRef.current) {
-                  clearInterval(recordingMergePollRef.current);
-                  recordingMergePollRef.current = null;
-                }
-                const canWatchNow =
-                  Boolean(selectedEvaluationSubmission?.evaluationReport) ||
-                  sr.data.status === "completed" ||
-                  sr.data.mergedVideo?.status === "ready";
-                if (canWatchNow && sr.data.mergedVideo?.status !== "merging") {
-                  setRecordingVideoLoading(true);
-                  const sessionIdForVideo =
-                    sr.data._id != null && typeof sr.data._id === "string"
-                      ? sr.data._id
-                      : sr.data._id?.toString?.() ?? String(sr.data._id);
-                  const videoResult = await getProctoringVideoPlaybackUrl(
-                    sessionIdForVideo,
-                    tok
-                  );
-                  if (!cancelled && videoResult.success && videoResult.data) {
-                    if (recordingVideoObjectUrlRef.current) {
-                      URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
-                    }
-                    recordingVideoObjectUrlRef.current = videoResult.data;
-                    setRecordingVideoObjectUrl(videoResult.data);
-                  }
-                  if (!cancelled) setRecordingVideoLoading(false);
-                }
+              if (stillMerging) return;
+              if (recordingMergePollRef.current) {
+                clearInterval(recordingMergePollRef.current);
+                recordingMergePollRef.current = null;
+              }
+              const canWatchNow =
+                sr.data.status === "completed" ||
+                sr.data.mergedVideo?.status === "ready";
+              if (canWatchNow && !playbackCacheFresh(recordingPlaybackRef.current, submissionId)) {
+                setRecordingVideoLoading(true);
+                await fetchPlaybackUrl(sessionIdString(sr.data), tok);
+                if (!cancelled) setRecordingVideoLoading(false);
               }
             } catch (e) {
               console.warn("[proctoring-video] merge poll failed:", e?.message ?? e);
@@ -1034,34 +1407,51 @@ export default function SubmissionsDashboard() {
           }, 4000);
         }
       } catch (err) {
-        console.log("[proctoring-video] client CAUGHT ERROR:", err?.message ?? err);
         if (!cancelled) {
-          setRecordingTranscriptError(err?.message ?? "Failed to load screen transcript");
+          // A missing proctoring session is an ordinary state, not an error:
+          // workflow-mode submissions never create one. Surfacing the raw
+          // "404 Not Found: {...}" string to an employer was a bug.
+          const msg = String(err?.message ?? "");
+          const isMissingSession = /404|not found/i.test(msg);
+          setRecordingTranscriptError(
+            isMissingSession ? null : msg || "Failed to load screen transcript"
+          );
         }
       } finally {
-        if (!cancelled) setRecordingTranscriptLoading(false);
-        setRecordingVideoLoading(false);
+        if (!cancelled) {
+          setRecordingTranscriptLoading(false);
+          setRecordingVideoLoading(false);
+        }
       }
     })();
     return () => {
       cancelled = true;
-      setRecordingVideoLoading(false);
       if (recordingMergePollRef.current) {
         clearInterval(recordingMergePollRef.current);
         recordingMergePollRef.current = null;
       }
-      if (recordingVideoObjectUrlRef.current) {
-        URL.revokeObjectURL(recordingVideoObjectUrlRef.current);
-        recordingVideoObjectUrlRef.current = null;
-      }
-      setRecordingVideoObjectUrl(null);
     };
   }, [
-    evaluationTab,
+    showEvaluationModal,
+    recordsScreen,
     selectedEvaluationSubmission?._id,
-    selectedEvaluationSubmission?.evaluationReport,
-    currentUser,
+    currentUser?.uid,
+    evidenceModeForReview,
   ]);
+
+  useEffect(() => {
+    if (evaluationTab === "recording" && !recordsScreen) {
+      setEvaluationTab("summary");
+    }
+    // A chip-requested seek is for one visit to the Recording tab. Leaving the
+    // tab clears it; without this, every later mount of the player re-applies
+    // the stale seek (Radix unmounts inactive tab content), so a jump that
+    // failed once — e.g. into an unseekable legacy recording — kept failing
+    // until a full page reload.
+    if (evaluationTab !== "recording") {
+      setRecordingSeekSec(null);
+    }
+  }, [evaluationTab, recordsScreen]);
 
   // Wait for auth state to be ready
   useEffect(() => {
@@ -1134,14 +1524,31 @@ export default function SubmissionsDashboard() {
     }
   }, [assessmentId, currentUser, isRefreshing]);
 
-  // Keep candidate detail panel in sync when list refreshes (e.g. behavioral poll)
+  // Keep the review dialog in sync when the list refreshes (e.g. behavioral
+  // poll). Only swap the object when something a reviewer can see actually
+  // changed — an unconditional swap handed every child a new reference on each
+  // poll, which is what made the recording reload underneath the reviewer.
   useEffect(() => {
     if (!selectedEvaluationSubmission?._id) return;
     const fresh = submissions.find(
       (s) => s._id === selectedEvaluationSubmission._id
     );
-    if (fresh) setSelectedEvaluationSubmission(fresh);
-  }, [submissions, selectedEvaluationSubmission?._id]);
+    if (!fresh || fresh === selectedEvaluationSubmission) return;
+    const signature = (s) =>
+      JSON.stringify([
+        s.status,
+        s.evaluationStatus,
+        s.evaluationError,
+        s.behavioralGradingStatus,
+        s.behavioralGradingError,
+        s.behavioralGradingProgress,
+        s.behavioralGradingReport?.cases?.length ?? null,
+        Boolean(s.evaluationReport),
+        s.evaluationReport?.criteria_results?.length ?? null,
+      ]);
+    if (signature(fresh) === signature(selectedEvaluationSubmission)) return;
+    setSelectedEvaluationSubmission(fresh);
+  }, [submissions, selectedEvaluationSubmission]);
 
   // When any submission is waiting for automatic evaluation, do a single
   // delayed refetch instead of polling. The effect re-runs on every
@@ -1180,6 +1587,94 @@ export default function SubmissionsDashboard() {
 
     return () => clearTimeout(timer);
   }, [submissions, assessmentId, currentUser]);
+
+  const handleRunEvaluation = React.useCallback(
+    async (submission, { silent = false } = {}) => {
+      if (!currentUser || !submission?._id) return;
+      setEvaluatingSubmissionId(submission._id);
+      try {
+        const token = await currentUser.getIdToken();
+        const result = await runSubmissionEvaluation(submission._id, token);
+        if (result.success) {
+          const submissionsResult = await getSubmissionsForAssessment(
+            assessmentId,
+            token
+          );
+          if (submissionsResult.success) {
+            setSubmissions(submissionsResult.data || []);
+            setSelectedEvaluationSubmission((prev) => {
+              if (!prev || prev._id !== submission._id) return prev;
+              return (
+                submissionsResult.data?.find((s) => s._id === submission._id) ??
+                prev
+              );
+            });
+          }
+          if (!silent) {
+            toast({
+              title: "Evaluation started",
+              description: "Scores will show up here when they are ready.",
+            });
+          }
+        } else if (!silent) {
+          toast({
+            title: "Evaluation failed",
+            description:
+              ("error" in result ? result.error : null) || "Evaluation failed",
+            variant: "destructive",
+          });
+        }
+      } catch (error) {
+        if (!silent) {
+          toast({
+            title: "Evaluation failed",
+            description: error?.message || "An unexpected error occurred.",
+            variant: "destructive",
+          });
+        }
+      } finally {
+        setEvaluatingSubmissionId((id) =>
+          id === submission._id ? null : id
+        );
+      }
+    },
+    [currentUser, assessmentId, toast]
+  );
+
+  // Re-kick evaluation for recent or recoverable failures so the employer
+  // never has to click "Run evaluation" after a submit.
+  useEffect(() => {
+    if (!currentUser || !assessmentId || submissions.length === 0) return;
+    const target = submissions.find((s) => {
+      if (autoEvalAttemptedRef.current.has(s._id)) return false;
+      if (s.status !== "submitted") return false;
+      if (hasEvaluableWorkflowReport(s)) return false;
+      if (s.evaluationStatus === "completed") return false;
+      // "pending" normally means a run is genuinely in flight, so leaving it
+      // alone is right — but nothing ever clears it if the server restarts
+      // mid-evaluation (it runs unawaited in the background, and deploys are
+      // routine). Those submissions sat on "Scoring…" forever with no report
+      // and no failure. Past the point where any real run would have finished,
+      // treat it as abandoned and start again.
+      if (s.evaluationStatus === "pending") {
+        return Boolean(
+          s.submittedAt &&
+            Date.now() - new Date(s.submittedAt).getTime() > STALE_PENDING_MS
+        );
+      }
+      const err = s.evaluationError || "";
+      if (/no evaluation criteria/i.test(err)) return false;
+      const recent =
+        s.submittedAt &&
+        Date.now() - new Date(s.submittedAt).getTime() < 15 * 60 * 1000;
+      const recoverable = /workflow capture session/i.test(err);
+      if (s.evaluationStatus === "failed") return recoverable || recent;
+      return Boolean(recent);
+    });
+    if (!target) return;
+    autoEvalAttemptedRef.current.add(target._id);
+    handleRunEvaluation(target, { silent: true });
+  }, [submissions, currentUser, assessmentId, handleRunEvaluation]);
 
   // Calculate stats from real data
   const stats = React.useMemo(() => {
@@ -1484,34 +1979,6 @@ export default function SubmissionsDashboard() {
     );
   };
 
-  const getInterviewStatusBadge = (interview) => {
-    if (!interview) {
-      return <Badge className="bg-gray-100 text-gray-600">Not Started</Badge>;
-    }
-
-    const statusStyles = {
-      not_started: "bg-gray-100 text-gray-600",
-      in_progress: "bg-blue-100 text-blue-700",
-      completed: "bg-green-100 text-green-700",
-      failed: "bg-red-100 text-red-700",
-    };
-
-    const statusLabels = {
-      not_started: "Not Started",
-      in_progress: "In Progress",
-      completed: "Completed",
-      failed: "Failed",
-    };
-
-    return (
-      <Badge
-        className={statusStyles[interview.status] || statusStyles.not_started}
-      >
-        {statusLabels[interview.status] || "Unknown"}
-      </Badge>
-    );
-  };
-
   const formatDate = (dateString) => {
     if (!dateString) return "—";
     const date = new Date(dateString);
@@ -1524,9 +1991,83 @@ export default function SubmissionsDashboard() {
     });
   };
 
-  const handleViewInterview = (submission) => {
-    setSelectedInterview(submission);
-    setShowInterviewModal(true);
+  // Episodes are persisted on the session when capture closes; the analysis
+  // response only carries them when explicitly requested. Prefer whichever
+  // source actually has them.
+  const episodesForReview =
+    (workflowAnalysis?.episodes?.length
+      ? workflowAnalysis.episodes
+      : workflowSession?.episodes) || [];
+
+  const evaluationInProgress = isEvaluationInProgress(
+    selectedEvaluationSubmission,
+    evaluatingSubmissionId
+  );
+  const behavioralGradingInProgress = isBehavioralGradingInProgress(
+    selectedEvaluationSubmission,
+    behavioralGradingSubmissionId
+  );
+
+  /**
+   * Jump the recording to a captured moment (rubric chip or activity row).
+   * Switches to the Recording tab and hands the player an offset. The player
+   * holds the offset until HAVE_METADATA, then seeks (and plays) so a chip
+   * click from Summary works on the first open, not only after a refresh.
+   */
+  const handleSeekRecording = (offsetSeconds) => {
+    if (!recordsScreen) return;
+    if (offsetSeconds == null || !Number.isFinite(offsetSeconds)) return;
+    setEvaluationTab("recording");
+    // New object identity on every click so repeat clicks on the same moment
+    // still register as a change for the player's effect.
+    setRecordingSeekSec({ sec: offsetSeconds, at: performance.now() });
+  };
+
+  /** Build the episode summary on demand (costs one LLM call server-side). */
+  const handleBuildEpisodes = async () => {
+    if (!workflowSession?._id || !currentUser) return;
+    setEpisodesBuilding(true);
+    try {
+      const token = await currentUser.getIdToken();
+      const analysis = await getWorkflowAnalysis(workflowSession._id, token, {
+        withEpisodes: true,
+      });
+      if (analysis) setWorkflowAnalysis(analysis);
+      if (!analysis?.episodes?.length) {
+        toast({
+          title: "No episodes built",
+          description:
+            "This session did not have enough captured activity to summarise.",
+        });
+      }
+    } catch (e) {
+      toast({
+        title: "Could not build episodes",
+        description: e?.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setEpisodesBuilding(false);
+    }
+  };
+
+  // The single way into candidate review. Everything that used to open a side
+  // panel, an evaluation modal or a recording jump now
+  // calls this; `tab` only pre-selects a section of the same surface.
+  const openReview = (submission, tab) => {
+    if (!submission) return;
+    setRecordingSeekSec(null);
+    if (tab) {
+      reviewTabOverrideRef.current = true;
+      const mode =
+        submission?.evidenceMode || assessment?.evidenceMode || "screen";
+      const canShowRecording = mode !== "workflow" && mode !== "none";
+      setEvaluationTab(
+        tab === "recording" && !canShowRecording ? "summary" : tab
+      );
+    }
+    setSelectedEvaluationSubmission(submission);
+    setShowEvaluationModal(true);
   };
 
   const [submissionToDelete, setSubmissionToDelete] = useState(null);
@@ -1538,7 +2079,6 @@ export default function SubmissionsDashboard() {
   const [shareEmailSent, setShareEmailSent] = useState(false);
 
   const [dashboardTab, setDashboardTab] = useState("candidates");
-  const [panelSubmission, setPanelSubmission] = useState(null);
   const [shareTab, setShareTab] = useState("single");
   const [shareCandidateName, setShareCandidateName] = useState("");
   const [shareCandidateEmail, setShareCandidateEmail] = useState("");
@@ -1713,12 +2253,6 @@ export default function SubmissionsDashboard() {
     } finally {
       setBehavioralArtifactsLoading(false);
     }
-  };
-
-  const openBehavioralModal = async (submission) => {
-    setSelectedBehavioralSubmission(submission);
-    setShowBehavioralModal(true);
-    await loadBehavioralArtifacts(submission);
   };
 
   const getCandidateLink = (submission) => {
@@ -2080,8 +2614,8 @@ export default function SubmissionsDashboard() {
           )}
         </motion.div>
         <p className="text-xs text-gray-500 -mt-2 mb-1">
-          Tip: Click a row to open candidate details. Use the menu for more
-          actions.
+          Click a candidate to review their scores, recording, code, and
+          conversations.
         </p>
 
         {/* Error Message */}
@@ -2148,19 +2682,33 @@ export default function SubmissionsDashboard() {
                     .toUpperCase()
                     .slice(0, 2);
 
+                  const reviewable = hasReviewableEvidence(submission);
+
                   return (
                     <tr
                       key={submission._id}
-                      role="button"
-                      tabIndex={0}
+                      role={reviewable ? "button" : undefined}
+                      tabIndex={reviewable ? 0 : undefined}
+                      aria-label={
+                        reviewable ? `Review ${candidateName}` : undefined
+                      }
                       onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
+                        if (
+                          reviewable &&
+                          (e.key === "Enter" || e.key === " ")
+                        ) {
                           e.preventDefault();
-                          setPanelSubmission(submission);
+                          openReview(submission);
                         }
                       }}
-                      onClick={() => setPanelSubmission(submission)}
-                      className="hover:bg-gray-50 transition-colors cursor-pointer"
+                      onClick={
+                        reviewable ? () => openReview(submission) : undefined
+                      }
+                      className={`transition-colors ${
+                        reviewable
+                          ? "hover:bg-gray-50 cursor-pointer"
+                          : ""
+                      }`}
                     >
                       <td className="px-5 py-4">
                         <div className="flex items-center gap-3">
@@ -2229,10 +2777,7 @@ export default function SubmissionsDashboard() {
                       <td className="px-5 py-4 text-sm text-gray-600">
                         {formatTimeSpent(submission.timeSpent)}
                       </td>
-                      <td
-                        className="px-5 py-4"
-                        onClick={(e) => e.stopPropagation()}
-                      >
+                      <td className="px-5 py-4">
                         {(() => {
                           const combinedScore =
                             getCombinedScore0to100(submission);
@@ -2250,24 +2795,21 @@ export default function SubmissionsDashboard() {
                             combinedScore == null &&
                             !hasEvaluationReport &&
                             (submission.evaluationStatus === "pending" ||
-                              (submission.evaluationStatus !== "failed" && submittedRecently));
-                          // Show "Run evaluation" only when evaluation actually failed (user can retry)
-                          const showRunEvaluation =
-                            submission.status === "submitted" &&
-                            !hasEvaluationReport &&
-                            submission.evaluationStatus === "failed";
-                          const openEvaluation = (e) => {
-                            e?.stopPropagation?.();
-                            setSelectedEvaluationSubmission(submission);
-                            setShowEvaluationModal(true);
-                          };
-                          const isEvaluating =
-                            evaluatingSubmissionId === submission._id;
+                              evaluatingSubmissionId === submission._id ||
+                              (submission.evaluationStatus !== "failed" &&
+                                submittedRecently));
                           if (combinedScore != null) {
                             return (
                               <div className="flex flex-col gap-0.5">
+                                {/* The denominator is not decoration: this is a
+                                    0–100 score sitting directly above "Process
+                                    1.0/10", so a bare "10" reads as full marks
+                                    when it is the worst possible result. */}
                                 <span className="text-lg font-bold text-gray-900 tabular-nums">
                                   {Math.round(combinedScore)}
+                                  <span className="text-xs font-medium text-gray-400">
+                                    /100
+                                  </span>
                                 </span>
                                 <span
                                   className="text-[10px] text-gray-500 leading-snug max-w-[11rem] truncate"
@@ -2278,133 +2820,26 @@ export default function SubmissionsDashboard() {
                                 >
                                   {breakdown || "Combined"}
                                 </span>
-                                <button
-                                  type="button"
-                                  onClick={(e) => openEvaluation(e)}
-                                  className="text-left text-xs text-[#21201C] hover:underline"
-                                  title="View scores and evaluation"
-                                >
-                                  View evaluation
-                                </button>
                               </div>
                             );
                           }
                           if (evaluationPending) {
                             return (
-                              <div className="flex flex-col gap-1.5 items-start">
-                                <div className="flex items-center gap-2 text-sm text-gray-500">
-                                  <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
-                                  <span>Evaluating…</span>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setSelectedEvaluationSubmission(submission);
-                                    setEvaluationTab("recording");
-                                    setShowEvaluationModal(true);
-                                  }}
-                                  className="text-left text-xs font-medium text-[#21201C] hover:underline"
-                                  title="Watch the screen capture while scores are still generating"
-                                >
-                                  View screen recording
-                                </button>
+                              <div className="flex items-center gap-2 text-sm text-gray-500">
+                                <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+                                <span>Scoring…</span>
                               </div>
                             );
                           }
-                          if (showRunEvaluation) {
+                          if (
+                            submission.status === "submitted" &&
+                            !hasEvaluationReport &&
+                            submission.evaluationStatus === "failed"
+                          ) {
                             return (
-                              <div className="flex flex-col gap-1.5 items-start">
-                                <Button
-                                    onClick={async (e) => {
-                                      e.stopPropagation();
-                                      if (!currentUser) {
-                                        toast({
-                                          title: "Not signed in",
-                                          description: "Please sign in to run evaluation.",
-                                          variant: "destructive",
-                                        });
-                                        return;
-                                      }
-                                      setEvaluatingSubmissionId(submission._id);
-                                      try {
-                                        const token =
-                                          await currentUser.getIdToken();
-                                        const result =
-                                          await runSubmissionEvaluation(
-                                            submission._id,
-                                            token
-                                          );
-                                        if (result.success) {
-                                          const submissionsResult =
-                                            await getSubmissionsForAssessment(
-                                              assessmentId,
-                                              token
-                                            );
-                                          if (submissionsResult.success) {
-                                            setSubmissions(
-                                              submissionsResult.data || []
-                                            );
-                                            setSelectedEvaluationSubmission(
-                                              submissionsResult.data?.find(
-                                                (s) => s._id === submission._id
-                                              ) ?? submission
-                                            );
-                                            toast({
-                                              title: "Evaluation complete",
-                                              description:
-                                                "Workflow evaluation has been updated.",
-                                            });
-                                          }
-                                        } else {
-                                          const errMsg =
-                                            "error" in result
-                                              ? result.error
-                                              : "Evaluation failed";
-                                          toast({
-                                            title: "Evaluation failed",
-                                            description: errMsg,
-                                            variant: "destructive",
-                                          });
-                                        }
-                                      } catch (error) {
-                                        console.error(
-                                          "Error running evaluation:",
-                                          error
-                                        );
-                                        toast({
-                                          title: "Evaluation failed",
-                                          description:
-                                            error?.message ||
-                                            "An unexpected error occurred.",
-                                          variant: "destructive",
-                                        });
-                                      } finally {
-                                        setEvaluatingSubmissionId(null);
-                                      }
-                                    }}
-                                    size="sm"
-                                    variant="outline"
-                                    disabled={isEvaluating}
-                                  >
-                                    {isEvaluating
-                                      ? "Running…"
-                                      : "Run evaluation"}
-                                  </Button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setSelectedEvaluationSubmission(submission);
-                                    setEvaluationTab("recording");
-                                    setShowEvaluationModal(true);
-                                  }}
-                                  className="text-left text-xs font-medium text-[#21201C] hover:underline"
-                                  title="Watch the screen capture"
-                                >
-                                  View screen recording
-                                </button>
-                              </div>
+                              <span className="text-xs text-amber-700">
+                                Scoring failed
+                              </span>
                             );
                           }
                           return (
@@ -2416,6 +2851,16 @@ export default function SubmissionsDashboard() {
                         className="px-5 py-4 text-right"
                         onClick={(e) => e.stopPropagation()}
                       >
+                        <div className="flex items-center justify-end gap-2">
+                          {reviewable && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => openReview(submission)}
+                            >
+                              Review
+                            </Button>
+                          )}
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                           <Button
@@ -2435,30 +2880,6 @@ export default function SubmissionsDashboard() {
                               <Send className="mr-2 h-4 w-4" />
                               Share or email invite
                             </DropdownMenuItem>
-                          {submission.status === "submitted" &&
-                            submission.githubLink && (
-                                <DropdownMenuItem asChild>
-                              <a
-                                href={submission.githubLink}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                  >
-                                    <Eye className="mr-2 h-4 w-4" />
-                                    View on GitHub
-                                  </a>
-                                </DropdownMenuItem>
-                              )}
-                            {submission.status === "submitted" &&
-                              submission.codeSource === "upload" && (
-                                <DropdownMenuItem
-                                  onClick={() =>
-                                    handleDownloadCodeArchive(submission)
-                                  }
-                                >
-                                  <Download className="mr-2 h-4 w-4" />
-                                  Download submitted archive
-                                </DropdownMenuItem>
-                              )}
                             {submission.status === "submitted" && (
                               <DropdownMenuItem
                                 onClick={() =>
@@ -2478,19 +2899,6 @@ export default function SubmissionsDashboard() {
                                 Run behavioral grading
                               </DropdownMenuItem>
                             )}
-                            {(submission.behavioralGradingReport?.cases
-                              ?.length > 0 ||
-                              submission.behavioralGradingStatus ===
-                                "failed") && (
-                              <DropdownMenuItem
-                                onClick={() =>
-                                  openBehavioralModal(submission)
-                                }
-                              >
-                                <Camera className="mr-2 h-4 w-4" />
-                                Behavioral evidence
-                              </DropdownMenuItem>
-                            )}
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
                               className="text-red-600 focus:text-red-600 focus:bg-red-50"
@@ -2501,6 +2909,7 @@ export default function SubmissionsDashboard() {
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -2846,199 +3255,6 @@ export default function SubmissionsDashboard() {
           </TabsContent>
         </Tabs>
 
-        <Sheet
-          open={!!panelSubmission}
-          onOpenChange={(open) => {
-            if (!open) setPanelSubmission(null);
-          }}
-        >
-          <SheetContent
-            side="right"
-            className="w-full sm:max-w-md overflow-y-auto flex flex-col"
-          >
-            {panelSubmission ? (
-              <>
-                <SheetHeader className="text-left">
-                  <SheetTitle>
-                    {panelSubmission.candidateName || "Candidate"}
-                  </SheetTitle>
-                  <SheetDescription>
-                    {panelSubmission.candidateEmail || "No email on file"}
-                  </SheetDescription>
-                </SheetHeader>
-                <div className="mt-6 space-y-5 flex-1">
-                  <div>
-                    <p className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-2">
-                      Pipeline
-                    </p>
-                    <div className="flex flex-col gap-2">
-                      {getStatusBadge(
-                        panelSubmission.status,
-                        panelSubmission
-                      )}
-                      {panelSubmission.behavioralGradingStatus ? (
-                        <Badge
-                          className={`w-fit ${
-                            panelSubmission.behavioralGradingStatus ===
-                            "completed"
-                              ? "bg-green-100 text-green-700"
-                              : panelSubmission.behavioralGradingStatus ===
-                                  "failed"
-                                ? "bg-red-100 text-red-700"
-                                : "bg-amber-100 text-amber-800"
-                          }`}
-                        >
-                          Behavioral: {panelSubmission.behavioralGradingStatus}
-                        </Badge>
-                      ) : null}
-                      {panelSubmission.interview?.status ? (
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs text-gray-500">
-                            Interview:
-                          </span>
-                          {getInterviewStatusBadge(panelSubmission.interview)}
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div>
-                      <p className="text-xs text-gray-500">Time spent</p>
-                      <p className="font-medium text-gray-900">
-                        {formatTimeSpent(panelSubmission.timeSpent)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Combined score</p>
-                      <p className="font-medium text-gray-900 tabular-nums">
-                        {(() => {
-                          const c = getCombinedScore0to100(panelSubmission);
-                          if (c == null) return "—";
-                          return Math.round(c);
-                        })()}
-                      </p>
-                      <p className="text-[10px] text-gray-500 leading-snug mt-0.5 line-clamp-2">
-                        {getCombinedScoreBreakdownParts(panelSubmission).join(" · ") ||
-                          "—"}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <Button
-                      className="w-full bg-[#21201C] hover:bg-[#35332D]"
-                      onClick={() => {
-                        setSelectedEvaluationSubmission(panelSubmission);
-                        setShowEvaluationModal(true);
-                        setPanelSubmission(null);
-                      }}
-                    >
-                      <BarChart3 className="w-4 h-4 mr-2" />
-                      View evaluation
-                    </Button>
-                    {panelSubmission.interview ? (
-                      <Button
-                        variant="outline"
-                        className="w-full"
-                        onClick={() => {
-                          handleViewInterview(panelSubmission);
-                          setPanelSubmission(null);
-                        }}
-                      >
-                        <MessageSquare className="w-4 h-4 mr-2" />
-                        Interview details
-                      </Button>
-                    ) : null}
-                    {panelSubmission.status === "submitted" &&
-                      panelSubmission.githubLink && (
-                        <Button variant="outline" className="w-full" asChild>
-                          <a
-                            href={panelSubmission.githubLink}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            <Eye className="w-4 h-4 mr-2" />
-                            Open GitHub
-                          </a>
-                        </Button>
-                      )}
-                    {panelSubmission.status === "submitted" &&
-                      panelSubmission.codeSource === "upload" && (
-                        <Button
-                          variant="outline"
-                          className="w-full"
-                          onClick={() => {
-                            handleDownloadCodeArchive(panelSubmission);
-                            setPanelSubmission(null);
-                          }}
-                        >
-                          <Download className="w-4 h-4 mr-2" />
-                          Download archive
-                        </Button>
-                      )}
-                    <Button
-                      variant="outline"
-                      className="w-full"
-                      onClick={() => {
-                        openShareModal(panelSubmission);
-                        setPanelSubmission(null);
-                      }}
-                    >
-                      <Send className="w-4 h-4 mr-2" />
-                      Share link or email
-                    </Button>
-                    {panelSubmission.status === "submitted" ? (
-                      <Button
-                        variant="outline"
-                        className="w-full"
-                        onClick={() => {
-                          handleRunBehavioralGrading(panelSubmission);
-                        }}
-                        disabled={
-                          behavioralGradingSubmissionId === panelSubmission._id
-                        }
-                      >
-                        {behavioralGradingSubmissionId ===
-                        panelSubmission._id ? (
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        ) : (
-                          <Play className="w-4 h-4 mr-2" />
-                        )}
-                        Run behavioral grading
-                      </Button>
-                    ) : null}
-                    {(panelSubmission.behavioralGradingReport?.cases?.length >
-                      0 ||
-                      panelSubmission.behavioralGradingStatus === "failed") && (
-                      <Button
-                        variant="outline"
-                        className="w-full"
-                        onClick={() => {
-                          openBehavioralModal(panelSubmission);
-                          setPanelSubmission(null);
-                        }}
-                      >
-                        <Camera className="w-4 h-4 mr-2" />
-                        Behavioral evidence
-                      </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      className="w-full text-red-600 hover:text-red-700 hover:bg-red-50"
-                      onClick={() => {
-                        handleDeleteClick(panelSubmission);
-                        setPanelSubmission(null);
-                      }}
-                    >
-                      <Trash2 className="w-4 h-4 mr-2" />
-                      Delete submission
-                    </Button>
-                  </div>
-                </div>
-              </>
-            ) : null}
-          </SheetContent>
-        </Sheet>
-
         {/* Delete Confirmation Modal */}
         <Dialog
           open={!!submissionToDelete}
@@ -3073,128 +3289,6 @@ export default function SubmissionsDashboard() {
                 {isDeleting ? "Deleting..." : "Delete"}
               </Button>
             </div>
-          </DialogContent>
-        </Dialog>
-
-        <Dialog
-          open={showBehavioralModal}
-          onOpenChange={(open) => {
-            setShowBehavioralModal(open);
-            if (!open) {
-              setSelectedBehavioralSubmission(null);
-              behavioralArtifactsLoadedForIdRef.current = null;
-              Object.values(behavioralArtifactUrls).forEach((url) => {
-                if (url) URL.revokeObjectURL(url);
-              });
-              setBehavioralArtifactUrls({});
-            }
-          }}
-        >
-          <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
-            <DialogHeader>
-              <div className="flex items-start justify-between gap-3 pr-8">
-                <div>
-                  <DialogTitle>Behavioral Grading Evidence</DialogTitle>
-                  <DialogDescription>
-                    Case-by-case evidence captured in sandbox execution.
-                  </DialogDescription>
-                </div>
-                <CopyBehavioralReportButton
-                  submission={selectedBehavioralSubmission}
-                  assessment={assessment}
-                  className="shrink-0"
-                  label="Copy all"
-                />
-              </div>
-            </DialogHeader>
-            {!selectedBehavioralSubmission ? null : (
-              <div className="space-y-4">
-                {selectedBehavioralSubmission.behavioralGradingStatus ===
-                  "failed" &&
-                  selectedBehavioralSubmission.behavioralGradingError && (
-                    <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                      {selectedBehavioralSubmission.behavioralGradingReport
-                        ?.failureCategory ? (
-                        <p className="text-xs font-medium uppercase font-mono tracking-[0.03em] mb-1">
-                          Failure:{" "}
-                          {
-                            selectedBehavioralSubmission.behavioralGradingReport
-                              .failureCategory
-                          }
-                        </p>
-                      ) : null}
-                      {selectedBehavioralSubmission.behavioralGradingError}
-                    </div>
-                  )}
-                <BehavioralSetupPanel
-                  report={selectedBehavioralSubmission.behavioralGradingReport}
-                />
-                <div className="text-sm text-gray-700">
-                  <p>
-                    README requirement:{" "}
-                    <span className="font-medium">
-                      {selectedBehavioralSubmission.behavioralGradingReport
-                        ?.runbook?.readmeRequirementPassed
-                        ? "passed"
-                        : "failed"}
-                    </span>
-                  </p>
-                  {selectedBehavioralSubmission.behavioralGradingReport?.runbook
-                    ?.readmeRequirementDetail?.summary && (
-                    <p className="text-xs text-gray-600 mt-1 leading-snug">
-                      {
-                        selectedBehavioralSubmission.behavioralGradingReport
-                          .runbook.readmeRequirementDetail.summary
-                      }
-                    </p>
-                  )}
-                  {selectedBehavioralSubmission.behavioralGradingReport?.runbook
-                    ?.readmeRequirementDetail?.notes && (
-                    <p className="text-xs text-gray-500 mt-1 italic">
-                      Planner notes:{" "}
-                      {
-                        selectedBehavioralSubmission.behavioralGradingReport
-                          .runbook.readmeRequirementDetail.notes
-                      }
-                    </p>
-                  )}
-                  <p className="text-xs text-gray-500 mt-1">
-                    {selectedBehavioralSubmission.behavioralGradingReport
-                      ?.runbook?.summary || "No runbook summary"}
-                  </p>
-                </div>
-                {(selectedBehavioralSubmission.behavioralGradingReport?.cases ||
-                  []
-                ).map((caseResult, idx) => (
-                  <div
-                    key={`${caseResult.checkText}-${idx}`}
-                    className="rounded-lg border border-gray-200 p-3 space-y-3"
-                  >
-                    <div className="flex items-center justify-between">
-                      <p className="text-sm font-medium text-gray-900">
-                        {caseResult.checkText}
-                      </p>
-                      <Badge
-                        className={
-                          caseResult.verdict === "pass"
-                            ? "bg-green-100 text-green-700"
-                            : caseResult.verdict === "fail"
-                            ? "bg-red-100 text-red-700"
-                            : "bg-amber-100 text-amber-800"
-                        }
-                      >
-                        {caseResult.verdict}
-                      </Badge>
-                    </div>
-                    <BehavioralCaseEvidenceBody
-                      caseResult={caseResult}
-                      behavioralArtifactsLoading={behavioralArtifactsLoading}
-                      behavioralArtifactUrls={behavioralArtifactUrls}
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
           </DialogContent>
         </Dialog>
 
@@ -3288,218 +3382,6 @@ export default function SubmissionsDashboard() {
           </DialogContent>
         </Dialog>
 
-        {/* Interview Details Modal */}
-        <Dialog open={showInterviewModal} onOpenChange={setShowInterviewModal}>
-          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <MessageSquare className="w-5 h-5" />
-                Interview Details
-                {selectedInterview && (
-                  <span className="text-sm font-normal text-gray-500">
-                    - {selectedInterview.candidateName || "Unknown Candidate"}
-                  </span>
-                )}
-              </DialogTitle>
-              <DialogDescription>
-                View transcript, summary, and metadata for this interview
-              </DialogDescription>
-            </DialogHeader>
-
-            {selectedInterview?.interview ? (
-              <div className="space-y-6 mt-4">
-                {/* Opt-Out Information */}
-                {selectedInterview.optedOut && (
-                  <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
-                    <p className="text-sm font-medium text-orange-900 mb-2">
-                      Candidate Opted Out
-                    </p>
-                    {selectedInterview.startedAt ? (
-                      <p className="text-xs text-orange-800 mb-2 font-semibold">
-                        ⚠️ Opted out after starting the assessment
-                      </p>
-                    ) : (
-                      <p className="text-xs text-orange-800 mb-2 font-semibold">
-                        ℹ️ Opted out before starting the assessment
-                      </p>
-                    )}
-                    {selectedInterview.optOutReason && (
-                      <p className="text-sm text-orange-800 mb-1">
-                        <strong>Reason:</strong>{" "}
-                        {selectedInterview.optOutReason}
-                      </p>
-                    )}
-                    {selectedInterview.optedOutAt && (
-                      <p className="text-xs text-orange-700">
-                        Opted out on: {formatDate(selectedInterview.optedOutAt)}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {/* Interview Status & Metadata */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-sm font-medium text-gray-700 mb-1">
-                      Status
-                    </p>
-                    {getInterviewStatusBadge(selectedInterview.interview)}
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-gray-700 mb-1">
-                      Provider
-                    </p>
-                    <p className="text-sm text-gray-600 capitalize">
-                      {selectedInterview.interview.provider || "—"}
-                    </p>
-                  </div>
-                  {selectedInterview.interview.startedAt && (
-                    <div>
-                      <p className="text-sm font-medium text-gray-700 mb-1">
-                        Started At
-                      </p>
-                      <p className="text-sm text-gray-600">
-                        {formatDate(selectedInterview.interview.startedAt)}
-                      </p>
-                    </div>
-                  )}
-                  {selectedInterview.interview.completedAt && (
-                    <div>
-                      <p className="text-sm font-medium text-gray-700 mb-1">
-                        Completed At
-                      </p>
-                      <p className="text-sm text-gray-600">
-                        {formatDate(selectedInterview.interview.completedAt)}
-                      </p>
-                    </div>
-                  )}
-                  {selectedInterview.interview.conversationId && (
-                    <div className="col-span-2">
-                      <p className="text-sm font-medium text-gray-700 mb-1">
-                        Conversation ID
-                      </p>
-                      <p className="text-sm text-gray-600 font-mono">
-                        {selectedInterview.interview.conversationId}
-                      </p>
-                    </div>
-                  )}
-                </div>
-
-                {/* Summary */}
-                {selectedInterview.interview.summary && (
-                  <div>
-                    <p className="text-sm font-medium text-gray-700 mb-2">
-                      Summary
-                    </p>
-                    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                      <p className="text-sm text-gray-700 whitespace-pre-wrap">
-                        {selectedInterview.interview.summary}
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Transcript */}
-                {selectedInterview.interview.transcript?.turns &&
-                  selectedInterview.interview.transcript.turns.length > 0 && (
-                    <div>
-                      <p className="text-sm font-medium text-gray-700 mb-2">
-                        Transcript (
-                        {selectedInterview.interview.transcript.turns.length}{" "}
-                        turns)
-                      </p>
-                      <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 space-y-4 max-h-96 overflow-y-auto">
-                        {selectedInterview.interview.transcript.turns.map(
-                          (turn, index) => (
-                            <div
-                              key={index}
-                              className={`flex gap-3 ${
-                                turn.role === "agent"
-                                  ? "justify-start"
-                                  : "justify-end"
-                              }`}
-                            >
-                              <div
-                                className={`max-w-[80%] rounded-lg p-3 ${
-                                  turn.role === "agent"
-                                    ? "bg-white border border-gray-200"
-                                    : "bg-[#21201C] text-white"
-                                }`}
-                              >
-                                <p className="text-xs font-medium mb-1 opacity-70">
-                                  {turn.role === "agent"
-                                    ? "Interviewer"
-                                    : "Candidate"}
-                                </p>
-                                <p
-                                  className={`text-sm ${
-                                    turn.role === "agent"
-                                      ? "text-gray-700"
-                                      : "text-white"
-                                  }`}
-                                >
-                                  {turn.text}
-                                </p>
-                                {(turn.startMs !== undefined ||
-                                  turn.endMs !== undefined) && (
-                                  <p className="text-xs opacity-60 mt-1">
-                                    {turn.startMs !== undefined &&
-                                      `${(turn.startMs / 1000).toFixed(1)}s`}
-                                    {turn.startMs !== undefined &&
-                                      turn.endMs !== undefined &&
-                                      " - "}
-                                    {turn.endMs !== undefined &&
-                                      `${(turn.endMs / 1000).toFixed(1)}s`}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          )
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                {/* Error Information */}
-                {selectedInterview.interview.error &&
-                  selectedInterview.interview.error.message && (
-                    <div>
-                      <p className="text-sm font-medium text-red-700 mb-2">
-                        Error
-                      </p>
-                      <div className="bg-red-50 rounded-lg p-4 border border-red-200">
-                        <p className="text-sm text-red-700">
-                          {selectedInterview.interview.error.message}
-                        </p>
-                        {selectedInterview.interview.error.at && (
-                          <p className="text-xs text-red-600 mt-1">
-                            At:{" "}
-                            {formatDate(selectedInterview.interview.error.at)}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                {!selectedInterview.interview.summary &&
-                  (!selectedInterview.interview.transcript?.turns ||
-                    selectedInterview.interview.transcript.turns.length ===
-                      0) && (
-                    <div className="text-center py-8 text-gray-500">
-                      <MessageSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                      <p>No interview data available yet</p>
-                    </div>
-                  )}
-              </div>
-            ) : (
-              <div className="text-center py-8 text-gray-500">
-                <MessageSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                <p>No interview data available</p>
-              </div>
-            )}
-          </DialogContent>
-        </Dialog>
-
         {/* Evaluation Modal */}
         <Dialog
           open={showEvaluationModal}
@@ -3507,42 +3389,626 @@ export default function SubmissionsDashboard() {
             if (!open) {
               setShowEvaluationModal(false);
               setSelectedEvaluationSubmission(null);
+              setRecordingSeekSec(null);
             }
           }}
         >
-          <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <BarChart3 className="w-5 h-5" />
-                Evaluation
-                {selectedEvaluationSubmission && (
-                  <span className="text-sm font-normal text-gray-500">
-                    – {selectedEvaluationSubmission.candidateName ||
-                      "Unknown Candidate"}
-                  </span>
-                )}
-              </DialogTitle>
+          <DialogContent className="max-w-5xl max-h-[92vh] overflow-hidden">
+            <DialogHeader className="pr-8">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <DialogTitle className="truncate">
+                    {selectedEvaluationSubmission?.candidateName ||
+                      "Candidate review"}
+                  </DialogTitle>
+                  <DialogDescription className="truncate">
+                    {selectedEvaluationSubmission?.candidateEmail ||
+                      "No email on file"}
+                  </DialogDescription>
+                </div>
+                {selectedEvaluationSubmission ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm" className="shrink-0">
+                        Actions
+                        <ChevronDown className="ml-2 h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-56">
+                      {selectedEvaluationSubmission.githubLink ? (
+                        <DropdownMenuItem asChild>
+                          <a
+                            href={selectedEvaluationSubmission.githubLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <Eye className="mr-2 h-4 w-4" />
+                            Open GitHub repo
+                          </a>
+                        </DropdownMenuItem>
+                      ) : null}
+                      {selectedEvaluationSubmission.codeSource === "upload" ? (
+                        <DropdownMenuItem
+                          onClick={() =>
+                            handleDownloadCodeArchive(
+                              selectedEvaluationSubmission
+                            )
+                          }
+                        >
+                          <Download className="mr-2 h-4 w-4" />
+                          Download archive
+                        </DropdownMenuItem>
+                      ) : null}
+                      {selectedEvaluationSubmission.status === "submitted" ? (
+                        <DropdownMenuItem
+                          onClick={() =>
+                            handleRunBehavioralGrading(
+                              selectedEvaluationSubmission
+                            )
+                          }
+                          disabled={
+                            behavioralGradingSubmissionId ===
+                            selectedEvaluationSubmission._id
+                          }
+                        >
+                          <Play className="mr-2 h-4 w-4" />
+                          Re-run behavioral grading
+                        </DropdownMenuItem>
+                      ) : null}
+                      {selectedEvaluationSubmission.status === "submitted" ? (
+                        <DropdownMenuItem
+                          onClick={() =>
+                            handleRunEvaluation(selectedEvaluationSubmission)
+                          }
+                          disabled={
+                            evaluatingSubmissionId ===
+                            selectedEvaluationSubmission._id
+                          }
+                        >
+                          <RefreshCw className="mr-2 h-4 w-4" />
+                          Re-run scoring
+                        </DropdownMenuItem>
+                      ) : null}
+                      <DropdownMenuItem
+                        onClick={() =>
+                          openShareModal(selectedEvaluationSubmission)
+                        }
+                      >
+                        <Send className="mr-2 h-4 w-4" />
+                        Share link or email
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        className="text-red-600 focus:text-red-600 focus:bg-red-50"
+                        onClick={() => {
+                          const target = selectedEvaluationSubmission;
+                          setShowEvaluationModal(false);
+                          setSelectedEvaluationSubmission(null);
+                          handleDeleteClick(target);
+                        }}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Delete submission
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null}
+              </div>
             </DialogHeader>
+
+            {/* Scoreboard — stays put across tabs, so the numbers never
+                depend on which section you happen to be looking at. */}
+            {selectedEvaluationSubmission ? (
+              <div className="border-y border-gray-200 -mx-6 px-6 py-3">
+                <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+                  {(() => {
+                    const combined = getCombinedScore0to100(
+                      selectedEvaluationSubmission
+                    );
+                    const breakdown = getCombinedScoreBreakdownParts(
+                      selectedEvaluationSubmission
+                    ).join(" · ");
+                    const processAvg = getRecordingRubricAvg10(
+                      selectedEvaluationSubmission
+                    );
+                    const behPct = getBehavioralPass0to100(
+                      selectedEvaluationSubmission
+                    );
+                    return (
+                      <>
+                        <div>
+                          <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
+                            Combined
+                          </p>
+                          {combined != null ? (
+                            <p className="text-2xl font-medium tracking-[-0.012em] text-gray-900 tabular-nums leading-tight">
+                              {Math.round(combined)}
+                              <span className="text-sm font-medium text-gray-400">
+                                /100
+                              </span>
+                            </p>
+                          ) : evaluationInProgress ||
+                            behavioralGradingInProgress ? (
+                            <ScoringPendingNote className="mt-1">
+                              Scoring…
+                            </ScoringPendingNote>
+                          ) : (
+                            <p className="text-2xl font-medium tracking-[-0.012em] text-gray-900 tabular-nums leading-tight">
+                              —
+                            </p>
+                          )}
+                          {breakdown ? (
+                            <p className="text-[10px] text-gray-500 leading-snug max-w-[16rem]">
+                              {breakdown}
+                            </p>
+                          ) : null}
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
+                            Process
+                          </p>
+                          {processAvg != null ? (
+                            <p className="text-lg font-semibold text-gray-900 tabular-nums leading-tight">
+                              {`${processAvg.toFixed(1)}/10`}
+                            </p>
+                          ) : evaluationInProgress ? (
+                            <ScoringPendingNote className="mt-1">
+                              Scoring…
+                            </ScoringPendingNote>
+                          ) : (
+                            <p className="text-lg font-semibold text-gray-900 tabular-nums leading-tight">
+                              —
+                            </p>
+                          )}
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
+                            Behavioral
+                          </p>
+                          {behPct != null ? (
+                            <p className="text-lg font-semibold text-gray-900 tabular-nums leading-tight">
+                              {`${Math.round(behPct)}%`}
+                            </p>
+                          ) : behavioralGradingInProgress ? (
+                            <ScoringPendingNote className="mt-1">
+                              Scoring…
+                            </ScoringPendingNote>
+                          ) : (
+                            <p className="text-lg font-semibold text-gray-900 tabular-nums leading-tight">
+                              —
+                            </p>
+                          )}
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
+                            Time spent
+                          </p>
+                          <p className="text-lg font-semibold text-gray-900 leading-tight">
+                            {formatTimeSpent(
+                              selectedEvaluationSubmission.timeSpent
+                            )}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 ml-auto">
+                          {getStatusBadge(
+                            selectedEvaluationSubmission.status,
+                            selectedEvaluationSubmission
+                          )}
+                          {selectedEvaluationSubmission.behavioralGradingStatus ? (
+                            <Badge
+                              className={
+                                selectedEvaluationSubmission.behavioralGradingStatus ===
+                                "completed"
+                                  ? "bg-green-100 text-green-700"
+                                  : selectedEvaluationSubmission.behavioralGradingStatus ===
+                                      "failed"
+                                    ? "bg-red-100 text-red-700"
+                                    : "bg-amber-100 text-amber-800"
+                              }
+                            >
+                              Behavioral:{" "}
+                              {
+                                selectedEvaluationSubmission.behavioralGradingStatus
+                              }
+                            </Badge>
+                          ) : null}
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            ) : null}
 
             <Tabs
               value={evaluationTab}
               onValueChange={setEvaluationTab}
-              className="mt-4"
+              className="mt-2"
             >
               <TabsList className="w-full justify-start">
-                <TabsTrigger value="execution">Final code</TabsTrigger>
                 <TabsTrigger
-                  value="recording"
-                  title="Screen recording, transcript, and recording rubric"
+                  value="summary"
+                  title="Scores, rubric verdicts, and what happened in the session"
                 >
-                  Recording & rubric
+                  Summary
                 </TabsTrigger>
-                <TabsTrigger value="agent">Agent communication</TabsTrigger>
+                {recordsScreen ? (
+                  <TabsTrigger
+                    value="recording"
+                    title="Screen recording and captured activity"
+                  >
+                    Recording
+                  </TabsTrigger>
+                ) : null}
+                <TabsTrigger value="execution" title="Behavioral grading and the submitted code">
+                  Code
+                </TabsTrigger>
+                <TabsTrigger
+                  value="agent"
+                  title="In-session voice companion"
+                >
+                  Conversations
+                </TabsTrigger>
               </TabsList>
 
+              <TabsContent value="summary" className="mt-4">
+                <div className="max-h-[58vh] overflow-y-auto pr-1 space-y-4">
+                  <EvidenceIntegrityBanner
+                    report={
+                      selectedEvaluationSubmission?.evaluationReport
+                    }
+                  />
+
+                  {selectedEvaluationSubmission ? (
+                    <BehavioralProductCard
+                      highlights={getBehavioralCheckHighlights(
+                        selectedEvaluationSubmission
+                      )}
+                      onSeeCode={() => setEvaluationTab("execution")}
+                    />
+                  ) : null}
+
+                  {/* Rubric verdicts (when assessment had evaluation criteria) */}
+                  {selectedEvaluationSubmission?.evaluationReport ? (
+                    <div className="space-y-4">
+                      <h3 className="text-sm font-semibold text-gray-900">
+                        Rubric
+                      </h3>
+
+                      {/* Session summary from evaluation report */}
+                      {selectedEvaluationSubmission?.evaluationReport?.session_summary && (
+                        <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+                          <p className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-2">
+                            Session summary
+                          </p>
+                          <p className="text-sm text-gray-700 leading-relaxed">
+                            {selectedEvaluationSubmission.evaluationReport.session_summary}
+                          </p>
+                        </div>
+                      )}
+
+                      {selectedEvaluationSubmission.evaluationReport
+                        .criteria_results?.length > 0 && (
+                        <div>
+                          <p className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-3">
+                            Criteria results
+                          </p>
+                          <div className="space-y-3">
+                            {selectedEvaluationSubmission.evaluationReport.criteria_results.map(
+                              (r, i) => {
+                                const scoreColor =
+                                  r.evaluable
+                                    ? r.score >= 7
+                                      ? "border-l-emerald-500 bg-emerald-50/50"
+                                      : r.score >= 4
+                                        ? "border-l-amber-500 bg-amber-50/50"
+                                        : "border-l-gray-400 bg-gray-50"
+                                    : "border-l-gray-300 bg-gray-50";
+                                const scoreTextColor = r.evaluable
+                                  ? r.score >= 7
+                                    ? "text-emerald-700"
+                                    : r.score >= 4
+                                      ? "text-amber-700"
+                                      : "text-gray-700"
+                                  : "text-gray-500";
+                                return (
+                                <div
+                                  key={i}
+                                  className={`rounded-lg border border-gray-200 border-l-4 p-4 shadow-sm ${scoreColor}`}
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <p className="font-semibold text-gray-900">
+                                      {r.criterion}
+                                    </p>
+                                    <span className={`text-xl font-medium tracking-[-0.012em] tabular-nums shrink-0 ${scoreTextColor}`}>
+                                      {r.evaluable ? `${r.score}` : "—"}/10
+                                    </span>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2 mt-1 mb-2">
+                                    <span className="text-xs text-gray-500">
+                                      Confidence: {r.confidence}
+                                    </span>
+                                    {!r.evaluable && (
+                                      <span className="text-amber-600 text-xs">
+                                        Not evaluable
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-sm text-gray-700 leading-relaxed">
+                                    {r.verdict}
+                                  </p>
+                                  {r.evidence?.length > 0 && (
+                                    <EvidenceMomentChips
+                                      evidence={r.evidence}
+                                      onSeek={
+                                        recordsScreen
+                                          ? handleSeekRecording
+                                          : null
+                                      }
+                                    />
+                                  )}
+                                </div>
+                                );
+                              }
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : evaluationInProgress ? (
+                    <div className="rounded-xl border border-gray-200 bg-white px-4 py-4">
+                      <h3 className="text-sm font-semibold text-gray-900 mb-3">
+                        Rubric
+                      </h3>
+                      <ScoringPendingNote>
+                        Evaluation running… scores and evidence will appear
+                        here.
+                      </ScoringPendingNote>
+                    </div>
+                  ) : null}
+
+                  {/* Spoken reasoning (voice companion): what they said aloud,
+                      claim-checked against the captured timeline. Renders
+                      nothing for reports without a communication section. */}
+                  <CommunicationCard
+                    communication={
+                      selectedEvaluationSubmission?.evaluationReport
+                        ?.communication
+                    }
+                    onSeek={recordsScreen ? handleSeekRecording : null}
+                    pending={
+                      evaluationInProgress &&
+                      (companionLoading ||
+                        (Array.isArray(companionMessages) &&
+                          companionMessages.length > 0))
+                    }
+                  />
+
+                  {/* Workflow capture: the hooks-first evidence path. Present
+                      for workflow/both submissions; absent for screen-only,
+                      where this renders nothing at all. */}
+                  {workflowLoading && !workflowSession ? (
+                    <div className="mb-6 rounded-xl border border-gray-200 bg-white px-4 py-4">
+                      <h4 className="text-sm font-semibold text-gray-900 mb-3">
+                        How they worked
+                      </h4>
+                      <ScoringPendingNote>
+                        Loading captured workflow…
+                      </ScoringPendingNote>
+                    </div>
+                  ) : workflowSession ? (
+                    <div className="mb-6 rounded-xl border border-gray-200 bg-white overflow-hidden">
+                      <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-3">
+                        <h4 className="text-sm font-semibold text-gray-900">
+                          How they worked
+                        </h4>
+                        <span className="text-xs text-gray-500">
+                          {workflowSession.stats?.promptCount ?? 0} prompts ·{" "}
+                          {workflowSession.stats?.toolUseCount ?? 0} tool calls ·{" "}
+                          {workflowSession.stats?.totalEvents ?? 0} events
+                        </span>
+                        {workflowSession.video?.chunks?.length > 0 && (
+                          <a
+                            href={workflowVideoUrl(workflowSession._id)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="ml-auto text-xs font-medium text-blue-600 hover:underline"
+                          >
+                            Open recording
+                          </a>
+                        )}
+                      </div>
+
+                      {workflowLoading && !workflowAnalysis ? (
+                        <div className="flex items-center gap-2 text-sm text-gray-500 px-4 py-4">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Loading captured workflow…
+                        </div>
+                      ) : (
+                        <>
+                          {/* Counted, not judged — the factual floor beside the scores */}
+                          {workflowAnalysis?.metrics && (
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-gray-100 border-b border-gray-100">
+                              {[
+                                [
+                                  "read : edit",
+                                  workflowAnalysis.metrics.readEditRatio == null
+                                    ? "—"
+                                    : `${workflowAnalysis.metrics.readEditRatio} : 1`,
+                                ],
+                                [
+                                  "writes tested",
+                                  workflowAnalysis.metrics.verifiedWriteRatio == null
+                                    ? "—"
+                                    : `${Math.round(workflowAnalysis.metrics.verifiedWriteRatio * 100)}%`,
+                                ],
+                                [
+                                  "low-effort prompts",
+                                  workflowAnalysis.metrics.lowEffortPromptRatio == null
+                                    ? "—"
+                                    : `${Math.round(workflowAnalysis.metrics.lowEffortPromptRatio * 100)}%`,
+                                ],
+                                [
+                                  "code from agent",
+                                  workflowAnalysis.metrics.authorship?.agentShare == null
+                                    ? "—"
+                                    : `${Math.round(workflowAnalysis.metrics.authorship.agentShare * 100)}%`,
+                                ],
+                              ].map(([label, value]) => (
+                                <div key={label} className="bg-white px-3 py-2">
+                                  <div className="text-sm font-semibold text-gray-900">
+                                    {value}
+                                  </div>
+                                  <div className="text-[11px] text-gray-500">{label}</div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* A dash here means "the candidate never did this",
+                              not "we failed to measure it" — three of the four
+                              metrics are ratios over file writes, so a session
+                              where the agent only read and ran commands is all
+                              dashes and looks broken without this line. */}
+                          {workflowAnalysis?.metrics &&
+                          workflowAnalysis.metrics.readEditRatio == null &&
+                          workflowAnalysis.metrics.verifiedWriteRatio == null &&
+                          workflowAnalysis.metrics.authorship?.agentShare ==
+                            null ? (
+                            <p className="px-4 py-2 text-[11px] text-gray-500 border-b border-gray-100">
+                              No file edits were captured in this session — the
+                              agent only read files and ran commands, so the
+                              edit-based ratios have nothing to measure.
+                            </p>
+                          ) : null}
+
+                          {/* Prompting conversation stays here only when there
+                              is no Recording tab (leftover workflow-only).
+                              Under `both` it sits under the player instead. */}
+                          {workflowAnalysis?.timeline?.length > 0 &&
+                          !activityTimelineOnRecording ? (
+                            <WorkflowActivityTimeline
+                              timeline={workflowAnalysis.timeline}
+                              onSeek={null}
+                              className="border-0 border-b border-gray-100 rounded-none"
+                            />
+                          ) : !activityTimelineOnRecording &&
+                            (workflowLoading || evaluationInProgress) ? (
+                            <WorkflowActivityTimeline
+                              timeline={[]}
+                              pending
+                              onSeek={null}
+                              className="border-0 border-b border-gray-100 rounded-none"
+                            />
+                          ) : null}
+
+                          {/* Episodes: the narrative layer a reviewer actually
+                              reads. Persisted on the session when capture ends;
+                              the analysis response only carries them when this
+                              page explicitly asks for them (an LLM call). */}
+                          {episodesForReview.length > 0 ? (
+                            <div className="divide-y divide-gray-100 max-h-[40vh] overflow-y-auto">
+                              {episodesForReview.map((ep) => (
+                                <div key={ep.index} className="px-4 py-3">
+                                  <div className="flex items-baseline gap-2">
+                                    <span className="text-xs text-gray-400 tabular-nums">
+                                      {ep.index}
+                                    </span>
+                                    <span className="text-sm font-medium text-gray-900">
+                                      {ep.label}
+                                    </span>
+                                    <span className="text-[10px] uppercase tracking-wide text-gray-500 border border-gray-200 rounded-full px-2 py-0.5">
+                                      {ep.kind}
+                                    </span>
+                                    <span className="ml-auto text-xs text-gray-400 tabular-nums">
+                                      {Math.floor(ep.startSeconds / 60)}:
+                                      {String(Math.floor(ep.startSeconds % 60)).padStart(2, "0")}
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-gray-600 mt-1 pl-6">
+                                    {ep.summary}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          ) : evaluationInProgress || workflowLoading ? (
+                            <div className="px-4 py-4">
+                              <ScoringPendingNote>
+                                Building episode summary…
+                              </ScoringPendingNote>
+                            </div>
+                          ) : (
+                            <div className="px-4 py-4 space-y-2">
+                              <p className="text-sm text-gray-500">
+                                {workflowSession.status === "completed"
+                                  ? "No episode summary has been built for this session yet."
+                                  : "This capture session was never closed, so its episode summary was not built automatically."}
+                              </p>
+                              {(workflowSession.stats?.totalEvents ?? 0) > 0 ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={handleBuildEpisodes}
+                                  disabled={episodesBuilding}
+                                >
+                                  {episodesBuilding ? (
+                                    <>
+                                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                      Building…
+                                    </>
+                                  ) : (
+                                    "Build episode summary"
+                                  )}
+                                </Button>
+                              ) : null}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  ) : null}
+
+                  {!selectedEvaluationSubmission?.evaluationReport &&
+                  !evaluationInProgress &&
+                  selectedEvaluationSubmission ? (
+                    <div className="py-8 text-center">
+                      <BarChart3 className="w-12 h-12 mx-auto mb-2 text-gray-400" />
+                      <p className="text-gray-500 mb-3">
+                        No rubric scores for this candidate yet.
+                      </p>
+                      {selectedEvaluationSubmission.evaluationError && (
+                        <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4 max-w-md mx-auto">
+                          {selectedEvaluationSubmission.evaluationError}
+                        </p>
+                      )}
+                      {!selectedEvaluationSubmission.evaluationError && (
+                        <p className="text-xs text-gray-400 mb-4">
+                          Scoring starts automatically after submit. If it
+                          has not appeared yet, it may still be running.
+                        </p>
+                      )}
+                      <Button
+                        onClick={() =>
+                          handleRunEvaluation(selectedEvaluationSubmission)
+                        }
+                        disabled={
+                          evaluatingSubmissionId ===
+                          selectedEvaluationSubmission?._id
+                        }
+                      >
+                        {evaluatingSubmissionId ===
+                        selectedEvaluationSubmission?._id
+                          ? "Running…"
+                          : "Run scoring"}
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              </TabsContent>
+
               <TabsContent value="execution" className="mt-4">
-                <div className="max-h-[70vh] overflow-y-auto pr-1 space-y-4">
-                  {/* Final code (demo: visuals only; real pipeline coming soon) */}
+                <div className="max-h-[58vh] overflow-y-auto pr-1 space-y-4">
+                  {/* Submitted code + sandbox behavioral checks */}
                   {selectedEvaluationSubmission?.githubLink ||
                   selectedEvaluationSubmission?.codeSource === "upload" ? (
                     <div className="space-y-4">
@@ -3658,6 +4124,15 @@ export default function SubmissionsDashboard() {
                                 }
                               />
                             </div>
+                            {selectedEvaluationSubmission
+                              ?.behavioralGradingReport?.runbook?.summary ? (
+                              <p className="mt-2 text-[11px] text-gray-500 leading-snug max-w-xl">
+                                {
+                                  selectedEvaluationSubmission
+                                    .behavioralGradingReport.runbook.summary
+                                }
+                              </p>
+                            ) : null}
                           </div>
                           <div className="flex items-center gap-2">
                             <CopyBehavioralReportButton
@@ -3777,82 +4252,6 @@ export default function SubmissionsDashboard() {
                         )}
                       </div>
 
-                      {/* Combined + behavioral summary */}
-                      {(() => {
-                        const combinedModal =
-                          getCombinedScore0to100(selectedEvaluationSubmission);
-                        const combinedModalBreakdown =
-                          getCombinedScoreBreakdownParts(
-                            selectedEvaluationSubmission
-                          ).join(" · ");
-                        const behCases =
-                          selectedEvaluationSubmission?.behavioralGradingReport
-                            ?.cases;
-                        const behPassPct =
-                          getBehavioralPass0to100(selectedEvaluationSubmission);
-                        const screenAvg = getRecordingRubricAvg10(
-                          selectedEvaluationSubmission
-                        );
-
-                        return (
-                          <>
-                            {combinedModal != null && (
-                              <div className="rounded-lg border border-gray-200 bg-white p-3 mb-3">
-                                <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
-                                  Combined score
-                                </p>
-                                <p className="text-2xl font-medium tracking-[-0.012em] text-gray-900 tabular-nums">
-                                  {Math.round(combinedModal)}
-                                </p>
-                                {combinedModalBreakdown ? (
-                                  <p className="text-[11px] text-gray-500 mt-1 leading-snug">
-                                    {combinedModalBreakdown}
-                                  </p>
-                                ) : null}
-                              </div>
-                            )}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                                <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
-                                  Screen
-                                </p>
-                                <p className="text-lg font-semibold text-gray-900">
-                                  {screenAvg != null
-                                    ? `${screenAvg.toFixed(1)}/10`
-                                    : "—"}
-                                </p>
-                                {screenAvg == null ? (
-                                  <p className="text-[11px] text-gray-500 mt-1 leading-snug">
-                                    Recording rubric not available yet.
-                                  </p>
-                                ) : null}
-                              </div>
-                              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                                <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
-                                  Behavioral
-                                </p>
-                                <p className="text-lg font-semibold text-gray-900">
-                                  {behPassPct != null
-                                    ? `${Math.round(behPassPct)}%`
-                                    : "—"}
-                                </p>
-                                {Array.isArray(behCases) &&
-                                behCases.length > 0 ? (
-                                  <p className="text-[11px] text-gray-500 mt-1 leading-snug">
-                                    {behCases.length} checks
-                                  </p>
-                                ) : selectedEvaluationSubmission?.behavioralGradingStatus ===
-                                  "pending" ? (
-                                  <p className="text-[11px] text-gray-500 mt-1 leading-snug">
-                                    Grading in progress
-                                  </p>
-                                ) : null}
-                              </div>
-                            </div>
-                          </>
-                        );
-                      })()}
-
                       {/* Pipeline steps from real grading status */}
                       <div className="rounded-lg border border-gray-200 bg-white p-3">
                         <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-2">
@@ -3918,7 +4317,9 @@ export default function SubmissionsDashboard() {
                               selectedEvaluationSubmission?.behavioralGradingReport
                                 ?.runbook?.evidence || [];
                             if (!entries.length) {
-                              return "No behavioral execution logs available yet.";
+                              return behavioralGradingInProgress
+                                ? "Behavioral grading is still running…"
+                                : "No behavioral execution logs available yet.";
                             }
 
                             return entries
@@ -3973,19 +4374,21 @@ export default function SubmissionsDashboard() {
               </TabsContent>
 
               <TabsContent value="recording" className="mt-4">
-                <div className="max-h-[70vh] overflow-y-auto pr-1 space-y-4">
+                <div className="max-h-[58vh] overflow-y-auto pr-1 space-y-4">
                   {/* Screen recording — available once session completes / merged */}
                   {selectedEvaluationSubmission &&
-                  recordingSession &&
-                  (selectedEvaluationSubmission.evaluationReport ||
-                    recordingSession.status === "completed" ||
-                    recordingSession.mergedVideo?.status === "ready" ||
-                    recordingSession.mergedVideo?.status === "merging") ? (
+                  (recordingVideoObjectUrl ||
+                    (recordingSession &&
+                      (selectedEvaluationSubmission.evaluationReport ||
+                        recordingSession.status === "completed" ||
+                        recordingSession.mergedVideo?.status === "ready" ||
+                        recordingSession.mergedVideo?.status ===
+                          "merging"))) ? (
                     <div className="space-y-3">
                       <h3 className="text-sm font-semibold text-gray-900">
                         Screen recording
                       </h3>
-                      {recordingSession.mergedVideo?.status === "merging" ? (
+                      {recordingSession?.mergedVideo?.status === "merging" ? (
                         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-900">
                           Preparing recording… This may take a minute. You can
                           refresh this tab or come back shortly.
@@ -4050,7 +4453,8 @@ export default function SubmissionsDashboard() {
                                     : undefined;
                             return (
                               <div className="mb-2 space-y-1">
-                                {recordingVideoLoading ? (
+                                {recordingVideoLoading &&
+                                !recordingVideoObjectUrl ? (
                                   <div className="rounded-xl border border-gray-200 bg-gray-50 overflow-hidden w-full">
                                     <div className="relative aspect-video bg-gray-900 flex flex-col items-center justify-center gap-3">
                                       <Loader2
@@ -4066,11 +4470,15 @@ export default function SubmissionsDashboard() {
                                   <VideoTimelineWithCriteria
                                     key={
                                       selectedEvaluationSubmission._id ??
-                                      recordingSession._id
+                                      recordingSession?._id
                                     }
                                     highlights={highlights}
                                     videoUrl={recordingVideoObjectUrl ?? null}
                                     durationHintSec={durationHintSec}
+                                    seekToSec={recordingSeekSec?.sec ?? null}
+                                    seekNonce={recordingSeekSec?.at ?? null}
+                                    onPlaybackError={handleRecordingPlaybackError}
+                                    highlightsPending={evaluationInProgress}
                                     className="w-full"
                                   />
                                 )}
@@ -4081,186 +4489,63 @@ export default function SubmissionsDashboard() {
                             {recordingVideoObjectUrl && recordingSession ? (
                               <button
                                 type="button"
-                                onClick={() =>
-                                  downloadProctoringVideo(recordingSession._id)
-                                }
+                                onClick={async () => {
+                                  if (!currentUser) return;
+                                  const token = await currentUser.getIdToken();
+                                  downloadProctoringVideo(
+                                    recordingSession._id,
+                                    token
+                                  );
+                                }}
                                 className="text-[#21201C] hover:underline"
                               >
                                 Download recording
                               </button>
                             ) : null}
                           </p>
-                          <p className="text-xs text-gray-500 pt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
-                            <Link
-                              to="/DemoReplay"
-                              className="text-[#21201C] hover:underline"
-                            >
-                              Timeline demo with sample video
-                            </Link>
-                          </p>
                         </>
                       )}
                     </div>
-                  ) : null}
-
-                  {/* Workflow evaluation (when assessment had evaluation criteria) */}
-                  {selectedEvaluationSubmission?.evaluationReport ? (
-                    <div className="space-y-4">
-                      <h3 className="text-sm font-semibold text-gray-900">
-                        Workflow evaluation
-                      </h3>
-
-                      {/* Overall score only */}
-                      {(() => {
-                        const report =
-                          selectedEvaluationSubmission.evaluationReport;
-                        const criteriaResults = report.criteria_results ?? [];
-                        const evaluable = criteriaResults.filter(
-                          (r) => r.evaluable
-                        );
-                        const overall =
-                          evaluable.length > 0
-                            ? evaluable.reduce((s, r) => s + r.score, 0) /
-                              evaluable.length
-                            : null;
-                        const scoreColor =
-                          overall != null
-                            ? overall >= 7
-                              ? "text-emerald-600"
-                              : overall >= 4
-                                ? "text-amber-600"
-                                : "text-gray-700"
-                            : "text-gray-500";
-                        if (evaluable.length === 0) return null;
-                        return (
-                          <div className="rounded-xl border-2 border-gray-200 bg-white px-4 py-3 shadow-sm">
-                            <p className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
-                              Overall score
-                            </p>
-                            <p className={`text-2xl font-medium tracking-[-0.012em] tabular-nums ${scoreColor}`}>
-                              {overall != null
-                                ? (Math.round(overall * 10) / 10).toFixed(1)
-                                : "—"}
-                              /10
-                            </p>
-                          </div>
-                        );
-                      })()}
-
-                      {/* Session summary from evaluation report */}
-                      {selectedEvaluationSubmission?.evaluationReport?.session_summary && (
-                        <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
-                          <p className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-2">
-                            Session summary
-                          </p>
-                          <p className="text-sm text-gray-700 leading-relaxed">
-                            {selectedEvaluationSubmission.evaluationReport.session_summary}
-                          </p>
-                        </div>
-                      )}
-
-                      {selectedEvaluationSubmission.evaluationReport
-                        .criteria_results?.length > 0 && (
-                        <div>
-                          <p className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-3">
-                            Criteria results
-                          </p>
-                          <div className="space-y-3">
-                            {selectedEvaluationSubmission.evaluationReport.criteria_results.map(
-                              (r, i) => {
-                                const scoreColor =
-                                  r.evaluable
-                                    ? r.score >= 7
-                                      ? "border-l-emerald-500 bg-emerald-50/50"
-                                      : r.score >= 4
-                                        ? "border-l-amber-500 bg-amber-50/50"
-                                        : "border-l-gray-400 bg-gray-50"
-                                    : "border-l-gray-300 bg-gray-50";
-                                const scoreTextColor = r.evaluable
-                                  ? r.score >= 7
-                                    ? "text-emerald-700"
-                                    : r.score >= 4
-                                      ? "text-amber-700"
-                                      : "text-gray-700"
-                                  : "text-gray-500";
-                                return (
-                                <div
-                                  key={i}
-                                  className={`rounded-lg border border-gray-200 border-l-4 p-4 shadow-sm ${scoreColor}`}
-                                >
-                                  <div className="flex items-start justify-between gap-3">
-                                    <p className="font-semibold text-gray-900">
-                                      {r.criterion}
-                                    </p>
-                                    <span className={`text-xl font-medium tracking-[-0.012em] tabular-nums shrink-0 ${scoreTextColor}`}>
-                                      {r.evaluable ? `${r.score}` : "—"}/10
-                                    </span>
-                                  </div>
-                                  <div className="flex flex-wrap gap-2 mt-1 mb-2">
-                                    <span className="text-xs text-gray-500">
-                                      Confidence: {r.confidence}
-                                    </span>
-                                    {!r.evaluable && (
-                                      <span className="text-amber-600 text-xs">
-                                        Not evaluable
-                                      </span>
-                                    )}
-                                  </div>
-                                  <p className="text-sm text-gray-700 leading-relaxed">
-                                    {r.verdict}
-                                  </p>
-                                  {r.evidence?.length > 0 && (
-                                    <div className="mt-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setExpandedEvidenceCriteria(
-                                            (prev) => {
-                                              const next = new Set(prev);
-                                              if (next.has(i)) next.delete(i);
-                                              else next.add(i);
-                                              return next;
-                                            }
-                                          );
-                                        }}
-                                        className="text-[#21201C] hover:underline text-xs font-medium"
-                                      >
-                                        Evidence: {r.evidence.length} moment(s){" "}
-                                        {expandedEvidenceCriteria.has(i)
-                                          ? "▼"
-                                          : "▶"}
-                                      </button>
-                                      {expandedEvidenceCriteria.has(i) && (
-                                        <ul className="mt-2 space-y-2 pl-3 border-l-2 border-gray-200">
-                                          {r.evidence.map((ev, evIdx) => (
-                                            <li
-                                              key={evIdx}
-                                              className="text-xs text-gray-700"
-                                            >
-                                              <span className="text-gray-500 font-medium">
-                                                {ev.ts}s–{ev.ts_end}s
-                                              </span>
-                                              <p className="mt-0.5 text-gray-600">
-                                                {ev.observation}
-                                              </p>
-                                            </li>
-                                          ))}
-                                        </ul>
-                                      )}
-                                    </div>
-                                  )}
-                                </div>
-                                );
-                              }
-                            )}
-                          </div>
-                        </div>
-                      )}
+                  ) : recordingTranscriptLoading || recordingVideoLoading ? (
+                    <div className="flex items-center justify-center gap-2 text-sm text-gray-500 py-10">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Loading recording…
                     </div>
+                  ) : (
+                    <div className="py-10 text-center">
+                      <Camera className="w-12 h-12 mx-auto mb-2 text-gray-400" />
+                      <p className="text-gray-600 text-sm">
+                        No screen recording for this candidate.
+                      </p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Recording appears here when the candidate consented
+                        to share their screen.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Under `both` this is the prompting conversation +
+                      screen beats — click a line to seek. Not on Summary. */}
+                  {activityTimelineOnRecording &&
+                  workflowAnalysis?.timeline?.length > 0 ? (
+                    <WorkflowActivityTimeline
+                      timeline={workflowAnalysis.timeline}
+                      onSeek={handleSeekRecording}
+                    />
+                  ) : activityTimelineOnRecording &&
+                    (workflowLoading ||
+                      (evaluationInProgress && workflowSession)) ? (
+                    <WorkflowActivityTimeline
+                      timeline={[]}
+                      pending
+                      onSeek={handleSeekRecording}
+                    />
                   ) : null}
 
-                  {/* Screen transcript: human-readable enriched (stateful chunked) when available, else raw OCR */}
-                  {selectedEvaluationSubmission && (
+                  {/* Leftover `screen` assessments still have a video OCR
+                      transcript. Current modes never generate one. */}
+                  {evidenceModeForReview === "screen" &&
+                    selectedEvaluationSubmission && (
                     <div className="space-y-3">
                       <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
                         <FileText className="w-4 h-4 text-[#21201C]" />
@@ -4282,9 +4567,16 @@ export default function SubmissionsDashboard() {
                           No proctoring session for this submission.
                         </p>
                       ) : recordingSession.transcript?.status !== "completed" ? (
-                        <p className="text-sm text-gray-500">
-                          Screen transcript not available yet.
-                        </p>
+                        evaluationInProgress ||
+                        recordingSession.transcript?.status === "generating" ? (
+                          <ScoringPendingNote className="py-4">
+                            Screen transcript is still being generated…
+                          </ScoringPendingNote>
+                        ) : (
+                          <p className="text-sm text-gray-500">
+                            Screen transcript not available yet.
+                          </p>
+                        )
                       ) : Array.isArray(recordingTranscript) && recordingTranscript.length > 0 ? (
                         <div className="bg-gray-50 rounded-lg border border-gray-200 p-3 max-h-[40vh] overflow-y-auto space-y-2">
                           <p className="text-xs text-gray-500 mb-2">Raw transcript (human-readable summary not yet generated)</p>
@@ -4312,172 +4604,121 @@ export default function SubmissionsDashboard() {
                       )}
                     </div>
                   )}
-
-                  {!selectedEvaluationSubmission?.evaluationReport && selectedEvaluationSubmission ? (
-                    <div className="py-8 text-center">
-                      <BarChart3 className="w-12 h-12 mx-auto mb-2 text-gray-400" />
-                      <p className="text-gray-500 mb-3">
-                        No recording evaluation data for this submission.
-                      </p>
-                      {selectedEvaluationSubmission.evaluationError && (
-                        <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4 max-w-md mx-auto">
-                          {selectedEvaluationSubmission.evaluationError}
-                        </p>
-                      )}
-                      {!selectedEvaluationSubmission.evaluationError && (
-                        <p className="text-xs text-gray-400 mb-4">
-                          Evaluation runs automatically after submit when the
-                          assessment has evaluation criteria and the candidate
-                          used proctoring. You can run it manually below if
-                          needed.
-                        </p>
-                      )}
-                      <Button
-                        onClick={async () => {
-                          if (!currentUser || !selectedEvaluationSubmission)
-                            return;
-                          setEvaluatingSubmissionId(
-                            selectedEvaluationSubmission._id
-                          );
-                          try {
-                            const token = await currentUser.getIdToken();
-                            const result = await runSubmissionEvaluation(
-                              selectedEvaluationSubmission._id,
-                              token
-                            );
-                            if (result.success) {
-                              const submissionsResult =
-                                await getSubmissionsForAssessment(
-                                  assessmentId,
-                                  token
-                                );
-                              if (submissionsResult.success) {
-                                setSubmissions(submissionsResult.data || []);
-                                const updated = submissionsResult.data?.find(
-                                  (s) =>
-                                    s._id === selectedEvaluationSubmission._id
-                                );
-                                if (updated)
-                                  setSelectedEvaluationSubmission(updated);
-                                toast({
-                                  title: "Evaluation complete",
-                                  description:
-                                    "Recording evaluation has been updated.",
-                                });
-                              }
-                            } else {
-                              const errMsg =
-                                "error" in result
-                                  ? result.error
-                                  : "Evaluation failed";
-                              toast({
-                                title: "Evaluation failed",
-                                description: errMsg,
-                                variant: "destructive",
-                              });
-                            }
-                          } catch (err) {
-                            toast({
-                              title: "Evaluation failed",
-                              description:
-                                err?.message || "An unexpected error occurred.",
-                              variant: "destructive",
-                            });
-                          } finally {
-                            setEvaluatingSubmissionId(null);
-                          }
-                        }}
-                        disabled={
-                          evaluatingSubmissionId ===
-                          selectedEvaluationSubmission?._id
-                        }
-                      >
-                        {evaluatingSubmissionId ===
-                        selectedEvaluationSubmission?._id
-                          ? "Running…"
-                          : "Run recording evaluation"}
-                      </Button>
-                    </div>
-                  ) : null}
                 </div>
               </TabsContent>
 
               <TabsContent value="agent" className="mt-4">
-                <div className="max-h-[70vh] overflow-y-auto pr-1 space-y-4">
-                  {selectedEvaluationSubmission?.interview?.transcript?.turns?.length > 0 ? (
-                    <div className="space-y-4">
-                      <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-                        <MessageSquare className="w-4 h-4 text-[#21201C]" />
-                        Agent communication
-                      </h3>
-                      <p className="text-xs text-gray-500">
-                        Legacy agent transcript (if this submission included a recorded session).
-                      </p>
+                <div className="max-h-[58vh] overflow-y-auto pr-1 space-y-6">
+                  {(() => {
+                    const hasCompanion =
+                      Array.isArray(companionMessages) &&
+                      companionMessages.length > 0;
+                    const optedOut = Boolean(
+                      selectedEvaluationSubmission?.optedOut
+                    );
 
-                      {/* Communication summary & score */}
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 sm:col-span-2">
-                          <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-1.5">Summary</p>
-                          <p className="text-sm text-gray-700">
-                            {selectedEvaluationSubmission.interview.summary || "No summary generated yet."}
+                    if (companionLoading) {
+                      return (
+                        <div className="flex items-center gap-2 text-sm text-gray-500 py-10 justify-center">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Loading conversations…
+                        </div>
+                      );
+                    }
+
+                    if (!hasCompanion && !optedOut) {
+                      return (
+                        <div className="py-10 text-center">
+                          <MessageSquare className="w-12 h-12 mx-auto mb-2 text-gray-400" />
+                          <p className="text-gray-600 text-sm">
+                            No conversations for this submission.
+                          </p>
+                          <p className="text-xs text-gray-400 mt-1">
+                            Nothing was recorded from the in-session voice
+                            companion.
                           </p>
                         </div>
-                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                          <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-1">Communication score</p>
-                          <p className="text-lg font-semibold text-emerald-600">
-                            {selectedEvaluationSubmission.interview.analysis?.communicationScore != null
-                              ? `${selectedEvaluationSubmission.interview.analysis.communicationScore}/10`
-                              : "—"}
-                          </p>
-                        </div>
-                      </div>
+                      );
+                    }
 
-                      {/* Transcript */}
-                      <div>
-                        <p className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em] mb-2">
-                          Transcript ({selectedEvaluationSubmission.interview.transcript.turns.length} turns)
-                        </p>
-                        <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 space-y-4 max-h-[50vh] overflow-y-auto">
-                          {selectedEvaluationSubmission.interview.transcript.turns.map((turn, index) => (
-                            <div
-                              key={index}
-                              className={`flex gap-3 ${turn.role === "agent" ? "justify-start" : "justify-end"}`}
+                    const bubble = (role, text, key) => {
+                      const isAgent =
+                        role === "agent" ||
+                        role === "assistant" ||
+                        role === "companion";
+                      return (
+                        <div
+                          key={key}
+                          className={`flex gap-3 ${isAgent ? "justify-start" : "justify-end"}`}
+                        >
+                          <div
+                            className={`max-w-[85%] rounded-lg p-3 ${
+                              isAgent
+                                ? "bg-white border border-gray-200"
+                                : "bg-[#21201C] text-white"
+                            }`}
+                          >
+                            <p className="text-xs font-medium mb-1 opacity-70">
+                              {isAgent ? "Agent" : "Candidate"}
+                            </p>
+                            <p
+                              className={
+                                isAgent
+                                  ? "text-sm text-gray-700 whitespace-pre-wrap"
+                                  : "text-sm text-white whitespace-pre-wrap"
+                              }
                             >
-                              <div
-                                className={`max-w-[85%] rounded-lg p-3 ${
-                                  turn.role === "agent"
-                                    ? "bg-white border border-gray-200"
-                                    : "bg-[#21201C] text-white"
-                                }`}
-                              >
-                                <p className="text-xs font-medium mb-1 opacity-70">
-                                  {turn.role === "agent" ? "Agent" : "Candidate"}
-                                </p>
-                                <p className={turn.role === "agent" ? "text-sm text-gray-700" : "text-sm text-white"}>
-                                  {turn.text}
-                                </p>
-                                {(turn.startMs != null || turn.endMs != null) && (
-                                  <p className="text-xs opacity-60 mt-1">
-                                    {turn.startMs != null && `${(turn.startMs / 1000).toFixed(1)}s`}
-                                    {turn.startMs != null && turn.endMs != null && " – "}
-                                    {turn.endMs != null && `${(turn.endMs / 1000).toFixed(1)}s`}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          ))}
+                              {text}
+                            </p>
+                          </div>
                         </div>
+                      );
+                    };
+
+                    return (
+                      <div className="space-y-6">
+                        {optedOut && (
+                          <div className="rounded-lg border border-orange-200 bg-orange-50 p-4">
+                            <p className="text-sm font-medium text-orange-900">
+                              Candidate opted out
+                              {selectedEvaluationSubmission.startedAt
+                                ? " after starting the assessment"
+                                : " before starting the assessment"}
+                            </p>
+                            {selectedEvaluationSubmission.optOutReason && (
+                              <p className="text-sm text-orange-800 mt-1">
+                                {selectedEvaluationSubmission.optOutReason}
+                              </p>
+                            )}
+                            {selectedEvaluationSubmission.optedOutAt && (
+                              <p className="text-xs text-orange-700 mt-1">
+                                {formatDate(
+                                  selectedEvaluationSubmission.optedOutAt
+                                )}
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        {hasCompanion && (
+                          <div className="space-y-3">
+                            <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                              <MessageSquare className="w-4 h-4 text-[#21201C]" />
+                              In-session voice companion
+                            </h3>
+                            <p className="text-xs text-gray-500">
+                              What the candidate said out loud while working.
+                            </p>
+                            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 space-y-3">
+                              {companionMessages.map((msg, index) =>
+                                bubble(msg.role, msg.text, `c-${index}`)
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  ) : (
-                    <div className="py-10 text-center">
-                      <MessageSquare className="w-12 h-12 mx-auto mb-2 text-gray-400" />
-                      <p className="text-gray-600 text-sm">No agent communication for this submission.</p>
-                      <p className="text-xs text-gray-400 mt-1">
-                        Nothing recorded for this submission, or no legacy transcript is stored.
-                      </p>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
               </TabsContent>
             </Tabs>

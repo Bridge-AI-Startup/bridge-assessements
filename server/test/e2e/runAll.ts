@@ -55,20 +55,6 @@ function seedExternalFixes(processes: ProcessResult[]): Recommendation[] {
   for (const p of processes) {
     if (p.recommendation) fixes.push(p.recommendation);
   }
-  // ElevenLabs voice interview cannot be fully automated (needs a live mic/agent).
-  fixes.push({
-    id: "p6-elevenlabs-voice",
-    severity: "minor",
-    process: "P6",
-    issue:
-      "The live ElevenLabs voice interview cannot be driven headlessly (needs a real microphone + agent session).",
-    rootCause:
-      "Voice interview is browser/mic-driven; only the post-call webhook path is automatable.",
-    recommendedFix:
-      "Verify the post-call pipeline by POSTing a signed sample payload to /webhooks/elevenlabs (see TESTING_WEBHOOK.md / test-webhook.js); for full coverage, do one manual voice run in staging.",
-    files: ["server/test-webhook.js", "TESTING_WEBHOOK.md", "server/src/controllers/webhook.ts"],
-    effort: "small",
-  });
   return fixes;
 }
 

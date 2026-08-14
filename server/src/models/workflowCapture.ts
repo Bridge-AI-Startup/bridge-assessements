@@ -20,7 +20,9 @@ export type WorkflowEventType =
   | "tool_result"
   | "assistant_message"
   | "session_end"
-  | "notification";
+  | "notification"
+  /** What was visible on screen — derived from the recording, not the hooks. */
+  | "screen_context";
 
 export interface IWorkflowCaptureSession extends Document {
   _id: Types.ObjectId;
@@ -80,6 +82,14 @@ export interface IWorkflowCaptureSession extends Document {
     mergedSizeBytes?: number;
     error?: string | null;
   };
+  /**
+   * Narrative segmentation of the session, computed once when capture ends.
+   * Persisted rather than derived per request because it costs an LLM call —
+   * recomputing on every dashboard poll would be both slow and expensive.
+   */
+  /** Shape produced by `groupIntoEpisodes`; stored Mixed (see schema note). */
+  episodes?: Array<Record<string, unknown>>;
+  episodesComputedAt?: Date | null;
   /** Environment facts the kit reports once, for context in review. */
   environment?: {
     cwd?: string | null;
@@ -154,6 +164,14 @@ const workflowCaptureSessionSchema = new Schema<IWorkflowCaptureSession>(
       mergedSizeBytes: { type: Number, default: 0 },
       error: { type: String, default: null },
     },
+    // Mixed: the shape is produced and validated by groupIntoEpisodes (which
+    // drops anything without usable evidence indices), and a nested subdocument
+    // array here buys nothing but a fight with Mongoose's generics.
+    episodes: {
+      type: Schema.Types.Mixed,
+      default: () => [],
+    },
+    episodesComputedAt: { type: Date, default: null },
     environment: {
       cwd: { type: String, default: null },
       gitBranch: { type: String, default: null },
@@ -203,6 +221,7 @@ const workflowEventSchema = new Schema<IWorkflowEvent>({
       "assistant_message",
       "session_end",
       "notification",
+      "screen_context",
     ],
     required: true,
   },
@@ -228,8 +247,9 @@ workflowEventSchema.index({ sessionId: 1, at: 1 });
  *
  * The event stream is the history; this is the "what does the project look like
  * right now" view the interviewer agent needs without replaying every edit.
- * Updated from Write/Edit tool events and from the kit's periodic git snapshot
- * (which also catches files the candidate edited by hand, outside the agent).
+ * Updated from Write/Read/Edit tool events (full contents, never an empty
+ * Edit stub) and from the kit's periodic snapshot (git when available, else a
+ * bounded project walk — unzipped starters often have no repo).
  */
 export interface IWorkflowFileState extends Document {
   sessionId: Types.ObjectId;
@@ -238,7 +258,7 @@ export interface IWorkflowFileState extends Document {
   /** Set when content exceeded the per-file cap; `content` holds the head. */
   truncated: boolean;
   sizeBytes: number;
-  /** "agent" = seen via a Write/Edit tool call; "snapshot" = git/file scan. */
+  /** "agent" = Write/Read/Edit result contents; "snapshot" = kit file scan. */
   origin: "agent" | "snapshot";
   revision: number;
   updatedAt: Date;

@@ -3,17 +3,38 @@ import { motion } from "framer-motion";
 import { AlertTriangle, Monitor, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+const OPTIONAL_DEFAULTS = {
+  title: "Screen Share Lost",
+  subtitle: "Your screen recording has stopped.",
+  body: "It looks like screen sharing was stopped. You can reshare your screen to continue recording, or dismiss this and continue without recording.",
+};
+
+const REQUIRED_DEFAULTS = {
+  title: "Reshare your entire screen",
+  subtitle: "Screen sharing is required for this assessment.",
+  body: "Choose Entire Screen (your full display) again — not a window or a browser tab. You cannot continue without sharing.",
+};
+
 /**
  * Modal shown when screen share stream is lost or after reload (resume).
  * Prompts user to reshare their screen.
+ *
+ * When `required` is true (employer requires screen recording), the prompt
+ * cannot be dismissed — only reshare. ProctoringTest and other optional
+ * flows keep Continue Without via `required={false}` (the default).
  */
 export default function ResharePrompt({
   onReshare,
   onDismiss,
-  title = "Screen Share Lost",
-  subtitle = "Your screen recording has stopped.",
-  body = "It looks like screen sharing was stopped. You can reshare your screen to continue recording, or dismiss this and continue without recording.",
+  required = false,
+  allowContinueWithout,
+  title,
+  subtitle,
+  body,
 }) {
+  const canContinueWithout =
+    allowContinueWithout ?? (!required && typeof onDismiss === "function");
+  const defaults = required ? REQUIRED_DEFAULTS : OPTIONAL_DEFAULTS;
   const [isResharing, setIsResharing] = useState(false);
 
   const handleReshare = async () => {
@@ -37,12 +58,16 @@ export default function ResharePrompt({
             <AlertTriangle className="w-5 h-5 text-yellow-600" />
           </div>
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
-            <p className="text-sm text-gray-500">{subtitle}</p>
+            <h2 className="text-lg font-semibold text-gray-900">
+              {title ?? defaults.title}
+            </h2>
+            <p className="text-sm text-gray-500">
+              {subtitle ?? defaults.subtitle}
+            </p>
           </div>
         </div>
 
-        <p className="text-sm text-gray-600 mb-4">{body}</p>
+        <p className="text-sm text-gray-600 mb-4">{body ?? defaults.body}</p>
 
         <div className="mb-6 p-3 rounded-lg border border-amber-200 bg-amber-50 text-sm text-amber-950">
           <strong className="font-semibold">Eligibility:</strong> When the share
@@ -59,10 +84,12 @@ export default function ResharePrompt({
             <RefreshCw className={`w-4 h-4 mr-2 ${isResharing ? "animate-spin" : ""}`} />
             {isResharing ? "Resharing..." : "Reshare Screen"}
           </Button>
-          <Button variant="outline" onClick={onDismiss} className="flex-1">
-            <Monitor className="w-4 h-4 mr-2" />
-            Continue Without
-          </Button>
+          {canContinueWithout && (
+            <Button variant="outline" onClick={onDismiss} className="flex-1">
+              <Monitor className="w-4 h-4 mr-2" />
+              Continue Without
+            </Button>
+          )}
         </div>
       </motion.div>
     </div>

@@ -119,29 +119,3 @@ export async function directIndexRepo(submissionId: string) {
   return indexSubmissionRepo(submissionId);
 }
 
-/** RAG interview-question generation via the service layer. */
-export async function directGenerateInterview(submissionId: string) {
-  await connectMongoose();
-  const submission = await SubmissionModel.findById(submissionId).populate(
-    "assessmentId"
-  );
-  if (!submission) throw new Error("submission not found");
-  const assessment = submission.assessmentId as any;
-  const { generateInterviewQuestionsFromRetrieval } = await import(
-    "../../../src/services/interviewGeneration.js"
-  );
-  const result = await generateInterviewQuestionsFromRetrieval(
-    submissionId,
-    assessment.description,
-    assessment.numInterviewQuestions ?? 2,
-    assessment.interviewerCustomInstructions
-  );
-  // Persist like the controller does so it surfaces on the submission.
-  (submission as any).interviewQuestions = result.questions.map((q: any) => ({
-    ...q,
-    createdAt: new Date(),
-  }));
-  await submission.save();
-  return result;
-}
-

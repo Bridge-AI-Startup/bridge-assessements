@@ -6,6 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 export default function DocumentBlock({
   title,
+  subtitle,
   icon: Icon,
   children,
   isActive,
@@ -80,14 +81,23 @@ export default function DocumentBlock({
       transition={{ duration: 0.3 }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center">
+      <div className="flex items-start justify-between px-5 py-3 border-b border-gray-100">
+        <div className="flex items-start gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
             <Icon className="w-4 h-4 text-gray-600" />
           </div>
-          <span className="font-medium text-gray-900">{title}</span>
+          <div className="min-w-0">
+            <span className="font-medium text-gray-900 block leading-8">
+              {title}
+            </span>
+            {subtitle && (
+              <span className="block text-xs text-gray-500 leading-snug -mt-1 pb-0.5">
+                {subtitle}
+              </span>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
           {onEdit && (
             <Button
               variant="ghost"

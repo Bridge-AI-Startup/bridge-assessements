@@ -74,25 +74,57 @@ export function renderTesterPage(): string {
   .badge { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--line); }
   .badge.agent { color:var(--agent); border-color:#b7e0c2; background:#f0fbf3; }
   .badge.snapshot { color:var(--muted); background:#f6f5ef; }
+  /* episodes */
+  .ep { padding:10px 16px; border-bottom:1px solid #f2f0e8; cursor:pointer; }
+  .ep:last-child { border-bottom:0; }
+  .ep:hover { background:#f6f5ef; }
+  .ep-head { display:flex; gap:10px; align-items:baseline; }
+  .ep-idx { color:var(--muted); font-variant-numeric:tabular-nums; font-size:12px; min-width:22px; }
+  .ep-label { font-weight:600; }
+  .ep-kind { font-size:10px; text-transform:uppercase; letter-spacing:.05em;
+    padding:2px 7px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
+  .ep-time { margin-left:auto; color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+  .ep-sum { color:var(--muted); font-size:13px; margin-top:3px; padding-left:32px; }
+  .ep-evi { font-size:11px; color:#a8a396; padding-left:32px; margin-top:2px; }
+  .k-debugging{color:#cf222e;border-color:#f0c0c4} .k-implementation{color:#1a7f37;border-color:#b7e0c2}
+  .k-verification{color:#1f6feb;border-color:#bcd6fb} .k-research{color:#8250df;border-color:#d8c7f5}
+  .k-planning{color:#9a6700;border-color:#f0d68a} .k-idle{color:#a8a396}
   .hint { color:var(--muted); font-size:12px; margin:0 0 16px; }
   code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 
-  /* ---- video dock + scrubber ---- */
+  /* ---- video dock: video sits directly ON TOP of the scrubber ---- */
   #dock { position:fixed; left:0; right:0; bottom:0; background:var(--panel);
-    border-top:1px solid var(--line); box-shadow:0 -6px 20px rgba(33,32,28,.07); padding:12px 20px; }
-  .dockrow { display:flex; gap:16px; align-items:flex-start; }
-  #dock video { width:340px; max-width:38vw; background:#000; border-radius:8px; display:block; }
-  .dockinfo { flex:1; min-width:0; }
-  .dockinfo h3 { margin:0 0 4px; font-size:12px; text-transform:uppercase;
+    border-top:1px solid var(--line); box-shadow:0 -6px 20px rgba(33,32,28,.07);
+    padding:10px 20px 12px; }
+  .dockhead { display:flex; align-items:baseline; gap:12px; margin-bottom:8px; }
+  .dockhead h3 { margin:0; font-size:12px; text-transform:uppercase;
     letter-spacing:.05em; color:var(--muted); }
-  #videoStatus { font-size:13px; color:var(--muted); margin:0 0 8px; }
-  #nowPlaying { font-size:13px; min-height:20px; }
-  #dockToggle { position:absolute; right:20px; top:10px; }
+  #videoStatus { font-size:12px; color:var(--muted); margin:0; }
+  #nowPlaying { font-size:12px; margin-left:auto; color:var(--ink); }
+  /* the stack: player centred, scrubber immediately beneath at the same width */
+  #stack { max-width:760px; margin:0 auto; }
+  #dock video { width:100%; max-height:180px; background:#000; border-radius:8px 8px 0 0;
+    display:block; object-fit:contain; }
+  #dockToggle { position:absolute; right:20px; top:8px; }
 
   /* scrubber: the video's own duration, with one tick per captured event */
-  #scrub { position:relative; height:44px; margin-top:10px; border-radius:8px;
-    background:#f2f0e8; border:1px solid var(--line); cursor:pointer; overflow:hidden; }
-  #scrubGaps { position:absolute; inset:0; }
+  #scrub { position:relative; height:56px; border-radius:0 0 8px 8px;
+    background:#f2f0e8; border:1px solid var(--line); border-top:0;
+    cursor:pointer; overflow:hidden; }
+  /* continuous screen-state band: what was visible at every moment */
+  #scrubBand { position:absolute; left:0; right:0; top:0; height:16px; }
+  .band { position:absolute; top:0; height:16px; }
+  .band.redundant { opacity:.55; }
+  .b-ide{background:#c9c5b8} .b-terminal{background:#9c968a}
+  .b-cli_agent{background:#6f6a5e}
+  .b-browser\\:search{background:#1f6feb} .b-browser\\:docs{background:#1a9c8f}
+  .b-browser\\:ai_chat{background:#8250df} .b-browser\\:own_app{background:#1a7f37}
+  .b-other{background:#d9b26f} .b-idle{background:#ece9e0}
+  #bandLegend { display:flex; gap:10px; flex-wrap:wrap; font-size:10px;
+    color:var(--muted); margin-top:6px; }
+  #bandLegend i { display:inline-block; width:9px; height:9px; border-radius:2px;
+    margin-right:3px; vertical-align:-1px; }
+  #scrubGaps { position:absolute; left:0; right:0; top:16px; bottom:0; }
   .gap { position:absolute; top:0; bottom:0; background:repeating-linear-gradient(
       45deg,#e7e4da,#e7e4da 4px,#dcd8cc 4px,#dcd8cc 8px); }
   .mark { position:absolute; top:6px; width:3px; height:20px; border-radius:2px;
@@ -130,6 +162,14 @@ export function renderTesterPage(): string {
   </p>
   <div class="stats" id="stats"></div>
   <section>
+    <h2>Deterministic metrics <span style="text-transform:none;letter-spacing:0">— counted, not judged</span></h2>
+    <div id="metrics"><div class="empty">Loading…</div></div>
+  </section>
+  <section>
+    <h2>Episodes <span style="text-transform:none;letter-spacing:0">— what an LLM turns the raw stream into</span></h2>
+    <div id="episodes"><div class="empty">Computed when capture ends.</div></div>
+  </section>
+  <section>
     <h2>Timeline</h2>
     <div id="timeline"><div class="empty">Waiting for events…</div></div>
   </section>
@@ -140,17 +180,21 @@ export function renderTesterPage(): string {
 </main>
 <div id="dock">
   <button id="dockToggle">Hide</button>
-  <div class="dockrow" id="dockBody">
-    <video id="player" controls preload="metadata"></video>
-    <div class="dockinfo">
+  <div id="dockBody">
+    <div class="dockhead">
       <h3>Recording</h3>
       <p id="videoStatus">No recording yet.</p>
       <div id="nowPlaying"></div>
+    </div>
+    <div id="stack">
+      <video id="player" controls preload="metadata"></video>
       <div id="scrub">
+        <div id="scrubBand"></div>
         <div id="scrubGaps"></div>
         <div id="playhead" style="left:0"></div>
         <div id="scrubLabels"></div>
       </div>
+      <div id="bandLegend"></div>
     </div>
   </div>
 </div>
@@ -159,7 +203,7 @@ export function renderTesterPage(): string {
 (function () {
   var paused = false, selected = null, token = null;
   var recorder = null, recStream = null, chunkCount = 0, lastChunkAt = 0;
-  var currentEvents = [], videoMeta = null, videoDuration = 0;
+  var currentEvents = [], videoMeta = null, videoDuration = 0, screenBand = [];
 
   function $(id) { return document.getElementById(id); }
   function esc(s) {
@@ -189,10 +233,31 @@ export function renderTesterPage(): string {
     if (!token) { warn("No capture session yet — run the setup command first."); return; }
     var stream;
     try {
-      stream = await navigator.mediaDevices.getDisplayMedia({ video:{ frameRate:5 }, audio:false });
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 5 },
+        audio: false,
+        // Pick the whole screen by default: a tab or window share ends the
+        // moment that surface goes away (tab navigates, window closes), which
+        // is the usual cause of a recording "randomly" stopping.
+        preferCurrentTab: false,
+        selfBrowserSurface: "exclude",
+        // Let the user switch what is shared without ending the track.
+        surfaceSwitching: "include",
+        systemAudio: "exclude",
+      });
     } catch (e) { return; } // user dismissed the picker
     warn("");
     recStream = stream;
+
+    var track = stream.getVideoTracks()[0];
+    var surface = (track.getSettings && track.getSettings().displaySurface) || "unknown";
+    if (surface === "browser" || surface === "window") {
+      warn(
+        "You are sharing a " + surface + ". That share ends as soon as that " +
+        (surface === "browser" ? "tab navigates or closes" : "window closes") +
+        " — which stops the recording. Sharing your Entire Screen is much more reliable."
+      );
+    }
 
     var r = await fetch("./video/start", { method:"POST", headers:{ Authorization:"Bearer "+token }});
     var info = await r.json().catch(function(){ return {}; });
@@ -219,13 +284,38 @@ export function renderTesterPage(): string {
     recorder.onerror = function (e) {
       stopRecording("recorder_error: " + ((e && e.error && e.error.name) || "unknown"));
     };
-    // Ending the share from Chrome's own "Stop sharing" bar, or closing the
-    // shared tab/window, ends the track. This is the most common cause.
-    stream.getVideoTracks()[0].addEventListener("ended", function () {
-      stopRecording("share_ended");
+    // A display-capture track can end for reasons that look identical from the
+    // outside: the user hitting Chrome's floating "Stop sharing" bar, the OS
+    // revoking screen-recording permission, the display sleeping or locking, or
+    // the renderer being killed. Record enough state to tell them apart —
+    // otherwise every report is "it randomly stopped", which is undiagnosable.
+    var lastInteractionAt = Date.now();
+    ["click", "keydown", "pointerdown"].forEach(function (evt) {
+      window.addEventListener(evt, function () { lastInteractionAt = Date.now(); }, true);
+    });
+    var muteEvents = 0;
+    track.addEventListener("mute", function () { muteEvents++; });
+    track.addEventListener("unmute", function () { muteEvents--; });
+
+    track.addEventListener("ended", function () {
+      var diag = [
+        "surface=" + surface,
+        "readyState=" + track.readyState,
+        "muted=" + track.muted,
+        "muteEvents=" + muteEvents,
+        "page=" + document.visibilityState,
+        // A click on our page moments before the end points at the sharing bar
+        // (which floats over this page); a long quiet gap points at the system.
+        "sinceClick=" + Math.round((Date.now() - lastInteractionAt) / 1000) + "s",
+      ].join(" ");
+      stopRecording("share_ended (" + diag + ")");
     });
 
     recorder.start(3000);
+    document.title = "● Recording — Workflow Capture";
+    if (window.Notification && Notification.permission === "default") {
+      try { Notification.requestPermission(); } catch (e) {}
+    }
     $("recBtn").textContent = "■ Stop recording";
     $("recBtn").classList.remove("rec");
     $("videoStatus").textContent = info.resuming
@@ -244,6 +334,16 @@ export function renderTesterPage(): string {
     if (reason && reason !== "manual") {
       warn("Recording stopped: " + reason.replace(/_/g, " ") +
            ". Earlier footage is kept — click Resume recording to continue.");
+      // You are almost certainly in another app when this happens, so put it
+      // in the one place a background tab can still shout: the title.
+      document.title = "⏹ RECORDING STOPPED — Workflow Capture";
+      if (window.Notification && Notification.permission === "granted") {
+        try {
+          new Notification("Workflow capture", {
+            body: "Screen recording stopped (" + reason.replace(/_/g, " ") + "). Click Resume to continue.",
+          });
+        } catch (e) {}
+      }
     }
     setTimeout(async function () {
       if (token) {
@@ -253,17 +353,42 @@ export function renderTesterPage(): string {
           body: JSON.stringify({ reason: reason || "manual" })
         });
       }
-      $("videoStatus").textContent = "Processing recording…";
+      $("videoStatus").textContent = "Processing recording, classifying screen…";
       setTimeout(loadVideo, 900);
+      // Classification runs server-side on stop; poll a little longer than the
+      // normal cadence so the band appears without anyone clicking anything.
+      var tries = 0;
+      var poll = setInterval(function () {
+        tries++;
+        load();
+        if (screenBand.length > 0 || tries > 40) {
+          clearInterval(poll);
+          if (screenBand.length > 0) {
+            $("videoStatus").textContent =
+              "Recording ready — screen classified (" + screenBand.length + " spans).";
+          }
+        }
+      }, 3000);
     }, 1200);
   }
 
   // A stalled upload means the recording is dead even though nothing errored.
+  // Only judged while the page is visible: Chrome throttles timers (and can
+  // defer MediaRecorder delivery) in background tabs, so a short threshold on a
+  // hidden page would kill perfectly healthy recordings — the very failure this
+  // check exists to catch.
   setInterval(function () {
-    if (recorder && Date.now() - lastChunkAt > 15000) {
-      stopRecording("upload_stalled");
-    }
+    if (!recorder) return;
+    if (document.visibilityState !== "visible") return;
+    if (Date.now() - lastChunkAt > 45000) stopRecording("upload_stalled");
   }, 5000);
+
+  // Losing the page loses the recording, so make it hard to do by accident.
+  window.addEventListener("beforeunload", function (e) {
+    if (!recorder) return;
+    e.preventDefault();
+    e.returnValue = "";
+  });
 
   function loadVideo() {
     if (!selected) return;
@@ -283,9 +408,54 @@ export function renderTesterPage(): string {
     return videoDuration || (videoMeta && videoMeta.totalRecordedSeconds) || 0;
   }
 
+  var LABEL_TEXT = {
+    "ide": "editor", "terminal": "terminal", "cli_agent": "CLI agent",
+    "browser:search": "search",
+    "browser:docs": "docs", "browser:ai_chat": "AI in browser",
+    "browser:own_app": "their app", "other": "other", "idle": "idle"
+  };
+
+  /**
+   * The continuous band: what Gemini says was on screen at every moment.
+   * Drawn UNDER the event ticks so you read both at once — the state at any
+   * instant, and the captured moments that punctuate it.
+   */
+  function renderBand(dur) {
+    var band = $("scrubBand"), legend = $("bandLegend");
+    if (!dur || !screenBand.length) {
+      band.innerHTML = "";
+      // Classification runs by itself when a recording stops; say what state we
+      // are in rather than pointing at a button that no longer exists.
+      legend.innerHTML = !videoMeta || !videoMeta.chunkCount
+        ? "<span>Screen band appears once a recording exists.</span>"
+        : recorder
+          ? "<span>Recording — the screen band is built when you stop.</span>"
+          : "<span>Classifying screen… this takes up to a minute after stopping.</span>";
+      return;
+    }
+    band.innerHTML = screenBand.map(function (s) {
+      var left = Math.max(0, Math.min(100, (s.start / dur) * 100));
+      var width = Math.max(0.4, Math.min(100 - left, ((s.end - s.start) / dur) * 100));
+      var cls = "band b-" + s.label + (s.redundant ? " redundant" : "");
+      var title = (LABEL_TEXT[s.label] || s.label) +
+        (s.detail ? " — " + s.detail : "") +
+        (s.concurrentWithAgent ? " (while the agent was working)" : "");
+      return '<div class="' + cls + '" style="left:' + left + '%;width:' + width +
+        '%" title="' + esc(title) + '"></div>';
+    }).join("");
+
+    // Legend only for labels actually present, so it stays short.
+    var seen = {};
+    screenBand.forEach(function (s) { seen[s.label] = true; });
+    legend.innerHTML = Object.keys(seen).map(function (l) {
+      return '<span><i class="b-' + l + '"></i>' + (LABEL_TEXT[l] || l) + "</span>";
+    }).join("");
+  }
+
   function renderScrubber() {
     var dur = scrubDuration();
     var gaps = $("scrubGaps"), labels = $("scrubLabels");
+    renderBand(dur);
     if (!dur) { gaps.innerHTML = ""; labels.innerHTML = ""; return; }
 
     // Gaps are drawn as zero-width joins: a paused stretch occupies no video
@@ -359,6 +529,51 @@ export function renderTesterPage(): string {
   });
 
   // ---- timeline --------------------------------------------------------
+  /**
+   * Episodes: the layer between raw events and a grade. Clicking one seeks the
+   * video to where it began, so you can watch the moment the summary describes.
+   */
+  function renderEpisodes(episodes, startedAt) {
+    var el = $("episodes");
+    if (!episodes || !episodes.length) {
+      el.innerHTML =
+        '<div class="empty">No episodes yet — they are computed once capture ends.</div>';
+      return;
+    }
+    el.innerHTML = episodes.map(function (e) {
+      return '<div class="ep" data-start="' + e.startSeconds + '">' +
+        '<div class="ep-head">' +
+          '<span class="ep-idx">' + e.index + "</span>" +
+          '<span class="ep-label">' + esc(e.label) + "</span>" +
+          '<span class="ep-kind k-' + esc(e.kind) + '">' + esc(e.kind) + "</span>" +
+          '<span class="ep-time">' + mmss(e.startSeconds) + " – " + mmss(e.endSeconds) + "</span>" +
+        "</div>" +
+        '<div class="ep-sum">' + esc(e.summary) + "</div>" +
+        '<div class="ep-evi">built from ' + (e.evidenceIndices || []).length +
+          " captured event(s)</div>" +
+      "</div>";
+    }).join("");
+
+    Array.prototype.forEach.call(el.querySelectorAll(".ep"), function (row) {
+      row.addEventListener("click", function () {
+        // Episode times are session-relative; map onto the recording.
+        var sec = Number(row.dataset.start);
+        var segs = (videoMeta && videoMeta.segments) || [];
+        if (!segs.length || !startedAt) return;
+        var wall = new Date(startedAt).getTime() + sec * 1000;
+        for (var i = 0; i < segs.length; i++) {
+          var s = new Date(segs[i].wallStartedAt).getTime();
+          var e2 = segs[i].wallEndedAt ? new Date(segs[i].wallEndedAt).getTime() : Infinity;
+          if (wall >= s && wall <= e2) {
+            seekTo(segs[i].videoOffsetStart + (wall - s) / 1000,
+              "episode: " + row.querySelector(".ep-label").textContent);
+            return;
+          }
+        }
+      });
+    });
+  }
+
   function renderTimeline(events, hasVideo) {
     currentEvents = events;
     if (!events.length) {
@@ -406,6 +621,7 @@ export function renderTesterPage(): string {
     selected = data.current.sessionId;
     token = data.current.captureToken || token;
     videoMeta = data.current.video || {};
+    screenBand = data.current.screenBand || [];
 
     var st = data.current.stats || {};
     $("stats").innerHTML = [
@@ -433,6 +649,7 @@ export function renderTesterPage(): string {
     }
 
     renderTimeline(data.current.events || [], !!videoMeta.chunkCount);
+    renderEpisodes(data.current.episodes || [], data.current.startedAt);
     renderScrubber();
 
     var files = data.current.files || [];
@@ -458,16 +675,47 @@ export function renderTesterPage(): string {
   $("recBtn").addEventListener("click", function () {
     if (recorder) stopRecording("manual"); else startRecording();
   });
+
+
+  // Deterministic metrics: fetched alongside the poll, rendered compactly.
+  async function loadMetrics() {
+    if (!selected) return;
+    try {
+      var res = await fetch("./sessions/" + encodeURIComponent(selected) + "/analysis");
+      if (!res.ok) return;
+      var a = await res.json();
+      var m = a.metrics;
+      var pct = function (v) { return v == null ? "—" : Math.round(v * 100) + "%"; };
+      var rows = [
+        ["read : edit", m.readEditRatio == null ? "—" : m.readEditRatio + " : 1"],
+        ["writes verified by a test", pct(m.verifiedWriteRatio)],
+        ["low-effort prompts", pct(m.lowEffortPromptRatio)],
+        ["median think time", m.medianThinkSeconds == null ? "—" : Math.round(m.medianThinkSeconds) + "s"],
+        ["code from agent", pct(m.authorship.agentShare)],
+        ["tokens in / out",
+          m.tokens.measuredTurns
+            ? m.tokens.input.toLocaleString() + " / " + m.tokens.output.toLocaleString() +
+              " (" + m.tokens.cacheRead.toLocaleString() + " cached)"
+            : "not captured for this session"],
+      ];
+      $("metrics").innerHTML = rows.map(function (r) {
+        return '<div class="file"><code style="flex:1">' + r[0] + "</code><b>" + r[1] + "</b></div>";
+      }).join("");
+    } catch (e) { /* metrics are a nicety; never break the page */ }
+  }
   $("dockToggle").addEventListener("click", function () {
     var body = $("dockBody");
     var hidden = body.style.display === "none";
-    body.style.display = hidden ? "flex" : "none";
+    body.style.display = hidden ? "block" : "none";
     this.textContent = hidden ? "Hide" : "Show";
     document.body.style.paddingBottom = hidden ? "300px" : "56px";
   });
 
   load();
   setInterval(load, 2000);
+  // Metrics change far more slowly than the event stream.
+  setTimeout(loadMetrics, 1500);
+  setInterval(loadMetrics, 10000);
 })();
 </script>
 </body>

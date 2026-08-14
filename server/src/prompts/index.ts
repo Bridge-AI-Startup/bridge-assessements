@@ -306,12 +306,25 @@ Each check is ONE observable fact about what the product must do or allow, from 
 - "Notes still show up after refreshing the page."
 - "Invalid input shows a clear error message."
 
+HOW THESE ARE VERIFIED. Each check is graded by an agent that gets the candidate's submitted repository in a fresh, offline-ish cloud sandbox. It installs and starts the project, drives the running app in a real browser (clicking, typing, reading the page, taking screenshots), sends HTTP requests to it, runs shell commands, and reads the source. It has no accounts, no API keys, no email inbox, no payment processor, and no second user. It works from a clean checkout with whatever seed data the project ships.
+
+So a check is only verifiable if the sandbox can settle it that way. Do NOT write checks that need:
+- Third-party credentials or paid services — real logins, OAuth to an external provider, live payment charges, SMS or email delivery, cloud services the repo cannot stand up itself.
+- Two people at once — real-time collaboration between separate users or sessions.
+- The passage of real time — anything about tomorrow, a scheduled job, a session expiring in 24 hours, or a cache eviction hours later.
+- Specific hardware or an environment the sandbox lacks — a physical phone, a camera, a GPU, a native mobile build, a deployed production URL.
+- Data the candidate was never told to create — do not assume a pre-populated database, a specific test account, or someone else's records.
+- Aesthetic or subjective judgement — "looks polished", "is intuitive", "is well designed". The agent can see the page but cannot score taste.
+- Non-functional targets with no stated budget — "is fast", "scales well", "is secure" — unless the assessment gives a concrete, checkable threshold.
+
 Rules:
 - Checks must NOT name specific technologies, frameworks, file paths, or APIs (no "React", "useState", "POST /api/notes", "App.tsx").
 - Checks must NOT require a particular implementation—any reasonable solution that satisfies the assessment could pass.
-- Phrase checks so they can be verified by observing the running app or system behavior.
+- Each check must be reachable from a fresh start of the app: if it needs setup, the check should describe that setup as part of the flow ("After adding a note, refreshing the page still shows it").
+- ONE outcome per check. Two behaviours joined by "and" cannot be graded as a single pass or fail.
 - Cover core workflows, persistence where relevant, and error/edge behavior where the assessment implies it.
 - Use varied, concrete wording; avoid duplicating the same idea.
+- Prefer fewer, solidly verifiable checks over a longer list padded with ones the sandbox would have to guess at.
 - Output valid JSON only with key "checks": an array of strings.`,
 
   userTemplate: (input: {
@@ -329,79 +342,6 @@ Project instructions for the candidate (full assessment description):
 ${input.description}
 
 Generate behavioral checks as JSON: { "checks": ["...", ...] }`,
-};
-
-// ============================================================================
-// INTERVIEW QUESTION GENERATION PROMPTS
-// ============================================================================
-
-export const PROMPT_GENERATE_INTERVIEW_QUESTIONS_RETRIEVAL = {
-  // Optional: Override provider for this prompt (defaults to environment variable)
-  provider: undefined as AIProvider | undefined,
-  // Optional: Override model for this prompt (defaults to provider's default model)
-  model: undefined as string | undefined,
-
-  systemTemplate: (numQuestions: number, customInstructions?: string) => {
-    const basePrompt = `You are a technical interviewer. Generate exactly ${numQuestions} interview question${
-      numQuestions === 1 ? "" : "s"
-    } based on the provided assessment description and code snippets from the candidate's submission.
-
-These questions will be used in a live voice interview. The interviewer will ask each base question and then ask exactly 1-2 follow-up questions maximum per base question to dive deeper, so make sure each base question is substantial enough to support meaningful follow-up discussion.
-
-Requirements:
-- Generate exactly ${numQuestions} thoughtful, specific question${
-      numQuestions === 1 ? "" : "s"
-    }
-- Anchors must be chosen ONLY from the provided snippets' file paths and line ranges
-- DO NOT invent file paths or line numbers - only use what is provided
-- Questions should probe understanding, design decisions, trade-offs, and potential improvements
-- Create a mix of questions, some should be very specific to the code, some should be more general to how they approached the project.
-- Each question should be substantial enough to support exactly 1-2 follow-up questions during the voice interview (the interviewer will ask a maximum of 2 follow-ups per base question)
-
-Output strict JSON with a single key "questions" containing an array of objects. Each object must have:
-- "prompt": string (the question text)
-- "anchors": array of objects with "path", "startLine", "endLine" (1-3 anchors per question, matching the provided snippets)
-
-Example format:
-{
-  "questions": [
-    {
-      "prompt": "In your authentication middleware, why did you choose to extract the token from the Authorization header this way?",
-      "anchors": [
-        {"path": "src/auth/middleware.js", "startLine": 45, "endLine": 67}
-      ]
-    },
-    {
-      "prompt": "How does your error handling in the user routes differ from the task routes?",
-      "anchors": [
-        {"path": "src/routes/users.js", "startLine": 12, "endLine": 34},
-        {"path": "src/routes/tasks.js", "startLine": 8, "endLine": 30}
-      ]
-    }
-  ]
-}`;
-
-    // Append custom instructions if provided
-    if (customInstructions && customInstructions.trim()) {
-      return `${basePrompt}\n\nAdditional Instructions for Question Generation:\n${customInstructions.trim()}\n\nIMPORTANT: If these custom instructions contradict any of the default instructions above, prioritize and follow the custom instructions.`;
-    }
-
-    return basePrompt;
-  },
-  userTemplate: (
-    assessmentDescription: string,
-    codeContext: string,
-    availableAnchorsList: string,
-  ) => `Assessment Description:
-${assessmentDescription}
-
-Available Code Snippets:
-${codeContext}
-
-Available Anchors (copy these EXACTLY for your anchors - path, startLine, endLine must match exactly):
-${availableAnchorsList}
-
-Generate interview questions grounded in these code snippets. For each question, include 1-3 anchors from the "Available Anchors" list above. Copy the path, startLine, and endLine EXACTLY as shown.`,
 };
 
 // ============================================================================
@@ -458,51 +398,6 @@ Guidelines:
 };
 
 // ============================================================================
-// INTERVIEW AGENT PROMPT (voice interview)
-// ============================================================================
-
-export const PROMPT_INTERVIEW_AGENT = {
-  template: (
-    numQuestions: number,
-    questionsList: string,
-    customInstructions?: string,
-  ) => {
-    const basePrompt = `You are a technical interviewer conducting a live verbal interview.
-
-Rules:
-- Ask the questions in order
-- Do not invent new base questions
-- CRITICAL: For each base question, ask EXACTLY 1-2 follow-up questions maximum. Do NOT ask 3, 4, or more follow-ups. The limit is 2 follow-ups per base question, no exceptions.
-- After asking 1-2 follow-ups for a base question, you MUST move on to the next base question immediately. Do not continue asking more follow-ups.
-- Keep track: If you've asked a base question and 1-2 follow-ups, you must move to the next base question.
-- Keep the interview focused and technical
-- If unsure about something, ask for clarification rather than guessing
-- When the candidate states what they're going to do or their approach/plan, do one of two things: (1) ask a relevant follow-up question if you have one and haven't used your follow-up limit, or (2) say something brief like "Sounds good" and move on. Do NOT simply repeat or paraphrase what they said—no echoing back their plan. Either follow up with a real question or acknowledge and move on.
-- IMPORTANT: The candidate only has one chance to record their answers. Do not allow them to re-record or restart their responses. Once they answer a question, move on to the next question.
-- When you have asked all ${numQuestions} base questions (with their 1-2 follow-ups each) and received answers, conclude the interview immediately by saying something like "Thank you for your time. This completes our interview." or "That covers all the questions. Thank you for participating in this interview."
-
-Available Tool:
-You have access to a tool called "get_context" that retrieves relevant code snippets from the candidate's submission based on the current question and their answer. Use this tool when:
-- The candidate mentions specific code, files, or implementation details
-- You want to verify their answer by checking the actual code
-- You need to ask a precise follow-up question that references specific code
-- The answer is unclear and you want to see what they actually implemented
-
-The tool requires: submissionId, currentQuestion, and candidateAnswer. It returns code chunks with file paths, line numbers, and code content that you can reference in follow-up questions.
-
-Interview Questions:
-${questionsList}`;
-
-    // Append custom instructions if provided
-    if (customInstructions && customInstructions.trim()) {
-      return `${basePrompt}\n\nAdditional Instructions:\n${customInstructions.trim()}`;
-    }
-
-    return basePrompt;
-  },
-};
-
-// ============================================================================
 // TRANSCRIPT EVALUATION PROMPTS
 // ============================================================================
 
@@ -519,6 +414,7 @@ The transcript contains a sequence of timestamped actions. Each action has one o
 - "testing"     — the candidate was running or reviewing tests
 - "reading"     — the candidate was reading documentation, code, or other text
 - "searching"   — the candidate was searching the web or a codebase
+- "speaking"    — the candidate said something out loud to the in-session voice companion (verbatim, timestamped; present only when the voice companion ran)
 - "idle"        — no meaningful activity was detected
 
 CRITICAL: The relevant_action_types field MUST contain only values from the list above. Any other string is invalid.
@@ -543,12 +439,12 @@ Return a JSON object with exactly these fields:
   "definition": "A clear, concise explanation of what this criterion means in the context of a coding assessment",
   "positive_indicators": ["Observable behavior 1 that shows the candidate meets this criterion", "..."],
   "negative_indicators": ["Observable behavior 1 that shows the candidate does not meet this criterion", "..."],
-  "relevant_action_types": ["one or more of: ai_prompt, ai_response, coding, testing, reading, searching, idle"]
+  "relevant_action_types": ["one or more of: ai_prompt, ai_response, coding, testing, reading, searching, speaking, idle"]
 }
 
 Rules:
 - positive_indicators and negative_indicators must describe concrete, observable behaviors visible in a transcript
-- relevant_action_types must contain only values from: "ai_prompt", "ai_response", "coding", "testing", "reading", "searching", "idle"
+- relevant_action_types must contain only values from: "ai_prompt", "ai_response", "coding", "testing", "reading", "searching", "speaking", "idle"
 - Include 3-6 items in each indicator list`,
 };
 
@@ -601,34 +497,96 @@ Respond with a JSON object with exactly these fields:
 In all string fields (criterion, observation, verdict), escape any double quotes inside the string with backslash (e.g. \\"). When citing code or test cases, you may use single quotes instead to avoid escaping.`,
 };
 
+/**
+ * Which record a criterion will be graded against.
+ *
+ * `workflow` is the hook stream from capture-kit (prompts, agent replies, tool
+ * calls, file states, timings) — this is what `evidenceMode` workflow/both
+ * actually grade. `screen` is the legacy video-transcript path.
+ *
+ * The distinction is not cosmetic: the two records see almost opposite things.
+ * The hook stream knows the exact text of every prompt and every command but has
+ * no idea whether the candidate read anything; a screen transcript is the
+ * reverse. Criteria written for the wrong one score on evidence that was never
+ * collected.
+ */
+export type CriterionEvidenceProfile = "workflow" | "screen";
+
+const EVIDENCE_INVENTORY: Record<CriterionEvidenceProfile, string> = {
+  workflow: `THE RECORD (workflow capture). Everything below is captured, timestamped, and citable:
+- Every prompt the candidate sent their AI coding agent, verbatim.
+- Every reply the agent sent back.
+- Every tool call the agent made, with its input and its result: file reads (Read/Grep/Glob/LS), web fetches and searches, file writes and edits, and shell commands with their output — installs, test runs, dev servers, git.
+- The contents of every file the project ends up with, and whether those contents came from the agent's own writes or appeared by hand.
+- Timing of all of it: time to the first prompt, the gap between an agent reply and the candidate's next prompt, idle gaps, total session length.
+- Counts derived from the above: reads per write, the share of writes followed by a test run within five minutes, the share of prompts that are bare assent ("ok", "go ahead", "fix it"), token spend.
+- ONLY when screen recording is also enabled: which application was on screen at each moment, from a fixed list — IDE, terminal, CLI coding agent, browser search, browser docs, browser AI chat, the candidate's own running app, other, idle. The surface only, never the text on it.
+- ONLY when the in-session voice companion ran: everything the candidate said out loud to it, verbatim and timestamped — spoken intentions, explanations of what they are about to do and why. Coverage varies enormously: some candidates narrate constantly, some say six words in a session. A criterion may cite what WAS said, but must not require narration to exist — "explains their approach when they speak" is scoreable, "narrates continuously" is a coverage lottery.
+
+NOT IN THE RECORD. A criterion that needs any of this cannot be scored:
+- Reading. There is no scrolling, dwell, or eye movement. We cannot tell whether the candidate read the brief, read a diff, or read an error message — only that a tool opened a file.
+- Keystroke-level editing, undo, cursor movement, or clicking Accept/Reject on an AI suggestion. There is no accept/reject event.
+- The content of anything outside the agent: browser page text, another chat window, notes, a second machine.
+- Anything the candidate thought or intended but neither typed into the agent nor said aloud to the voice companion.
+- Anything about them as a person — background, teamwork, motivation.`,
+
+  screen: `THE RECORD (screen recording). A screen recording is sampled into frames and described by a vision model. Captured:
+- What application and surface was visible, and roughly what was on it — editor, terminal, browser, AI chat.
+- Visible actions: running a command, editing a file, switching windows, typing into an AI tool.
+- Text large enough to be read reliably: terminal commands, prompts typed into an AI tool, search queries.
+
+NOT IN THE RECORD. A criterion that needs any of this cannot be scored:
+- Small or dense text read verbatim — treat exact file contents and diff text as unreliable.
+- Anything off-screen, on another monitor that was not shared, or on another machine.
+- Anything the candidate said, thought, or intended.
+- Anything about them as a person — background, communication style, teamwork, motivation.`,
+};
+
 export const PROMPT_VALIDATE_CRITERION = {
   provider: "anthropic" as AIProvider,
   model: "claude-3-haiku-20240307",
 
-  system: `You are a validator for hiring evaluation criteria. Your job is to decide whether a given criterion is evaluable from a screen recording of a candidate doing a coding assessment.
+  system: (
+    profile: CriterionEvidenceProfile = "workflow"
+  ) => `You are a validator for hiring evaluation criteria. Your job is to decide whether a given criterion can actually be scored from the record we collect while a candidate works through a coding assessment.
 
-A criterion is EVALUABLE only if it describes observable behavior that is directly visible in a screen recording. Ask yourself: could a reviewer watching the recording see concrete evidence for or against this criterion?
+${EVIDENCE_INVENTORY[profile]}
 
-EVALUABLE examples:
-- "Reviews AI-generated code before accepting it" — you can see the candidate reading the diff before clicking Accept
-- "Runs tests after implementing a feature" — you can see terminal output and test commands
-- "Reads the problem statement before starting to code" — you can see them scrolling through the brief
-- "Uses AI prompts that are specific and scoped" — you can see what they typed into the AI tool
-- "Breaks the problem into smaller tasks before coding" — you can see planning behavior in the recording
+A criterion is EVALUABLE only if a reviewer who never watched the candidate work could point at specific moments in that record and say the behaviour did or did not happen. If scoring it would require guessing at something the record does not contain, it is NOT evaluable — no matter how reasonable the criterion sounds.
+
+${
+  profile === "workflow"
+    ? `EVALUABLE examples (each maps to something recorded):
+- "Runs the test suite after changing code" — test commands and their output are recorded, with timestamps relative to the edits
+- "Reproduces a failure before fixing it" — the failing command and its output appear before the edit
+- "Prompts state the goal and the constraints rather than just saying 'fix it'" — prompt text is recorded verbatim
+- "Edits agent-written code by hand rather than shipping it untouched" — file authorship is recorded per file
+- "Investigates an error before re-prompting" — tool calls and commands between the failure and the next prompt are recorded
+- "Splits the work across focused prompts instead of one large request" — the whole prompt sequence is recorded
 
 NOT EVALUABLE examples:
-- "Shows good culture fit" — this is not observable in a screen recording
-- "Is a team player" — there is no team interaction in a solo screen recording
-- "Has good communication skills" — a screen recording of coding does not capture this
-- "Is passionate about their work" — subjective, not observable from a screen
-- "Would be a good mentor" — cannot be observed in a solo coding session
+- "Reads the requirements before starting to code" — nothing records reading. Reformulate around a recorded action, e.g. "Inspects existing project files before the first edit"
+- "Reviews AI-generated code before accepting it" — there is no accept/reject event and no reading signal. Reformulate as "Edits or rewrites agent-written code rather than leaving it untouched"
+- "Checks the layout at several browser widths" — no browser interaction is recorded
+- "Writes clean, readable code" — vague; name the recorded action instead
+- "Communicates well" / "Would be a good teammate" — a solo captured session contains no such evidence`
+    : `EVALUABLE examples:
+- "Runs tests after implementing a feature" — terminal commands and output are visible
+- "Types specific, scoped prompts into their AI tool" — the prompt text is visible on screen
+- "Switches to the running app to check a change" — the window switch is visible
 
-When a criterion is NOT evaluable, explain clearly why it cannot be assessed from a screen recording and suggest how the criterion could be reformulated to describe a concrete, observable behavior instead.
+NOT EVALUABLE examples:
+- "Writes clean, readable code" — vague, and small text is not read reliably
+- "Communicates well" / "Shows culture fit" — a solo screen recording contains no such evidence
+- "Uses the right abstraction" — a judgement about code, not an observable moment`
+}
+
+When a criterion is NOT evaluable, say plainly which piece of missing evidence makes it unscoreable, then suggest a reformulation that is scoreable from the record above.
 
 Respond with a JSON object: { "valid": boolean, "reason": string (only when valid is false) }`,
 
   userTemplate: (criterion: string) =>
-    `Is the following criterion evaluable from a screen recording of a candidate doing a coding assessment?
+    `Can the following criterion be scored from the record described above?
 
 CRITERION: ${criterion}
 
@@ -639,62 +597,70 @@ export const PROMPT_SUGGEST_CRITERIA = {
   provider: "anthropic" as AIProvider,
   model: "claude-3-haiku-20240307",
 
-  system: `You are an expert technical hiring evaluator. Given a job description, your task is to generate no more than 5 evaluation criteria that can be used to assess a candidate's screen recording of a coding assessment session.
+  system: (
+    profile: CriterionEvidenceProfile = "workflow"
+  ) => `You are an expert technical hiring evaluator. Given a job description, generate no more than 5 evaluation criteria describing HOW a candidate works through a coding assessment.
 
-CRITICAL RULES — what makes a good criterion:
-1. Every criterion MUST describe an observable behavior visible on screen during a coding session. A reviewer watching a silent screen recording must be able to confirm or deny the behavior happened.
-2. Criteria MUST be specific and actionable, not character traits or soft skills.
-3. Criteria MUST be tailored to the role described in the job description. Use the seniority level, tech stack, and responsibilities to determine what behaviors matter most.
-4. NEVER use vague or subjective phrases. Name the exact action or moment a reviewer would see. Avoid "best practices", "clean code", "good quality", "proper X", "attention to detail" without specifying what the candidate does on screen.
-5. FOCUS ON CODE PRACTICES. Prefer criteria about how they code, test, debug, read requirements, and structure work. You may include one or two criteria about AI use (e.g. how they use an AI assistant during the session) when relevant — but keep the majority focused on observable coding behavior, not soft skills or tool preferences.
+Each criterion will be scored automatically against the record described below. Write only criteria that record can actually settle — a criterion nothing in the record speaks to is worse than no criterion at all, because it produces a confident-looking score standing on nothing.
 
-AVOID VAGUE CRITERIA (do not use phrases like these):
-- "Follows best practices for X" → instead: e.g. "Resizes browser or checks layout at multiple viewport widths"
-- "Writes clean/readable code" → instead: e.g. "Refactors duplicated code or renames variables for clarity"
-- "Demonstrates good code quality" → instead: name a concrete action (runs tests, handles errors, etc.)
-- "Uses proper design patterns" → instead: e.g. "Splits logic into smaller functions or modules"
-- "Shows attention to detail" → instead: e.g. "Re-reads requirements after a test failure"
+${EVIDENCE_INVENTORY[profile]}
 
-EXAMPLES OF VALID CRITERIA (concrete, observable on screen):
+CRITICAL RULES:
+1. Every criterion must name a behaviour that leaves a trace in the record above, and a reviewer must be able to point at the moments that settle it.
+2. Prefer criteria that turn on presence, absence, ordering, or counts of concrete actions: prompts sent, commands run, files read before written, tests run after edits.
+3. Tailor them to the seniority, stack, and responsibilities in the job description.
+4. Never use vague or subjective phrasing — no "best practices", "clean code", "good quality", "proper X", "attention to detail".
+5. Judge process, not product. Whether the finished app works is scored separately by running the submitted code; do not duplicate that here.
+6. Keep each criterion to one behaviour. Two behaviours joined by "and" cannot be scored as one.
+${
+  profile === "workflow"
+    ? `
+GOOD CRITERIA (each maps to something recorded):
+- "Runs the test suite after changing code"
+- "Reproduces a failure before changing code to fix it"
+- "Inspects existing project files before the first edit"
+- "Prompts state the goal and constraints rather than just 'fix it'"
+- "Edits or rewrites agent-written code rather than leaving it untouched"
+- "Investigates an error message before sending the next prompt"
+- "Splits work into focused prompts instead of one large request"
+- "Runs the app or its tests to check a change before moving on"
 
-Code practices (prioritize these):
-- "Tests their work after implementing each feature"
-- "Reads the full requirements before starting to code"
-- "Checks error messages before making changes"
-- "Looks up documentation when encountering an unfamiliar API"
-- "Refactors duplicated code rather than copying it"
-- "Writes or runs tests after implementing a function"
-- "Breaks the problem into smaller steps before coding"
-- "Validates edge cases in their implementation"
-- "Reviews their own code before submitting"
-- "Uses debugging tools rather than only print statements"
+DO NOT SUGGEST (nothing records these):
+- "Reads the requirements/documentation/diff before X" — reading is not captured; use a tool action instead
+- "Reviews AI-generated code before accepting it" — there is no accept/reject event; say "edits agent-written code" instead
+- "Checks the layout at multiple browser widths" — browser interaction is not captured
+- "Uses a debugger rather than print statements" — only captured if it runs as a shell command; name the command instead
+- Anything about the person: communication, teamwork, attitude, passion, culture fit`
+    : `
+GOOD CRITERIA (visible on screen):
+- "Runs tests after implementing a feature"
+- "Types specific, scoped prompts into their AI tool"
+- "Opens the running app to check a change"
+- "Re-runs a failing command after editing the code"
 
-AI use (include one or two when relevant; must be observable):
-- "Reviews AI-generated code before accepting it"
-- "Edits or adapts AI suggestions rather than pasting them verbatim"
-- "Asks the AI for clarification or optimization, then implements themselves"
+DO NOT SUGGEST:
+- Anything needing verbatim small text — exact diff or file contents are not read reliably
+- Anything about the person: communication, teamwork, attitude, passion, culture fit
+- Vague quality judgements: "clean code", "best practices", "proper error handling"`
+}
 
-EXAMPLES OF INVALID CRITERIA (do not use these):
-- Soft/subjective: "Shows culture fit", "Communicates well", "Has a positive attitude", "Demonstrates teamwork"
-- Vague: "Follows best practices for responsive UI design", "Writes clean code", "Demonstrates good code quality", "Uses proper error handling" (use a specific behavior instead, e.g. "Checks error messages before making changes")
-
-ROLE-LEVEL GUIDANCE (keep criteria focused on code practices):
-- Junior roles: Reading requirements carefully, looking up documentation, running tests frequently, following instructions step by step.
-- Mid-level roles: Structuring work, checking errors and fixing them, refactoring duplication, validating assumptions with tests.
-- Senior roles: Optimization decisions, refactoring, reviewing AI-generated or existing code critically, handling edge cases. You may include one criterion on how they use AI (e.g. reviewing AI output before accepting).
+ROLE-LEVEL GUIDANCE:
+- Junior: verifying work as they go, running tests, following the brief step by step, asking the agent focused questions.
+- Mid-level: structuring the work across prompts, investigating failures before re-prompting, testing after edits.
+- Senior: reproducing before fixing, reworking agent output rather than shipping it untouched, handling edge cases, spending prompts on the hard part.
 
 Output a JSON object with exactly this shape:
 { "criteria": string[] }
 
-The array must contain no more than 5 criteria strings. Each string should be a concise, imperative phrase (10–15 words maximum).`,
+No more than 5 strings, each a concise phrase of 15 words or fewer.`,
 
   userTemplate: (jobDescription: string) =>
-    `Generate no more than 5 observable screen-recording evaluation criteria for a candidate being assessed for the following role.
+    `Generate no more than 5 evaluation criteria, scoreable from the record described above, for a candidate being assessed for the following role.
 
 JOB DESCRIPTION:
 ${jobDescription}
 
-Tailor the criteria to the seniority level, responsibilities, and tech stack described above. Focus on code practices (testing, debugging, reading requirements, refactoring, handling errors). You may include one or two criteria about how they use AI during the session (e.g. reviews AI-generated code before accepting, or edits AI suggestions rather than pasting verbatim). Every criterion must be a concrete, observable action, not a vague phrase like "best practices" or "clean code".
+Tailor them to the seniority level, responsibilities, and stack described above. Every criterion must name a behaviour that leaves a trace in the record — never a vague quality judgement, and never something the record does not contain.
 
 Respond with a JSON object only: { "criteria": string[] }`,
 };
@@ -724,40 +690,6 @@ TRANSCRIPT:
 ${transcriptJson}
 
 Respond with a single paragraph (3–6 sentences), no JSON.`,
-};
-
-// ============================================================================
-// INTERVIEW SUMMARY GENERATION PROMPTS
-// ============================================================================
-
-export const PROMPT_GENERATE_INTERVIEW_SUMMARY = {
-  // Optional: Override provider for this prompt (defaults to environment variable)
-  provider: undefined as AIProvider | undefined,
-  // Optional: Override model for this prompt (defaults to provider's default model)
-  model: undefined as string | undefined,
-
-  system: `You are an expert at summarizing technical interview transcripts for BridgeAI, a platform for technical hiring assessments.
-
-BridgeAI is a platform that:
-- Generates custom take-home coding assessments based on job descriptions
-- Conducts AI-powered voice interviews with candidates about their code submissions
-- Helps hiring teams evaluate candidates more effectively than traditional coding puzzles
-
-Your task is to create a clear, objective summary of the interview conversation. Simply summarize what was discussed - the questions asked and the candidate's responses. Do not provide critique, evaluation, or assessment of the candidate's performance.
-
-Create a neutral, factual summary (200-400 words) that captures:
-1. The topics and questions discussed
-2. The candidate's responses and explanations
-3. Any technical details or code references mentioned
-
-Keep the summary factual and descriptive, without judgment or evaluation.`,
-  userTemplate: (transcript: string) =>
-    `Summarize this technical interview transcript. Provide a factual summary of the conversation - what questions were asked and how the candidate responded. Do not critique or evaluate the candidate's performance.
-
-Transcript:
-${transcript}
-
-Generate a neutral summary (200-400 words) that describes what was discussed in the interview.`,
 };
 
 // ============================================================================

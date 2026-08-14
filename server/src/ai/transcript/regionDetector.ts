@@ -180,7 +180,7 @@ export async function detectRegions(
       () =>
         client.chat.completions.create({
           model,
-          max_tokens: 1024,
+          max_completion_tokens: 1024,
           messages: [
             { role: "system", content: PROMPT_DETECT_REGIONS },
             {
