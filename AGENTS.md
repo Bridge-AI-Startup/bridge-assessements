@@ -197,6 +197,7 @@ See `server/config.env.example` for the full list. Key variables:
 - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` -- IAM user credentials on hosts like Render (or use default credential chain)
 - One-time migration: `npx tsx src/scripts/migrateProctoringLocalToS3.ts` (see `server/docs/VIDEO_PROCTORING_SYSTEM.md`)
 - Retroactive WebM merge (chunks → `playback.webm`): from `server/`, `npm run backfill:proctoring-video` (same as `npx tsx src/scripts/backfillMergedProctoringVideos.ts`; use `--dry-run` first)
+- Repair unseekable merged recordings (raw concat, no Cues/duration): `npx tsx src/scripts/repairMergedPlaybackVideos.ts` (dry-run default; `--apply` remuxes + overwrites, keeping the original at `{sessionId}/playback-preremux.webm`)
 - `TRANSCRIPT_GENERATION_ENABLED` -- Enable/disable AI transcript generation (default: `true`)
 - `PROCTORING_FRAME_INTERVAL_MS` -- Capture interval in ms (default: `5000`)
 - `PROCTORING_DEDUP_THRESHOLD` -- Pixel diff threshold for dedup (default: `0.03`)
@@ -337,6 +338,7 @@ server/src/
 │       └── manifestInjector.ts  # Inject sidecar events into transcript
 └── scripts/               # Utility/migration scripts
     ├── backfillMergedProctoringVideos.ts # Merge legacy WebM chunks → playback.webm + mergedVideo
+    ├── repairMergedPlaybackVideos.ts # Re-remux stored playback.webm files that shipped as raw concats (unseekable); dry-run default, --apply backs up original first
     ├── duplicateSubmissionWithTrace.ts
     ├── listSubmissions.ts
     ├── seedCompetition.ts   # Link Mongo Competition slug → assessment (hackathon dashboard)
@@ -459,7 +461,7 @@ server/src/
 - `GET /sessions/:sessionId/transcript` -- Get JSONL transcript
 
 *Companion (in-session voice transcript; candidate token or employer auth for GET):*
-- `POST /sessions/:sessionId/companion/prompt` -- Get system prompt for ElevenLabs companion (body: token)
+- `POST /sessions/:sessionId/companion/prompt` -- Get system prompt + spoken opener for the ElevenLabs companion (body: token). `firstMessage` is a post-start briefing (check-in, title-only intro, unzip / Node command); resume is a short welcome-back. Prompt includes standing instructions to help with post-start setup if asked, and to tell the candidate to reshare their entire screen whenever capture drops.
 - `POST /sessions/:sessionId/companion/messages` -- Record companion transcript messages (body: token, conversationId?, messages[])
 - `GET /sessions/:sessionId/companion/transcript` -- Get persisted companion transcript (query token or auth)
 
@@ -512,7 +514,7 @@ client/src/
 │   ├── GetStarted.jsx     # Registration -- email, password, company name
 │   ├── CreateAssessment.jsx    # Assessment creation -- AI generation or manual, reads localStorage pending data
 │   ├── AssessmentEditor.jsx    # Edit assessment -- title, desc, time, starter files, share links, bulk invite
-│   ├── CandidateAssessment.jsx # Candidate views assessment -- read-only details, start timer, submit local folder upload (auto-zipped client-side), opt-out
+│   ├── CandidateAssessment.jsx # Candidate views assessment -- workspace setup before the timer (Start gated on entire-screen share when recording is required; no skip), then brief + submit local folder upload (auto-zipped client-side), opt-out
 │   ├── CandidateSubmission.jsx # Shows mock submission data with code review
 │   ├── CandidateSubmitted.jsx  # Post-submission confirmation (you're done)
 │   ├── HackathonDashboard.jsx  # Challenge join + dashboard/leaderboard only; marketing landing may live on Framer (slug: `?slug=` > env > `config/competition.js`)
@@ -539,18 +541,19 @@ client/src/
 │   │   ├── AISidebar.jsx               # AI chat sidebar for assessment editing (quick action chips)
 │   │   ├── AssessmentPanel.jsx         # Assessment display panel
 │   │   ├── AssessmentResult.jsx        # Results display after submission
+│   │   ├── AssessmentSetup.jsx        # Pre-timer gate: entire-screen share required to enable Start when recording is on; zip/brief wait until start
 │   │   ├── CandidatePreviewModal.jsx   # Candidate assessment preview modal
 │   │   ├── ChatInput.jsx              # Input field for AI chat
 │   │   ├── DocumentBlock.jsx          # Reusable content block with edit, auto-resizing textarea
 │   │   └── PresetPills.jsx            # Quick preset job descriptions
 │   ├── BulkInviteModal.jsx            # 3-step CSV upload wizard: upload → review → success
 │   ├── proctoring/
-│   │   ├── ConsentScreen.jsx          # Consent dialog before screen recording
+│   │   ├── ConsentScreen.jsx          # Consent dialog before screen recording (no Skip when recording is required)
 │   │   ├── ScreenShareSetup.jsx       # Multi-monitor picker UI
 │   │   ├── RecordingIndicator.jsx     # Floating red recording badge
 │   │   ├── StreamStatusPanel.jsx      # Upload stats panel (frames, uploads, dedup)
-│   │   ├── ResharePrompt.jsx          # Stream-lost recovery modal
-│   │   └── ProctoringCompanionNotch.jsx # In-session ElevenLabs voice companion (notch dropdown, transcript flush)
+│   │   ├── ResharePrompt.jsx          # Stream-lost recovery modal (`required` hides continue-without)
+│   │   └── ProctoringCompanionNotch.jsx # In-session ElevenLabs voice companion (mounts after Start; startSession overrides.agent.firstMessage)
 │   └── ui/                             # 60+ Shadcn UI components (auto-generated, rarely edited)
 ├── config/
 │   ├── api.js             # API_BASE_URL: VITE_API_URL || localhost:5050 (dev) || Render URL (prod)
@@ -594,7 +597,7 @@ client/src/
 1. **Employer creates assessment**: Landing page → enters job description → stored in localStorage → CreateAssessment page auto-fills → AI generates assessment (extract requirements → generate components → quality review → behavioral checks) → saves to DB; manual path calls `generate-behavioral-checks` then create
 2. **Employer edits assessment**: AssessmentEditor page → AI chat sidebar for refinements → configure time limit, starter files, custom instructions
 3. **Employer shares link**: Generates unique token-based URL for candidate (single or bulk via CSV upload with email invitations via Resend)
-4. **Candidate accesses assessment**: Opens token URL → CandidateAssessment page → views read-only details → starts timer (status: pending → in-progress, captures IP/user agent)
+4. **Candidate accesses assessment**: Opens token URL → CandidateAssessment page → pre-timer gate (consent + entire-screen share; starter files and the brief stay hidden). When `evidenceMode` records the screen (`both` or leftover `screen`), sharing is mandatory: no skip/continue-without, Start is disabled until they share their entire screen (`displaySurface === "monitor"`, or any share if the browser does not report a surface), and a lost stream must be reshared (no dismiss). The in-session companion tells them to reshare their entire screen on every drop after the timer starts. Observation off (`none`) or leftover `workflow` does not require screen share. Start assessment begins the timer (`in-progress`), downloads the zip, and reveals the assignment
 5. **Candidate submits code**: Uploads project folder (client auto-zips) or submits GitHub link → backend stores source metadata (upload archive or pinned commit SHA) → status: submitted
 6. **Code indexing**: Repo is downloaded, chunked (200 lines/chunk, 40 line overlap), embedded via OpenAI, and upserted to Pinecone (used by the companion context center's code section when the index is ready)
 7. **Scoring**: Combined employer/leaderboard score from available signals — Process (how-they-worked rubric via `evaluationReport`) and Behavioral (E2B check pass rate)
@@ -686,7 +689,7 @@ Transcript: `transcript` { status (not_started/generating/completed/failed), sto
 
 Video: `videoChunks[]` { storageKey, screenIndex, startTime, endTime, sizeBytes } — cleared after a successful eager merge.
 
-Merged recording (screen 0): `mergedVideo` { status (`not_started` / `merging` / `ready` / `failed`), storageKey (typically `{sessionId}/playback.webm`), sizeBytes, durationSeconds, mergedAt, error, chunksDeletedAt, mergingStartedAt }. After **complete**, **submit** (all submit paths), or **opt-out**, the server merges + remuxes chunk WebMs into one file in storage, updates Mongo, then deletes per-chunk objects.
+Merged recording (screen 0): `mergedVideo` { status (`not_started` / `merging` / `ready` / `failed`), storageKey (typically `{sessionId}/playback.webm`), sizeBytes, durationSeconds, mergedAt, error, chunksDeletedAt, mergingStartedAt }. After **complete**, **submit** (all submit paths), or **opt-out**, the server merges + remuxes chunk WebMs into one file in storage, updates Mongo, then deletes per-chunk objects. The remux (`playbackRemux.ts`) is EBML-segment-aware: a recording is often several MediaRecorder sessions back to back (each restart writes a fresh EBML header and resets timestamps to 0), plain `ffmpeg -c copy` on that byte-concat fails with non-monotonic dts, and the old fallback shipped the raw concat — a file with no duration and no Cues that the Review player cannot seek (an evidence-chip jump from Summary stalled on a black frame until a page reload). It now splits at EBML header offsets and feeds the segments to ffmpeg's concat demuxer, which re-stamps timestamps; `repairMergedPlaybackVideos.ts` retrofits already-stored broken files.
 
 Stats: `stats` { totalFrames, uniqueFrames, duplicatesSkipped, totalSizeBytes, captureStartedAt, captureEndedAt }
 

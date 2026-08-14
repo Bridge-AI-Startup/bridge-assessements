@@ -303,7 +303,7 @@ server/src/
 │   ├── agentContext/
 │   │   └── contextCenter.ts   # Unified budgeted context bundle for the ElevenLabs voice agent (assessment/conversation/timeline/code)
 │   ├── companion/
-│   │   └── firstMessage.ts    # Setup-aware spoken opener + prompt notes for the in-session companion (evidence mode + starter files)
+│   │   └── firstMessage.ts    # Spoken opener after Start: title + unzip/command walkthrough; resume is a short welcome-back
 │   ├── behavioralGrading/
 │   │   ├── index.ts           # E2B behavioral grading orchestrator + in-process concurrency queue
 │   │   ├── planner.ts         # LLM: README → runbook plan (install/test/start)
@@ -540,7 +540,7 @@ Hooks-first capture of the candidate's AI-agent conversation + code changes, as 
 - `GET /sessions/:sessionId/transcript` -- Get JSONL transcript
 
 *Companion (in-session voice transcript; candidate token or employer auth for GET):*
-- `POST /sessions/:sessionId/companion/prompt` -- Get system prompt + spoken opener for the ElevenLabs companion (body: token). The prompt is assessment-aware (title only) and explicitly forbids solutions, hints, and code. `firstMessage` is built from the resolved evidence mode + whether starter files exist: it walks through full-screen share, unzip/open starters, and the Node capture-kit command when those steps apply. A remount after the companion has already spoken (`companion.status` active/completed) gets a short welcome-back instead of repeating the briefing.
+- `POST /sessions/:sessionId/companion/prompt` -- Get system prompt + spoken opener for the ElevenLabs companion (body: token). The prompt is assessment-aware (title only) and explicitly forbids solutions, hints, and code. `firstMessage` is a post-start briefing: check-in, title-only project intro, then unzip / starter repo / Node command (screen share already happened on the previous screen). A remount after the companion has already spoken (`companion.status` active/completed) gets a short welcome-back instead of repeating the briefing.
 - `POST /sessions/:sessionId/companion/messages` -- Record companion transcript messages (body: token, conversationId?, messages[]); one JSONL blob per flush under `{sessionId}/companion/`
 - `POST /sessions/:sessionId/companion/complete` -- Mark the companion conversation finished (body: token)
 - `GET /sessions/:sessionId/companion/transcript` -- Get persisted companion transcript (query token or auth; `?format=jsonl` for raw)
@@ -548,10 +548,12 @@ Hooks-first capture of the candidate's AI-agent conversation + code changes, as 
 **In-session voice companion.** While the candidate works, an ElevenLabs agent listens and
 asks the occasional one-line follow-up so their *reasoning* is captured alongside their code.
 The spoken opener
-(`services/companion/firstMessage.ts`) is not a generic greeting: it matches the
-on-screen setup for that assessment (entire-screen share when recording, unzip/open
-starter files, run the Node capture-kit command when workflow capture is on) and never
-reads the token or URL aloud. **It is proactive**, not
+(`services/companion/firstMessage.ts`) runs **after Start**, when the companion mounts: a short check-in, the assessment **title** only (never the description), then the on-the-clock setup — unzip starter-code.zip / open the starter repo, run the Node command on the page, type agree, open Claude/Cursor/Codex in that folder. Screen share already happened on the pre-timer gate, so the opener does not re-brief it; a one-liner to keep sharing the entire screen is enough. Prompt notes recap those post-start steps if they ask what to do first, and never read the token or URL aloud. Resume (companion already spoke this session) is a short welcome-back.
+When screen recording is required, a lost stream (including resume-after-refresh)
+sends an ElevenLabs `sendContextualUpdate` so the companion **speaks every time**
+and tells them to reshare their entire screen — not a window/tab; they cannot
+continue without sharing. Standing instructions in `COMPANION_PROMPT_BASE` recap
+the same if they ask. **It is proactive**, not
 answer-only: `COMPANION_PROMPT_BASE` (in `controllers/proctoring.ts`) tells it to poll
 `get_candidate_context` with `topics: ["timeline"]` roughly every couple of minutes, read the
 `latest` array, and open with a question about something concrete the candidate just did
@@ -561,12 +563,34 @@ survive any edit: at most one proactive question every couple of minutes, `skip_
 candidate is mid-flow, **never** `code` or `episodes` topics (code makes hinting too easy;
 episodes only exist after capture ends, so live it always returns empty), and the hint ban —
 "why did you pick that order?" is fine, "have you considered the other way?" is forbidden.
+A second set of guardrails came from a live smoke test where the agent interrogated a
+candidate all through setup ("what are you working on right now?" on loop), pinged every
+silence with "are you still there?", re-read its whole opener mid-conversation, and lectured
+about Google Cloud Code after mishearing "Claude Code". All of these must also survive any
+edit: **setup is quiet time** (until the timeline shows a prompt to their AI assistant, a
+file edit, or an app/test run, the default on every turn is `skip_turn` — unzip/install/agree
+activity is never question material); every proactive question must be **anchored to a named
+timeline entry**, generic "what are you doing / trying to achieve" invitations are forbidden;
+**silence never gets a nudge** (the ElevenLabs turn-timeout hands the LLM a turn when the
+candidate is quiet — the prompt tells it that turn is `skip_turn`, never "are you still
+there?"; the one sanctioned exception is a single warm "what are you working on?" after
+roughly ten minutes of no narration *and* no timeline-anchored question — a fallback, never
+a loop, and never used when a concrete question is available); questions target what the
+candidate has **not already narrated aloud** — self-explained decisions are captured and are
+not re-asked; a bare status update gets at most a brief acknowledgment, not a follow-up question;
+the opener is never repeated or paraphrased (and if the candidate says "you already said
+that", apologize briefly and go quiet); and the agent never explains or defines tools —
+misheard names are let pass, not guessed at.
 It carries the same honesty carve-out as the interviewer: never volunteer that the session is
 captured, but never deny it when asked directly. The overlay is
 [`ProctoringCompanionNotch.jsx`](client/src/components/proctoring/ProctoringCompanionNotch.jsx):
 it auto-starts when mounted with a proctoring `sessionId` + candidate `token`, buffers
 transcript lines in memory, and POSTs them every 10s (a failed flush pushes the lines back
-onto the buffer rather than dropping them). The parent **must** call
+onto the buffer rather than dropping them). The server `firstMessage` is passed into
+ElevenLabs as `startSession({ overrides: { agent: { firstMessage } } })` — without that field
+the dashboard default greeting plays. `CandidateAssessment` passes `reshareRequestId`
+so every in-progress stream loss (and resume-after-refresh) calls `sendContextualUpdate`.
+The parent **must** call
 `ref.current.endAndFlush()` before completing the proctoring session — `CandidateAssessment`
 does this on submit, opt-out, and time-out (`stopProctoringCapture`), and unmount runs it as a backstop. It is gated on
 `VITE_ELEVENLABS_AGENT_ID` through [`client/src/config/companion.js`](client/src/config/companion.js);
@@ -633,7 +657,7 @@ client/src/
 │   ├── GetStarted.jsx     # Registration -- email, password, company name
 │   ├── CreateAssessment.jsx    # Assessment creation -- AI generation or manual, reads localStorage pending data
 │   ├── AssessmentEditor.jsx    # Edit assessment -- title, desc, time, starter files, share links, bulk invite
-│   ├── CandidateAssessment.jsx # Candidate views assessment -- start timer, screen share, submit/opt-out; capture flushes before submit and only completes after success; pagehide beacons sidecar/companion; past-grace attempts redirect after the server reaper
+│   ├── CandidateAssessment.jsx # Candidate views assessment -- workspace setup (screen/starters/capture-kit) before the timer; Start gated on entire-screen share when recording is required (no skip); then brief + submit; capture flushes before submit and only completes after success; pagehide beacons sidecar/companion; past-grace attempts redirect after the server reaper
 │   ├── CandidateSubmission.jsx # Shows mock submission data with code review
 │   ├── CandidateSubmitted.jsx  # Post-submission confirmation (you're done)
 │   ├── HackathonDashboard.jsx  # Challenge join + dashboard/leaderboard only; marketing landing may live on Framer (slug: `?slug=` > env > `config/competition.js`)
@@ -657,6 +681,7 @@ client/src/
 ├── components/
 │   ├── assessment/
 │   │   ├── AISidebar.jsx               # AI chat sidebar for assessment editing (quick action chips)
+│   │   ├── AssessmentSetup.jsx        # Pre-timer gate: entire-screen share required to enable Start when recording is on; zip/brief wait until start
 │   │   ├── CandidatePreviewModal.jsx   # Candidate assessment preview modal
 │   │   ├── DocumentBlock.jsx          # Reusable content block with edit, auto-resizing textarea
 │   │   └── PresetPills.jsx            # Quick preset job descriptions
@@ -667,11 +692,11 @@ client/src/
 │   │   ├── EvidenceMomentChips.jsx        # Rubric evidence as clickable time+observation chips that seek the recording
 │   │   └── WorkflowActivityTimeline.jsx   # "What they did": prompting conversation + screen-context beats under the Recording player for `both` (click-to-seek); Summary only for leftover workflow-only
 │   ├── proctoring/
-│   │   ├── ConsentScreen.jsx          # Consent dialog before screen recording
+│   │   ├── ConsentScreen.jsx          # Consent dialog before screen recording (no Skip when recording is required)
 │   │   ├── RecordingIndicator.jsx     # Floating red recording badge
 │   │   ├── StreamStatusPanel.jsx      # Upload stats panel (frames, uploads, dedup)
-│   │   ├── ResharePrompt.jsx          # Stream-lost recovery modal
-│   │   └── ProctoringCompanionNotch.jsx # In-session ElevenLabs voice companion (notch dropdown, transcript flush)
+│   │   ├── ResharePrompt.jsx          # Stream-lost recovery modal (`required` hides continue-without)
+│   │   └── ProctoringCompanionNotch.jsx # In-session ElevenLabs voice companion (notch dropdown, transcript flush; speaks on every stream loss)
 │   └── ui/                             # 60+ Shadcn UI components (auto-generated, rarely edited)
 ├── config/
 │   ├── api.js             # API_BASE_URL: VITE_API_URL || localhost:5050 (dev) || Render URL (prod)
@@ -715,7 +740,7 @@ client/src/
 1. **Employer creates assessment**: Landing page → enters job description → stored in localStorage → CreateAssessment page auto-fills → AI generates assessment (extract requirements → generate components → quality review → behavioral checks) → saves to DB; manual path calls `generate-behavioral-checks` then create
 2. **Employer edits assessment**: AssessmentEditor page → AI chat sidebar for refinements → configure time limit, starter files, evidence mode
 3. **Employer shares link**: Generates unique token-based URL for candidate (single or bulk via CSV upload with email invitations via Resend)
-4. **Candidate accesses assessment**: Opens token URL → CandidateAssessment page → views read-only details → starts timer (status: pending → in-progress, captures IP/user agent)
+4. **Candidate accesses assessment**: Opens token URL → CandidateAssessment page → pre-timer gate (consent + entire-screen share; starter files and the brief stay hidden). When `evidenceMode` records the screen (`both` or leftover `screen`), sharing is mandatory: no skip/continue-without, Start is disabled until they share their entire screen (`displaySurface === "monitor"`, or any share if the browser does not report a surface), and a lost stream must be reshared (no dismiss). The in-session companion tells them to reshare their entire screen on every drop after the timer starts. Observation off (`none`) or leftover `workflow` does not require screen share. Start assessment begins the timer (`in-progress`), downloads the zip, and reveals the assignment
 5. **Candidate submits code**: Uploads project folder (client auto-zips) or submits GitHub link → backend stores source metadata (upload archive or pinned commit SHA) → status: submitted
 6. **Code indexing**: Repo is downloaded, chunked (200 lines/chunk, 40 line overlap), embedded via OpenAI, and upserted to Pinecone (used by the companion context center's code section when the index is ready)
 7. **Scoring**: Combined employer/leaderboard score from available signals — Process (how-they-worked rubric via `evaluationReport`) and Behavioral (E2B check pass rate). Deprecated Trace / LLM-workflow scoring was removed.

@@ -9,7 +9,12 @@ import { COMPANION_ENABLED } from "@/config/companion";
  * candidate's AI conversation and code changes are captured by the capture kit.
  * Describing only the screen would understate the more invasive of the two.
  */
-export default function ConsentScreen({ onConsent, onDecline, evidenceMode = "screen" }) {
+export default function ConsentScreen({
+  onConsent,
+  onDecline,
+  evidenceMode = "screen",
+  allowSkip = true,
+}) {
   const alsoCapturesWorkflow = evidenceMode === "both";
   const [agreed, setAgreed] = useState(false);
 
@@ -29,9 +34,13 @@ export default function ConsentScreen({ onConsent, onDecline, evidenceMode = "sc
             : "Screen Recording Consent"}
         </h2>
         <p className="text-sm text-gray-500 mt-2">
-          {COMPANION_ENABLED
-            ? "This assessment includes optional screen recording and a voice check-in to capture how you work."
-            : "This assessment includes optional screen recording to verify your work."}
+          {allowSkip
+            ? COMPANION_ENABLED
+              ? "This assessment includes optional screen recording and a voice check-in to capture how you work."
+              : "This assessment includes optional screen recording to verify your work."
+            : COMPANION_ENABLED
+              ? "This assessment requires screen recording and includes a voice check-in to capture how you work."
+              : "This assessment requires screen recording to verify your work."}
         </p>
         {alsoCapturesWorkflow && (
           <p className="text-sm text-gray-700 mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-left">
@@ -52,11 +61,12 @@ export default function ConsentScreen({ onConsent, onDecline, evidenceMode = "sc
         <div className="text-sm text-amber-950">
           <p className="font-semibold text-amber-950 mb-1">Eligibility</p>
           <p>
-            In the next step your browser will ask what to share. To remain
-            eligible for official scoring, choose{" "}
+            In the next step your browser will ask what to share. Choose{" "}
             <strong className="font-semibold">Entire Screen</strong> (your full
-            display). Sharing only a single app window or a browser tab may make
-            your attempt ineligible.
+            display)
+            {allowSkip
+              ? ". Sharing only a single app window or a browser tab may make your attempt ineligible."
+              : " — not a window or a browser tab. You cannot start without sharing your entire screen."}
           </p>
         </div>
       </div>
@@ -90,8 +100,10 @@ export default function ConsentScreen({ onConsent, onDecline, evidenceMode = "sc
         <div className="flex items-start gap-3">
           <Monitor className="w-5 h-5 text-purple-500 mt-0.5 flex-shrink-0" />
           <p className="text-sm text-gray-600">
-            You can add more than one display if you use multiple monitors. You
-            can stop sharing at any time.
+            You can add more than one display if you use multiple monitors.
+            {allowSkip
+              ? " You can stop sharing at any time."
+              : " Keep sharing until you submit. If sharing stops, you will be asked to reshare your entire screen."}
           </p>
         </div>
       </div>
@@ -111,10 +123,12 @@ export default function ConsentScreen({ onConsent, onDecline, evidenceMode = "sc
       </label>
 
       <div className="flex gap-3">
-        <Button variant="outline" onClick={onDecline} className="flex-1">
-          <XCircle className="w-4 h-4 mr-2" />
-          Skip Recording
-        </Button>
+        {allowSkip && onDecline && (
+          <Button variant="outline" onClick={onDecline} className="flex-1">
+            <XCircle className="w-4 h-4 mr-2" />
+            Skip Recording
+          </Button>
+        )}
         <Button
           onClick={onConsent}
           disabled={!agreed}
@@ -124,6 +138,15 @@ export default function ConsentScreen({ onConsent, onDecline, evidenceMode = "sc
           Continue with Recording
         </Button>
       </div>
+      {!allowSkip && onDecline && (
+        <button
+          type="button"
+          onClick={onDecline}
+          className="mt-3 w-full text-sm text-gray-500 hover:text-gray-700 py-2"
+        >
+          Go back
+        </button>
+      )}
     </motion.div>
   );
 }

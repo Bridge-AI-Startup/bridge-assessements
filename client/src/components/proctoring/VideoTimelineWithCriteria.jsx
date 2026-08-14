@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Play, Pause, Maximize2, Tag } from "lucide-react";
+import { Play, Pause, Maximize2, Tag, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import BoundingBoxOverlay from "./BoundingBoxOverlay";
 
@@ -66,6 +66,7 @@ function videoHasMetadata(video) {
  * @param {number} [seekToSec] - External seek request; applied after HAVE_METADATA, never before
  * @param {number} [seekNonce] - Bump to re-trigger a seek to the same second
  * @param {function} [onPlaybackError] - Signed URL expired or media failed; parent may refresh
+ * @param {boolean} [highlightsPending] - Scoring still running; timeline bands are not in yet
  * @param {string} [className]
  */
 export default function VideoTimelineWithCriteria({
@@ -78,6 +79,7 @@ export default function VideoTimelineWithCriteria({
   seekToSec = null,
   seekNonce = null,
   onPlaybackError,
+  highlightsPending = false,
   className,
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -143,10 +145,19 @@ export default function VideoTimelineWithCriteria({
     if (pending == null || !Number.isFinite(pending) || !videoHasMetadata(video)) {
       return false;
     }
+    // Legacy un-remuxed recordings report Infinity duration; fall back to the
+    // API's duration hint so an evidence seek can never target past the end of
+    // the stream (an unclamped over-the-end seek leaves the element black).
     const d = video.duration;
-    const target =
+    const knownDuration =
       Number.isFinite(d) && d > 0
-        ? Math.max(0, Math.min(pending, d))
+        ? d
+        : Number.isFinite(durationHintSec) && durationHintSec > 0
+          ? durationHintSec
+          : null;
+    const target =
+      knownDuration != null
+        ? Math.max(0, Math.min(pending, knownDuration))
         : Math.max(0, pending);
     pendingSeekRef.current = null;
     const wantPlay = playAfterSeekRef.current;
@@ -337,6 +348,14 @@ export default function VideoTimelineWithCriteria({
             seekTo(pct * effectiveDuration);
           }}
         >
+          {highlightsPending && highlights.length === 0 ? (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <span className="inline-flex items-center gap-2 rounded-full bg-black/55 px-3 py-1 text-[11px] text-white/90">
+                <Loader2 className="w-3 h-3 animate-spin" aria-hidden />
+                Scoring still running — moments will appear here
+              </span>
+            </div>
+          ) : null}
           {/* Highlight segments and points */}
           {highlights.map((h, i) => {
             const startPct = effectiveDuration > 0 ? (h.startSec / effectiveDuration) * 100 : 0;
@@ -403,11 +422,15 @@ export default function VideoTimelineWithCriteria({
             })}
           </div>
         )}
-        {highlights.length > 0 && (
+        {highlightsPending && highlights.length === 0 ? (
+          <p className="mt-1.5 text-[10px] text-gray-400">
+            Criteria highlights land on this bar once scoring finishes.
+          </p>
+        ) : highlights.length > 0 ? (
           <p className="mt-1.5 text-[10px] text-gray-400">
             Click a coloured band to jump the video to that moment.
           </p>
-        )}
+        ) : null}
       </div>
 
       {/* Selected highlight detail panel */}

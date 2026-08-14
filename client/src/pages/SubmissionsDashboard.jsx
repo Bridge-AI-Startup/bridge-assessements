@@ -164,6 +164,40 @@ function hasEvaluableWorkflowReport(sub) {
   return n > 0;
 }
 
+const EVALUATION_RECENT_MS = 15 * 60 * 1000;
+
+/** Process scoring is still in flight — surfaces should say so, not look empty. */
+function isEvaluationInProgress(sub, evaluatingId) {
+  if (!sub) return false;
+  if (hasEvaluableWorkflowReport(sub)) return false;
+  if (evaluatingId && evaluatingId === sub._id) return true;
+  if (sub.evaluationStatus === "pending") return true;
+  if (sub.evaluationStatus === "failed") return false;
+  if (sub.status !== "submitted") return false;
+  if (sub.evaluationReport?.criteria_results?.length) return false;
+  return Boolean(
+    sub.submittedAt &&
+      Date.now() - new Date(sub.submittedAt).getTime() < EVALUATION_RECENT_MS
+  );
+}
+
+function isBehavioralGradingInProgress(sub, gradingId) {
+  if (!sub) return false;
+  if (gradingId && gradingId === sub._id) return true;
+  return sub.behavioralGradingStatus === "pending";
+}
+
+function ScoringPendingNote({ children, className = "" }) {
+  return (
+    <div
+      className={`flex items-center gap-2 text-sm text-gray-500 ${className}`}
+    >
+      <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+      <span>{children}</span>
+    </div>
+  );
+}
+
 /** Behavioral checks → 0–100 (pass=1, inconclusive=0.5, fail=0), when grading completed. */
 function getBehavioralPass0to100(sub) {
   if (sub.behavioralGradingStatus !== "completed") return null;
@@ -293,7 +327,7 @@ function BehavioralProductCard({ highlights, onSeeCode }) {
   let body = null;
   if (highlights.status === "pending") {
     body = (
-      <p className="text-sm text-gray-600">Checks are still running.</p>
+      <ScoringPendingNote>Checks are still running.</ScoringPendingNote>
     );
   } else if (highlights.status === "failed") {
     body = (
@@ -1102,7 +1136,8 @@ export default function SubmissionsDashboard() {
 
   // Load workflow capture (if any) whenever the evaluation modal opens.
   // Independent of the proctoring load: a workflow submission has no proctoring
-  // session, and a "both" submission has both.
+  // session, and a "both" submission has both. Re-fetch when scoring finishes
+  // so screen-context beats and episodes appear without closing the dialog.
   useEffect(() => {
     let cancelled = false;
     const submissionId = selectedEvaluationSubmission?._id;
@@ -1139,7 +1174,11 @@ export default function SubmissionsDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [showEvaluationModal, selectedEvaluationSubmission?._id]);
+  }, [
+    showEvaluationModal,
+    selectedEvaluationSubmission?._id,
+    selectedEvaluationSubmission?.evaluationStatus,
+  ]);
 
   // In-session voice companion — this is the "agent communication" the
   // candidate actually had during the assessment.
@@ -1403,6 +1442,14 @@ export default function SubmissionsDashboard() {
   useEffect(() => {
     if (evaluationTab === "recording" && !recordsScreen) {
       setEvaluationTab("summary");
+    }
+    // A chip-requested seek is for one visit to the Recording tab. Leaving the
+    // tab clears it; without this, every later mount of the player re-applies
+    // the stale seek (Radix unmounts inactive tab content), so a jump that
+    // failed once — e.g. into an unseekable legacy recording — kept failing
+    // until a full page reload.
+    if (evaluationTab !== "recording") {
+      setRecordingSeekSec(null);
     }
   }, [evaluationTab, recordsScreen]);
 
@@ -1951,6 +1998,15 @@ export default function SubmissionsDashboard() {
     (workflowAnalysis?.episodes?.length
       ? workflowAnalysis.episodes
       : workflowSession?.episodes) || [];
+
+  const evaluationInProgress = isEvaluationInProgress(
+    selectedEvaluationSubmission,
+    evaluatingSubmissionId
+  );
+  const behavioralGradingInProgress = isBehavioralGradingInProgress(
+    selectedEvaluationSubmission,
+    behavioralGradingSubmissionId
+  );
 
   /**
    * Jump the recording to a captured moment (rubric chip or activity row).
@@ -3464,14 +3520,23 @@ export default function SubmissionsDashboard() {
                           <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
                             Combined
                           </p>
-                          <p className="text-2xl font-medium tracking-[-0.012em] text-gray-900 tabular-nums leading-tight">
-                            {combined != null ? Math.round(combined) : "—"}
-                            {combined != null ? (
+                          {combined != null ? (
+                            <p className="text-2xl font-medium tracking-[-0.012em] text-gray-900 tabular-nums leading-tight">
+                              {Math.round(combined)}
                               <span className="text-sm font-medium text-gray-400">
                                 /100
                               </span>
-                            ) : null}
-                          </p>
+                            </p>
+                          ) : evaluationInProgress ||
+                            behavioralGradingInProgress ? (
+                            <ScoringPendingNote className="mt-1">
+                              Scoring…
+                            </ScoringPendingNote>
+                          ) : (
+                            <p className="text-2xl font-medium tracking-[-0.012em] text-gray-900 tabular-nums leading-tight">
+                              —
+                            </p>
+                          )}
                           {breakdown ? (
                             <p className="text-[10px] text-gray-500 leading-snug max-w-[16rem]">
                               {breakdown}
@@ -3482,19 +3547,37 @@ export default function SubmissionsDashboard() {
                           <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
                             Process
                           </p>
-                          <p className="text-lg font-semibold text-gray-900 tabular-nums leading-tight">
-                            {processAvg != null
-                              ? `${processAvg.toFixed(1)}/10`
-                              : "—"}
-                          </p>
+                          {processAvg != null ? (
+                            <p className="text-lg font-semibold text-gray-900 tabular-nums leading-tight">
+                              {`${processAvg.toFixed(1)}/10`}
+                            </p>
+                          ) : evaluationInProgress ? (
+                            <ScoringPendingNote className="mt-1">
+                              Scoring…
+                            </ScoringPendingNote>
+                          ) : (
+                            <p className="text-lg font-semibold text-gray-900 tabular-nums leading-tight">
+                              —
+                            </p>
+                          )}
                         </div>
                         <div>
                           <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
                             Behavioral
                           </p>
-                          <p className="text-lg font-semibold text-gray-900 tabular-nums leading-tight">
-                            {behPct != null ? `${Math.round(behPct)}%` : "—"}
-                          </p>
+                          {behPct != null ? (
+                            <p className="text-lg font-semibold text-gray-900 tabular-nums leading-tight">
+                              {`${Math.round(behPct)}%`}
+                            </p>
+                          ) : behavioralGradingInProgress ? (
+                            <ScoringPendingNote className="mt-1">
+                              Scoring…
+                            </ScoringPendingNote>
+                          ) : (
+                            <p className="text-lg font-semibold text-gray-900 tabular-nums leading-tight">
+                              —
+                            </p>
+                          )}
                         </div>
                         <div>
                           <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
@@ -3672,6 +3755,16 @@ export default function SubmissionsDashboard() {
                         </div>
                       )}
                     </div>
+                  ) : evaluationInProgress ? (
+                    <div className="rounded-xl border border-gray-200 bg-white px-4 py-4">
+                      <h3 className="text-sm font-semibold text-gray-900 mb-3">
+                        Rubric
+                      </h3>
+                      <ScoringPendingNote>
+                        Evaluation running… scores and evidence will appear
+                        here.
+                      </ScoringPendingNote>
+                    </div>
                   ) : null}
 
                   {/* Spoken reasoning (voice companion): what they said aloud,
@@ -3683,12 +3776,27 @@ export default function SubmissionsDashboard() {
                         ?.communication
                     }
                     onSeek={recordsScreen ? handleSeekRecording : null}
+                    pending={
+                      evaluationInProgress &&
+                      (companionLoading ||
+                        (Array.isArray(companionMessages) &&
+                          companionMessages.length > 0))
+                    }
                   />
 
                   {/* Workflow capture: the hooks-first evidence path. Present
                       for workflow/both submissions; absent for screen-only,
                       where this renders nothing at all. */}
-                  {workflowSession && (
+                  {workflowLoading && !workflowSession ? (
+                    <div className="mb-6 rounded-xl border border-gray-200 bg-white px-4 py-4">
+                      <h4 className="text-sm font-semibold text-gray-900 mb-3">
+                        How they worked
+                      </h4>
+                      <ScoringPendingNote>
+                        Loading captured workflow…
+                      </ScoringPendingNote>
+                    </div>
+                  ) : workflowSession ? (
                     <div className="mb-6 rounded-xl border border-gray-200 bg-white overflow-hidden">
                       <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-3">
                         <h4 className="text-sm font-semibold text-gray-900">
@@ -3784,6 +3892,14 @@ export default function SubmissionsDashboard() {
                               onSeek={null}
                               className="border-0 border-b border-gray-100 rounded-none"
                             />
+                          ) : !activityTimelineOnRecording &&
+                            (workflowLoading || evaluationInProgress) ? (
+                            <WorkflowActivityTimeline
+                              timeline={[]}
+                              pending
+                              onSeek={null}
+                              className="border-0 border-b border-gray-100 rounded-none"
+                            />
                           ) : null}
 
                           {/* Episodes: the narrative layer a reviewer actually
@@ -3815,6 +3931,12 @@ export default function SubmissionsDashboard() {
                                 </div>
                               ))}
                             </div>
+                          ) : evaluationInProgress || workflowLoading ? (
+                            <div className="px-4 py-4">
+                              <ScoringPendingNote>
+                                Building episode summary…
+                              </ScoringPendingNote>
+                            </div>
                           ) : (
                             <div className="px-4 py-4 space-y-2">
                               <p className="text-sm text-gray-500">
@@ -3844,15 +3966,11 @@ export default function SubmissionsDashboard() {
                         </>
                       )}
                     </div>
-                  )}
+                  ) : null}
 
                   {!selectedEvaluationSubmission?.evaluationReport &&
-                  selectedEvaluationSubmission?.evaluationStatus === "pending" ? (
-                    <div className="flex items-center justify-center gap-2 text-sm text-gray-500 py-8">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Evaluation running…
-                    </div>
-                  ) : !selectedEvaluationSubmission?.evaluationReport && selectedEvaluationSubmission ? (
+                  !evaluationInProgress &&
+                  selectedEvaluationSubmission ? (
                     <div className="py-8 text-center">
                       <BarChart3 className="w-12 h-12 mx-auto mb-2 text-gray-400" />
                       <p className="text-gray-500 mb-3">
@@ -4199,7 +4317,9 @@ export default function SubmissionsDashboard() {
                               selectedEvaluationSubmission?.behavioralGradingReport
                                 ?.runbook?.evidence || [];
                             if (!entries.length) {
-                              return "No behavioral execution logs available yet.";
+                              return behavioralGradingInProgress
+                                ? "Behavioral grading is still running…"
+                                : "No behavioral execution logs available yet.";
                             }
 
                             return entries
@@ -4358,6 +4478,7 @@ export default function SubmissionsDashboard() {
                                     seekToSec={recordingSeekSec?.sec ?? null}
                                     seekNonce={recordingSeekSec?.at ?? null}
                                     onPlaybackError={handleRecordingPlaybackError}
+                                    highlightsPending={evaluationInProgress}
                                     className="w-full"
                                   />
                                 )}
@@ -4411,11 +4532,14 @@ export default function SubmissionsDashboard() {
                       timeline={workflowAnalysis.timeline}
                       onSeek={handleSeekRecording}
                     />
-                  ) : activityTimelineOnRecording && workflowLoading ? (
-                    <div className="flex items-center gap-2 text-sm text-gray-500 py-4">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Loading captured activity…
-                    </div>
+                  ) : activityTimelineOnRecording &&
+                    (workflowLoading ||
+                      (evaluationInProgress && workflowSession)) ? (
+                    <WorkflowActivityTimeline
+                      timeline={[]}
+                      pending
+                      onSeek={handleSeekRecording}
+                    />
                   ) : null}
 
                   {/* Leftover `screen` assessments still have a video OCR
@@ -4443,9 +4567,16 @@ export default function SubmissionsDashboard() {
                           No proctoring session for this submission.
                         </p>
                       ) : recordingSession.transcript?.status !== "completed" ? (
-                        <p className="text-sm text-gray-500">
-                          Screen transcript not available yet.
-                        </p>
+                        evaluationInProgress ||
+                        recordingSession.transcript?.status === "generating" ? (
+                          <ScoringPendingNote className="py-4">
+                            Screen transcript is still being generated…
+                          </ScoringPendingNote>
+                        ) : (
+                          <p className="text-sm text-gray-500">
+                            Screen transcript not available yet.
+                          </p>
+                        )
                       ) : Array.isArray(recordingTranscript) && recordingTranscript.length > 0 ? (
                         <div className="bg-gray-50 rounded-lg border border-gray-200 p-3 max-h-[40vh] overflow-y-auto space-y-2">
                           <p className="text-xs text-gray-500 mb-2">Raw transcript (human-readable summary not yet generated)</p>

@@ -8,43 +8,55 @@ export type CompanionSetupFacts = {
   evidenceMode: EvidenceMode;
   hasStarterZip: boolean;
   hasStarterRepo: boolean;
+  /** Assessment title only — never pass the description. */
+  title?: string | null;
   /** Refresh / remount after the companion has already spoken once. */
   isResume?: boolean;
 };
 
 const GREETING =
-  "You're about to start a coding problem as part of this assessment. I'm here as a quick check-in so you can talk through what you're doing as you code — it helps capture your thinking. No pressure, and I won't give hints or answers.";
+  "You're in. I'm here as a quick check-in so you can talk through what you're doing as you code — it helps capture your thinking. No pressure, and I won't give hints or answers.";
 
 const RESUME_MESSAGE =
   "Welcome back. I'm still here if you want to talk through what you're working on. No hints or answers from me — just think out loud when it helps.";
 
+const TITLE_SPEAK_MAX = 120;
+
 /**
- * Spoken sentences that match the on-screen "Do this first" / capture-kit
- * instructions. Never includes tokens, URLs, or the full command — those are
- * unspeakable and already on the page.
+ * Light project intro from the title only. Never include a description,
+ * requirements, or a URL that snuck into the title field.
+ */
+export function companionTitleSentence(title?: string | null): string | null {
+  const cleaned = (title ?? "")
+    .replace(/https?:\/\/\S+/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return null;
+  const spoken =
+    cleaned.length > TITLE_SPEAK_MAX
+      ? `${cleaned.slice(0, TITLE_SPEAK_MAX - 1).trimEnd()}…`
+      : cleaned;
+  return `You're working on ${spoken}. The assignment is on the page — work from what's written there.`;
+}
+
+/**
+ * Spoken post-start setup: unzip / starter repo, capture-kit command, then a
+ * keep-sharing one-liner if the screen is already being recorded. Does not
+ * re-brief "share your entire screen" as if they haven't — that was the
+ * pre-timer gate.
  */
 export function companionSetupSentences(facts: CompanionSetupFacts): string[] {
   const screen = shouldCaptureScreen(facts.evidenceMode);
   const workflow = shouldCaptureWorkflow(facts.evidenceMode);
   const sentences: string[] = [];
 
-  if (screen) {
-    sentences.push(
-      "To start, make sure you shared your entire screen — not just a window or a tab."
-    );
-  }
-
   if (facts.hasStarterZip) {
     sentences.push(
-      screen
-        ? "Unzip the starter files that just downloaded and work in that folder, not a blank project."
-        : "To start, unzip the starter files that just downloaded and work in that folder, not a blank project."
+      "To start, unzip the starter files that just downloaded and work in that folder, not a blank project."
     );
   } else if (facts.hasStarterRepo) {
     sentences.push(
-      screen
-        ? "Open the starter repository linked on the page and work from those files, not a blank project."
-        : "To start, open the starter repository linked on the page and work from those files, not a blank project."
+      "To start, open the starter repository linked on the page and work from those files, not a blank project."
     );
   }
 
@@ -62,18 +74,27 @@ export function companionSetupSentences(facts: CompanionSetupFacts): string[] {
     );
   }
 
+  if (screen) {
+    sentences.push("Keep sharing your entire screen while you work.");
+  }
+
   return sentences;
 }
 
-/** First thing the companion says. Setup-aware on a fresh start; short on resume. */
+/** First thing the companion says after Start. Resume stays a short welcome-back. */
 export function buildCompanionFirstMessage(facts: CompanionSetupFacts): string {
   if (facts.isResume) return RESUME_MESSAGE;
 
+  const parts = [GREETING];
+  const titleSentence = companionTitleSentence(facts.title);
+  if (titleSentence) parts.push(titleSentence);
   const setup = companionSetupSentences(facts);
-  if (setup.length === 0) {
-    return `${GREETING} Ready when you are.`;
+  if (setup.length > 0) {
+    parts.push(...setup);
+  } else {
+    parts.push("Ready when you are.");
   }
-  return `${GREETING} ${setup.join(" ")} Ready when you are.`;
+  return parts.join(" ");
 }
 
 /**
@@ -87,7 +108,7 @@ export function companionSetupPromptNotes(facts: CompanionSetupFacts): string {
 
   if (screen) {
     steps.push(
-      "- Share the entire screen (full display), not a single window or browser tab."
+      "- They already shared their entire screen to start. Remind them only to keep sharing the full display (not a window or tab). Do not brief them to share as if they haven't."
     );
   }
   if (facts.hasStarterZip) {
@@ -109,9 +130,14 @@ export function companionSetupPromptNotes(facts: CompanionSetupFacts): string {
     return "";
   }
 
-  return `## Setup they were walked through
+  const lostShare =
+    screen
+      ? `\n\nIf their screen share drops during the assessment, tell them immediately to reshare their entire screen (full display), not a window or tab. They cannot continue without sharing. Do not offer to continue without recording.`
+      : "";
 
-You already said this in your first message. Do not repeat that briefing unless they ask what to do first. If they ask, recap only the steps below — never invent extras, and never read out tokens, URLs, or the full command.
+  return `## Post-start setup
 
-${steps.join("\n")}`;
+Screen share (when this assessment records the screen) already happened on the previous screen, before the timer. After Start they still need to unzip or open the starter and run the Node command — help with those if they ask, matching the steps below. Never invent extras, never read the assignment description, and never read out tokens, URLs, or the full command.
+
+${steps.join("\n")}${lostShare}`;
 }

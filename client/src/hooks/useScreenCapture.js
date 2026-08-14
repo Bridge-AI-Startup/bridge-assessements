@@ -60,8 +60,10 @@ function installGlobalScreenShareDebugHooksOnce() {
  * Supports single or multiple screens.
  *
  * @returns {{
- *   streams: Array<{stream: MediaStream, screenIndex: number, label: string}>,
+ *   streams: Array<{stream: MediaStream, screenIndex: number, label: string, displaySurface: string | null}>,
  *   isSharing: boolean,
+ *   isSharingFullScreen: boolean,
+ *   displaySurface: string | null,
  *   error: string | null,
  *   startCapture: () => Promise<MediaStream>,
  *   addStream: () => Promise<void>,
@@ -97,11 +99,12 @@ export default function useScreenCapture() {
       const track = mediaStream.getVideoTracks()[0];
       const label = track.label || `Screen ${screenIndex + 1}`;
       const settings = track.getSettings();
+      const displaySurface = settings.displaySurface || null;
 
-      // Validate it's a full screen share, not a tab/window
-      if (settings.displaySurface && settings.displaySurface !== "monitor") {
+      // Window/tab shares are accepted so we can ask them to reshare a monitor.
+      if (displaySurface && displaySurface !== "monitor") {
         console.warn(
-          `Screen share is ${settings.displaySurface}, not a full monitor. Accepting anyway.`
+          `Screen share is ${displaySurface}, not a full monitor. Accepting anyway.`
         );
       }
 
@@ -186,7 +189,7 @@ export default function useScreenCapture() {
         streamLostCallbackRef.current?.();
       });
 
-      const entry = { stream: mediaStream, screenIndex, label };
+      const entry = { stream: mediaStream, screenIndex, label, displaySurface };
       setStreams((prev) => [...prev, entry]);
       setIsSharing(true);
       setError(null);
@@ -257,9 +260,16 @@ export default function useScreenCapture() {
     }
   }, [streams.length, streamLost]);
 
+  const isSharingFullScreen = streams.some(
+    (s) => s.displaySurface === "monitor"
+  );
+  const displaySurface = streams[0]?.displaySurface ?? null;
+
   return {
     streams,
     isSharing,
+    isSharingFullScreen,
+    displaySurface,
     error,
     startCapture,
     addStream,
