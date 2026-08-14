@@ -578,7 +578,7 @@ client/src/
 │   │   ├── AISidebar.jsx               # AI chat sidebar for assessment editing (quick action chips)
 │   │   ├── AssessmentPanel.jsx         # Assessment display panel
 │   │   ├── AssessmentResult.jsx        # Results display after submission
-│   │   ├── AssessmentSetup.jsx        # Pre-timer gate: entire-screen share required to enable Start when recording is on; zip/brief wait until start
+│   │   ├── AssessmentSetup.jsx        # Pre-timer gate: entire-screen share + voice-companion probe required to enable Start when recording/companion is on; zip/brief wait until start
 │   │   ├── CandidatePreviewModal.jsx   # Candidate assessment preview modal
 │   │   ├── ChatInput.jsx              # Input field for AI chat
 │   │   ├── DocumentBlock.jsx          # Reusable content block with edit, auto-resizing textarea

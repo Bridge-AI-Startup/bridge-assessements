@@ -1,0 +1,12 @@
+{
+  "name": "guestbook-smoke",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Tiny guestbook — 10-minute Bridge smoke assessment",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

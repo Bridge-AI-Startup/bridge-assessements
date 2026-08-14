@@ -421,6 +421,7 @@ server/src/
     ├── seedCompetition.ts   # Link Mongo Competition slug → assessment (hackathon dashboard)
     ├── seedRuntimeSetupMernDemo.ts # Upsert MERN Notes Board assessment + candidate link under demo@bridgeai-demo.com; submit folder is demos/runtime-setup-mern
     ├── seedRuntimeSetupPathfinderDemo.ts # Upsert Warehouse Pathfinder (Python A*/TSP) assessment + candidate link; submit folder is demos/runtime-setup-pathfinder
+    ├── seedGuestbookSmoke.ts # 10-min Guestbook smoke under saaz.m@icloud.com + demo@bridgeai-demo.com; evidenceMode both + deterministic E2B checks; completed folder is demos/guestbook-smoke
     ├── seedShortsChallenge.ts # Upsert Shorts daily challenge from shorts/challenges/*.json
     ├── seedShortsLaunchRound.ts # Cold-start round seed driven by shorts/seed-builds/<date>/seed.json: upsert challenge, insert seeded builds + simulated vote graph (--date=YYYY-MM-DD, dry-run unless --apply; refuses if the round already has submissions)
     ├── moveShortsLaunchRound.ts # One-off: re-dated the week-1 seeded round from 2026-08-03 onto 2026-07-27 (kept as a template for date moves)
@@ -729,7 +730,7 @@ client/src/
 ├── components/
 │   ├── assessment/
 │   │   ├── AISidebar.jsx               # AI chat sidebar for assessment editing (quick action chips)
-│   │   ├── AssessmentSetup.jsx        # Pre-timer gate: entire-screen share required to enable Start when recording is on; zip/brief wait until start
+│   │   ├── AssessmentSetup.jsx        # Pre-timer gate: entire-screen share + voice-companion probe (mic + ElevenLabs reachability) required to enable Start when recording/companion is on; zip/brief wait until start
 │   │   ├── BehavioralCheckVerification.jsx # Per-check "How is this verified?" editor (UI walkthrough default; agent opt-in)
 │   │   ├── CandidatePreviewModal.jsx   # Candidate assessment preview modal
 │   │   ├── DocumentBlock.jsx          # Reusable content block with edit, auto-resizing textarea
@@ -763,6 +764,7 @@ client/src/
 ├── lib/
 │   ├── query-client.js    # TanStack Query client (refetchOnWindowFocus=false, retry=1)
 │   ├── captureUtils.js    # Pure capture utils: captureFrame, pixelDiff, enforceMaxSize, createVideoRecorder
+│   ├── companionVoiceCheck.js # Pre-start mic + ElevenLabs reachability probe (ad-blocker gate)
 │   ├── NavigationTracker.jsx
 │   ├── VisualEditAgent.jsx
 │   ├── PageNotFound.jsx
@@ -790,7 +792,7 @@ client/src/
 1. **Employer creates assessment**: Landing page → enters job description → stored in localStorage → CreateAssessment page auto-fills → AI generates assessment (extract requirements → generate components → quality review → behavioral checks) → saves to DB; manual path calls `generate-behavioral-checks` then create
 2. **Employer edits assessment**: AssessmentEditor page → AI chat sidebar for refinements → configure time limit, starter files, evidence mode
 3. **Employer shares link**: Generates unique token-based URL for candidate (single or bulk via CSV upload with email invitations via Resend)
-4. **Candidate accesses assessment**: Opens token URL → CandidateAssessment page → pre-timer gate (consent + entire-screen share; starter files and the brief stay hidden). When `evidenceMode` records the screen (`both` or leftover `screen`), sharing is mandatory: no skip/continue-without, Start is disabled until they share their entire screen (`displaySurface === "monitor"`, or any share if the browser does not report a surface), and a lost stream must be reshared (no dismiss). The in-session companion tells them to reshare their entire screen on every drop after the timer starts. Observation off (`none`) or leftover `workflow` does not require screen share. Start assessment begins the timer (`in-progress`), downloads the zip, and reveals the assignment
+4. **Candidate accesses assessment**: Opens token URL → CandidateAssessment page → pre-timer gate (consent + entire-screen share + voice check when the companion is on; starter files and the brief stay hidden). When `evidenceMode` records the screen (`both` or leftover `screen`), sharing is mandatory: no skip/continue-without, Start is disabled until they share their entire screen (`displaySurface === "monitor"`, or any share if the browser does not report a surface), and a lost stream must be reshared (no dismiss). When `VITE_ELEVENLABS_AGENT_ID` is set, the same gate also probes the mic and ElevenLabs reachability (`probeCompanionVoice`) so an ad blocker fails before the timer starts instead of as a live "Failed to fetch". The in-session companion tells them to reshare their entire screen on every drop after the timer starts. Observation off (`none`) or leftover `workflow` does not require screen share. Start assessment begins the timer (`in-progress`), downloads the zip, and reveals the assignment
 5. **Candidate submits code**: Uploads project folder (client auto-zips) or submits GitHub link → backend stores source metadata (upload archive or pinned commit SHA) → status: submitted
 6. **Code indexing**: Repo is downloaded, chunked (200 lines/chunk, 40 line overlap), embedded via OpenAI, and upserted to Pinecone (used by the companion context center's code section when the index is ready)
 7. **Scoring**: Combined employer/leaderboard score from available signals — Process (how-they-worked rubric via `evaluationReport`) and Behavioral (E2B check pass rate). Deprecated Trace / LLM-workflow scoring was removed.

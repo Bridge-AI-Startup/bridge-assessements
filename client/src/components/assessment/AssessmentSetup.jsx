@@ -1,9 +1,11 @@
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
   AlertCircle,
   CheckCircle2,
   Clock,
   FolderOpen,
+  Mic,
   Monitor,
   Play,
   Terminal,
@@ -11,6 +13,10 @@ import {
 import { Button } from "@/components/ui/button";
 import bridgeLogo from "@/assets/bridge-logo.svg";
 import { STARTER_ZIP_FILENAME } from "@/lib/downloadStarterCode";
+import {
+  probeCompanionVoice,
+  voiceCheckCopy,
+} from "@/lib/companionVoiceCheck";
 
 export function CaptureSetupCommand({ command, copied, onCopy }) {
   return (
@@ -38,11 +44,13 @@ function StepNumber({ n }) {
 }
 
 /**
- * Pre-timer gate. Screen share happens here; starter files and the brief
- * wait until they start so nobody can read ahead off the clock.
- * When screen recording is required, Start stays disabled until they share
- * their entire screen (`displaySurface === "monitor"`, or any share if the
- * browser does not report a surface).
+ * Pre-timer gate. Screen share and the voice-companion probe happen here;
+ * starter files and the brief wait until they start so nobody can read ahead
+ * off the clock. When screen recording is required, Start stays disabled
+ * until they share their entire screen (`displaySurface === "monitor"`, or
+ * any share if the browser does not report a surface). When the voice
+ * companion is on, Start also waits for a mic + ElevenLabs reachability
+ * check (ad blockers otherwise fail after the timer starts).
  */
 export default function AssessmentSetup({
   title,
@@ -54,6 +62,7 @@ export default function AssessmentSetup({
   isSharingFullScreen,
   displaySurface,
   onShareScreen,
+  usesVoiceCheck = false,
   hasStarterZip,
   hasStarterRepo,
   usesWorkflowCapture,
@@ -62,6 +71,39 @@ export default function AssessmentSetup({
   onOptOut,
 }) {
   const showScreenStatus = usesScreenRecording && !recordingSkipped;
+  const [voiceStatus, setVoiceStatus] = useState(
+    usesVoiceCheck ? "checking" : "skipped"
+  );
+  const [voiceReason, setVoiceReason] = useState(null);
+  const [voiceAttempt, setVoiceAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!usesVoiceCheck) {
+      setVoiceStatus("skipped");
+      setVoiceReason(null);
+      return undefined;
+    }
+    let cancelled = false;
+    setVoiceStatus("checking");
+    setVoiceReason(null);
+    (async () => {
+      const result = await probeCompanionVoice();
+      if (cancelled) return;
+      if (result.ok) {
+        setVoiceStatus("ready");
+        setVoiceReason(null);
+      } else {
+        setVoiceStatus("failed");
+        setVoiceReason(result.reason);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [usesVoiceCheck, voiceAttempt]);
+
+  const voiceReady = !usesVoiceCheck || voiceStatus === "ready";
+  const voiceCopy = voiceStatus === "failed" ? voiceCheckCopy(voiceReason) : null;
   const knownPartialShare =
     isSharing &&
     (displaySurface === "window" ||
@@ -70,6 +112,7 @@ export default function AssessmentSetup({
   const verifiedFullScreen =
     isSharingFullScreen || (isSharing && !knownPartialShare && !displaySurface);
   const needsReshare = showScreenStatus && !verifiedFullScreen;
+  const needsVoice = usesVoiceCheck && !voiceReady;
 
   let preview = 1;
   const starterPreview = hasStarterZip || hasStarterRepo ? preview++ : null;
@@ -189,6 +232,64 @@ export default function AssessmentSetup({
             </div>
           )}
 
+          {usesVoiceCheck && (
+            <div
+              className={`mb-6 rounded-xl border p-4 ${
+                voiceStatus === "ready"
+                  ? "border-green-200 bg-green-50"
+                  : "border-amber-200 bg-amber-50"
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                {voiceStatus === "ready" ? (
+                  <CheckCircle2 className="w-6 h-6 text-green-700 flex-shrink-0 mt-0.5" />
+                ) : (
+                  <Mic className="w-6 h-6 text-amber-800 flex-shrink-0 mt-0.5" />
+                )}
+                <div className="min-w-0 flex-1">
+                  {voiceStatus === "ready" ? (
+                    <>
+                      <h2 className="text-sm font-semibold text-green-900">
+                        Voice check-in is ready
+                      </h2>
+                      <p className="mt-1 text-sm text-green-900/80">
+                        Microphone is on and the check-in can connect. It
+                        starts after you begin the assessment.
+                      </p>
+                    </>
+                  ) : voiceStatus === "checking" ? (
+                    <>
+                      <h2 className="text-sm font-semibold text-amber-950">
+                        Checking the voice check-in
+                      </h2>
+                      <p className="mt-1 text-sm text-amber-950">
+                        Allow the microphone if asked. This confirms the
+                        check-in can reach you before the timer starts.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <h2 className="text-sm font-semibold text-amber-950">
+                        {voiceCopy.title}
+                      </h2>
+                      <p className="mt-1 text-sm text-amber-950">
+                        {voiceCopy.body}
+                      </p>
+                      <Button
+                        type="button"
+                        onClick={() => setVoiceAttempt((n) => n + 1)}
+                        className="mt-3 h-9 px-3 text-xs"
+                      >
+                        <Mic className="w-3.5 h-3.5 mr-1.5" />
+                        Try voice check again
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {hasPreview && (
             <>
           <p className="text-sm text-gray-700 mb-4">
@@ -276,15 +377,19 @@ export default function AssessmentSetup({
             </p>
           </div>
 
-          {needsReshare && (
+          {(needsReshare || needsVoice) && (
             <p className="text-xs text-gray-500 mb-3 text-center">
-              Share your entire screen to start
+              {needsReshare && needsVoice
+                ? "Share your entire screen and connect the voice check-in to start"
+                : needsReshare
+                  ? "Share your entire screen to start"
+                  : "Connect the voice check-in to start"}
             </p>
           )}
 
           <Button
             onClick={onFinishSetup}
-            disabled={isFinishing || needsReshare}
+            disabled={isFinishing || needsReshare || needsVoice}
             className="w-full bg-[#21201C] hover:bg-[#35332D] text-white py-6 text-lg rounded-full disabled:opacity-50 mb-3"
           >
             <Play className="w-5 h-5 mr-2" />

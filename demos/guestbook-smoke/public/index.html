@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Guestbook</title>
+    <style>
+      :root {
+        color: #21201c;
+        background: #faf9f2;
+        font-family: Inter, system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 2rem 1rem 4rem;
+      }
+      main {
+        max-width: 32rem;
+        margin: 0 auto;
+      }
+      h1 {
+        font-size: 1.5rem;
+        letter-spacing: -0.03em;
+      }
+      form {
+        display: flex;
+        gap: 0.5rem;
+        margin: 1.25rem 0;
+      }
+      input {
+        flex: 1;
+        padding: 0.6rem 0.75rem;
+        border: 1px solid #d6d3c9;
+        border-radius: 999px;
+        background: #fff;
+        font: inherit;
+      }
+      button {
+        padding: 0.6rem 1rem;
+        border: 0;
+        border-radius: 999px;
+        background: #21201c;
+        color: #fff;
+        font: inherit;
+        cursor: pointer;
+      }
+      li {
+        list-style: none;
+        padding: 0.75rem 0;
+        border-bottom: 1px solid #eceae2;
+      }
+      ul {
+        padding: 0;
+        margin: 0;
+      }
+      .error {
+        color: #9b3a2f;
+      }
+      .muted {
+        color: #6b6860;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Guestbook</h1>
+      <p class="muted">Leave a short message. It should show up in the list right away.</p>
+      <form id="form">
+        <input
+          type="text"
+          name="text"
+          placeholder="Write a message"
+          aria-label="Message"
+          required
+        />
+        <button type="submit">Add</button>
+      </form>
+      <p id="status" class="muted" hidden></p>
+      <ul id="list"></ul>
+    </main>
+    <script>
+      const list = document.getElementById("list");
+      const status = document.getElementById("status");
+      const form = document.getElementById("form");
+
+      function showStatus(text, isError) {
+        status.hidden = !text;
+        status.textContent = text;
+        status.className = isError ? "error" : "muted";
+      }
+
+      function render(messages) {
+        list.innerHTML = "";
+        if (!messages.length) {
+          list.innerHTML = '<li class="muted">No messages yet.</li>';
+          return;
+        }
+        for (const message of messages) {
+          const item = document.createElement("li");
+          item.textContent = message.text;
+          list.appendChild(item);
+        }
+      }
+
+      async function load() {
+        const response = await fetch("/api/messages");
+        const data = await response.json();
+        render(data.messages || []);
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const text = new FormData(form).get("text");
+        showStatus("");
+        const response = await fetch("/api/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          showStatus(data.error || "Could not add that message.", true);
+          return;
+        }
+        form.reset();
+        await load();
+      });
+
+      load().catch(() => showStatus("Could not load messages.", true));
+    </script>
+  </body>
+</html>

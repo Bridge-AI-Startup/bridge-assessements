@@ -35,6 +35,8 @@ import { RunnableLambda, RunnableSequence } from "@langchain/core/runnables";
 
 const MAX_PARSE_RETRIES = 3;
 const RETRY_DELAY_MS = 500;
+/** GPT-5 reasoning tokens count against max_completion_tokens; 800 left the review JSON empty. */
+const QUALITY_REVIEW_MAX_TOKENS = 4000;
 
 const ASSESSMENT_DOMAINS = [
   "Music streaming website",
@@ -431,28 +433,49 @@ async function runQualityReviewLLM(
     },
   ];
 
-  const { result } = await createChatCompletionWithStructuredOutput(
-    "assessment_generation",
-    messages,
-    assessmentReviewSchema,
-    {
-      temperature: 0.2,
-      maxTokens: 800,
-      provider: PROMPT_ASSESSMENT_QUALITY_REVIEW.provider as "openai" | "anthropic" | "gemini",
-      model: PROMPT_ASSESSMENT_QUALITY_REVIEW.model,
-    }
-  );
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_PARSE_RETRIES; attempt++) {
+    try {
+      const { result } = await createChatCompletionWithStructuredOutput(
+        "assessment_generation",
+        messages,
+        assessmentReviewSchema,
+        {
+          temperature: 0.2,
+          maxTokens: QUALITY_REVIEW_MAX_TOKENS,
+          provider: PROMPT_ASSESSMENT_QUALITY_REVIEW.provider as "openai" | "anthropic" | "gemini",
+          model: PROMPT_ASSESSMENT_QUALITY_REVIEW.model,
+        }
+      );
 
-  if (result.valid) {
-    return { passed: true };
+      if (result.valid) {
+        return { passed: true };
+      }
+      const parts: string[] = [result.summaryFeedback];
+      if (result.qualityFeedback?.trim()) parts.push(`Quality: ${result.qualityFeedback.trim()}`);
+      if (result.feasibilityFeedback?.trim()) parts.push(`Feasibility: ${result.feasibilityFeedback.trim()}`);
+      return {
+        passed: false,
+        reviewFeedback: parts.join(" "),
+      };
+    } catch (err) {
+      lastError = err;
+      if (attempt < MAX_PARSE_RETRIES) {
+        console.warn(
+          `⚠️ [assessmentGeneration] Quality review parse attempt ${attempt} failed, retrying...`,
+          err
+        );
+        await delay(RETRY_DELAY_MS * attempt);
+      }
+    }
   }
-  const parts: string[] = [result.summaryFeedback];
-  if (result.qualityFeedback?.trim()) parts.push(`Quality: ${result.qualityFeedback.trim()}`);
-  if (result.feasibilityFeedback?.trim()) parts.push(`Feasibility: ${result.feasibilityFeedback.trim()}`);
-  return {
-    passed: false,
-    reviewFeedback: parts.join(" "),
-  };
+
+  // Review is optional polish. An empty/unparseable reply must not discard Step 2.
+  console.warn(
+    "⚠️ [assessmentGeneration] Quality review failed after retries; keeping generated assessment.",
+    lastError
+  );
+  return { passed: true };
 }
 
 /** Generate starter code files for the assessment. Returns [] on failure (non-fatal). */

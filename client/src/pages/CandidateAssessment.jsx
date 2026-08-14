@@ -1205,6 +1205,7 @@ export default function CandidateAssessment() {
           isSharingFullScreen={screenCapture.isSharingFullScreen}
           displaySurface={screenCapture.displaySurface}
           onShareScreen={handleSetupShareScreen}
+          usesVoiceCheck={COMPANION_ENABLED && usesScreenRecording}
           hasStarterZip={hasStarterZip}
           hasStarterRepo={hasStarterRepo}
           usesWorkflowCapture={usesWorkflowCapture}
