@@ -36,9 +36,10 @@ export function getSubscriptionStatus(user: any): string | null {
 }
 
 /**
- * Free tier is capped at 1 assessment in production. In development, that cap
- * is disabled so local testing is not blocked.
+ * Free-tier assessment/submission caps are off for now so anyone can create
+ * unlimited assessments. Flip this back to `NODE_ENV === "production"` to
+ * restore the 1-assessment paid limit.
  */
 export function shouldEnforceFreeTierAssessmentLimit(): boolean {
-  return process.env.NODE_ENV === "production";
+  return false;
 }

@@ -807,7 +807,7 @@ This replaced a maze: a right-side detail Sheet, a separate evaluation modal, a 
 4. Subscription changes (cancel, update, expire) come through as Stripe webhooks
 5. Paid features are gated **inline in the controllers**, not by middleware: `controllers/assessment.ts` and `controllers/user.ts` read `user.subscriptionStatus || user.subscription?.subscriptionStatus` and compare against `"active"`. There is no `requireSubscription` middleware — it existed but was never mounted on a route, and was deleted.
 6. `utils/subscription.ts` also exports `isSubscribed()` / `getSubscriptionStatus()` with the same top-level-then-legacy-nested fallback, but **nothing currently imports them** — the controllers duplicate that logic inline. Prefer calling the util if you touch this code.
-7. Free tier limits: 1 assessment, 3 submissions. Paid tier: unlimited. The assessment cap is only enforced when `NODE_ENV === "production"` (`shouldEnforceFreeTierAssessmentLimit()`).
+7. Free-tier limits are **off for now** (`shouldEnforceFreeTierAssessmentLimit()` always returns `false`). When re-enabled, the production cap is 1 assessment (3-submission cap is documented but not enforced). Paid tier remains unlimited.
 
 ## Database Models
 
