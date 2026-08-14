@@ -7,29 +7,57 @@ import {
   executeRunbook,
   probeRepoLayoutForRunbook,
   readmeFromSandbox,
+  restartRunbookApp,
   saveReportJson,
+  stopRunbookApps,
   type ReadmeRequirementDetail,
+  type RunbookExecutionResult,
+  type RunbookSource,
   type StepEvidence,
 } from "./executor.js";
+import { runDeterministicCheck } from "./deterministicChecks.js";
+import { secretValuesFromEnvVars } from "../runtimeSetup/secrets.js";
+import {
+  candidateGradingEnv,
+  candidateRunbookFromSubmission,
+} from "./runtimeConfigRunbook.js";
+import type { RunbookPlan } from "./schema.js";
+import type { RuntimeEnvVar } from "../runtimeSetup/schema.js";
 import { runAgentBehavioralJudge } from "./agentJudge.js";
 import { BehavioralBrowserSession } from "./browserSession.js";
 import { extractRunbook } from "./planner.js";
-import { behavioralInfo } from "./log.js";
+import { behavioralInfo, createBehavioralLogger } from "./log.js";
+import {
+  createProgressWriter,
+  type BehavioralProgressStep,
+} from "./progress.js";
 import {
   buildCliSetupStatus,
+  checkRequiresRunningApp,
   orderChecksForIsolation,
   waitForAppReady,
   waitForAppReadyInsideSandbox,
   type GradingFailureCategory,
   type RunbookSetupStatus,
 } from "./setupHealth.js";
+import { computeBehavioralScore, type BehavioralScore } from "./scoring.js";
+import {
+  resolveBehavioralCheckSpecs,
+  type BehavioralCheckKind,
+  type BehavioralCheckSpec,
+} from "./checkSpecs.js";
 import { discoverSandboxAppAccess } from "./sandboxAppUrl.js";
 
 export type BehavioralCaseResult = {
   checkText: string;
   /** Original index in assessment.behavioralChecks (stable after isolation reorder). */
   checkIndex: number;
-  verdict: "pass" | "fail" | "inconclusive";
+  /** Stable spec id — survives reordering, so a recruiter link keeps pointing at the same check. */
+  checkId?: string;
+  /** How the verdict was reached: a deterministic acceptance run, or the LLM judge. */
+  verifiedBy?: BehavioralCheckKind;
+  /** `blocked` = never judged because the environment could not support it. */
+  verdict: "pass" | "fail" | "inconclusive" | "blocked";
   evidence: StepEvidence[];
   artifacts: string[];
   /** Fresh browser context per check when web grading (G). */
@@ -53,8 +81,14 @@ export type BehavioralGradingReport = {
     executionProfile?: "cli_stdout" | "web_server" | "unclear";
   };
   setup: RunbookSetupStatus;
+  /** Whether the commands came from the candidate's verified config or the LLM planner. */
+  runbookSource: RunbookSource;
+  /** Set when the candidate config was tried first and did not reach ready. */
+  runbookFallbackReason?: string;
   failureCategory?: GradingFailureCategory | null;
   cases: BehavioralCaseResult[];
+  /** Pass rate over decided checks. Single source of truth for every reader. */
+  score: BehavioralScore;
   startedAt: string;
   completedAt: string;
   reportArtifactKey?: string;
@@ -92,15 +126,100 @@ function isUploadBehavioralEnabled(): boolean {
 
 async function withGradeSlot<T>(fn: () => Promise<T>): Promise<T> {
   if (activeGrades >= MAX_CONCURRENT_GRADES) {
+    behavioralInfo("grade_slot_wait", {
+      activeGrades,
+      maxConcurrent: MAX_CONCURRENT_GRADES,
+      queued: gradeQueue.length + 1,
+    });
     await new Promise<void>((resolve) => gradeQueue.push(resolve));
   }
   activeGrades += 1;
+  behavioralInfo("grade_slot_acquired", {
+    activeGrades,
+    maxConcurrent: MAX_CONCURRENT_GRADES,
+  });
   try {
     return await fn();
   } finally {
     activeGrades -= 1;
     const next = gradeQueue.shift();
     if (next) next();
+  }
+}
+
+/**
+ * Submissions this process is currently grading (queued or running).
+ *
+ * Submit already triggers a run, so a recruiter hitting "Re-run" on a fresh
+ * submission used to start a second sandbox against the same code: two runs
+ * writing one report field, the loser's verdicts silently overwriting the
+ * winner's. In-process is the right scope because the queue above is too.
+ */
+const inFlightGrades = new Set<string>();
+
+export function isBehavioralGradingInFlight(submissionId: string): boolean {
+  return inFlightGrades.has(submissionId);
+}
+
+/** True while this process holds any grade (queued or running a sandbox). */
+export function hasAnyBehavioralGradingInFlight(): boolean {
+  return inFlightGrades.size > 0;
+}
+
+/** Reserves the submission for one run; false when a run already holds it. */
+export function claimBehavioralGradingRun(submissionId: string): boolean {
+  if (inFlightGrades.has(submissionId)) return false;
+  inFlightGrades.add(submissionId);
+  return true;
+}
+
+export function releaseBehavioralGradingRun(submissionId: string): void {
+  inFlightGrades.delete(submissionId);
+}
+
+/**
+ * Marks runs that this process can no longer be holding as interrupted.
+ *
+ * The queue lives in memory, so every deploy or crash abandons whatever was
+ * grading — and a `pending` submission renders as a spinner forever, which
+ * looks like a candidate whose grading is still going rather than one whose
+ * grading was thrown away. Run once at boot, before any new work is accepted.
+ */
+export async function sweepInterruptedBehavioralGrading(): Promise<number> {
+  try {
+    const result = await SubmissionModel.updateMany(
+      { behavioralGradingStatus: "pending" },
+      {
+        $set: {
+          behavioralGradingStatus: "failed",
+          behavioralGradingError:
+            "Behavioral grading was interrupted by a server restart before it finished. Re-run it to get verdicts; nothing here reflects the candidate's work.",
+          behavioralGradingReport: {
+            failureCategory: "interrupted" satisfies GradingFailureCategory,
+            setup: {
+              status: "failed",
+              phase: "runbook",
+              summary:
+                "The grading run was interrupted by a server restart. This is a platform failure, not a result for this submission.",
+              failedSteps: [],
+            },
+            cases: [],
+          },
+        },
+        $unset: { behavioralGradingProgress: "" },
+      }
+    );
+    const swept = result.modifiedCount ?? 0;
+    if (swept > 0) {
+      behavioralInfo("interrupted_sweep", { swept });
+    }
+    return swept;
+  } catch (err) {
+    console.error(
+      "[behavioral grading] Failed to sweep interrupted runs at boot:",
+      err
+    );
+    return 0;
   }
 }
 
@@ -213,14 +332,86 @@ function assessmentDescriptionExcerpt(assessment: any): string {
 
 export {
   inferFailureCategory,
+  gradingFaultOwner,
   type GradingFailureCategory,
   type RunbookSetupStatus,
 } from "./setupHealth.js";
 
+/** A config without an explicit port can still have bound one; free that too. */
+function portsFromOrigin(origin: string | undefined): number[] {
+  const match = origin?.match(/:(\d{2,5})(?:\/|$)/);
+  const port = match ? Number(match[1]) : NaN;
+  return Number.isInteger(port) ? [port] : [];
+}
+
+function runbookProgressPhase(
+  purpose: string
+): "install" | "start" {
+  return purpose === "start" ? "start" : "install";
+}
+
+function previewCommand(command: string, max = 80): string {
+  const one = command.replace(/\s+/g, " ").trim();
+  return one.length > max ? `${one.slice(0, max)}…` : one;
+}
+
+function agentTraceToProgressSteps(
+  trace: Array<{
+    iteration: number;
+    tool: string;
+    detail: string;
+    outputPreview?: string;
+  }>,
+  running?: { iteration: number; tool: string; detail: string }
+): BehavioralProgressStep[] {
+  const steps: BehavioralProgressStep[] = trace.map((t) => ({
+    iteration: t.iteration,
+    tool: t.tool,
+    detail: previewCommand(t.detail, 160),
+    status: "done" as const,
+    ...(t.outputPreview
+      ? { outputPreview: t.outputPreview.slice(0, 240) }
+      : {}),
+  }));
+  if (running) {
+    steps.push({
+      iteration: running.iteration,
+      tool: running.tool,
+      detail: previewCommand(running.detail, 160),
+      status: "running",
+    });
+  }
+  return steps;
+}
+
+async function safeProgress(
+  fn: () => Promise<void>
+): Promise<void> {
+  try {
+    await fn();
+  } catch {
+    // Live progress must never fail the grading run.
+  }
+}
+
+/** One execution of a runbook, from commands through app-ready health. */
+type RunbookAttempt = {
+  source: RunbookSource;
+  runbook: RunbookPlan;
+  runbookResult: RunbookExecutionResult;
+  executionProfile: "cli_stdout" | "web_server" | "unclear";
+  appAccess: Awaited<ReturnType<typeof discoverSandboxAppAccess>>;
+  sandboxAppOrigin?: string;
+  browserBaseUrl?: string;
+  setup: RunbookSetupStatus;
+};
+
 export async function gradeSubmissionBehavioral(
   submissionId: string
 ): Promise<BehavioralGradingReport> {
-  return withGradeSlot(async () => {
+  const log = createBehavioralLogger({ submissionId });
+  return log.runAsync(() =>
+    withGradeSlot(async () => {
     const t0 = Date.now();
     if (!isBehavioralGradingEnabled()) {
       throw new Error(
@@ -238,28 +429,59 @@ export async function gradeSubmissionBehavioral(
     }
 
     const assessment: any = submission.assessmentId;
-    const behavioralChecks: string[] = Array.isArray(assessment?.behavioralChecks)
-      ? assessment.behavioralChecks
-      : [];
+    // Never read `behavioralChecks` / `behavioralCheckSpecs` directly: the
+    // resolver pairs every sentence with a spec (defaulting to the agent judge)
+    // and honours the server-wide deterministic switch.
+    const resolvedSpecs = resolveBehavioralCheckSpecs(assessment ?? {});
+    const specsByIndex: BehavioralCheckSpec[] = resolvedSpecs.specs;
+    const behavioralChecks: string[] = specsByIndex.map((s) => s.text);
     if (behavioralChecks.length === 0) {
       throw new Error("Assessment has no behavioral checks configured.");
+    }
+    if (resolvedSpecs.rejected.length > 0 || resolvedSpecs.orphanedSpecIds.length > 0) {
+      behavioralInfo("check_specs_ignored", {
+        submissionId,
+        rejected: resolvedSpecs.rejected,
+        orphaned: resolvedSpecs.orphanedSpecIds,
+      });
     }
 
     const startedAt = new Date().toISOString();
     const sandboxTimeoutMs = getBehavioralSandboxTimeoutMs();
+    /**
+     * How long one setup attempt (install → build → start) may take. Checks are
+     * the point of the run, so setup gets a fixed share of the box rather than
+     * however much it feels like using.
+     */
+    const setupBudgetMs = Math.floor(sandboxTimeoutMs * 0.4);
 
     behavioralInfo("run_start", {
       submissionId,
       checks: behavioralChecks.length,
+      deterministicChecks: specsByIndex.filter((s) => s.kind !== "agent").length,
       sandboxTimeoutMs,
+      setupBudgetMs,
     });
 
+    const progress = createProgressWriter({
+      submissionId,
+      checksTotal: behavioralChecks.length,
+      startedAt,
+    });
+    await safeProgress(() =>
+      progress.setPhase("sandbox", "Provisioning E2B sandbox…")
+    );
+
+    try {
     const report = await withGradingSandbox<BehavioralGradingReport>(
       async (ctx) => {
         behavioralInfo("sandbox_open", {
           sandboxId: ctx.sandboxId,
           sandboxTimeoutMs,
         });
+        await safeProgress(() =>
+          progress.setPhase("sandbox", "Cloning submission into sandbox")
+        );
 
         const repoPath = await cloneAndCheckout(ctx.run, submission, ctx.sandbox);
         behavioralInfo("clone_done", { repoPath });
@@ -271,60 +493,177 @@ export async function gradeSubmissionBehavioral(
         });
         const repoSummary = getRepoSummary(submission);
 
-        const runbookRaw = await extractRunbook({
-          readmeText,
-          repoSummary,
-          repoLayoutProbe,
-        });
-        const runbook = {
-          ...runbookRaw,
-          steps: runbookRaw.steps.filter((s) => s.purpose !== "test"),
-        };
-        behavioralInfo("runbook_llm_ok", {
-          steps: runbook.steps.length,
-          profile: runbook.executionProfile,
-        });
+        const runAttempt = async (
+          runbook: RunbookPlan,
+          source: RunbookSource,
+          envVars?: RuntimeEnvVar[]
+        ): Promise<RunbookAttempt> => {
+          const runbookResult = await executeRunbook(ctx, runbook, repoPath, {
+            source,
+            envVars,
+            // Each attempt gets its own slice of the box, so a slow first
+            // attempt cannot leave the fallback (or the checks) with no time.
+            deadlineEpochMs: Date.now() + setupBudgetMs,
+            onStep: (event) =>
+              safeProgress(() =>
+                progress.setPhase(
+                  runbookProgressPhase(event.purpose),
+                  event.status === "skipped"
+                    ? "Setup budget spent — remaining steps skipped"
+                    : event.status === "running"
+                      ? `Running ${event.purpose}: ${previewCommand(event.command)}`
+                      : event.timedOut
+                        ? `${event.purpose} hit the grading time limit`
+                        : `Finished ${event.purpose}`,
+                  {
+                    agentSteps: [
+                      {
+                        iteration: event.stepIndex,
+                        tool: event.purpose,
+                        detail: previewCommand(event.command),
+                        status:
+                          event.status === "running"
+                            ? "running"
+                            : event.status === "skipped"
+                              ? "pending"
+                              : "done",
+                      },
+                    ],
+                  }
+                )
+              ),
+          });
+          behavioralInfo("runbook_executed", {
+            source,
+            readmeRequirementPassed: runbookResult.readmeRequirementPassed,
+            hasBaseUrl: Boolean(runbookResult.baseUrl),
+          });
 
-        const runbookResult = await executeRunbook(ctx, runbook, repoPath);
-        const runbookSummary = summarizeRunbook(runbook);
-        behavioralInfo("runbook_executed", {
-          readmeRequirementPassed: runbookResult.readmeRequirementPassed,
-          hasBaseUrl: Boolean(runbookResult.baseUrl),
-        });
-
-        const executionProfile = runbook.executionProfile ?? "unclear";
-        const appAccess = await discoverSandboxAppAccess(
-          ctx,
-          repoPath,
-          readmeText,
-          runbook,
-          executionProfile === "cli_stdout" ? undefined : runbookResult.baseUrl
-        );
-        const sandboxAppOrigin = appAccess.internalOrigin;
-        const browserBaseUrl = appAccess.externalOrigin;
-
-        let setup: RunbookSetupStatus;
-        if (executionProfile !== "cli_stdout" && sandboxAppOrigin) {
-          setup = await waitForAppReadyInsideSandbox(
+          const executionProfile = runbook.executionProfile ?? "unclear";
+          const appAccess = await discoverSandboxAppAccess(
             ctx,
-            sandboxAppOrigin,
-            runbookResult.evidence
+            repoPath,
+            readmeText,
+            runbook,
+            executionProfile === "cli_stdout" ? undefined : runbookResult.baseUrl
           );
-          if (setup.status === "failed") {
-            behavioralInfo("setup_failed", { summary: setup.summary });
+          const sandboxAppOrigin = appAccess.internalOrigin;
+          const browserBaseUrl = appAccess.externalOrigin;
+
+          let setup: RunbookSetupStatus;
+          if (executionProfile !== "cli_stdout" && sandboxAppOrigin) {
+            await safeProgress(() =>
+              progress.setPhase("start", "Waiting for the app to respond")
+            );
+            setup = await waitForAppReadyInsideSandbox(
+              ctx,
+              sandboxAppOrigin,
+              runbookResult.evidence
+            );
+          } else if (browserBaseUrl?.trim()) {
+            await safeProgress(() =>
+              progress.setPhase("start", "Waiting for the app to respond")
+            );
+            setup = await waitForAppReady(
+              ctx,
+              browserBaseUrl,
+              runbookResult.evidence
+            );
+          } else {
+            setup = buildCliSetupStatus(runbookResult.evidence);
           }
-        } else if (browserBaseUrl?.trim()) {
-          setup = await waitForAppReady(
-            ctx,
-            browserBaseUrl,
-            runbookResult.evidence
-          );
           if (setup.status === "failed") {
-            behavioralInfo("setup_failed", { summary: setup.summary });
+            behavioralInfo("setup_failed", { source, summary: setup.summary });
+          }
+
+          return {
+            source,
+            runbook,
+            runbookResult,
+            executionProfile,
+            appAccess,
+            sandboxAppOrigin,
+            browserBaseUrl,
+            setup,
+          };
+        };
+
+        const planFromReadme = async (): Promise<RunbookAttempt> => {
+          const runbookRaw = await extractRunbook({
+            readmeText,
+            repoSummary,
+            repoLayoutProbe,
+          });
+          const runbook = {
+            ...runbookRaw,
+            steps: runbookRaw.steps.filter((s) => s.purpose !== "test"),
+          };
+          behavioralInfo("runbook_llm_ok", {
+            steps: runbook.steps.length,
+            profile: runbook.executionProfile,
+          });
+          return runAttempt(runbook, "llm");
+        };
+
+        const candidate = candidateRunbookFromSubmission(submission as never);
+        let attempt: RunbookAttempt;
+        let runbookFallbackReason: string | undefined;
+
+        if (candidate) {
+          behavioralInfo("runbook_candidate_config", {
+            steps: candidate.runbook.steps.length,
+            profile: candidate.runbook.executionProfile,
+            port: candidate.config.port,
+          });
+          attempt = await runAttempt(
+            candidate.runbook,
+            "candidate_config",
+            candidateGradingEnv(candidate.config)
+          );
+          if (attempt.setup.status === "failed") {
+            // The candidate verified these commands, so a failure here is more
+            // likely an environment difference than a wrong config — plan from
+            // the README rather than grading a project that never came up.
+            runbookFallbackReason =
+              attempt.setup.summary ||
+              "Candidate runtime config did not reach a ready state.";
+            behavioralInfo("runbook_candidate_config_fallback", {
+              reason: runbookFallbackReason,
+            });
+            await stopRunbookApps(ctx, [
+              ...candidate.runbook.portsHint,
+              ...portsFromOrigin(attempt.sandboxAppOrigin),
+            ]);
+            attempt = await planFromReadme();
           }
         } else {
-          setup = buildCliSetupStatus(runbookResult.evidence);
+          attempt = await planFromReadme();
         }
+
+        const {
+          runbook,
+          runbookResult,
+          executionProfile,
+          appAccess,
+          sandboxAppOrigin,
+          browserBaseUrl,
+          setup,
+        } = attempt;
+        const runbookSummary = summarizeRunbook(runbook);
+
+        // Candidate secret values never reach recorded evidence.
+        const candidateSecrets = secretValuesFromEnvVars(
+          candidate ? candidateGradingEnv(candidate.config) : []
+        );
+        // Only a restart_persistence acceptance spec needs this, and only when the
+        // runbook actually got the app up — replaying the exact start command.
+        const restartApp = runbookResult.startExecution
+          ? () =>
+              restartRunbookApp(ctx, runbookResult.startExecution!, [
+                ...runbook.portsHint,
+                ...portsFromOrigin(sandboxAppOrigin),
+              ])
+          : null;
 
         behavioralInfo("sandbox_app_access", {
           sandboxAppOrigin: sandboxAppOrigin ?? null,
@@ -366,21 +705,135 @@ export async function gradeSubmissionBehavioral(
 
         const cases: BehavioralCaseResult[] = [];
         const orderedChecks = orderChecksForIsolation(behavioralChecks);
-        const browserSession = browserBaseUrl?.trim()
-          ? new BehavioralBrowserSession()
-          : null;
+        const setupFailed = setup.status === "failed";
+        const browserSession =
+          browserBaseUrl?.trim() && !setupFailed
+            ? new BehavioralBrowserSession()
+            : null;
 
         try {
           for (let ord = 0; ord < orderedChecks.length; ord += 1) {
             const { checkText, originalIndex: checkIndex } =
               orderedChecks[ord];
+            const spec = specsByIndex[checkIndex];
             const startedAtJudge = new Date().toISOString();
             const otherBehavioralChecks = behavioralChecks.filter(
               (_, j) => j !== checkIndex
             );
 
+            // A spec states its own interface, so its kind decides whether a live
+            // app is required; only a plain-language check needs the heuristic.
+            const needsRunningApp =
+              spec.kind === "agent"
+                ? checkRequiresRunningApp(checkText)
+                : spec.kind !== "cli";
+
+            // The app never came up. Judging a runtime behavior anyway produces a
+            // verdict about software that never ran — and costs a full agent loop
+            // per check to produce it. Report it as blocked and spend nothing.
+            if (setupFailed && needsRunningApp) {
+              behavioralInfo("judge_check_blocked", {
+                index: ord + 1,
+                checkIndex,
+                total: behavioralChecks.length,
+                setupPhase: setup.phase,
+              });
+              await safeProgress(() =>
+                progress.addCompletedCheck({
+                  checkIndex,
+                  checkText,
+                  verdict: "blocked",
+                  verifiedBy: spec.kind,
+                })
+              );
+              cases.push({
+                checkText,
+                checkIndex,
+                checkId: spec.id,
+                verifiedBy: spec.kind,
+                verdict: "blocked",
+                artifacts: [],
+                evidence: [
+                  {
+                    id: randomUUID(),
+                    type: "judge",
+                    startedAt: startedAtJudge,
+                    finishedAt: new Date().toISOString(),
+                    success: false,
+                    verdict: "blocked",
+                    rationale: `Not judged: the environment never reached a runnable state, so this behavior could not be observed. ${setup.summary}`,
+                    citations: [],
+                    input: { setupStatus: setup.status, setupPhase: setup.phase },
+                  },
+                ],
+              });
+              continue;
+            }
+
             if (browserSession) {
               await browserSession.resetIsolation();
+            }
+
+            // A check with an acceptance spec is settled by running it. No LLM
+            // call, and the recorded request is the whole justification.
+            if (spec.kind !== "agent") {
+              await safeProgress(() =>
+                progress.beginCheck(
+                  checkIndex,
+                  checkText,
+                  `Checking (${spec.kind}): ${previewCommand(checkText, 72)}`
+                )
+              );
+              const deterministic = await runDeterministicCheck({
+                ctx,
+                spec,
+                sandboxAppOrigin,
+                browserBaseUrl: setupFailed ? undefined : browserBaseUrl,
+                browserSession: browserSession ?? undefined,
+                repoPath,
+                secrets: candidateSecrets,
+                restartApp: restartApp ?? undefined,
+              });
+              behavioralInfo("deterministic_check_done", {
+                index: ord + 1,
+                checkIndex,
+                kind: spec.kind,
+                verdict: deterministic.verdict,
+              });
+              await safeProgress(() =>
+                progress.addCompletedCheck({
+                  checkIndex,
+                  checkText,
+                  verdict: deterministic.verdict,
+                  verifiedBy: spec.kind,
+                })
+              );
+              cases.push({
+                checkText,
+                checkIndex,
+                checkId: spec.id,
+                verifiedBy: spec.kind,
+                verdict: deterministic.verdict,
+                artifacts: [],
+                evidence: [
+                  ...deterministic.evidence,
+                  {
+                    id: randomUUID(),
+                    type: "judge",
+                    startedAt: startedAtJudge,
+                    finishedAt: new Date().toISOString(),
+                    success: deterministic.verdict === "pass",
+                    verdict: deterministic.verdict,
+                    rationale: deterministic.rationale,
+                    citations: deterministic.citations,
+                    input: { verifiedBy: spec.kind, acceptance: spec.acceptance },
+                  },
+                ],
+                ...(browserSession && spec.kind === "ui"
+                  ? { isolation: "fresh_browser_context" as const }
+                  : {}),
+              });
+              continue;
             }
 
             behavioralInfo("judge_check_start", {
@@ -389,6 +842,13 @@ export async function gradeSubmissionBehavioral(
               total: behavioralChecks.length,
               preview: checkText.slice(0, 100),
             });
+            await safeProgress(() =>
+              progress.beginCheck(
+                checkIndex,
+                checkText,
+                `Checking: ${previewCommand(checkText, 72)}`
+              )
+            );
 
             const judgeResult = await runAgentBehavioralJudge({
               assessmentTitle,
@@ -401,11 +861,17 @@ export async function gradeSubmissionBehavioral(
               repoPath,
               ctx,
               sandboxAppOrigin,
-              baseUrl: browserBaseUrl,
+              // A dead app has no browsable surface; offering the tools invites
+              // the agent to spend turns on navigations that cannot succeed.
+              baseUrl: setupFailed ? undefined : browserBaseUrl,
               submissionId,
               otherBehavioralChecks,
               browserSession: browserSession ?? undefined,
               manageBrowserLifecycle: !browserSession,
+              onAgentStep: (entry, trace) =>
+                safeProgress(() =>
+                  progress.setSteps(agentTraceToProgressSteps(trace))
+                ),
             });
             const finishedAtJudge = new Date().toISOString();
 
@@ -436,6 +902,8 @@ export async function gradeSubmissionBehavioral(
             cases.push({
               checkText,
               checkIndex,
+              checkId: spec.id,
+              verifiedBy: "agent",
               verdict: judgeResult.verdict,
               evidence,
               artifacts: screenshotArtifactKeys,
@@ -450,6 +918,14 @@ export async function gradeSubmissionBehavioral(
               verdict: judgeResult.verdict,
               ms: Date.now() - t0,
             });
+            await safeProgress(() =>
+              progress.addCompletedCheck({
+                checkIndex,
+                checkText,
+                verdict: judgeResult.verdict,
+                verifiedBy: "agent",
+              })
+            );
           }
         } finally {
           await browserSession?.close();
@@ -475,13 +951,17 @@ export async function gradeSubmissionBehavioral(
             executionProfile,
           },
           setup,
+          runbookSource: attempt.source,
+          ...(runbookFallbackReason ? { runbookFallbackReason } : {}),
           failureCategory: setup.status === "failed" ? "setup" : null,
           cases,
+          score: computeBehavioralScore(cases),
           startedAt,
           completedAt,
         };
 
         const reportArtifactKey = await saveReportJson(submissionId, reportDraft);
+        behavioralInfo("report_saved", { reportArtifactKey });
         return {
           ...reportDraft,
           reportArtifactKey,
@@ -499,10 +979,19 @@ export async function gradeSubmissionBehavioral(
     behavioralInfo("run_complete", {
       submissionId,
       cases: report.cases.length,
+      decided: report.score.decided,
+      blocked: report.score.blocked,
+      passRate: report.score.passRate,
       totalMs: Date.now() - t0,
       sandboxId: report.sandbox.sandboxId,
+      runbookSource: report.runbookSource,
     });
 
+    await progress.flush();
     return report;
-  });
+    } finally {
+      await progress.stop();
+    }
+    })
+  );
 }

@@ -97,8 +97,6 @@ const RuntimeSetupSessionSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
-    cpu: { type: Number, default: null },
-    memMiB: { type: Number, default: null },
     error: { type: String, default: null },
     logSeq: { type: Number, default: 0 },
     logLines: { type: [LogLineSchema], default: [] },

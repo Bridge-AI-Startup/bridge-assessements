@@ -312,7 +312,19 @@ Rules:
 - Phrase checks so they can be verified by observing the running app or system behavior.
 - Cover core workflows, persistence where relevant, and error/edge behavior where the assessment implies it.
 - Use varied, concrete wording; avoid duplicating the same idea.
-- Output valid JSON only with key "checks": an array of strings.`,
+
+You may also supply machine-checkable acceptance criteria in an optional "acceptance" array. These let a check be settled by making a real request instead of by a reviewer's judgment, so they must never invent an interface.
+
+Only include an acceptance entry when the assessment description ITSELF pins the exact request — the method, the path, and the response — for example because it says "expose POST /notes returning 201" or gives an API table. If the description leaves the interface to the candidate, omit the entry entirely; the check is still graded, just by observation. It is always correct to return no acceptance entries at all.
+
+Each acceptance entry has:
+- "text": the check it verifies, copied EXACTLY from "checks".
+- "kind": "http" (one request), "http_sequence" (ordered requests, e.g. create then list), or "restart_persistence" (write, restart the app, read it back).
+- "requests": each with "method", "path" (path only, starting with /), optional "jsonBody" (a JSON string), and at least one of "expectStatus" (array of status codes) or "expectBodyContains" (array of substrings).
+
+Use the literal token {{nonce}} inside a request body and its expected substring when the check is about data the candidate's app stored. It is replaced with a value invented at grading time, so an app returning canned fixtures cannot pass by echoing a value it hardcoded.
+
+Output valid JSON only, with key "checks" (array of strings) and optionally "acceptance".`,
 
   userTemplate: (input: {
     title: string;
@@ -328,7 +340,8 @@ ${input.requirementsSummary}
 Project instructions for the candidate (full assessment description):
 ${input.description}
 
-Generate behavioral checks as JSON: { "checks": ["...", ...] }`,
+Generate behavioral checks as JSON: { "checks": ["...", ...], "acceptance": [ ... ] }
+Include "acceptance" only for checks whose exact request and response the description above already pins; omit it otherwise.`,
 };
 
 // ============================================================================

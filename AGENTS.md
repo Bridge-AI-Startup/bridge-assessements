@@ -169,11 +169,11 @@ See `server/config.env.example` for the full list. Key variables:
 
 **Runtime setup (post-submit candidate-authored run config):**
 - `RUNTIME_SETUP_ENABLED` -- Gate candidate runtime-setup routes and UI (default: disabled)
-- `RUNTIME_SETUP_MAX_CONCURRENT` -- Cap on **running** (non-paused) setup sandboxes (default: `3`)
+- `RUNTIME_SETUP_MAX_CONCURRENT` -- Cap on **running or provisioning** setup sandboxes (default: `3`); `paused` boxes are excluded on purpose
 - `RUNTIME_SETUP_SANDBOX_TTL_MS` -- Hard cap per live sandbox (default: `1800000` = 30m)
-- `RUNTIME_SETUP_IDLE_PAUSE_MS` -- Idle → E2B pause (default: `240000` = 4m)
-- `RUNTIME_SETUP_INSTALL_TIMEOUT_MS` / `RUNTIME_SETUP_BUILD_TIMEOUT_MS` / `RUNTIME_SETUP_RUN_MAX_MS`
-- `RUNTIME_SETUP_CPU` / `RUNTIME_SETUP_MEM_MIB` -- sandbox size (default 2 vCPU / 4096 MiB)
+- `RUNTIME_SETUP_IDLE_PAUSE_MS` -- Idle → E2B pause (default: `240000` = 4m); status **and log** polls count as activity
+- `RUNTIME_SETUP_INSTALL_TIMEOUT_MS` / `RUNTIME_SETUP_BUILD_TIMEOUT_MS` -- per-step caps
+- `RUNTIME_SETUP_RUN_MAX_MS` -- whole-run budget shared by install/build/start/health (default: `900000`). No CPU/memory env knobs: sandbox size is a template property in E2B
 - `RUNTIME_SETUP_DENY_EGRESS_AT_RUNTIME` -- After start, lock outbound traffic except `declaredEgressDomains` (default: `true`; requires E2B `updateNetwork`, SDK ≈2.28+)
 - `RUNTIME_SETUP_RUNS_PER_HOUR` -- Per-submission run cap (default: `12`)
 - `RUNTIME_SETUP_HEALTH_WAIT_MS` -- Poll for app ready after start (default: `90000`)
@@ -279,8 +279,9 @@ server/src/
 │   ├── behavioralGrading/
 │   │   ├── index.ts           # E2B behavioral grading orchestrator + in-process concurrency queue
 │   │   ├── planner.ts         # LLM: README → runbook plan (install/test/start)
+│   │   ├── runtimeConfigRunbook.ts # Candidate's finalized+verified runtimeConfig → runbook (skips the LLM planner)
 │   │   ├── schema.ts          # Zod schemas for runbook
-│   │   ├── executor.ts        # Executes runbook commands; saves report JSON; readmeFromSandbox
+│   │   ├── executor.ts        # Executes runbook commands (optional candidate envVars, secret-scrubbed evidence); saves report JSON; readmeFromSandbox
 │   │   ├── judge.ts           # One-shot LLM judge (stdout/source/HTTP seed)
 │   │   ├── agentJudge.ts      # Tool-using judge (run_command/read_file in sandbox, then finish)
 │   │   └── artifacts.ts       # collectJudgeArtifacts + bashLc helpers
@@ -446,7 +447,7 @@ server/src/
 - `POST /:submissionId/grade-behavioral` -- Trigger manual behavioral grading re-run (E2B + evidence capture)
 - `GET /:submissionId/behavioral-artifact` -- Retrieve stored behavioral grading artifacts (screenshots/report files)
 - `GET /:submissionId/code-archive` -- Download uploaded candidate archive (upload-source submissions only)
-- `POST /:submissionId/runtime/preview` -- Recruiter replay: accept a **fresh** `kind: "replay"` sandbox job for the **finalized** runtime config (auth + ownership); returns quickly (`accepted`) and runs install/build/start in the background
+- `POST /:submissionId/runtime/preview` -- Recruiter replay: accept a `kind: "replay"` sandbox job for the **finalized** runtime config (auth + ownership); returns quickly (`accepted`) and runs install/build/start in the background. Reuses a `ready`, still-listening box; `{ restart: true }` forces a cold rebuild. **409** if any behavioral grade is in flight in this process — a new replay sandbox must not evict the grading box; warm reconnect is still allowed
 - `GET /:submissionId/runtime/preview/status` -- Recruiter poll: session state + redacted config + previewUrl/health (auth + ownership)
 - `GET /:submissionId/runtime/preview/logs` -- Recruiter poll: build/runtime logs (`?after=` seq; auth + ownership)
 - `POST /:submissionId/runtime/preview/stop` -- Kill the recruiter replay sandbox (auth + ownership)
@@ -557,7 +558,7 @@ client/src/
 │   ├── CandidateAssessment.jsx # Candidate views assessment -- read-only details, start timer, submit local folder upload (auto-zipped client-side), opt-out
 │   ├── CandidateSubmission.jsx # Shows mock submission data with code review
 │   ├── CandidateSubmitted.jsx  # Post-submission confirmation; CTA into RuntimeSetup when enabled
-│   ├── RuntimeSetup.jsx        # Candidate runtime config + Run + live preview/logs + Finalize
+│   ├── RuntimeSetup.jsx        # Candidate runtime config + one-button "Run project" (provisions if needed) + live preview/logs + Restart environment + Finalize
 │   ├── HackathonDashboard.jsx  # Challenge join + dashboard/leaderboard only; marketing landing may live on Framer (slug: `?slug=` > env > `config/competition.js`)
 │   ├── SubmissionsDashboard.jsx # Employer views submissions -- stats, filtering, dropoff analysis, interview modal, runtime replay
 │   ├── Subscription.jsx        # Billing plans -- Free tier vs Early Access
@@ -567,7 +568,7 @@ client/src/
 │   ├── CancelSubscription.jsx  # Cancellation form with reason
 │   └── Contact.jsx             # Contact/support page
 ├── api/
-│   ├── requests.ts        # Base HTTP client (fetch wrapper: get/post/put/patch/del with error handling)
+│   ├── requests.ts        # Base HTTP client (fetch wrapper: get/post/put/patch/del; parses JSON error bodies so a user sees `error`/`message`, not the raw payload)
 │   ├── assessment.ts      # Assessment API: create, list, get, update, delete, generate, chat
 │   ├── submission.ts      # Submission API: generateLink, bulk, invites, start, submit, interview, optOut, uploadTrace
 │   ├── runtimeSetup.ts    # Candidate runtime setup + recruiter replay (preview/status/logs/stop)
@@ -589,7 +590,7 @@ client/src/
 │   ├── ElevenLabsInterviewClient.jsx  # Voice interview UI (conversation hooks, transcript display)
 │   ├── submissions/
 │   │   ├── BehavioralGradingLiveTrace.jsx # Live behavioral-grading progress in evaluation modal
-│   │   └── RuntimeReplayPanel.jsx     # Recruiter read-only runtime config + Run project preview/logs
+│   │   └── RuntimeReplayPanel.jsx     # Recruiter read-only runtime config + finalized-run evidence card + Run project / Restart preview/logs (stops the replay sandbox on unmount)
 │   ├── proctoring/
 │   │   ├── ConsentScreen.jsx          # Consent dialog before screen recording
 │   │   ├── ScreenShareSetup.jsx       # Multi-monitor picker UI
@@ -694,16 +695,20 @@ Scores bag may still exist on old docs; Trace/llmWorkflow scoring was removed. C
 
 Behavioral grading: `behavioralGradingStatus` (`pending`/`completed`/`failed`), `behavioralGradingError`, `behavioralGradingReport` (runbook summary, per-check verdict/evidence, artifact keys, timings, sandbox metadata)
 
-Runtime setup: `runtimeConfig` { rootDir, runtime (`auto`/`node20`/`python312`), installCommand, buildCommand, startCommand, port, healthPath, executionProfile (`web_server`/`cli_stdout`/`unclear`), envVars[] { key, value, secret }, declaredEgressDomains[] }; `runtimeSetup` { status (`not_started`/`in_progress`/`finalized`), verified, lastRunAt, lastRunResult, finalizedAt, snapshotSha256 }. Secret env values are write-only (never returned on GET).
+Runtime setup: `runtimeConfig` { rootDir, runtime (`auto`/`node20`/`python312` — stored but never read at execution time; not surfaced in either UI), installCommand, buildCommand, startCommand, port, healthPath, executionProfile (`web_server`/`cli_stdout`/`unclear`), envVars[] { key, value, secret }, declaredEgressDomains[] }; `runtimeSetup` { status (`not_started`/`in_progress`/`finalized`), verified, lastRunAt, lastRunResult, finalizedAt, snapshotSha256, evidence { healthOk, healthSummary, port, capturedAt, logTail[] } — captured at finalize so the recruiter panel can show what `Verified` means without booting a sandbox }. Secret env values are write-only (never returned on GET); redacted rows carry `hasValue` so a saved secret is distinguishable from an empty one.
+
+Behavioral grading prefers these commands over the README planner: when setup is `finalized` and `verified`, `services/behavioralGrading/runtimeConfigRunbook.ts` maps the config onto a runbook (candidate `envVars` + `PORT` applied to every step), the LLM planner call is skipped, and the report carries `runbookSource: "candidate_config" | "llm"` plus `runbookFallbackReason` when the candidate config failed to come up and grading re-planned from the README.
 
 Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`, `{ "interview.conversationId": 1 }` (sparse)
 
 ### RuntimeSetupSession
 Ephemeral E2B box for candidate setup (`kind: setup`) or recruiter replay (`kind: replay`). Durable record is `Submission.runtimeConfig` + the stored code snapshot.
 
-Fields: `submissionId` (indexed), `token`, `kind` (`setup`/`replay`), `e2bSandboxId`, `status` (`provisioning`/`running`/`paused`/`dead`), `runPhase`, `repoPath`, `port`, `previewUrl`, `health`, `startedAt`, `lastActiveAt`, `pausedAt`, `cpu`, `memMiB`, `error`, `logLines[]`, `codeLoaded`
+Fields: `submissionId` (indexed), `token`, `kind` (`setup`/`replay`), `e2bSandboxId`, `status` (`provisioning`/`running`/`paused`/`dead`), `runPhase`, `repoPath`, `port`, `previewUrl`, `health`, `startedAt`, `lastActiveAt`, `pausedAt`, `error`, `logLines[]`, `codeLoaded`
 
 Indexes: unique `{ submissionId: 1, kind: 1 }`
+
+Status **and** log polls bump `lastActiveAt` so a watched preview is not idle-paused; `logLines` survive resume (only an explicit restart clears them); a recruiter re-`Run` on a `ready` session reuses the warm box, and cold rebuild is the panel's separate **Restart**.
 
 ### PlayChallenge (bridge-play DB)
 Fields: `slug` (unique, lowercase `a-z0-9-`), `challengeDate` (unique, `YYYY-MM-DD` UTC), `title` (max 120), `prompt`, `tokenBudget`, `timeLimitMinutes` (optional), `category` (`widget`/`game`/`tool`/`other`), `status` (`draft`/`published`)

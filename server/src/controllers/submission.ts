@@ -37,10 +37,15 @@ import {
   shouldGenerateVideoTranscript,
 } from "../utils/evidenceMode.js";
 import {
+  claimBehavioralGradingRun,
   gradeSubmissionBehavioral,
   inferFailureCategory,
   isBehavioralGradingEnabled,
+  isBehavioralGradingInFlight,
+  releaseBehavioralGradingRun,
 } from "../services/behavioralGrading/index.js";
+import { behavioralInfo } from "../services/behavioralGrading/log.js";
+import { queuedBehavioralProgress } from "../services/behavioralGrading/progress.js";
 import {
   isStressDemoAssessment,
   beginStressDemoBehavioralSimulation,
@@ -134,21 +139,31 @@ async function setBehavioralGradingFailed(
         cases: [],
       },
     },
+    $unset: { behavioralGradingProgress: "" },
   });
 }
 
 function triggerBehavioralGradingInBackground(
   submissionId: string,
   source: "submitSubmissionByToken" | "submitSubmission" | "manual"
-): void {
+): boolean {
   if (!isBehavioralGradingEnabled()) {
-    return;
+    return false;
   }
+  if (!claimBehavioralGradingRun(submissionId)) {
+    behavioralInfo("grade_skipped_in_flight", { submissionId, source });
+    console.log(
+      `[${source}] Behavioral grading already in flight for ${submissionId}; skipping.`
+    );
+    return false;
+  }
+  behavioralInfo("grade_claimed", { submissionId, source });
   SubmissionModel.findByIdAndUpdate(submissionId, {
     $set: {
       behavioralGradingStatus: "pending",
       behavioralGradingError: null,
       behavioralGradingReport: null,
+      behavioralGradingProgress: queuedBehavioralProgress(),
     },
   })
     .then(() => gradeSubmissionBehavioral(submissionId))
@@ -159,6 +174,7 @@ function triggerBehavioralGradingInBackground(
           behavioralGradingError: null,
           behavioralGradingReport: report,
         },
+        $unset: { behavioralGradingProgress: "" },
       })
     )
     .catch((err) => {
@@ -175,7 +191,11 @@ function triggerBehavioralGradingInBackground(
         submissionId,
         message
       ).catch(() => {});
+    })
+    .finally(() => {
+      releaseBehavioralGradingRun(submissionId);
     });
+  return true;
 }
 
 /**
@@ -2150,6 +2170,12 @@ export const gradeBehavioralHandler: RequestHandler = async (
       return res.status(503).json({
         error:
           "Behavioral grading (E2B) is currently disabled. Set BEHAVIORAL_GRADING_ENABLED=true on the server to enable.",
+      });
+    }
+
+    if (isBehavioralGradingInFlight(submissionId)) {
+      return res.status(409).json({
+        error: "Behavioral grading is already running for this submission.",
       });
     }
 

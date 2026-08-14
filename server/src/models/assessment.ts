@@ -94,6 +94,22 @@ const AssessmentSchema = new mongoose.Schema(
       default: [],
     },
 
+    /**
+     * Optional per-check verification specs — how a given sentence in
+     * `behavioralChecks` is settled (`agent` = LLM judge, or a deterministic
+     * http / http_sequence / restart_persistence / cli / ui acceptance).
+     *
+     * Mixed, and validated by Zod at the boundary
+     * (`behavioralGrading/checkSpecs.ts`) rather than by Mongoose, so the
+     * acceptance shapes evolve without a schema migration. Never read this field
+     * directly — resolve through `resolveBehavioralCheckSpecs`, which keeps the
+     * plain-language list authoritative.
+     */
+    behavioralCheckSpecs: {
+      type: mongoose.Schema.Types.Mixed,
+      default: undefined,
+    },
+
     // Evaluation criteria for grading submissions
     evaluationCriteria: {
       type: [String],

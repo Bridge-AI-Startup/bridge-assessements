@@ -29,6 +29,35 @@ export const assessmentOutputSchema = z.object({
 
 export type AssessmentOutput = z.infer<typeof assessmentOutputSchema>;
 
+/**
+ * One suggested request in a machine-checkable acceptance criterion.
+ *
+ * Deliberately flatter and looser than the real `BehavioralCheckSpec` schema in
+ * `behavioralGrading/checkSpecs.ts`: an LLM producing a deep discriminated union
+ * fails in ways that are tedious to recover from, so it emits this shape and the
+ * server converts + strictly validates. A suggestion that will not convert is
+ * dropped, leaving the check to the agent judge.
+ */
+const suggestedRequestSchema = z.object({
+  method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
+  path: z.string().min(1).max(300).describe("Path only, starting with /"),
+  jsonBody: z
+    .string()
+    .max(4000)
+    .optional()
+    .describe("Request body as a JSON string, when the request sends one"),
+  expectStatus: z
+    .array(z.coerce.number().int().min(100).max(599))
+    .max(5)
+    .optional()
+    .describe("Acceptable response status codes"),
+  expectBodyContains: z
+    .array(z.string().min(1).max(500))
+    .max(5)
+    .optional()
+    .describe("Substrings the response body must contain"),
+});
+
 /** Plain-language behavioral checks (stack-agnostic, observable). */
 export const behavioralChecksOutputSchema = z.object({
   checks: z
@@ -36,9 +65,31 @@ export const behavioralChecksOutputSchema = z.object({
     .min(5)
     .max(18)
     .describe("Observable behaviors any reasonable implementation should satisfy"),
+  acceptance: z
+    .array(
+      z.object({
+        text: z
+          .string()
+          .min(1)
+          .max(400)
+          .describe("Must exactly match one entry in checks"),
+        kind: z
+          .enum(["http", "http_sequence", "restart_persistence"])
+          .describe("restart_persistence = write, restart the app, read back"),
+        requests: z.array(suggestedRequestSchema).min(1).max(4),
+      })
+    )
+    .max(18)
+    .optional()
+    .describe(
+      "Only for checks whose interface the assessment description pins exactly; omit otherwise"
+    ),
 });
 
 export type BehavioralChecksOutput = z.infer<typeof behavioralChecksOutputSchema>;
+export type SuggestedAcceptance = NonNullable<
+  BehavioralChecksOutput["acceptance"]
+>[number];
 
 /** Step 1: requirements extraction + stack/level with confidence */
 export const requirementsExtractionSchema = z.object({

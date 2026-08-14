@@ -45,23 +45,36 @@ async function fetchRequest(
  * @throws An error if the response was not successful (200-299) or a redirect
  * (300-399)
  */
+function messageFromErrorBody(text: string): string {
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown; message?: unknown };
+    for (const value of [parsed?.error, parsed?.message]) {
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+  } catch {
+    // Not JSON — the caller falls back to the raw body.
+  }
+  return "";
+}
+
 async function assertOk(response: Response): Promise<void> {
   if (response.ok) {
     return;
   }
 
-  let message = `${response.status.toString()} ${response.statusText}`;
+  const status = `${response.status.toString()} ${response.statusText}`;
 
+  let text = "";
   try {
-    const text = await response.text();
-    if (text) {
-      message += ": " + text;
-    }
+    text = await response.text();
   } catch {
-    // skip errors
+    // No readable body; the status line is all we have.
   }
+  if (!text) throw new Error(status);
 
-  throw new Error(message);
+  // The API reports failures as `{ error: "..." }`, so surfacing the raw body
+  // means people read JSON where a sentence would do.
+  throw new Error(messageFromErrorBody(text) || `${status}: ${text}`);
 }
 
 /**

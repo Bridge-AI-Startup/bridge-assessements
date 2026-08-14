@@ -4,6 +4,18 @@ import { API_BASE_URL } from "@/config/api";
 
 export type StarterCodeFile = { path: string; content: string };
 
+/**
+ * How one behavioral check is verified. Shape is owned and Zod-validated by the
+ * server (`behavioralGrading/checkSpecs.ts`); the client only carries it, so
+ * `acceptance` stays loose rather than duplicating a schema that would drift.
+ */
+export type BehavioralCheckSpec = {
+  id: string;
+  text: string;
+  kind: "agent" | "http" | "http_sequence" | "restart_persistence" | "cli" | "ui";
+  acceptance?: unknown;
+};
+
 export type Assessment = {
   _id: string;
   userId: string;
@@ -16,6 +28,7 @@ export type Assessment = {
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
   behavioralChecks?: string[];
+  behavioralCheckSpecs?: BehavioralCheckSpec[];
   evaluationCriteria?: string[];
   createdAt: string;
   updatedAt: string;
@@ -30,6 +43,7 @@ export type AssessmentCreate = {
   starterCodeFiles?: StarterCodeFile[];
   interviewerCustomInstructions?: string;
   behavioralChecks?: string[];
+  behavioralCheckSpecs?: BehavioralCheckSpec[];
   evaluationCriteria?: string[];
 };
 
@@ -43,6 +57,7 @@ export type AssessmentUpdate = {
   interviewerCustomInstructions?: string;
   isSmartInterviewerEnabled?: boolean;
   behavioralChecks?: string[];
+  behavioralCheckSpecs?: BehavioralCheckSpec[];
   evaluationCriteria?: string[];
 };
 
@@ -69,6 +84,7 @@ export async function createAssessment(
       description: string;
       timeLimit: number;
       behavioralChecks?: string[];
+      behavioralCheckSpecs?: BehavioralCheckSpec[];
       evaluationCriteria?: string[];
       starterCodeFiles?: StarterCodeFile[];
     } = {
@@ -78,6 +94,9 @@ export async function createAssessment(
     };
     if (data.behavioralChecks && data.behavioralChecks.length > 0) {
       requestBody.behavioralChecks = data.behavioralChecks;
+    }
+    if (data.behavioralCheckSpecs && data.behavioralCheckSpecs.length > 0) {
+      requestBody.behavioralCheckSpecs = data.behavioralCheckSpecs;
     }
     if (data.evaluationCriteria && data.evaluationCriteria.length > 0) {
       requestBody.evaluationCriteria = data.evaluationCriteria;
@@ -237,6 +256,7 @@ export async function updateAssessment(
       interviewerCustomInstructions?: string;
       isSmartInterviewerEnabled?: boolean;
       behavioralChecks?: string[];
+      behavioralCheckSpecs?: BehavioralCheckSpec[];
       evaluationCriteria?: string[];
     } = {};
 
@@ -267,6 +287,9 @@ export async function updateAssessment(
     }
     if (data.behavioralChecks !== undefined) {
       updateBody.behavioralChecks = data.behavioralChecks;
+    }
+    if (data.behavioralCheckSpecs !== undefined) {
+      updateBody.behavioralCheckSpecs = data.behavioralCheckSpecs;
     }
     if (data.evaluationCriteria !== undefined) {
       updateBody.evaluationCriteria = data.evaluationCriteria;
@@ -348,6 +371,7 @@ export async function generateAssessmentData(
     description: string;
     timeLimit: number;
     behavioralChecks?: string[];
+    behavioralCheckSpecs?: BehavioralCheckSpec[];
     starterCodeFiles?: StarterCodeFile[];
   }>
 > {
@@ -491,7 +515,12 @@ export async function generateBehavioralChecksForAssessment(
   title: string,
   description: string,
   token?: string
-): Promise<APIResult<{ behavioralChecks: string[] }>> {
+): Promise<
+  APIResult<{
+    behavioralChecks: string[];
+    behavioralCheckSpecs?: BehavioralCheckSpec[];
+  }>
+> {
   try {
     let authToken = token;
     if (!authToken) {
@@ -543,7 +572,12 @@ export async function generateBehavioralChecksForAssessment(
     if (result && Array.isArray(result.behavioralChecks)) {
       return {
         success: true,
-        data: { behavioralChecks: result.behavioralChecks },
+        data: {
+          behavioralChecks: result.behavioralChecks,
+          ...(Array.isArray(result.behavioralCheckSpecs)
+            ? { behavioralCheckSpecs: result.behavioralCheckSpecs }
+            : {}),
+        },
       };
     }
 

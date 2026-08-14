@@ -8,6 +8,7 @@ import {
   getRuntimeSetupBuildTimeoutMs,
   getRuntimeSetupHealthWaitMs,
   getRuntimeSetupInstallTimeoutMs,
+  getRuntimeSetupRunMaxMs,
 } from "./config.js";
 
 const ENV_FILE = "/tmp/runtime-setup.env";
@@ -126,6 +127,22 @@ async function listListenPorts(ctx: RuntimeSandboxContext): Promise<number[]> {
   return parseListenPorts(listen.stdout || "");
 }
 
+/**
+ * Cheap "is the app still serving?" probe, used before reusing a warm sandbox
+ * instead of paying for a full reinstall.
+ */
+export async function appStillListening(
+  ctx: RuntimeSandboxContext,
+  port: number
+): Promise<boolean> {
+  try {
+    if (!(await isAppPidAlive(ctx))) return false;
+    return await portIsOpen(ctx, port);
+  } catch {
+    return false;
+  }
+}
+
 async function portIsOpen(
   ctx: RuntimeSandboxContext,
   port: number
@@ -178,10 +195,14 @@ async function waitForHealth(input: {
   healthPath: string | null;
   shouldAbort?: () => Promise<boolean>;
   onHeartbeat?: (summary: string) => Promise<void>;
+  maxWaitMs?: number;
 }): Promise<{ ok: boolean; summary: string; httpOk: boolean; aborted?: boolean }> {
   const { ctx, sessionId, origin, port, healthPath, shouldAbort, onHeartbeat } =
     input;
-  const maxWaitMs = getRuntimeSetupHealthWaitMs();
+  const maxWaitMs = Math.max(
+    1_000,
+    Math.min(input.maxWaitMs ?? Number.POSITIVE_INFINITY, getRuntimeSetupHealthWaitMs())
+  );
   const paths = healthPath
     ? [healthPath]
     : ["/health", "/api/health", "/"];
@@ -265,6 +286,33 @@ async function waitForHealth(input: {
   };
 }
 
+export type RunDeadline = {
+  /** Milliseconds left in the whole-run budget (can go negative). */
+  msLeft: () => number;
+  expired: () => boolean;
+  /** A step never gets more time than the run has left. */
+  stepTimeout: (limitMs: number) => number;
+};
+
+/**
+ * Whole-run budget. Per-step timeouts alone let install + build + health each
+ * take their full window, so one run could hold a sandbox far longer than
+ * RUNTIME_SETUP_RUN_MAX_MS implies.
+ */
+export function createRunDeadline(
+  startedAtMs: number,
+  runMaxMs: number,
+  now: () => number = Date.now
+): RunDeadline {
+  const deadlineAt = startedAtMs + runMaxMs;
+  const msLeft = () => deadlineAt - now();
+  return {
+    msLeft,
+    expired: () => msLeft() <= 0,
+    stepTimeout: (limitMs: number) => Math.max(1_000, Math.min(limitMs, msLeft())),
+  };
+}
+
 export type RuntimeRunResult = {
   ok: boolean;
   exitCode: number | null;
@@ -292,6 +340,12 @@ export async function executeRuntimeConfig(input: {
   const startedAt = new Date();
   const cwd = resolveCwd(config.rootDir, repoPath);
 
+  const runMaxMs = getRuntimeSetupRunMaxMs();
+  const { msLeft, expired, stepTimeout } = createRunDeadline(
+    startedAt.getTime(),
+    runMaxMs
+  );
+
   const abortedResult = (): RuntimeRunResult => ({
     ok: false,
     exitCode: null,
@@ -304,6 +358,22 @@ export async function executeRuntimeConfig(input: {
     endedAt: new Date(),
     aborted: true,
   });
+
+  const deadlineResult = (phase: string): RuntimeRunResult => {
+    const message = `Run exceeded the ${Math.round(runMaxMs / 60_000)}-minute limit during ${phase}.`;
+    appendLiveLog(sessionId, "system", message);
+    return {
+      ok: false,
+      exitCode: null,
+      error: message,
+      port: null,
+      previewUrl: null,
+      healthOk: false,
+      healthSummary: null,
+      startedAt,
+      endedAt: new Date(),
+    };
+  };
 
   appendLiveLog(sessionId, "system", `Working directory: ${cwd}`);
 
@@ -318,9 +388,10 @@ export async function executeRuntimeConfig(input: {
     appendLiveLog(sessionId, "system", `$ ${config.installCommand}`);
     const install = await runLogged(ctx, sessionId, config.installCommand, {
       cwd,
-      timeoutMs: getRuntimeSetupInstallTimeoutMs(),
+      timeoutMs: stepTimeout(getRuntimeSetupInstallTimeoutMs()),
     });
     if (shouldAbort && (await shouldAbort())) return abortedResult();
+    if (expired()) return deadlineResult("install");
     if (install.exitCode !== 0) {
       const endedAt = new Date();
       return {
@@ -342,9 +413,10 @@ export async function executeRuntimeConfig(input: {
     appendLiveLog(sessionId, "system", `$ ${config.buildCommand}`);
     const build = await runLogged(ctx, sessionId, config.buildCommand, {
       cwd,
-      timeoutMs: getRuntimeSetupBuildTimeoutMs(),
+      timeoutMs: stepTimeout(getRuntimeSetupBuildTimeoutMs()),
     });
     if (shouldAbort && (await shouldAbort())) return abortedResult();
+    if (expired()) return deadlineResult("build");
     if (build.exitCode !== 0) {
       const endedAt = new Date();
       return {
@@ -394,7 +466,7 @@ export async function executeRuntimeConfig(input: {
     appendLiveLog(sessionId, "system", `$ ${config.startCommand}`);
     const cli = await runLogged(ctx, sessionId, config.startCommand, {
       cwd,
-      timeoutMs: 120_000,
+      timeoutMs: stepTimeout(120_000),
     });
     const endedAt = new Date();
     const ok = cli.exitCode === 0;
@@ -507,6 +579,7 @@ export async function executeRuntimeConfig(input: {
     healthPath: config.healthPath,
     shouldAbort,
     onHeartbeat,
+    maxWaitMs: msLeft(),
   });
 
   if (health.aborted) return abortedResult();

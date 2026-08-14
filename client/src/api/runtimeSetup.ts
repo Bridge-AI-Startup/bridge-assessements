@@ -6,11 +6,12 @@ export type RuntimeEnvVar = {
   key: string;
   value: string;
   secret?: boolean;
+  /** Secret values are blanked on read; this says whether one is stored. */
+  hasValue?: boolean;
 };
 
 export type RuntimeConfig = {
   rootDir: string;
-  runtime: "auto" | "node20" | "python312";
   installCommand: string;
   buildCommand: string | null;
   startCommand: string;
@@ -34,6 +35,14 @@ export type RuntimeSetupMeta = {
   } | null;
   finalizedAt?: string | null;
   snapshotSha256?: string | null;
+  /** Captured at finalize so the recruiter panel can skip booting a sandbox. */
+  evidence?: {
+    healthOk?: boolean | null;
+    healthSummary?: string | null;
+    port?: number | null;
+    capturedAt?: string | null;
+    logTail?: Array<{ stream: string; text: string; t: string | null }>;
+  } | null;
 };
 
 export type RuntimeSession = {
@@ -226,12 +235,17 @@ async function recruiterFetch<T>(
   }
 }
 
+/**
+ * Boots the finalized config in a sandbox. Without `restart`, a box that is
+ * still serving is reconnected instead of reinstalled.
+ */
 export async function startRuntimeReplay(
-  submissionId: string
+  submissionId: string,
+  opts: { restart?: boolean } = {}
 ): Promise<APIResult<RuntimeReplayStatusResponse>> {
   return recruiterFetch(`/submissions/${submissionId}/runtime/preview`, {
     method: "POST",
-    body: "{}",
+    body: JSON.stringify({ restart: Boolean(opts.restart) }),
   });
 }
 

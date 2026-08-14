@@ -25,7 +25,6 @@ import {
 
 const EMPTY_CONFIG = {
   rootDir: ".",
-  runtime: "auto",
   installCommand: "",
   buildCommand: "",
   startCommand: "",
@@ -40,7 +39,6 @@ function toForm(config) {
   if (!config) return { ...EMPTY_CONFIG };
   return {
     rootDir: config.rootDir || ".",
-    runtime: config.runtime || "auto",
     installCommand: config.installCommand || "",
     buildCommand: config.buildCommand || "",
     startCommand: config.startCommand || "",
@@ -51,6 +49,9 @@ function toForm(config) {
       key: row.key || "",
       value: row.value || "",
       secret: Boolean(row.secret),
+      // Secret values come back blank, so this is the only way to tell a stored
+      // secret apart from one that was never filled in.
+      hasValue: Boolean(row.hasValue),
     })),
     declaredEgressDomains: (config.declaredEgressDomains || []).join(", "),
   };
@@ -61,7 +62,6 @@ function fromForm(form) {
   const port = portRaw ? Number(portRaw) : null;
   return {
     rootDir: form.rootDir || ".",
-    runtime: form.runtime || "auto",
     installCommand: form.installCommand || "",
     buildCommand: form.buildCommand ? form.buildCommand : null,
     startCommand: form.startCommand || "",
@@ -89,6 +89,12 @@ function isLiveSetupSandbox(session) {
   );
 }
 
+const BUSY_RUN_PHASES = ["installing", "building", "starting", "waiting_health"];
+
+function isBusyRunPhase(phase) {
+  return BUSY_RUN_PHASES.includes(phase || "");
+}
+
 function phaseLabel(phase, sessionStatus) {
   if (sessionStatus === "paused") return "Paused";
   if (sessionStatus === "provisioning") return "Starting environment";
@@ -108,6 +114,41 @@ function phaseLabel(phase, sessionStatus) {
     default:
       return sessionStatus === "running" ? "Ready" : "Idle";
   }
+}
+
+/** What the empty preview pane says, tracking the state it is actually in. */
+function previewPlaceholder({ booting, running, session, hasStartCommand }) {
+  if (booting || session?.status === "provisioning") {
+    return "Starting an isolated environment…";
+  }
+  if (running && !isBusyRunPhase(session?.runPhase)) {
+    return "Installing dependencies…";
+  }
+  switch (session?.runPhase) {
+    case "installing":
+      return "Installing dependencies…";
+    case "building":
+      return "Building your project…";
+    case "starting":
+      return "Starting your app…";
+    case "waiting_health":
+      return session?.health?.summary || "Waiting for your app to respond…";
+    default:
+      break;
+  }
+  if (session?.runPhase === "failed" || session?.status === "dead") {
+    return (
+      session?.error ||
+      "The last run failed. Check the logs, fix the config, and run again."
+    );
+  }
+  if (!hasStartCommand) {
+    return "Add a start command, then run your project here.";
+  }
+  if (isLiveSetupSandbox(session)) {
+    return "Environment is ready. Run project to install and start your app.";
+  }
+  return "Run project to boot your code in an isolated sandbox.";
 }
 
 function Field({ label, hint, children }) {
@@ -149,19 +190,12 @@ export default function RuntimeSetup() {
   const skipPauseRef = useRef(false);
 
   const finalized = setup?.status === "finalized";
-  const hasLiveSandbox = !booting && isLiveSetupSandbox(session);
-  const runPhaseBusy = [
-    "installing",
-    "building",
-    "starting",
-    "waiting_health",
-  ].includes(session?.runPhase || "");
+  const runPhaseBusy = isBusyRunPhase(session?.runPhase);
+  const hasStartCommand = Boolean(String(form.startCommand || "").trim());
+  // One CTA: booting the sandbox is an implementation detail, so Run project
+  // provisions first when there is nothing live yet.
   const canRun =
-    hasLiveSandbox &&
-    !running &&
-    !runPhaseBusy &&
-    Boolean(String(form.startCommand || "").trim()) &&
-    !finalizing;
+    !booting && !running && !runPhaseBusy && hasStartCommand && !finalizing;
   const busy =
     booting ||
     running ||
@@ -174,8 +208,15 @@ export default function RuntimeSetup() {
     !session?.hasSandbox ||
     runPhaseBusy;
 
+  // Polling continues at a slow cadence once the app is up: the poll is what
+  // tells the server this box is being watched, and stopping it lets the idle
+  // reaper pause a sandbox whose preview is on screen.
+  const watchingPreview =
+    session?.status === "running" && Boolean(session?.previewUrl);
+
   useEffect(() => {
-    if (!token || !busy || finalized) return undefined;
+    if (!token || finalized) return undefined;
+    if (!busy && !watchingPreview) return undefined;
     let cancelled = false;
     const tick = async () => {
       const result = await getRuntimeStatus(token);
@@ -193,13 +234,13 @@ export default function RuntimeSetup() {
         setRunning(false);
       }
     };
-    const id = setInterval(tick, 2500);
+    const id = setInterval(tick, busy ? 2500 : 10000);
     tick();
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [token, busy, finalized]);
+  }, [token, busy, finalized, watchingPreview]);
 
   const patch = useCallback((partial) => {
     setForm((prev) => ({ ...prev, ...partial }));
@@ -291,16 +332,13 @@ export default function RuntimeSetup() {
     };
   }, [token]);
 
-  const startEnvironment = async () => {
-    const live = isLiveSetupSandbox(session);
+  const onRestartEnvironment = async () => {
     setError(null);
     setBooting(true);
     setRunning(false);
     logSeqRef.current = 0;
     setLogs([]);
-    const result = live
-      ? await restartRuntime(token)
-      : await createRuntimeSession(token);
+    const result = await restartRuntime(token);
     setBooting(false);
     if (!result.success) {
       setError(result.error);
@@ -321,6 +359,22 @@ export default function RuntimeSetup() {
       }
       setSaveState("saved");
     }
+
+    if (!isLiveSetupSandbox(session)) {
+      setBooting(true);
+      logSeqRef.current = 0;
+      setLogs([]);
+      const booted = await createRuntimeSession(token);
+      setBooting(false);
+      if (!booted.success) {
+        setError(booted.error);
+        const status = await getRuntimeStatus(token);
+        if (status.success) applyStatus(status.data);
+        return;
+      }
+      applyStatus(booted.data);
+    }
+
     setRunning(true);
     const result = await runRuntime(token);
     if (!result.success) {
@@ -332,11 +386,17 @@ export default function RuntimeSetup() {
   };
 
   const onFinalize = async () => {
-    if (
-      !window.confirm(
-        "Finalize this setup? Recruiters will replay this config against your submitted code. You will not be able to change it."
-      )
-    ) {
+    const lastRunFailed = setup?.lastRunResult?.ok === false;
+    const message = setup?.verified
+      ? "Finalize this setup? Recruiters will replay this config against your submitted code. You will not be able to change it."
+      : [
+          lastRunFailed
+            ? "Your last run did not succeed."
+            : "You haven't had a successful run yet.",
+          "If you finalize now, recruiters will see this setup as unverified and may not be able to start your project.",
+          "Finalize anyway?",
+        ].join("\n\n");
+    if (!window.confirm(message)) {
       return;
     }
     setFinalizing(true);
@@ -438,24 +498,30 @@ export default function RuntimeSetup() {
             <Button
               variant="outline"
               size="sm"
-              disabled={booting || finalizing}
-              onClick={startEnvironment}
+              disabled={booting || running || runPhaseBusy || finalizing}
+              title="Throw away this environment and provision a clean one from your submitted code"
+              onClick={onRestartEnvironment}
             >
               {booting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
-              ) : hasLiveSandbox ? (
-                "Restart environment"
               ) : (
-                "Start environment"
+                "Restart environment"
               )}
             </Button>
-            <Button size="sm" disabled={!canRun} onClick={onRun}>
-              {running ? (
+            <Button
+              size="sm"
+              disabled={!canRun}
+              onClick={onRun}
+              title={
+                hasStartCommand ? undefined : "Add a start command first"
+              }
+            >
+              {booting || running ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <Play className="w-4 h-4" />
               )}
-              Run
+              Run project
             </Button>
             <Button
               variant="secondary"
@@ -492,17 +558,6 @@ export default function RuntimeSetup() {
               value={form.rootDir}
               onChange={(e) => patch({ rootDir: e.target.value })}
             />
-          </Field>
-          <Field label="Runtime">
-            <select
-              className={inputClass}
-              value={form.runtime}
-              onChange={(e) => patch({ runtime: e.target.value })}
-            >
-              <option value="auto">Auto</option>
-              <option value="node20">Node 20</option>
-              <option value="python312">Python 3.12</option>
-            </select>
           </Field>
           <Field label="Install command">
             <input
@@ -591,17 +646,30 @@ export default function RuntimeSetup() {
                       patch({ envVars: next });
                     }}
                   />
-                  <input
-                    className={inputClass + " mt-0"}
-                    placeholder={row.secret ? "••••" : "value"}
-                    type={row.secret ? "password" : "text"}
-                    value={row.value}
-                    onChange={(e) => {
-                      const next = [...form.envVars];
-                      next[idx] = { ...row, value: e.target.value };
-                      patch({ envVars: next });
-                    }}
-                  />
+                  <div className="relative flex-1 min-w-0">
+                    <input
+                      className={inputClass + " mt-0"}
+                      placeholder={
+                        row.secret && row.hasValue
+                          ? "Leave blank to keep saved value"
+                          : row.secret
+                            ? "••••"
+                            : "value"
+                      }
+                      type={row.secret ? "password" : "text"}
+                      value={row.value}
+                      onChange={(e) => {
+                        const next = [...form.envVars];
+                        next[idx] = { ...row, value: e.target.value };
+                        patch({ envVars: next });
+                      }}
+                    />
+                    {row.secret && row.hasValue && !row.value ? (
+                      <span className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-green-50 px-2 py-0.5 text-[10px] font-mono uppercase tracking-[0.03em] text-green-700">
+                        Saved
+                      </span>
+                    ) : null}
+                  </div>
                   <label className="text-[10px] font-mono uppercase tracking-[0.03em] whitespace-nowrap">
                     <input
                       type="checkbox"
@@ -665,11 +733,12 @@ export default function RuntimeSetup() {
               />
             ) : (
               <div className="flex-1 min-h-[280px] flex items-center justify-center text-sm text-muted-foreground p-6 text-center">
-                {booting
-                  ? "Starting an isolated environment…"
-                  : running
-                    ? "Installing and starting your app…"
-                    : "Press Run to boot your project in an isolated sandbox."}
+                {previewPlaceholder({
+                  booting,
+                  running,
+                  session,
+                  hasStartCommand,
+                })}
               </div>
             )}
           </div>

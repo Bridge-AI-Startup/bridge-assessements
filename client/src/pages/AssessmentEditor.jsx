@@ -41,8 +41,71 @@ import { auth } from "@/firebase/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 import DocumentBlock from "@/components/assessment/DocumentBlock";
 import AISidebar from "@/components/assessment/AISidebar";
+import BehavioralCheckVerification from "@/components/assessment/BehavioralCheckVerification";
 import StarterCodeIDE from "@/components/StarterCodeIDE";
 import { BulkInviteContent } from "@/components/BulkInviteModal";
+
+/**
+ * Pair stored verification specs back up with the check list.
+ *
+ * Specs are stored keyed by the sentence they verify (that is what the server
+ * resolver matches on), but the editor works positionally, so a spec whose
+ * sentence has since been rewritten simply has no home and is dropped — exactly
+ * what grading already does with it.
+ */
+function alignSpecsToChecks(checks, storedSpecs) {
+  const byText = new Map();
+  (Array.isArray(storedSpecs) ? storedSpecs : []).forEach((spec) => {
+    if (spec?.text && !byText.has(spec.text.trim())) {
+      byText.set(spec.text.trim(), spec);
+    }
+  });
+  return checks.map((text) => byText.get(text.trim()) ?? null);
+}
+
+/**
+ * Serialize the editor's specs for the API: drop specs whose check was deleted or
+ * blanked, restamp `text` to the current wording, and parse JSON bodies that the
+ * step editor holds as raw text. A body that is not valid JSON aborts the save
+ * rather than silently sending a string where an object was meant.
+ */
+function serializeCheckSpecs(checks, specs) {
+  const out = [];
+  checks.forEach((rawText, idx) => {
+    const text = typeof rawText === "string" ? rawText.trim() : "";
+    const spec = specs[idx];
+    if (!text || !spec || spec.kind === "agent") return;
+
+    const parseStep = (step) => {
+      if (!step) return step;
+      const { json, ...request } = step.request ?? {};
+      if (typeof json !== "string" || json.trim() === "") {
+        return { ...step, request };
+      }
+      return { ...step, request: { ...request, json: JSON.parse(json) } };
+    };
+
+    let acceptance;
+    if (spec.kind === "http") {
+      acceptance = parseStep(spec.acceptance);
+    } else if (spec.kind === "http_sequence") {
+      acceptance = { steps: (spec.acceptance?.steps ?? []).map(parseStep) };
+    } else {
+      acceptance = {
+        write: parseStep(spec.acceptance?.write),
+        read: parseStep(spec.acceptance?.read),
+      };
+    }
+
+    out.push({
+      id: spec.id || `check-${crypto.randomUUID().slice(0, 8)}`,
+      text,
+      kind: spec.kind,
+      acceptance,
+    });
+  });
+  return out;
+}
 
 export default function AssessmentEditor() {
   const [searchParams] = useSearchParams();
@@ -80,6 +143,8 @@ export default function AssessmentEditor() {
   const [isEditingStarterFiles, setIsEditingStarterFiles] = useState(false);
   const [editedStarterFilesLink, setEditedStarterFilesLink] = useState("");
   const [behavioralChecks, setBehavioralChecks] = useState([]);
+  /** Verification spec per check, aligned by index. `null` = graded by the AI reviewer. */
+  const [checkSpecs, setCheckSpecs] = useState([]);
   const [evaluationCriteria, setEvaluationCriteria] = useState([]);
   const [isSuggestingCriteria, setIsSuggestingCriteria] = useState(false);
   /** Validation result per criterion text: { [criterion]: { valid: boolean, reason?: string } } */
@@ -195,11 +260,16 @@ export default function AssessmentEditor() {
         setEvidenceMode(assessmentData.evidenceMode);
       }
       if (assessmentData.behavioralChecks?.length) {
-        setBehavioralChecks(
-          assessmentData.behavioralChecks.filter((c) => typeof c === "string")
+        const checks = assessmentData.behavioralChecks.filter(
+          (c) => typeof c === "string"
+        );
+        setBehavioralChecks(checks);
+        setCheckSpecs(
+          alignSpecsToChecks(checks, assessmentData.behavioralCheckSpecs)
         );
       } else {
         setBehavioralChecks([]);
+        setCheckSpecs([]);
       }
       if (assessmentData.evaluationCriteria) {
         setEvaluationCriteria(
@@ -306,10 +376,12 @@ export default function AssessmentEditor() {
           );
         }
         if (result.data.behavioralChecks !== undefined) {
-          setBehavioralChecks(
-            Array.isArray(result.data.behavioralChecks)
-              ? result.data.behavioralChecks.filter((c) => typeof c === "string")
-              : []
+          const checks = Array.isArray(result.data.behavioralChecks)
+            ? result.data.behavioralChecks.filter((c) => typeof c === "string")
+            : [];
+          setBehavioralChecks(checks);
+          setCheckSpecs(
+            alignSpecsToChecks(checks, result.data.behavioralCheckSpecs)
           );
         }
         return result;
@@ -1034,40 +1106,58 @@ export default function AssessmentEditor() {
                     an assessment with AI, or you can add your own.
                   </p>
                 ) : (
-                  <ul className="space-y-2">
+                  <ul className="space-y-3">
                     {behavioralChecks.map((check, idx) => (
-                      <li key={idx} className="flex gap-2 items-start">
-                        <span
-                          className="mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#21201C]/70"
-                          aria-hidden
-                        />
-                        <input
-                          type="text"
-                          value={check}
-                          onChange={(e) =>
-                            setBehavioralChecks((prev) => {
-                              const next = [...prev];
-                              next[idx] = e.target.value;
-                              return next;
+                      <li key={idx}>
+                        <div className="flex gap-2 items-start">
+                          <span
+                            className="mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#21201C]/70"
+                            aria-hidden
+                          />
+                          <input
+                            type="text"
+                            value={check}
+                            onChange={(e) =>
+                              setBehavioralChecks((prev) => {
+                                const next = [...prev];
+                                next[idx] = e.target.value;
+                                return next;
+                              })
+                            }
+                            className="flex-1 text-sm text-gray-800 bg-white border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#21201C]/20 focus:border-[#21201C]"
+                            placeholder="Observable behavior…"
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setBehavioralChecks((prev) =>
+                                prev.filter((_, i) => i !== idx)
+                              );
+                              setCheckSpecs((prev) =>
+                                prev.filter((_, i) => i !== idx)
+                              );
+                            }}
+                            className="text-gray-500 hover:text-red-600 p-2 h-9 w-9 shrink-0"
+                            aria-label="Remove check"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                        <BehavioralCheckVerification
+                          spec={checkSpecs[idx] ?? null}
+                          onChange={(next) =>
+                            setCheckSpecs((prev) => {
+                              const copy = [...prev];
+                              while (copy.length < behavioralChecks.length) {
+                                copy.push(null);
+                              }
+                              copy[idx] = next;
+                              return copy;
                             })
                           }
-                          className="flex-1 text-sm text-gray-800 bg-white border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#21201C]/20 focus:border-[#21201C]"
-                          placeholder="Observable behavior…"
                         />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            setBehavioralChecks((prev) =>
-                              prev.filter((_, i) => i !== idx)
-                            )
-                          }
-                          className="text-gray-500 hover:text-red-600 p-2 h-9 w-9 shrink-0"
-                          aria-label="Remove check"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
                       </li>
                     ))}
                   </ul>
@@ -1077,7 +1167,10 @@ export default function AssessmentEditor() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={() => setBehavioralChecks((prev) => [...prev, ""])}
+                    onClick={() => {
+                      setBehavioralChecks((prev) => [...prev, ""]);
+                      setCheckSpecs((prev) => [...prev, null]);
+                    }}
                     className="text-sm"
                   >
                     <Plus className="w-4 h-4 mr-1.5" />
@@ -1087,11 +1180,31 @@ export default function AssessmentEditor() {
                     type="button"
                     size="sm"
                     onClick={async () => {
-                      const checks = behavioralChecks
-                        .map((c) => (typeof c === "string" ? c.trim() : ""))
-                        .filter(Boolean);
-                      await saveAssessment({ behavioralChecks: checks });
+                      const kept = behavioralChecks
+                        .map((c, i) => ({
+                          text: typeof c === "string" ? c.trim() : "",
+                          spec: checkSpecs[i] ?? null,
+                        }))
+                        .filter((row) => row.text);
+                      const checks = kept.map((row) => row.text);
+                      let specs;
+                      try {
+                        specs = serializeCheckSpecs(
+                          checks,
+                          kept.map((row) => row.spec)
+                        );
+                      } catch {
+                        alert(
+                          "A request body under “How is this verified?” is not valid JSON. Fix it and save again."
+                        );
+                        return;
+                      }
+                      await saveAssessment({
+                        behavioralChecks: checks,
+                        behavioralCheckSpecs: specs,
+                      });
                       setBehavioralChecks(checks);
+                      setCheckSpecs(alignSpecsToChecks(checks, specs));
                     }}
                     disabled={isSaving}
                     className="text-sm bg-[#21201C] hover:bg-[#35332D]"

@@ -109,11 +109,37 @@ const makeOptionalStarterCodeFilesValidator = () =>
     .isArray()
     .withMessage("starterCodeFiles must be an array");
 
+/**
+ * Shape is validated by Zod in `behavioralGrading/checkSpecs.ts` — the acceptance
+ * schemas are far too structured for express-validator, and grading resolves
+ * through the parser anyway. This only rejects obvious junk early, with a message
+ * naming the offending entry so a bad edit is not silently dropped later.
+ */
+const makeOptionalBehavioralCheckSpecsValidator = () =>
+  body("behavioralCheckSpecs")
+    .optional({ nullable: true })
+    .isArray()
+    .withMessage("behavioralCheckSpecs must be an array")
+    .bail()
+    .custom(async (arr: unknown) => {
+      const { parseBehavioralCheckSpecs } = await import(
+        "../services/behavioralGrading/checkSpecs.js"
+      );
+      const { rejected } = parseBehavioralCheckSpecs(arr);
+      if (rejected.length > 0) {
+        throw new Error(
+          `invalid check spec at index ${rejected[0].index} — ${rejected[0].reason}`
+        );
+      }
+      return true;
+    });
+
 export const createAssessmentValidation = [
   makeTitleValidator(),
   makeDescriptionValidator(),
   makeTimeLimitValidator(),
   makeOptionalBehavioralChecksValidator(),
+  makeOptionalBehavioralCheckSpecsValidator(),
   makeOptionalEvaluationCriteriaValidator(),
   makeOptionalStarterCodeFilesValidator(),
 ];
@@ -123,6 +149,7 @@ export const updateAssessmentValidation = [
   makeOptionalDescriptionValidator(),
   makeOptionalTimeLimitValidator(),
   makeOptionalBehavioralChecksValidator(),
+  makeOptionalBehavioralCheckSpecsValidator(),
   makeOptionalEvaluationCriteriaValidator(),
   makeOptionalStarterCodeFilesValidator(),
 ];

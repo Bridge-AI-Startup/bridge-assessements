@@ -26,6 +26,7 @@ import { errorHandler } from "./errors/handler.js";
 import { isDevLoopbackOrigin } from "./utils/corsOrigins.js";
 import { startIncrementalScheduler } from "./ai/transcript/incrementalScheduler.js";
 import { startRuntimeSetupReaper } from "./services/runtimeSetup/index.js";
+import { sweepInterruptedBehavioralGrading } from "./services/behavioralGrading/index.js";
 
 // Node 15+ terminates the process on an unhandled rejection. Without these
 // handlers a background async failure (E2B, Mongo, a stray promise) kills the
@@ -518,6 +519,15 @@ const startServer = async () => {
     console.log("   🔄 Connecting to MongoDB Play database...");
     await connectPlayMongoose();
     console.log("   ✅ MongoDB Play connected");
+
+    // Behavioral grading queues in memory, so anything left `pending` by the
+    // previous process is gone. Retire those before serving traffic.
+    const sweptGrades = await sweepInterruptedBehavioralGrading();
+    if (sweptGrades > 0) {
+      console.log(
+        `   🧹 Marked ${sweptGrades} interrupted behavioral grading run(s) as failed`
+      );
+    }
 
     // Start Express server
     console.log("\n🚀 Starting Express server...");

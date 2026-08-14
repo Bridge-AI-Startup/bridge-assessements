@@ -5,6 +5,7 @@ import {
   Loader2,
   Maximize2,
   Play,
+  RotateCcw,
   Square,
   X,
 } from "lucide-react";
@@ -57,6 +58,56 @@ function envValue(row) {
   return row?.value || "";
 }
 
+/**
+ * What the candidate's own final run looked like, captured at finalize. Lets a
+ * recruiter judge "Verified" without spending a sandbox.
+ */
+function EvidenceCard({ evidence, verified }) {
+  const logTail = evidence?.logTail || [];
+  const hasBody = Boolean(evidence?.healthSummary || evidence?.port || logTail.length);
+  if (!hasBody) return null;
+
+  return (
+    <div className="rounded-md border border-gray-200 bg-white p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
+          Candidate&apos;s last run
+        </p>
+        {evidence?.capturedAt ? (
+          <span className="text-[11px] text-gray-500">
+            {new Date(evidence.capturedAt).toLocaleString()}
+          </span>
+        ) : null}
+      </div>
+      <p
+        className={`mt-1 text-xs ${
+          evidence?.healthOk || verified ? "text-gray-800" : "text-gray-600"
+        }`}
+      >
+        {evidence?.healthSummary ||
+          (verified ? "Started successfully." : "No health result recorded.")}
+      </p>
+      {evidence?.port ? (
+        <p className="mt-0.5 text-[11px] font-mono text-gray-600">
+          Served on port {evidence.port}
+        </p>
+      ) : null}
+      {logTail.length > 0 ? (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-[11px] font-medium text-gray-600">
+            Last {logTail.length} log lines
+          </summary>
+          <pre className="mt-2 max-h-40 overflow-auto rounded bg-[#21201C] p-2 text-[11px] leading-5 font-mono text-[#F4F2E9] whitespace-pre-wrap">
+            {logTail
+              .map((line) => line.text)
+              .join("\n")}
+          </pre>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 function ConfigRow({ label, value }) {
   if (value == null || value === "") return null;
   return (
@@ -92,6 +143,8 @@ export default function RuntimeReplayPanel({ submission }) {
 
   const logEndRef = useRef(null);
   const logSeqRef = useRef(0);
+  /** submissionId this panel booted a replay sandbox for, if any. */
+  const startedForRef = useRef(null);
 
   const busy = isBusy(session, starting);
   const previewUrl = session?.previewUrl;
@@ -112,6 +165,19 @@ export default function RuntimeReplayPanel({ submission }) {
   useEffect(() => {
     if (!previewLive) setExpanded(false);
   }, [previewLive]);
+
+  // Kill the box when this panel goes away, which covers SPA navigation and
+  // switching to another candidate while the evaluation modal stays mounted.
+  // A closed tab cannot be handled here: the stop route needs a Firebase bearer
+  // token and sendBeacon cannot attach one, so that case stays the reaper's job.
+  useEffect(() => {
+    if (!submissionId) return undefined;
+    return () => {
+      if (startedForRef.current !== submissionId) return;
+      startedForRef.current = null;
+      stopRuntimeReplay(submissionId);
+    };
+  }, [submissionId]);
 
   useEffect(() => {
     if (!expanded) return undefined;
@@ -146,8 +212,11 @@ export default function RuntimeReplayPanel({ submission }) {
     };
   }, [submissionId, finalized, disabled]);
 
+  // Polling does not stop at `ready`: it is also the signal that keeps the idle
+  // reaper from pausing a box whose preview the recruiter is clicking through.
   useEffect(() => {
-    if (!submissionId || !finalized || disabled || !busy) return undefined;
+    if (!submissionId || !finalized || disabled) return undefined;
+    if (!busy && !previewLive) return undefined;
     let cancelled = false;
     const tick = async () => {
       const result = await getRuntimeReplayStatus(submissionId);
@@ -165,13 +234,13 @@ export default function RuntimeReplayPanel({ submission }) {
         setStarting(false);
       }
     };
-    const id = setInterval(tick, 2500);
+    const id = setInterval(tick, busy ? 2500 : 10000);
     tick();
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [submissionId, finalized, disabled, busy]);
+  }, [submissionId, finalized, disabled, busy, previewLive]);
 
   useEffect(() => {
     if (!submissionId || !finalized || disabled) return undefined;
@@ -194,25 +263,31 @@ export default function RuntimeReplayPanel({ submission }) {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
-  const onRun = async () => {
+  const onRun = async (opts = {}) => {
     if (!submissionId) return;
     setError(null);
     setStarting(true);
-    logSeqRef.current = 0;
-    setLogs([]);
-    const result = await startRuntimeReplay(submissionId);
+    // A cold rebuild starts a new log stream; a warm reconnect keeps the old one.
+    if (opts.restart) {
+      logSeqRef.current = 0;
+      setLogs([]);
+    }
+    const result = await startRuntimeReplay(submissionId, opts);
     if (!result.success) {
       setStarting(false);
       setError(result.error);
       return;
     }
+    startedForRef.current = submissionId;
     if (result.data.config) setConfig(result.data.config);
     if (result.data.session !== undefined) setSession(result.data.session);
+    if (result.data.session?.runPhase === "ready") setStarting(false);
   };
 
   const onStop = async () => {
     if (!submissionId) return;
     setStarting(false);
+    startedForRef.current = null;
     await stopRuntimeReplay(submissionId);
     setSession((prev) =>
       prev
@@ -272,12 +347,24 @@ export default function RuntimeReplayPanel({ submission }) {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {session?.hasSandbox || busy || previewUrl ? (
-            <Button variant="outline" size="sm" onClick={onStop} disabled={!session}>
-              <Square className="w-3.5 h-3.5 mr-1.5" />
-              Stop
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onRun({ restart: true })}
+                disabled={busy}
+                title="Discard this sandbox and reinstall from the submitted snapshot"
+              >
+                <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+                Restart
+              </Button>
+              <Button variant="outline" size="sm" onClick={onStop} disabled={!session}>
+                <Square className="w-3.5 h-3.5 mr-1.5" />
+                Stop
+              </Button>
+            </>
           ) : null}
-          <Button size="sm" onClick={onRun} disabled={busy}>
+          <Button size="sm" onClick={() => onRun()} disabled={busy}>
             {busy ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
@@ -292,6 +379,8 @@ export default function RuntimeReplayPanel({ submission }) {
         <p className="text-xs text-red-600">{error}</p>
       ) : null}
 
+      <EvidenceCard evidence={setup?.evidence} verified={setup?.verified} />
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-md border border-gray-100 bg-gray-50 p-3">
         <ConfigRow label="Install" value={config?.installCommand} />
         <ConfigRow label="Build" value={config?.buildCommand} />
@@ -302,7 +391,6 @@ export default function RuntimeReplayPanel({ submission }) {
             [config?.port, config?.healthPath].filter(Boolean).join(" · ") || null
           }
         />
-        <ConfigRow label="Runtime" value={config?.runtime} />
         <ConfigRow label="Root" value={config?.rootDir} />
         {envVars.length > 0 ? (
           <div className="sm:col-span-2">

@@ -15,6 +15,9 @@ export {
   getReplayLogs,
   stopReplay,
   assertFinalizedForReplay,
+  assertReplayDoesNotPreemptGrading,
+  replayWouldPreemptGrading,
+  REPLAY_BLOCKED_BY_GRADING_MESSAGE,
 } from "./sessions.js";
 export { startRuntimeSetupReaper } from "./reaper.js";
 export { publicRuntimeConfig } from "./secrets.js";

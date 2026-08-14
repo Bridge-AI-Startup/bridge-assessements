@@ -2,17 +2,36 @@ import type { RuntimeConfig, RuntimeEnvVar } from "./schema.js";
 
 const SECRET_PLACEHOLDER = "";
 
+/**
+ * A blanked secret is otherwise indistinguishable from one that was never
+ * filled in, so the redacted row carries whether a value is stored.
+ */
+export type PublicRuntimeEnvVar = RuntimeEnvVar & { hasValue: boolean };
+export type PublicRuntimeConfig = Omit<RuntimeConfig, "envVars"> & {
+  envVars: PublicRuntimeEnvVar[];
+};
+
 /** Never return secret values on GET/status. Write-only rows keep `secret: true`. */
 export function publicRuntimeConfig(
   config: RuntimeConfig | null | undefined
-): RuntimeConfig | null {
+): PublicRuntimeConfig | null {
   if (!config) return null;
   return {
     ...config,
     envVars: (config.envVars || []).map((row) =>
       row.secret
-        ? { key: row.key, value: SECRET_PLACEHOLDER, secret: true }
-        : { key: row.key, value: row.value ?? "", secret: false }
+        ? {
+            key: row.key,
+            value: SECRET_PLACEHOLDER,
+            secret: true,
+            hasValue: Boolean(row.value),
+          }
+        : {
+            key: row.key,
+            value: row.value ?? "",
+            secret: false,
+            hasValue: Boolean(row.value),
+          }
     ),
   };
 }
@@ -42,12 +61,19 @@ export function mergeRuntimeConfig(
   return { ...incoming, envVars };
 }
 
-export function secretValues(config: RuntimeConfig | null | undefined): string[] {
-  if (!config) return [];
-  return (config.envVars || [])
+/** Values worth scrubbing from log output. Very short values would match noise. */
+export function secretValuesFromEnvVars(
+  envVars: RuntimeEnvVar[] | null | undefined
+): string[] {
+  return (envVars || [])
     .filter((row) => row.secret && row.value)
     .map((row) => row.value)
     .filter((v) => v.length >= 4);
+}
+
+export function secretValues(config: RuntimeConfig | null | undefined): string[] {
+  if (!config) return [];
+  return secretValuesFromEnvVars(config.envVars);
 }
 
 /** Scrub secret values (and common token-looking assignments) from log text. */

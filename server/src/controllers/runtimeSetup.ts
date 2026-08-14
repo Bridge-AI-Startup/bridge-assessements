@@ -147,7 +147,8 @@ async function requireEmployerOwnsSubmission(req: Request) {
 export const postReplay: RequestHandler = async (req, res, next) => {
   try {
     const { submissionId } = await requireEmployerOwnsSubmission(req);
-    const result = await replayFinalizedConfig(submissionId);
+    const restart = req.body?.restart === true;
+    const result = await replayFinalizedConfig(submissionId, { restart });
     res.status(200).json(result);
   } catch (error) {
     next(error);

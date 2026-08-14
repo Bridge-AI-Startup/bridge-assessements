@@ -3,6 +3,7 @@ import type { Sandbox } from "e2b";
 import SubmissionModel from "../../models/submission.js";
 import RuntimeSetupSessionModel from "../../models/runtimeSetupSession.js";
 import { isE2bConfigured } from "../e2b/graderSandbox.js";
+import { hasAnyBehavioralGradingInFlight } from "../behavioralGrading/index.js";
 import { extractRunbook } from "../behavioralGrading/planner.js";
 import {
   probeRepoLayoutForRunbook,
@@ -11,8 +12,6 @@ import {
 import {
   isRuntimeSetupEnabled,
   getRuntimeSetupMaxConcurrent,
-  getRuntimeSetupCpu,
-  getRuntimeSetupMemMiB,
   getRuntimeSetupRunsPerHour,
   isBusyRunPhase,
 } from "./config.js";
@@ -26,6 +25,7 @@ import {
   mergeRuntimeConfig,
   publicRuntimeConfig,
   secretValues,
+  type PublicRuntimeConfig,
 } from "./secrets.js";
 import {
   appendLiveLog,
@@ -41,10 +41,11 @@ import {
   createRuntimeSandbox,
   killRuntimeSandbox,
   pauseRuntimeSandbox,
+  previewUrlForPort,
   toRuntimeCtx,
 } from "./sandbox.js";
 import { loadSubmissionCodeIntoSandbox } from "./loadCode.js";
-import { executeRuntimeConfig } from "./run.js";
+import { appStillListening, executeRuntimeConfig } from "./run.js";
 import { createKeyedAsyncLock } from "./lock.js";
 
 const withSubmissionLock = createKeyedAsyncLock();
@@ -125,6 +126,16 @@ function recordRun(submissionId: string): void {
   runTimestamps.set(submissionId, stamps);
 }
 
+export const RUNTIME_EVIDENCE_LOG_LINES = 40;
+
+export type RuntimeSetupEvidence = {
+  healthOk: boolean;
+  healthSummary: string | null;
+  port: number | null;
+  capturedAt: Date;
+  logTail: Array<{ stream: string; text: string; t: Date | null }>;
+};
+
 type RuntimeSetupFields = {
   status?: string;
   verified?: boolean;
@@ -138,7 +149,34 @@ type RuntimeSetupFields = {
   } | null;
   finalizedAt?: Date | null;
   snapshotSha256?: string | null;
+  evidence?: RuntimeSetupEvidence | null;
 };
+
+/**
+ * Freeze what the setup sandbox looked like so the recruiter panel can show a
+ * readable verdict with no sandbox running. Log lines are already redacted by
+ * the live buffer.
+ */
+export function captureRuntimeEvidence(session: {
+  _id: { toString(): string };
+  port?: number | null;
+  health?: { ok?: boolean; summary?: string | null } | null;
+}): RuntimeSetupEvidence {
+  const lines = getLiveLogs(session._id.toString(), 0).slice(
+    -RUNTIME_EVIDENCE_LOG_LINES
+  );
+  return {
+    healthOk: Boolean(session.health?.ok),
+    healthSummary: session.health?.summary ?? null,
+    port: session.port ?? null,
+    capturedAt: new Date(),
+    logTail: lines.map((line) => ({
+      stream: line.stream,
+      text: line.text,
+      t: line.t ? new Date(line.t) : null,
+    })),
+  };
+}
 
 /**
  * Mutate the nested runtimeSetup subdoc in place. Replacing it with a spread
@@ -217,10 +255,10 @@ async function isCurrentRunStillActive(
 
 export function publicConfigForSubmission(submission: {
   runtimeConfig?: RuntimeConfig | null;
-}): RuntimeConfig {
+}): PublicRuntimeConfig {
   return (
     publicRuntimeConfig(submission.runtimeConfig as RuntimeConfig) ||
-    emptyRuntimeConfig()
+    (publicRuntimeConfig(emptyRuntimeConfig()) as PublicRuntimeConfig)
   );
 }
 
@@ -230,16 +268,40 @@ async function loadSubmissionByToken(token: string) {
   return submission;
 }
 
+/**
+ * Seats held against RUNTIME_SETUP_MAX_CONCURRENT. `provisioning` counts because
+ * a box is already being created; without it, simultaneous requests all read a
+ * stale count and overshoot the cap. `paused` is excluded on purpose — a paused
+ * E2B box is cheap and resuming it does not create a new sandbox.
+ */
+export function runningSandboxFilter(): {
+  status: { $in: string[] };
+} {
+  return { status: { $in: ["running", "provisioning"] } };
+}
+
 async function countRunningSandboxes(): Promise<number> {
-  return RuntimeSetupSessionModel.countDocuments({
-    status: "running",
-  });
+  return RuntimeSetupSessionModel.countDocuments(runningSandboxFilter());
 }
 
 async function touchSession(session: {
   lastActiveAt?: Date;
   save: () => Promise<unknown>;
 }): Promise<void> {
+  session.lastActiveAt = new Date();
+  await session.save();
+}
+
+/**
+ * Any poll from a client that is watching a live box counts as activity, so the
+ * idle reaper cannot pause a sandbox someone is clicking through. Status polling
+ * stops once a run reaches `ready`; log polling does not.
+ */
+async function touchIfLive(
+  session: InstanceType<typeof RuntimeSetupSessionModel> | null
+): Promise<void> {
+  if (!session) return;
+  if (session.status !== "running" && session.status !== "provisioning") return;
   session.lastActiveAt = new Date();
   await session.save();
 }
@@ -354,6 +416,10 @@ async function ensureSandboxOnSession(
     session.previewUrl = null;
   }
 
+  if (session.kind === "replay") {
+    assertReplayDoesNotPreemptGrading();
+  }
+
   const running = await countRunningSandboxes();
   if (running >= getRuntimeSetupMaxConcurrent()) {
     throw createHttpError(
@@ -371,13 +437,14 @@ async function ensureSandboxOnSession(
     sessionId: session._id.toString(),
   });
 
+  // CPU/memory are fixed by the E2B template, not by Sandbox.create (the create
+  // body carries only template, metadata, env, timeout, and network), so there is
+  // nothing to size here — which is why the session no longer records either.
   session.e2bSandboxId = sandbox.sandboxId;
   session.status = "running";
   session.startedAt = new Date();
   session.lastActiveAt = new Date();
   session.pausedAt = null;
-  session.cpu = getRuntimeSetupCpu();
-  session.memMiB = getRuntimeSetupMemMiB();
   session.error = null;
   session.codeLoaded = false;
   session.repoPath = null;
@@ -434,8 +501,13 @@ export async function createOrResumeSession(token: string) {
         lastActiveAt: new Date(),
       });
     }
+    // Resume keeps the log history: only an explicit restart clears it, so a
+    // refresh mid-setup does not throw away the output the candidate was reading.
     hydrateLiveFromSession(session as never);
-    resetLiveLogs(session._id.toString(), secretValues(submission.runtimeConfig as RuntimeConfig));
+    setLiveSecrets(
+      session._id.toString(),
+      secretValues(submission.runtimeConfig as RuntimeConfig)
+    );
 
     try {
       const sandbox = await ensureSandboxOnSession(session, submission);
@@ -874,7 +946,12 @@ export async function finalizeSetup(token: string) {
       submissionId: fresh._id,
       kind: "setup",
     });
+    let evidence: RuntimeSetupEvidence | null = null;
     if (session) {
+      // Read the box before tearing it down: this is the only moment the health
+      // result, resolved port, and log tail are all still in hand.
+      hydrateLiveFromSession(session as never);
+      evidence = captureRuntimeEvidence(session as never);
       const previousSandboxId = session.e2bSandboxId;
       session.status = "dead";
       session.e2bSandboxId = null;
@@ -902,6 +979,7 @@ export async function finalizeSetup(token: string) {
       snapshotSha256:
         fresh.runtimeSetup?.snapshotSha256 ||
         snapshotShaFromSubmission(fresh as never),
+      ...(evidence ? { evidence } : {}),
     });
     await fresh.save();
 
@@ -928,6 +1006,7 @@ export async function getLogs(token: string, afterSeq = 0) {
   const lines = getLiveLogs(session._id.toString(), afterSeq);
   const nextSeq =
     lines.length > 0 ? lines[lines.length - 1].seq : afterSeq;
+  await touchIfLive(session);
   return { lines, nextSeq };
 }
 
@@ -943,6 +1022,24 @@ export function assertFinalizedForReplay(submission: {
 
 function replayLockKey(submissionId: string): string {
   return `replay:${submissionId}`;
+}
+
+/**
+ * Recruiter replay must not create a new E2B box while grading holds one.
+ * The team concurrent-sandbox quota is shared; a new replay create can
+ * evict or pause the grading sandbox, which then fails the in-flight grade.
+ * Reconnecting a warm replay box does not create anything, so it is allowed.
+ */
+export const REPLAY_BLOCKED_BY_GRADING_MESSAGE =
+  "Behavioral grading is still running. Wait until it finishes before starting a live preview.";
+
+export function replayWouldPreemptGrading(): boolean {
+  return hasAnyBehavioralGradingInFlight();
+}
+
+export function assertReplayDoesNotPreemptGrading(): void {
+  if (!replayWouldPreemptGrading()) return;
+  throw createHttpError(409, REPLAY_BLOCKED_BY_GRADING_MESSAGE);
 }
 
 function replayPublicPayload(
@@ -977,15 +1074,63 @@ function shouldApplyReplayRunResult(input: {
 }
 
 /**
+ * Reconnect a replay sandbox that is already serving the app, so a second Run
+ * costs a probe instead of a full reinstall. Returns false when there is no
+ * warm box to reuse, in which case the caller does a cold rebuild.
+ */
+async function reuseWarmReplaySandbox(
+  session: InstanceType<typeof RuntimeSetupSessionModel>,
+  config: RuntimeConfig
+): Promise<boolean> {
+  if (session.runPhase !== "ready") return false;
+  if (!session.e2bSandboxId) return false;
+  if (session.status !== "running" && session.status !== "paused") return false;
+  const port = session.port;
+  if (!port) return false;
+
+  const sessionId = session._id.toString();
+  try {
+    const sandbox = await connectRuntimeSandbox(session.e2bSandboxId);
+    const ctx = toRuntimeCtx(sandbox);
+    if (!(await appStillListening(ctx, port))) return false;
+
+    hydrateLiveFromSession(session as never);
+    setLiveSecrets(sessionId, secretValues(config));
+    session.status = "running";
+    session.pausedAt = null;
+    session.previewUrl = previewUrlForPort(sandbox, port);
+    session.error = null;
+    session.lastActiveAt = new Date();
+    await session.save();
+    appendLiveLog(
+      sessionId,
+      "system",
+      `Reconnected to the running sandbox on port ${port} (no reinstall).`
+    );
+    await persistLiveLogs(sessionId);
+    return true;
+  } catch (err) {
+    console.warn(
+      `[runtime-setup] warm replay reuse failed for ${session.e2bSandboxId}:`,
+      err instanceof Error ? err.message : err
+    );
+    return false;
+  }
+}
+
+/**
  * Recruiter replay of a finalized runtime config. Accepts the job and runs
  * provision + install/build/start in the background so the HTTP request
  * returns before a long MERN install can 502.
  *
  * A second POST while a replay is already in flight returns the current
- * session. A POST after ready/failed/dead kills the previous replay box and
- * starts a fresh one.
+ * session. A second POST against a box that is still serving reconnects to it
+ * rather than reinstalling; `restart` forces the cold kill-and-rebuild path.
  */
-export async function replayFinalizedConfig(submissionId: string) {
+export async function replayFinalizedConfig(
+  submissionId: string,
+  opts: { restart?: boolean } = {}
+) {
   assertRuntimeSetupEnabled();
   if (!isE2bConfigured()) {
     throw createHttpError(503, "E2B is not configured on this server");
@@ -1023,6 +1168,15 @@ export async function replayFinalizedConfig(submissionId: string) {
         accepted: true,
       });
     }
+
+    if (!opts.restart && (await reuseWarmReplaySandbox(session, config))) {
+      return replayPublicPayload(submission, session, {
+        ok: true,
+        accepted: true,
+      });
+    }
+
+    assertReplayDoesNotPreemptGrading();
 
     resetLiveLogs(session._id.toString(), secretValues(config));
     if (session.e2bSandboxId) {
@@ -1179,10 +1333,7 @@ export async function getReplayStatus(submissionId: string) {
   });
   if (session) {
     hydrateLiveFromSession(session as never);
-    if (session.status === "running" || session.status === "provisioning") {
-      session.lastActiveAt = new Date();
-      await session.save();
-    }
+    await touchIfLive(session);
   }
   return replayPublicPayload(submission, session);
 }
@@ -1203,6 +1354,7 @@ export async function getReplayLogs(submissionId: string, afterSeq = 0) {
   );
   const lines = getLiveLogs(session._id.toString(), afterSeq);
   const nextSeq = lines.length > 0 ? lines[lines.length - 1].seq : afterSeq;
+  await touchIfLive(session);
   return { lines, nextSeq };
 }
 

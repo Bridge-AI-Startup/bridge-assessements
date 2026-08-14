@@ -48,14 +48,6 @@ export function getRuntimeSetupRunMaxMs(): number {
   return envInt("RUNTIME_SETUP_RUN_MAX_MS", 15 * 60 * 1000, 30_000, 30 * 60 * 1000);
 }
 
-export function getRuntimeSetupCpu(): number {
-  return envInt("RUNTIME_SETUP_CPU", 2, 1, 4);
-}
-
-export function getRuntimeSetupMemMiB(): number {
-  return envInt("RUNTIME_SETUP_MEM_MIB", 4096, 512, 8192);
-}
-
 export function denyEgressAtRuntime(): boolean {
   return envBool("RUNTIME_SETUP_DENY_EGRESS_AT_RUNTIME", true);
 }

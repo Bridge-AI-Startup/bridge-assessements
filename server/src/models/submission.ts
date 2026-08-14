@@ -405,6 +405,24 @@ const SubmissionSchema = new mongoose.Schema(
       },
       finalizedAt: { type: Date, default: null },
       snapshotSha256: { type: String, default: null },
+      // Snapshot of the setup box taken at finalize, so a recruiter can read
+      // what "verified" means without paying to boot a sandbox.
+      evidence: {
+        healthOk: { type: Boolean, default: null },
+        healthSummary: { type: String, default: null },
+        port: { type: Number, default: null },
+        capturedAt: { type: Date, default: null },
+        logTail: {
+          type: [
+            {
+              stream: { type: String, default: "stdout" },
+              text: { type: String, default: "" },
+              t: { type: Date, default: null },
+            },
+          ],
+          default: [],
+        },
+      },
     },
   },
   {

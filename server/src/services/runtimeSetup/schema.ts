@@ -38,6 +38,11 @@ export const runtimeConfigSchema = z.object({
       if (t.includes("..") || t.startsWith("/")) return ".";
       return t;
     }),
+  /**
+   * Stored but never read at execution time — the sandbox image decides which
+   * runtimes exist, and the start command decides which one is used. Kept so
+   * existing documents still parse; not surfaced in either UI.
+   */
   runtime: z.enum(RUNTIME_IDS).default("auto"),
   installCommand: z.string().trim().max(2_000).default(""),
   buildCommand: z

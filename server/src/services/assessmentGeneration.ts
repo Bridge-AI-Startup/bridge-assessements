@@ -28,6 +28,8 @@ import {
   type RequirementsExtraction,
   type AssessmentOutput,
 } from "./schemas/assessmentGeneration.js";
+import { suggestionsToSpecs } from "./behavioralGrading/specSuggestions.js";
+import type { BehavioralCheckSpec } from "./behavioralGrading/checkSpecs.js";
 import type { AssessmentStack, RoleLevel, GenerateAssessmentOptions } from "../types/assessmentGeneration.js";
 import { RunnableLambda, RunnableSequence } from "@langchain/core/runnables";
 
@@ -80,13 +82,17 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * Plain-language behavioral checks (stack-agnostic). On failure returns [] so assessment creation can continue.
+ * Plain-language behavioral checks (stack-agnostic), plus any machine-checkable
+ * acceptance specs the description pinned tightly enough to justify one.
+ *
+ * On failure returns empty arrays so assessment creation can continue; a check
+ * with no spec is graded by the agent judge, which is the default everywhere.
  */
 export async function generateBehavioralChecks(input: {
   title: string;
   description: string;
   requirementsSummary: string;
-}): Promise<string[]> {
+}): Promise<{ checks: string[]; specs: BehavioralCheckSpec[] }> {
   const messages: ChatMessage[] = [
     { role: "system", content: PROMPT_GENERATE_BEHAVIORAL_CHECKS.system },
     { role: "user", content: PROMPT_GENERATE_BEHAVIORAL_CHECKS.userTemplate(input) },
@@ -106,7 +112,10 @@ export async function generateBehavioralChecks(input: {
           model: PROMPT_GENERATE_BEHAVIORAL_CHECKS.model,
         }
       );
-      return result.checks;
+      return {
+        checks: result.checks,
+        specs: suggestionsToSpecs(result.checks, result.acceptance),
+      };
     } catch (err) {
       lastError = err;
       if (attempt < MAX_PARSE_RETRIES) {
@@ -119,7 +128,7 @@ export async function generateBehavioralChecks(input: {
     }
   }
   console.warn("⚠️ [assessmentGeneration] generateBehavioralChecks failed after retries:", lastError);
-  return [];
+  return { checks: [], specs: [] };
 }
 
 /** Step 1: Extract requirements and infer stack/level from job description. Uses structured output + retries. */
@@ -491,15 +500,23 @@ async function finalizeAssessmentChain(
   step1: RequirementsExtraction;
   assessment: { title: string; description: string; timeLimit: number; reviewFeedback?: string };
   behavioralChecks: string[];
+  behavioralCheckSpecs: BehavioralCheckSpec[];
   starterCodeFiles: Array<{ path: string; content: string }>;
 }> {
-  const behavioralChecks = await generateBehavioralChecks({
-    title: assessment.title,
-    description: assessment.description,
-    requirementsSummary: step1.summary,
-  });
+  const { checks: behavioralChecks, specs: behavioralCheckSpecs } =
+    await generateBehavioralChecks({
+      title: assessment.title,
+      description: assessment.description,
+      requirementsSummary: step1.summary,
+    });
   const starterCodeFiles = await generateStarterCode(assessment, stack, level);
-  return { step1, assessment, behavioralChecks, starterCodeFiles };
+  return {
+    step1,
+    assessment,
+    behavioralChecks,
+    behavioralCheckSpecs,
+    starterCodeFiles,
+  };
 }
 
 interface AssessmentChainState {
@@ -557,6 +574,7 @@ async function runAssessmentChain(
   step1: RequirementsExtraction;
   assessment: { title: string; description: string; timeLimit: number; reviewFeedback?: string };
   behavioralChecks: string[];
+  behavioralCheckSpecs: BehavioralCheckSpec[];
   starterCodeFiles: Array<{ path: string; content: string }>;
 }> {
   const domain = selectRandomDomain();
@@ -655,12 +673,19 @@ export async function generateAssessmentComponents(
   timeLimit: number;
   reviewFeedback?: string;
   behavioralChecks: string[];
+  behavioralCheckSpecs: BehavioralCheckSpec[];
   starterCodeFiles: Array<{ path: string; content: string }>;
 }> {
   console.log("🤖 [assessmentGeneration] LCEL chain: extract requirements → generate assessment → review");
   try {
-    const { assessment, behavioralChecks, starterCodeFiles } = await runAssessmentChain(jobDescription, options);
-    return { ...assessment, behavioralChecks, starterCodeFiles };
+    const { assessment, behavioralChecks, behavioralCheckSpecs, starterCodeFiles } =
+      await runAssessmentChain(jobDescription, options);
+    return {
+      ...assessment,
+      behavioralChecks,
+      behavioralCheckSpecs,
+      starterCodeFiles,
+    };
   } catch (error) {
     console.error("❌ [assessmentGeneration] Error:", error);
     console.log("🔄 [assessmentGeneration] Falling back to simple defaults...");
@@ -669,7 +694,14 @@ export async function generateAssessmentComponents(
       ? firstSentence
       : jobDescription.substring(0, 50).trim() + "...";
     const description = `Assessment generation could not be completed. Please try again or create the assessment manually. (Error: ${error instanceof Error ? error.message : "unknown"})`;
-    return { title, description, timeLimit: 60, behavioralChecks: [], starterCodeFiles: [] };
+    return {
+      title,
+      description,
+      timeLimit: 60,
+      behavioralChecks: [],
+      behavioralCheckSpecs: [],
+      starterCodeFiles: [],
+    };
   }
 }
 
@@ -685,6 +717,7 @@ export async function generateAssessmentComponentsWithSteps(
   step1: RequirementsExtraction;
   assessment: { title: string; description: string; timeLimit: number; reviewFeedback?: string };
   behavioralChecks: string[];
+  behavioralCheckSpecs: BehavioralCheckSpec[];
   starterCodeFiles: Array<{ path: string; content: string }>;
 }> {
   console.log("🤖 [assessmentGeneration] LCEL chain (with steps output): extract requirements → generate assessment → review");
@@ -706,6 +739,12 @@ export async function generateAssessmentComponentsWithSteps(
       stackConfidence: "low",
       levelConfidence: "low",
     };
-    return { step1, assessment, behavioralChecks: [], starterCodeFiles: [] };
+    return {
+      step1,
+      assessment,
+      behavioralChecks: [],
+      behavioralCheckSpecs: [],
+      starterCodeFiles: [],
+    };
   }
 }
