@@ -1,6 +1,6 @@
 /**
  * Seed demo data for saaz@bridge-jobs.com: one assessment, Saaz's submission (full
- * evaluation + interview), and several extra dummy submissions with mixed statuses.
+ * evaluation), and several extra dummy submissions with mixed statuses.
  * For local/demo use.
  *
  * Usage (from server directory):
@@ -23,24 +23,6 @@ import SubmissionModel from "../models/submission.js";
 
 const DEMO_EMAIL = "saaz@bridge-jobs.com";
 const DEMO_FIREBASE_UID = "demo-saaz-bridge";
-
-const DEMO_INTERVIEW_TRANSCRIPT = {
-  turns: [
-    { role: "agent" as const, text: "Thanks for joining. Can you walk me through how you approached the news recommendation feature?", startMs: 0, endMs: 4000 },
-    { role: "candidate" as const, text: "I started by reading the requirements and then set up the MERN stack. I built the backend API for articles and user reading history, and implemented a simple similarity-based recommendation algorithm.", startMs: 4000, endMs: 12000 },
-    { role: "agent" as const, text: "How did you handle marking articles as read and storing that in the user profile?", startMs: 12000, endMs: 16000 },
-    { role: "candidate" as const, text: "I used MongoDB to store a readArticles array on the user document. The frontend calls a PATCH endpoint when the user clicks an article, and the recommendation endpoint filters out already-read articles.", startMs: 16000, endMs: 24000 },
-    { role: "agent" as const, text: "What was the trickiest part of the implementation?", startMs: 24000, endMs: 28000 },
-    { role: "candidate" as const, text: "Getting the recommendation algorithm to feel relevant with the mock data. I went with a simple approach: find articles that share keywords with the user's read articles, then rank by overlap.", startMs: 28000, endMs: 36000 },
-    { role: "agent" as const, text: "Did you add any tests or validation?", startMs: 36000, endMs: 40000 },
-    { role: "candidate" as const, text: "Yes, I added unit tests for the recommendation logic and validation on the API. I also included a README with setup instructions.", startMs: 40000, endMs: 48000 },
-    { role: "agent" as const, text: "That covers what I needed. Thank you for your time. This completes our interview.", startMs: 48000, endMs: 52000 },
-    { role: "candidate" as const, text: "Thank you. Happy to discuss more if needed.", startMs: 52000, endMs: 58000 },
-  ],
-};
-
-const DEMO_INTERVIEW_SUMMARY =
-  "The candidate discussed their approach to the news article recommendation system. They set up a MERN stack, implemented endpoints for articles and reading history, and built a similarity-based recommendation algorithm using shared keywords. They added unit tests, API validation, and documentation. The interview concluded with a brief recap and thank you.";
 
 // Dense evidence across ~52 min (3120s) so the timeline is largely filled with colored segments
 const DEMO_EVALUATION_REPORT = {
@@ -196,16 +178,6 @@ async function main() {
       candidateEmail: DEMO_EMAIL,
     }).lean();
 
-    const interviewPayload = {
-      provider: "elevenlabs",
-      status: "completed",
-      transcript: DEMO_INTERVIEW_TRANSCRIPT,
-      summary: DEMO_INTERVIEW_SUMMARY,
-      startedAt: new Date(Date.now() - 60 * 60 * 1000),
-      completedAt: new Date(),
-      updatedAt: new Date(),
-    };
-
     if (existingSubmission) {
       await SubmissionModel.updateOne(
         { _id: existingSubmission._id },
@@ -218,7 +190,6 @@ async function main() {
             evaluationReport: DEMO_EVALUATION_REPORT,
             submittedAt: new Date(),
             timeSpent: 45,
-            interview: interviewPayload,
           },
         }
       );
@@ -237,7 +208,6 @@ async function main() {
         githubLink: "https://github.com/demo/candidate-repo",
         evaluationStatus: "completed",
         evaluationReport: DEMO_EVALUATION_REPORT,
-        interview: interviewPayload,
       });
       console.log("Created submission for", DEMO_EMAIL);
     }

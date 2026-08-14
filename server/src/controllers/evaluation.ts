@@ -8,6 +8,7 @@ import { evaluateTranscript } from "../services/evaluation/orchestrator.js";
 import { validateCriterion } from "../services/evaluation/validator.js";
 import { suggestCriteria } from "../services/evaluation/suggestCriteria.js";
 import type { TranscriptEvent } from "../types/evaluation.js";
+import type { CriterionEvidenceProfile } from "../prompts/index.js";
 import { ensureProctoringTranscriptAndEvaluate } from "./submission.js";
 
 async function getUserIdFromFirebaseUid(firebaseUid: string): Promise<string> {
@@ -96,11 +97,24 @@ export const evaluate: RequestHandler = async (req, res, next) => {
 
 export type ValidateCriterionRequest = {
   criterion: string;
+  evidence_mode?: string;
 };
 
 /**
+ * Which record a criterion will be graded against.
+ *
+ * Only the legacy `screen` mode is graded from video. `workflow` and `both`
+ * grade the hook stream, and `none` grades nothing at all — but an employer
+ * writing criteria under `none` is writing them for the mode they would turn
+ * on, so it maps to workflow rather than to the legacy path.
+ */
+function evidenceProfileFor(mode?: string): CriterionEvidenceProfile {
+  return mode === "screen" ? "screen" : "workflow";
+}
+
+/**
  * POST /api/evaluation/validate-criterion
- * Body: { criterion: string }
+ * Body: { criterion: string, evidence_mode?: string }
  * Returns { valid: boolean, reason?: string }
  */
 export const validateCriterionHandler: RequestHandler = async (
@@ -111,8 +125,11 @@ export const validateCriterionHandler: RequestHandler = async (
   try {
     const errors = validationResult(req);
     validationErrorParser(errors);
-    const { criterion } = req.body as ValidateCriterionRequest;
-    const result = await validateCriterion(criterion);
+    const { criterion, evidence_mode } = req.body as ValidateCriterionRequest;
+    const result = await validateCriterion(
+      criterion,
+      evidenceProfileFor(evidence_mode)
+    );
     return res.status(200).json(result);
   } catch (e) {
     next(e);
@@ -121,11 +138,12 @@ export const validateCriterionHandler: RequestHandler = async (
 
 export type SuggestCriteriaRequest = {
   job_description: string;
+  evidence_mode?: string;
 };
 
 /**
  * POST /api/evaluation/suggest-criteria
- * Body: { job_description: string }
+ * Body: { job_description: string, evidence_mode?: string }
  * Returns { suggested_criteria: string[] }
  */
 export const suggestCriteriaHandler: RequestHandler = async (
@@ -136,8 +154,12 @@ export const suggestCriteriaHandler: RequestHandler = async (
   try {
     const errors = validationResult(req);
     validationErrorParser(errors);
-    const { job_description } = req.body as SuggestCriteriaRequest;
-    const suggested_criteria = await suggestCriteria(job_description);
+    const { job_description, evidence_mode } =
+      req.body as SuggestCriteriaRequest;
+    const suggested_criteria = await suggestCriteria(
+      job_description,
+      evidenceProfileFor(evidence_mode)
+    );
     return res.status(200).json({ suggested_criteria });
   } catch (e) {
     next(e);

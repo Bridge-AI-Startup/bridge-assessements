@@ -2,7 +2,7 @@
 
 ## What This App Is
 
-BridgeAI is a technical hiring assessment platform. Employers create take-home coding assessments from job descriptions using AI, share unique links with candidates, and then candidates submit their code via GitHub. After submission, an AI-powered voice interview is conducted using ElevenLabs to evaluate the candidate's understanding of their code. Submissions are scored across multiple dimensions. Employers view results through an analytics dashboard with diff analysis, interview transcripts, and scoring breakdowns.
+BridgeAI is a technical hiring assessment platform. Employers create take-home coding assessments from job descriptions using AI, share unique links with candidates, and then candidates submit their code via GitHub or a local archive. While the candidate works, an optional in-session ElevenLabs voice companion can capture their reasoning. Submissions are scored across process (how they worked) and behavioral (does the product pass checks) dimensions. Employers view results through an analytics dashboard with recordings, transcripts, and scoring breakdowns.
 
 ## Monorepo Structure
 
@@ -127,8 +127,6 @@ stripe listen --forward-to localhost:5050/api/billing/webhook
 - **LangChain** with pluggable AI providers for:
   - Assessment generation from job descriptions
   - Assessment chat assistant
-  - Interview question generation from candidate code (RAG)
-  - Interview summary generation from transcripts
   - Base code generation
   - Code change / diff analysis
   - Completeness scoring
@@ -137,7 +135,7 @@ stripe listen --forward-to localhost:5050/api/billing/webhook
 - **Pinecone** vector database for code indexing and retrieval
 - **Stripe** for subscription billing (checkout sessions + webhooks)
 - **Resend** for sending candidate invitation emails
-- **ElevenLabs** webhooks for receiving post-call interview transcripts
+- **ElevenLabs** Conversational AI for the in-session voice companion
 - **multer** for file uploads (LLM trace uploads)
 - **unzipper** for ZIP extraction
 - **Zod** for schema validation
@@ -166,8 +164,8 @@ See `server/config.env.example` for the full list. Key variables:
 
 **AI Providers:**
 - `AI_PROVIDER` -- Global default: `openai`, `anthropic`, or `gemini`
-- `AI_PROVIDER_ASSESSMENT_GENERATION` / `AI_PROVIDER_ASSESSMENT_CHAT` / `AI_PROVIDER_INTERVIEW_QUESTIONS` / `AI_PROVIDER_INTERVIEW_SUMMARY` -- Per-use-case overrides
-- `OPENAI_API_KEY` / `OPENAI_MODEL` -- OpenAI config (default: `gpt-5.6-luna`; `gpt-5.6-terra` for assessment generation + interview questions)
+- `AI_PROVIDER_ASSESSMENT_GENERATION` / `AI_PROVIDER_ASSESSMENT_CHAT` -- Per-use-case overrides
+- `OPENAI_API_KEY` / `OPENAI_MODEL` -- OpenAI config (default: `gpt-5.6-luna`; `gpt-5.6-terra` for assessment generation)
 - `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` -- Anthropic config (default: `claude-3-5-sonnet-20241022`)
 - `GEMINI_API_KEY` / `GEMINI_MODEL` -- Gemini config (default: `gemini-1.5-pro`)
 - Per-use-case model overrides: `{PROVIDER}_MODEL_{USECASE}` (e.g., `OPENAI_MODEL_ASSESSMENT_GENERATION`)
@@ -204,11 +202,10 @@ See `server/config.env.example` for the full list. Key variables:
 **Billing:**
 - `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_PRICE_ID` / `APP_URL` -- Stripe billing
 
-**Voice Interviews:**
+**In-session voice companion (ElevenLabs):**
 - `AGENT_SECRET` -- Authenticates ElevenLabs agent tool requests (sent as `X-Agent-Secret`; stored on ElevenLabs as the workspace secret `bridge_agent_secret` so the tool config never holds it in plaintext)
-- `ELEVENLABS_WEBHOOK_SECRET` -- Verifies ElevenLabs webhook signatures
 - `ELEVENLABS_API_KEY` -- Management API key used **only** by `src/scripts/registerElevenLabsContextTool.ts` to create/attach the agent's context tool. Not needed at runtime
-- `ELEVENLABS_AGENT_ID` -- Default agent for that script (falls back to the hardcoded Interview agent)
+- `ELEVENLABS_AGENT_ID` -- Default agent for that script (falls back to a hardcoded companion agent id)
 
 **Testing the agent tool against localhost.** ElevenLabs calls the tool from its own
 servers, so it cannot reach `localhost` — but you do **not** have to deploy to test. Run
@@ -249,6 +246,8 @@ machine, so switch back to `--prod` when you stop testing.
 - `TRANSCRIPT_GEMINI_CHUNK_OVERLAP_SEC` -- Lead-in overlap between windows (default: `30`)
 - `TRANSCRIPT_INCREMENTAL_ENABLED` -- Enable sliding-window incremental transcript for active sessions (default: `false`). Set to `true` in production so transcript is built during the assessment and submit only finalizes.
 - `TRANSCRIPT_INCREMENTAL_INTERVAL_MS` -- Interval for incremental runs in ms (default: `60000`)
+- `ATTEMPT_REAPER_ENABLED` -- Sweep in-progress attempts past `timeLimit` + 5-minute grace and expire them (default: on; set `false` to disable). Same outcome as the client recording-only submit, so a closed tab still merges video and closes capture-kit.
+- `ATTEMPT_REAPER_INTERVAL_MS` -- Reaper interval in ms (default: `60000`)
 
 ### Frontend (`client/.env.local`)
 - `VITE_API_URL` -- Override API base URL (optional, auto-detected from mode)
@@ -271,23 +270,22 @@ server/src/
 │   ├── user.ts            # User schema (Firebase UID, company, Stripe subscription fields)
 │   ├── assessment.ts      # Assessment schema (title, description, time limit, settings)
 │   ├── competition.ts     # Competition / hackathon: slug, assessmentId, rules, registration window, leaderboard flag
-│   ├── submission.ts      # Submission schema (token, candidate info, GitHub repo, interview, scores, LLM workflow)
+│   ├── submission.ts      # Submission schema (token, candidate info, GitHub repo, scores, LLM workflow)
 │   ├── repoIndex.ts       # Repository indexing metadata for Pinecone
 │   └── proctoringSession.ts  # Proctoring session (frames, events, transcript, video chunks)
 ├── routes/
 │   ├── user.ts            # /api/users/* -- create, whoami, delete
 │   ├── assessment.ts      # /api/assessments/* -- CRUD + generate + chat
-│   ├── submission.ts      # /api/submissions/* -- link generation, token access, submit, interview, grading
+│   ├── submission.ts      # /api/submissions/* -- link generation, token access, submit, grading
 │   ├── competition.ts     # /api/competitions/* -- public competition metadata, self-serve join, leaderboard
 │   ├── ops.ts             # /api/ops/* -- workload dashboard (OPS_ADMIN_EMAIL)
 │   ├── billing.ts         # /api/billing/* -- checkout, status, cancel, reactivate, webhook
 │   ├── agentTools.ts      # /api/agent-tools/* -- ElevenLabs agent context retrieval
-│   ├── webhook.ts         # /webhooks/* -- ElevenLabs post-call webhook
 │   └── proctoring.ts      # /api/proctoring/* -- screen capture sessions, frames, transcripts
 ├── controllers/
 │   ├── user.ts            # User creation, login (with tier limits), account deletion
 │   ├── assessment.ts      # Assessment CRUD, AI generation, chat
-│   ├── submission.ts      # All submission handlers (share links, submissions, interviews, grading)
+│   ├── submission.ts      # All submission handlers (share links, submissions, grading)
 │   ├── competition.ts     # Public competitions: get by slug, join (creates pending submission), leaderboard
 │   ├── ops.ts             # Ops workload aggregation (employer attribution for heavy jobs)
 │   ├── billing.ts         # Stripe checkout, status, cancel, reactivate, webhook handler
@@ -298,13 +296,14 @@ server/src/
 │   ├── langchainAI.ts     # LangChain abstraction: createChatCompletion(), structured output, provider/model selection
 │   ├── assessmentGeneration.ts  # 3-step AI assessment generation (extract reqs → generate → quality review)
 │   ├── assessmentChat.ts  # AI chat for assessment editing
-│   ├── interviewGeneration.ts  # RAG-based interview question generation + summary generation
 │   ├── email.ts           # Resend email service for candidate invitations
 │   ├── repoIndexing.ts    # GitHub repo → Pinecone indexing (download, chunk, embed, upsert)
 │   ├── repoRetrieval.ts   # Code chunk retrieval from Pinecone (search, dedup, budget)
 │   ├── stripe.ts          # Stripe client initialization (API v2024-12-18.acacia)
 │   ├── agentContext/
 │   │   └── contextCenter.ts   # Unified budgeted context bundle for the ElevenLabs voice agent (assessment/conversation/timeline/code)
+│   ├── companion/
+│   │   └── firstMessage.ts    # Setup-aware spoken opener + prompt notes for the in-session companion (evidence mode + starter files)
 │   ├── behavioralGrading/
 │   │   ├── index.ts           # E2B behavioral grading orchestrator + in-process concurrency queue
 │   │   ├── planner.ts         # LLM: README → runbook plan (install/test/start)
@@ -333,6 +332,9 @@ server/src/
 │   │   └── index.ts
 │   ├── gradingEvidence/
 │   │   └── storage.ts         # Artifact storage abstraction for behavioral grading reports/screenshots
+│   ├── submission/
+│   │   ├── closeAttempt.ts    # completeProctoring + closeCapture for an ended attempt
+│   │   └── finalizeExpired.ts # Expire past-grace in-progress attempts (reaper + recording-only)
 │   ├── capture/
 │   │   ├── storage.ts       # IFrameStorage + getFrameStorage() (local vs S3)
 │   │   ├── s3FrameStorage.ts # S3FrameStorage (PROCTORING_STORAGE_BACKEND=s3 or bucket set)
@@ -361,6 +363,7 @@ server/src/
 │   ├── pinecone.ts        # getPineconeClient(), getPineconeIndex(), upsertVectors(), deleteNamespace(), queryPinecone()
 │   ├── repoSnapshot.ts    # downloadAndExtractRepoSnapshot(), cleanupRepoSnapshot()
 │   ├── leaderboardScore.ts # Combined Screen + Behavioral score for public competition leaderboard
+│   ├── submissionTiming.ts # timeLimit + 5-minute grace window (keep in lockstep with the candidate client)
 │   └── validationErrorParser.ts  # Express-validator error formatting
 ├── prompts/
 │   └── index.ts           # All AI prompt templates (see Prompts section below)
@@ -382,7 +385,6 @@ server/src/
 │       └── manifestInjector.ts  # Inject sidecar events into transcript
 └── scripts/               # Utility/migration scripts
     ├── backfillMergedProctoringVideos.ts # Merge legacy WebM chunks → playback.webm + mergedVideo
-    ├── backfillInterviewQuestions.ts
     ├── listSubmissions.ts
     ├── seedCompetition.ts   # Link Mongo Competition slug → assessment (hackathon dashboard)
     ├── seedShortsChallenge.ts # Upsert Shorts daily challenge from shorts/challenges/*.json
@@ -393,8 +395,7 @@ server/src/
     ├── dropShortsSubmissionUniqueIndex.ts # One-time: drop legacy unique {anonymousId, challengeDate} on PlaySubmission
     ├── shorts-sandbox-smoke.ts # Create Shorts E2B template sandbox; print preview URL + Claude check
     ├── transcriptEngineAB.ts # A/B compare transcript engines (gemini vs frames) on one session, no DB writes; list mode + --plan-only cost preview
-    ├── registerElevenLabsContextTool.ts # Register/update the `get_candidate_context` webhook tool on the ElevenLabs agent and attach it (`--dry-run`, `--local` = point at the running ngrok tunnel, `--prod`, `--url=`, `--agent=`, `--sync-prompt` = push the baseline interviewer prompt + opening line); idempotent
-    ├── seedDummyInterview.ts
+    ├── registerElevenLabsContextTool.ts # Register/update the `get_candidate_context` webhook tool on the ElevenLabs companion agent and attach it (`--dry-run`, `--local` = point at the running ngrok tunnel, `--prod`, `--url=`); idempotent
     ├── behavioral-grading-smoke.ts
     ├── e2b-smoke.ts
     └── test-assessment-generation.ts
@@ -413,7 +414,7 @@ server/src/
 - `POST /` -- Create assessment with subscription tier check (auth required); optional `behavioralChecks` array
 - `GET /` -- List user's assessments (auth required)
 - `GET /:id` -- Get single assessment (auth required)
-- `PATCH /:id` -- Update assessment (auth required); optional `evidenceMode` (`none` / `workflow` / `both` / legacy `screen`)
+- `PATCH /:id` -- Update assessment (auth required); optional `evidenceMode` (`both` / `none`; leftover `workflow` / `screen` still accepted)
 - `DELETE /:id` -- Delete assessment + all submissions + Pinecone data (auth required)
 - `POST /:id/chat` -- Chat with AI about assessment (auth required)
 
@@ -460,28 +461,33 @@ server/src/
 - `POST /vote` -- Cast pairwise vote (Bayesian rating update); optional body `includeFiles` (default true); every 5th vote returns round ranking recap; max 25 votes/day
 - `GET /leaderboard` -- Rankings by conservative Bayesian score `μ−3σ` (`challengeDate`, `limit`, `anonymousId`). **One row per submission** — every build ranks independently, so a builder with several entries occupies several rows (each flagged `isMine`); `total` is the submission count. `you` is that builder's highest-ranked entry. Ranks match the gallery's, which uses the same all-submissions ordering
 
-**Workflow capture routes** (`/api/workflow-capture`, experimental — requires `WORKFLOW_CAPTURE_ENABLED=true`):
+**Workflow capture routes** (`/api/workflow-capture` — always mounted):
 
 Hooks-first capture of the candidate's AI-agent conversation + code changes, as an alternative to screen recording. The candidate runs [`capture-kit/setup.js`](capture-kit/setup.js) in the assessment repo; it discloses what is recorded, requires typed consent, then writes `.claude/settings.json` hooks that POST each prompt / tool call / assistant reply here in real time. See [`capture-kit/README.md`](capture-kit/README.md).
 
 **Per-tool coverage:** **Claude Code** streams live via hooks. **Codex CLI** and **Cursor** have no usable live hook path for us, so they are imported from the stores they already keep — `capture-kit/codex-adapter.js` reads `~/.codex/sessions/**/rollout-*.jsonl` (only rollouts whose recorded `cwd` matches the project; reads `response_item` records only, since `event_msg` duplicates them; skips `developer`-role system context) and `capture-kit/cursor-adapter.js` reads a **copy** of Cursor's `state.vscdb` (`cursorDiskKV` → `bubbleId:*`). Both offer `--probe` (report only, sends nothing) and `--watch`. Cursor's schema is reverse-engineered and has already changed once (2.6 → 3.0) — probe after any Cursor update. Windsurf/Amp route through vendor backends and **cannot** be captured at all.
 
-- `GET /health` -- always on when the flag is set; `{ ok: true, product: "workflow-capture" }`
+- `GET /health` -- always on; `{ ok: true, product: "workflow-capture" }`
 - `POST /sessions` -- create a capture session; **400 `consent_required` unless `consentGranted: true`**. Returns `captureToken` exactly once
-- `POST /events` -- batch ingest from the kit (Bearer `captureToken`). Idempotent on `(sessionId, seq)` so the kit's offline queue can retry freely; oversized payloads are truncated, never rejected. A `Write` tool event carries the new file contents and updates live code state
-- `POST /snapshot` -- git-derived changed-file snapshot (Bearer `captureToken`); catches hand edits the agent never made
+- `POST /events` -- batch ingest from the kit (Bearer `captureToken`). Idempotent on `(sessionId, seq)` so the kit's offline queue can retry freely; oversized payloads are truncated, never rejected. A `Write` tool event carries the new file contents and updates live code state. After the session is completed, returns **202** `{ closed: true, note: "session_completed" }` so the kit can stop locally.
+- `POST /snapshot` -- changed-file snapshot (Bearer `captureToken`); git when available, else a bounded project walk (unzipped starters often have no repo). Catches hand edits the agent never made
 - `POST /complete` -- close the session (Bearer `captureToken`)
 - `GET /me` -- the candidate's own captured record (Bearer `captureToken`). Transparency feature, not a debug route: the setup disclosure promises they can see exactly what was collected, and this is how that is kept. Backs `capture-kit/view.js`
 - `GET /agent-context` -- **live** context for the ElevenLabs interviewer agent (`X-Agent-Secret`, shared with `/api/agent-tools`): recent conversation in chronological order + current code state, by `submissionToken` or `sessionId`
 - `GET /sessions/:id` -- full timeline for employer review (Firebase auth; ownership-checked via the linked submission; never returns `captureToken`). Each event is stamped with `videoOffsetSeconds` when the submission also has a screen recording, so a reviewer can click a prompt and seek the player to it; response carries a `video` block (merged-recording status/duration). Events outside the recording window get `null`, not a bogus offset
-- `POST /video/start`, `POST /video/chunk` (multipart, field `chunk`), `POST /video/stop` -- optional screen recording attached to the capture session (Bearer `captureToken`). `video/start` stamps `video.startedAt`, which is the **sync origin**: an event's position in the recording is `event.at − video.startedAt`. Chunks go to disk via multer diskStorage, never the heap. This video is **never analysed** — no frames, no OCR, no vision model; it exists so a reviewer can watch the moment a timeline event points at
-- `GET /sessions/:id/video` -- dev-only; merges + **remuxes** chunks on first request (cached to `video.mergedKey`), streams with HTTP Range support. The remux is required, not cosmetic: raw concatenated MediaRecorder output plays but is not seekable, which breaks click-to-jump
-**Grading a workflow submission.** When `evidenceMode` resolves to `workflow`/`both`, `ensureProctoringTranscriptAndEvaluate` grades the hook stream via [`evaluateWorkflowSession`](server/src/services/workflowCapture/evaluate.ts) (same `evaluateTranscript` orchestrator). Same `evaluationReport` shape is stored on the submission. If no capture-kit session is linked, evaluation **fails clearly** — it does **not** fall back to `generateTranscript` / video OCR. Screen recording in `both` is for human playback and Gemini screen classification (`classifyScreenGaps` / `screenContext`) only. `none` skips observational evaluation entirely (clears a pending status rather than failing as if the candidate skipped capture). `POST /api/evaluate` kicks off this same background pipeline and returns 202.
+- `POST /video/start`, `POST /video/chunk` (multipart, field `chunk`), `POST /video/stop` -- leftover kit recorder (Bearer `captureToken`), kept for the local tester. **Refused on `both`** (`409 screen_recorded_by_proctoring`) — that mode already records via proctoring. Sync origin for Review is proctoring `stats.captureStartedAt`, not kit `video.startedAt`. Chunks go to disk via multer diskStorage, never the heap.
+- `GET /sessions/:id/video` -- kit playback (dev/tester); production Review plays the proctoring signed S3 URL, never this stream
+
+**Grading a workflow submission.** When `evidenceMode` resolves to `workflow`/`both`, `ensureProctoringTranscriptAndEvaluate` grades the hook stream via [`evaluateWorkflowSession`](server/src/services/workflowCapture/evaluate.ts) (same `evaluateTranscript` orchestrator). Same `evaluationReport` shape is stored on the submission. If no capture-kit session is linked, evaluation **fails clearly** — it does **not** fall back to `generateTranscript` / video OCR. Screen recording in `both` is **one** movie: the proctoring merged `{sessionId}/playback.webm` (Review `<video>`, signed S3). After merge (`mergeSessionVideo` / `completeProctoringForSubmission`), `classifyScreenGaps` runs Gemini surface identification on **that** file (`MEDIA_RESOLUTION_LOW` / 1fps — not OCR, not `TRANSCRIPT_ENGINE=gemini`) and writes `screen_context` events. Sync origin is proctoring `stats.captureStartedAt` (`event.at − start`), matching Review seeks. `workflow` has no proctoring movie — classification is skipped. The capture-kit recorder is not started on `both`. **Closing capture sessions.** The kit only ends a session when it calls `POST /complete` itself, which the web submit never triggers — sessions sat `active` forever, and since episodes are computed once when capture ends, a finished assessment showed the reviewer "capture is still in progress" and no episode summary. [`services/workflowCapture/finalize.ts`](server/src/services/workflowCapture/finalize.ts) fixes this: `closeCaptureForSubmission(submissionId)` is fired (unawaited) from **every** path that ends an attempt — both GitHub submits, the upload submit, the recording-only finalise, opt-out, and the past-grace reaper (`services/submission/finalizeExpired.ts`). After close, leftover kit POSTs get **202 `closed: true`**; the kit writes `.bridge/ended` and subsequent hooks/watch loops no-op. When a proctoring recording exists (`both`), finalize **closes only** and leaves episodes to `prepareScreenContextForEvaluation` (await merge + classify, then group) inside `evaluateWorkflowCaptureForSubmission`, so hook-silent stretches are described. `none` skips observational evaluation entirely (clears a pending status rather than failing as if the candidate skipped capture). `POST /api/evaluate` kicks off this same background pipeline and returns 202.
+
+**Voice in the graded timeline.** `evaluateWorkflowSession` merges the in-session voice companion transcript (read via [`services/companion/transcript.ts`](server/src/services/companion/transcript.ts), the single reader for the `{proctoringSessionId}/companion/*.jsonl` blobs — the context center uses the same one) into the event stream before `buildTranscriptEvents`, as `voice_utterance` events rendered "Candidate said aloud: …" / "Voice companion asked: …" with action type **`speaking`**. `speaking` is a first-class `ActionType` (types, zod schema, grounder prompt, and `compactTranscript`'s HIGH_SIGNAL set all know it — the last one matters: utterances are rare and must survive downsampling). So the judge sees *"said X"* chronologically beside *"did Y"*, and criteria can cite spoken intent. `EVIDENCE_INVENTORY` (workflow profile) now lists voice with the coverage caveat: criteria may cite what WAS said but must not require narration to exist. **`workflowMetrics` stay voice-free on purpose** — they are the deterministic behavioural floor and speech volume must not move them. Known limitation: the timeline origin is capture-kit start, and the companion starts earlier (at consent), so pre-capture utterances clamp to ts 0.
+
+**Communication assessment** ([`services/evaluation/communication.ts`](server/src/services/evaluation/communication.ts)) runs after grading when any voice exists and lands on the report as `evaluationReport.communication` — **supplementary, deliberately excluded from every combined score** (narration volume measures comfort talking to a bot, not skill; the prompt judges only what WAS said, never how much). Shape: `{ available, utteranceCount, wordCount, clarity 1-10, summary, highlights[], claimChecks[] }`. `claimChecks` is the piece no single stream could produce: every falsifiable spoken assertion ("I tested it", "I'll do the backend first") is checked against the captured timeline and marked supported / contradicted / unverifiable — with screen classification merged in, even "I opened it in Chrome" becomes checkable via `browser:own_app` spans. All citations are validated against real spoken moments (±30s) before storage; fewer than 3 utterances or 25 words → `available: false` with reason, never a hollow score. Costs one extra LLM call per evaluation. Rendered on the Review dialog's Summary tab by [`CommunicationCard.jsx`](client/src/components/submissions/CommunicationCard.jsx) (between the rubric and "How they worked"): clarity + summary, quotable highlights, and the claim-check list with Supported / **Not seen in capture** / Unverifiable badges — "unverifiable" styled grey on purpose (it describes the record, not the candidate). Timestamps seek the recording via the same `handleSeekRecording` path as rubric evidence chips. Render rules: `communication` absent or pipeline-failed → nothing; too-little-speech → one muted factual line ("staying quiet is normal and doesn't affect their score"), never a hollow 0/10.
 
 - **Episodes** ([`episodes.ts`](server/src/services/workflowCapture/episodes.ts)) -- computed **once** when capture ends (after screen classification, so they can describe hook-silent stretches) and **persisted** on the session as `episodes` + `episodesComputedAt`; recomputing per request would cost an LLM call on every dashboard poll. `?episodes=true` on the analysis route also groups raw events into ~15-40 narrative stretches ("fixing stale summary counts", kind `debugging`), each carrying `evidenceIndices` back to the raw events. Thousands of events are too granular to grade and too big for one context; episodes are the middle layer, and the back-pointers are what keep every downstream claim traceable. Text-only, so cost is independent of session length. Opt-in per request because it costs an LLM call. On very long sessions the prompt **samples with a stride** rather than truncating — keeping the first 400 events would describe only the opening minutes and silently discard the rest of the story
 - **Evidence validator** ([`evidenceValidator.ts`](server/src/services/workflowCapture/evidenceValidator.ts)) -- checks every citation in a criterion verdict against the captured timeline (±30s tolerance, since a judge summarising a stretch may cite its middle) and **drops what cannot be matched**. A judge will happily cite a timestamp that never existed, and once a verdict reaches an employer a fabricated citation is indistinguishable from a real one. When more than half the support is dropped the verdict is marked non-evaluable rather than keeping a score nothing stands behind
 - `GET /sessions/:id/analysis` -- the **gradable** view: deterministic metrics + the timeline as `TranscriptEvent[]`, the exact shape `services/evaluation/` already consumes, so `grounder` → `evaluator` run against a workflow session unchanged (same adapter role as `proctoringTranscriptAdapter`). Every row carries `videoOffsetSeconds` so a cited moment is one click from the footage. Metrics live in [`services/workflowCapture/metrics.ts`](server/src/services/workflowCapture/metrics.ts): read:edit ratio, verified-write ratio, low-effort-prompt ratio, median think time, agent-vs-human authorship, and **token usage** (Claude Code hooks carry no usage, so the kit reads the tail of the `transcript_path` the hook hands it; Codex `token_count` records feed the same field). Counted, never asked of a model — free, reproducible, and it frees the judge for interpretive calls
-- Screen classification ([`screenContext.ts`](server/src/services/workflowCapture/screenContext.ts)) runs **automatically when recording stops** — unawaited after the response, since merging + uploading the video takes tens of seconds and stopping a recording must not block on it. `POST /sessions/:id/classify-screen` re-runs it manually after a prompt/model change; a re-run **replaces** prior `screen_context` events rather than appending, or stop/resume cycles would duplicate every span. Gemini over video time ranges at `MEDIA_RESOLUTION_LOW` (**deliberately the opposite of the transcript engine's HIGH** — identifying a surface needs a quarter of the tokens that reading its text does) and **1 fps**. Note "native video input" does not mean continuous watching: Gemini samples frames and charges per frame, so `fps` sets temporal resolution. This was originally 0.2 in gaps / 0.05 elsewhere to save tokens, which meant a 15-second switch to a running app produced at most one frame and was routinely missed; a 90-min session at 1 fps is ~380k tokens (~10¢). The **whole recording** is swept, not just hook-silent gaps — gaps-only was blind to anything happening *alongside* agent activity, such as a ChatGPT window open while Claude Code works. The gap/active distinction survives only in what counts as evidence: during hook-active stretches, editor/terminal observations are stored flagged `redundant: true` so the coverage band stays unbroken while `buildTranscriptEvents` excludes them from grading. A window straddling a recording break is skipped — its endpoints map to valid offsets with no continuous footage between them
+- Screen classification ([`screenContext.ts`](server/src/services/workflowCapture/screenContext.ts)) runs **after the proctoring merge is ready** on `{sessionId}/playback.webm` (kicked from `mergeSessionVideo` and awaited in the evaluate path before episodes). `POST /sessions/:id/classify-screen` re-runs it manually after a prompt/model change; a re-run **replaces** prior `screen_context` events rather than appending. Auto paths skip if `screen_context` already exists. Gemini over video time ranges at `MEDIA_RESOLUTION_LOW` (**deliberately the opposite of the transcript engine's HIGH** — identifying a surface needs a quarter of the tokens that reading its text does) and **1 fps**. Note "native video input" does not mean continuous watching: Gemini samples frames and charges per frame, so `fps` sets temporal resolution. This was originally 0.2 in gaps / 0.05 elsewhere to save tokens, which meant a 15-second switch to a running app produced at most one frame and was routinely missed; a 90-min session at 1 fps is ~380k tokens (~10¢). The **whole recording** is swept, not just hook-silent gaps — gaps-only was blind to anything happening *alongside* agent activity, such as a ChatGPT window open while Claude Code works. The gap/active distinction survives only in what counts as evidence: during hook-active stretches, editor/terminal observations are stored flagged `redundant: true` so the coverage band stays unbroken while `buildTranscriptEvents` excludes them from grading. A window straddling a recording break is skipped — its endpoints map to valid offsets with no continuous footage between them. `workflow` (no screen share) skips classification.
 - `GET /tester` and `GET /dev/data` -- **development only** (not mounted when `NODE_ENV=production`, and `dev/data` re-checks): a self-contained live page that polls every 2s and renders the timeline, stats, and code state as events arrive. Open `http://localhost:5050/api/workflow-capture/tester` while working in Claude Code. Page markup lives in [`services/workflowCapture/testerPage.ts`](server/src/services/workflowCapture/testerPage.ts)
 
 **Submission routes** (`/api/submissions`):
@@ -492,7 +498,6 @@ Hooks-first capture of the candidate's AI-agent conversation + code changes, as 
 - `POST /send-invites` -- Send invitation emails to candidates via Resend
 - `GET /assessments/:id/submissions` -- List submissions for assessment
 - `DELETE /:submissionId` -- Delete submission
-- `POST /:submissionId/generate-interview` -- Generate interview questions (requires indexed repo)
 - `POST /:submissionId/index-repo` -- Index submitted code snapshot into Pinecone (GitHub or uploaded archive)
 - `GET /:submissionId/repo-index/status` -- Check repo indexing status
 - `POST /:submissionId/search-code` -- Search indexed code (debug)
@@ -502,20 +507,15 @@ Hooks-first capture of the candidate's AI-agent conversation + code changes, as 
 
 *Candidate endpoints (no auth, token-based):*
 - `GET /assessments/public/:id` -- Get public assessment details
-- `GET /token/:token` -- Get submission by token
+- `GET /token/:token` -- Get submission by token. If the attempt is still `in-progress` but past `timeLimit` + 5-minute grace, expires it (recording-only tie-out) before responding so a closed tab cannot sit `in-progress` forever.
 - `POST /token/:token/start` -- Start assessment (pending → in-progress, captures metadata)
 - `POST /token/:token/submit` -- Legacy GitHub URL submit flow (can be disabled via `SUBMISSION_SOURCE_MODE`); accepts late submits within a 5-minute grace period after `timeLimit`, then returns 400 once grace expires
-- `POST /token/:token/submit-recording-only` -- Finalize timed-out attempts with proctoring/screen-recording evidence only (no code repo required); marks submission `expired`
+- `POST /token/:token/submit-recording-only` -- Finalize timed-out attempts with proctoring/screen-recording evidence only (no code repo required); marks submission `expired`. Also run by a process reaper (`ATTEMPT_REAPER_*`) and by `GET /token/:token` once grace has elapsed.
 - `POST /token/:token/upload` -- Submit code by archive upload (`multipart/form-data`, field `archive`), stores upload metadata, starts indexing, auto-triggers behavioral grading; same 5-minute post-time-limit grace window as GitHub submit
-- `POST /token/:token/generate-interview` -- Generate interview questions
 - `POST /token/:token/opt-out` -- Opt out with reason
 - `PATCH /:id` -- Update submission (auto-save)
 - `GET /:id` -- Get submission by ID
 - `POST /:id/submit` -- Final submission (legacy, also auto-triggers behavioral grading)
-
-*Shared endpoints (auth or token):*
-- `GET /:submissionId/interview-agent-prompt` -- Get interview agent prompt
-- `PATCH /:submissionId/interview-conversation-id` -- Set interview conversation ID
 
 **Billing routes** (`/api/billing`):
 - `POST /checkout` -- Create Stripe checkout session (auth required)
@@ -540,20 +540,35 @@ Hooks-first capture of the candidate's AI-agent conversation + code changes, as 
 - `GET /sessions/:sessionId/transcript` -- Get JSONL transcript
 
 *Companion (in-session voice transcript; candidate token or employer auth for GET):*
-- `POST /sessions/:sessionId/companion/prompt` -- Get system prompt + spoken opener for the ElevenLabs companion (body: token). The prompt is assessment-aware (title only) and explicitly forbids solutions, hints, and code
+- `POST /sessions/:sessionId/companion/prompt` -- Get system prompt + spoken opener for the ElevenLabs companion (body: token). The prompt is assessment-aware (title only) and explicitly forbids solutions, hints, and code. `firstMessage` is built from the resolved evidence mode + whether starter files exist: it walks through full-screen share, unzip/open starters, and the Node capture-kit command when those steps apply. A remount after the companion has already spoken (`companion.status` active/completed) gets a short welcome-back instead of repeating the briefing.
 - `POST /sessions/:sessionId/companion/messages` -- Record companion transcript messages (body: token, conversationId?, messages[]); one JSONL blob per flush under `{sessionId}/companion/`
 - `POST /sessions/:sessionId/companion/complete` -- Mark the companion conversation finished (body: token)
 - `GET /sessions/:sessionId/companion/transcript` -- Get persisted companion transcript (query token or auth; `?format=jsonl` for raw)
 
 **In-session voice companion.** While the candidate works, an ElevenLabs agent listens and
-asks the occasional one-line follow-up so their *reasoning* is captured alongside their code —
-this is separate from the post-submission voice interview. The overlay is
+asks the occasional one-line follow-up so their *reasoning* is captured alongside their code.
+The spoken opener
+(`services/companion/firstMessage.ts`) is not a generic greeting: it matches the
+on-screen setup for that assessment (entire-screen share when recording, unzip/open
+starter files, run the Node capture-kit command when workflow capture is on) and never
+reads the token or URL aloud. **It is proactive**, not
+answer-only: `COMPANION_PROMPT_BASE` (in `controllers/proctoring.ts`) tells it to poll
+`get_candidate_context` with `topics: ["timeline"]` roughly every couple of minutes, read the
+`latest` array, and open with a question about something concrete the candidate just did
+("you re-ran the dev server twice — what are you checking for?"). It was previously "only
+speak when spoken to", which meant it never used the evidence at all. Guardrails that must
+survive any edit: at most one proactive question every couple of minutes, `skip_turn` when the
+candidate is mid-flow, **never** `code` or `episodes` topics (code makes hinting too easy;
+episodes only exist after capture ends, so live it always returns empty), and the hint ban —
+"why did you pick that order?" is fine, "have you considered the other way?" is forbidden.
+It carries the same honesty carve-out as the interviewer: never volunteer that the session is
+captured, but never deny it when asked directly. The overlay is
 [`ProctoringCompanionNotch.jsx`](client/src/components/proctoring/ProctoringCompanionNotch.jsx):
 it auto-starts when mounted with a proctoring `sessionId` + candidate `token`, buffers
 transcript lines in memory, and POSTs them every 10s (a failed flush pushes the lines back
 onto the buffer rather than dropping them). The parent **must** call
 `ref.current.endAndFlush()` before completing the proctoring session — `CandidateAssessment`
-does this on both submit and time-out, and unmount runs it as a backstop. It is gated on
+does this on submit, opt-out, and time-out (`stopProctoringCapture`), and unmount runs it as a backstop. It is gated on
 `VITE_ELEVENLABS_AGENT_ID` through [`client/src/config/companion.js`](client/src/config/companion.js);
 with no agent id the overlay renders nothing **and** `ConsentScreen` drops its microphone copy,
 so a deployment without an agent never asks for the mic or claims it does. `@elevenlabs/react`
@@ -566,44 +581,37 @@ conversation id comes from `getId()`, and `onMessage` receives **raw socket even
 *Employer endpoints (auth required):*
 - `POST /sessions/:sessionId/generate-transcript` -- Trigger AI transcript generation
 - `GET /sessions/by-submission/:submissionId` -- Get session by submission ID
-- `GET /sessions/:sessionId/playback-video` -- Stream merged WebM for in-page playback (auth + ownership; supports HTTP Range; `?format=url` returns `{ url }` with a presigned S3 URL, or null on local storage — client puts it straight into `<video src>`)
-- `GET /sessions/:sessionId/download-video` -- Download merged WebM (same merge-on-demand + Range + `?format=url` behavior; **currently unauthenticated** — known gap)
+- `GET /sessions/:sessionId/playback-video` -- Presigned S3 URL only (auth + ownership). `?format=url` returns `{ url }`; otherwise 302 to the same URL. Video bytes are **never** proxied through this API (a prior Express stream of `playback.webm` is what billed outbound). 503 if S3 cannot sign.
+- `GET /sessions/:sessionId/download-video` -- Same as playback (auth + ownership, S3 only). `?format=url` returns `{ url }`; otherwise 302.
 
 **Agent tools** (`/api/agent-tools`):
-- `POST /get-context` -- ElevenLabs agent retrieves code context from Pinecone (X-Agent-Secret header, max 6 chunks / 16000 chars). Legacy/narrow: requires an indexed repo and a question+answer pair
-- `POST /context` -- **Context center**: one budgeted bundle for the voice agent (X-Agent-Secret). Body `{ submissionId, question?, topics? }` → six fail-soft sections. Every section returns `{ available: false, reason }` rather than throwing, because a tool error mid-call stalls a live voice conversation; each is separately budgeted so the bundle stays inside a voice turn (~0.3s, ~5KB typical).
+- `POST /context` -- **Context center**: one budgeted bundle for the in-session voice companion (X-Agent-Secret). Body `{ submissionId, question?, topics? }` → six fail-soft sections. Every section returns `{ available: false, reason }` rather than throwing, because a tool error mid-call stalls a live voice conversation; each is separately budgeted so the bundle stays inside a voice turn (~0.3s, ~5KB typical).
   - `assessment` — title, description, time limit, behavioral checks
   - `episodes` — the session as 15-40 labelled narrative stretches, read from the **persisted** `session.episodes` (computed once when capture ends, never on the request path). The highest-value section for a voice agent: raw events are far below the altitude an interviewer thinks at
   - `metrics` — deterministic behavioral counts. Prefers the copy on `evaluationReport.workflowMetrics`; computes live only when the session is under `METRICS_LIVE_EVENT_CAP` (4000) events, else reports `session_too_large_for_live_metrics_grade_first`
-  - `timeline` — workflow-capture events merged chronologically with proctoring sidecar events, **including `screen_context`** (the Gemini screen classification — the only record of work done outside the captured agent, e.g. a browser AI chat). Observations flagged `redundant` are excluded: they exist to keep the coverage band unbroken and would crowd out real events under the entry cap
-  - `conversation` — companion voice transcript + interview turns
+  - `timeline` — workflow-capture events merged chronologically with proctoring sidecar events, **including `screen_context`** (the Gemini screen classification — the only record of work done outside the captured agent, e.g. a browser AI chat). Also returns `latest` (the last 8 meaningful events, newest first, each with `secondsAgo`) — this is what a proactive question anchors on — and `counts`. **Two exclusion rules keep the entry cap spent on signal, and both are load-bearing:** `screen_context` observations flagged `redundant` are dropped (they exist to keep the coverage band unbroken), and consecutive duplicate sidecar events are collapsed with meaningful events claiming the budget first. Without the second rule a real session returned 32 blur/focus events (13 back-to-back duplicates) against 3 prompts — on a longer session the cap fills entirely with alt-tab churn and the agent sees no prompts at all, while the endpoint still reports `available: true`
+  - `conversation` — companion voice transcript
   - `code` — Pinecone chunks keyed to `question` when the repo index is ready, else **live** `WorkflowFileState` files from capture (so the agent can see code mid-assessment, before any submission exists)
 
   Service: `services/agentContext/contextCenter.ts`. `submissionId` is the universal key (the companion overlay passes it via `dynamicVariables`). Registered on the ElevenLabs agent as the webhook tool `get_candidate_context` by `src/scripts/registerElevenLabsContextTool.ts`
-
-**Webhooks** (`/webhooks`):
-- `POST /elevenlabs` -- ElevenLabs post-call transcript webhook (HMAC signature verified, generates summary)
 
 ### Rate Limiting (production only, disabled in dev)
 - General API: 100 requests / 15 minutes per IP (shared across most `/api/*` routes; proctoring and Shorts preview excluded)
 - Proctoring (`/api/proctoring/*`): 8000 requests / 15 minutes per IP (separate limiter; screen capture is high-volume)
 - Shorts preview (`/api/shorts/preview/*`): 3000 requests / 15 minutes per IP (separate limiter; gallery iframe assets)
 - Auth endpoints (`/api/users/whoami`): 5 requests / 15 minutes per IP
-- Webhooks: 50 requests / 15 minutes per IP
 - Competition join (`POST /api/competitions/:slug/join`): 30 requests / 60 minutes per IP
 
 ### Raw Body Parsing
-Webhook routes (`/webhooks` and `/api/billing/webhook`) use `express.raw()` before `express.json()` to preserve the raw body for HMAC/Stripe signature verification. This is configured in `server.ts`.
+`/api/billing/webhook` uses `express.raw()` before `express.json()` to preserve the raw body for Stripe signature verification. This is configured in `server.ts`.
 
 ### AI Prompts (`server/src/prompts/index.ts`)
 - `PROMPT_EXTRACT_ASSESSMENT_REQUIREMENTS` -- Extract requirements, infer stack/level from job description
 - `PROMPT_GENERATE_ASSESSMENT_COMPONENTS` -- Generate assessment title, description, timeLimit (with few-shot examples)
-- `PROMPT_GENERATE_BEHAVIORAL_CHECKS` -- Generate stack-agnostic behavioral checks from title, description, and requirements summary
+- `PROMPT_GENERATE_BEHAVIORAL_CHECKS` -- Generate stack-agnostic behavioral checks from title, description, and requirements summary. The prompt spells out **how a check gets verified** — a sandbox agent that installs and starts the repo, drives it in a real Playwright browser, curls it, and reads source — and therefore what it must not ask for: third-party credentials or paid services, two simultaneous users, the passage of real time, absent hardware, pre-seeded data the candidate was never told to create, aesthetic judgement, or unbounded "is fast/secure" claims. One outcome per check (no "and")
+- `PROMPT_SUGGEST_CRITERIA` / `PROMPT_VALIDATE_CRITERION` -- Evaluation criteria (the *process* rubric). Both `system` fields are **functions of a `CriterionEvidenceProfile`** (`"workflow"` default | `"screen"`), which splices in `EVIDENCE_INVENTORY` — an explicit list of what that record does and does not contain. This is not cosmetic: the hook stream knows every prompt and command verbatim but records **no reading at all** and no accept/reject event, while a screen recording is the reverse. Criteria written for the wrong record get scored on evidence that was never collected. Under `workflow` the prompts actively reject the old favourites ("reads the requirements before coding", "reviews AI-generated code before accepting") and steer to recorded equivalents ("inspects existing files before the first edit", "edits agent-written code rather than leaving it untouched"). Profile comes from the request's optional `evidence_mode`; only legacy `screen` maps to the screen profile — `workflow`/`both`/`none` all map to `workflow` (an employer writing criteria under `none` is writing them for the mode they'd turn on). Suggestions are re-validated under the same profile before being returned. Eval cases are pinned per profile in `src/scripts/runEvals.ts`
 - `PROMPT_ASSESSMENT_QUALITY_REVIEW` -- Review and validate generated assessment quality
 - `PROMPT_ASSESSMENT_CHAT` -- System prompt for AI assistant editing assessments
-- `PROMPT_GENERATE_INTERVIEW_QUESTIONS_RETRIEVAL` -- Generate interview questions from RAG code chunks
-- `PROMPT_GENERATE_INTERVIEW_SUMMARY` -- Summarize interview transcript
-- `PROMPT_INTERVIEW_AGENT` -- System prompt for the ElevenLabs voice interview agent. Teaches it to call `get_candidate_context` (once at the start for `assessment`/`episodes`/`metrics`, again with a `question` for `code`) and — the part that matters — **how to use evidence without weaponising it**: ask never recite, never reveal that the session was captured, never accuse, and when evidence contradicts an answer ask one open follow-up rather than prosecuting. Passing `numQuestions: 0` renders the no-prepared-questions variant, which is what `--sync-prompt` pushes as the agent's dashboard baseline
 - `LEVEL_INSTRUCTIONS` -- Role-specific guidance for junior/mid/senior difficulty levels
 - `PROMPT_TRANSCRIPT_SYSTEM` -- System prompt for GPT-4o-mini vision: raw observation, character-level text accuracy, JSONL output
 
@@ -624,13 +632,13 @@ client/src/
 │   ├── Home.jsx           # Authenticated dashboard -- lists assessments, create/delete, account dropdown
 │   ├── GetStarted.jsx     # Registration -- email, password, company name
 │   ├── CreateAssessment.jsx    # Assessment creation -- AI generation or manual, reads localStorage pending data
-│   ├── AssessmentEditor.jsx    # Edit assessment -- title, desc, time, starter files, smart interviewer, share links, bulk invite
-│   ├── CandidateAssessment.jsx # Candidate views assessment -- read-only details, start timer, submit local folder upload (auto-zipped client-side), opt-out
+│   ├── AssessmentEditor.jsx    # Edit assessment -- title, desc, time, starter files, share links, bulk invite
+│   ├── CandidateAssessment.jsx # Candidate views assessment -- start timer, screen share, submit/opt-out; capture flushes before submit and only completes after success; pagehide beacons sidecar/companion; past-grace attempts redirect after the server reaper
 │   ├── CandidateSubmission.jsx # Shows mock submission data with code review
-│   ├── CandidateSubmitted.jsx  # Post-submission -- polls for interview questions, ElevenLabs voice interview
+│   ├── CandidateSubmitted.jsx  # Post-submission confirmation (you're done)
 │   ├── HackathonDashboard.jsx  # Challenge join + dashboard/leaderboard only; marketing landing may live on Framer (slug: `?slug=` > env > `config/competition.js`)
 │   ├── OpsDashboard.jsx        # Internal ops workload dashboard (OPS_ADMIN_EMAIL); heavy merge/transcript/grading attribution
-│   ├── SubmissionsDashboard.jsx # Employer views submissions -- stats, filtering, dropoff analysis, interview modal, diff viewer
+│   ├── SubmissionsDashboard.jsx # Employer views submissions -- stats, filtering, dropoff analysis, and the single candidate Review dialog
 │   ├── Subscription.jsx        # Billing plans -- Free tier vs Early Access
 │   ├── Pricing.jsx             # Public pricing page
 │   ├── BillingSuccess.jsx      # Stripe success redirect
@@ -640,7 +648,7 @@ client/src/
 ├── api/
 │   ├── requests.ts        # Base HTTP client (fetch wrapper: get/post/put/patch/del with error handling)
 │   ├── assessment.ts      # Assessment API: create, list, get, update, delete, generate, chat
-│   ├── submission.ts      # Submission API: generateLink, bulk, invites, start, submit, interview, optOut, uploadTrace
+│   ├── submission.ts      # Submission API: generateLink, bulk, invites, start, submit, optOut, uploadTrace
 │   ├── competition.ts     # Public competition API: get by slug, join, leaderboard
 │   ├── ops.ts             # Ops workload API (admin allowlist)
 │   ├── billing.ts         # Billing API: checkout, status, cancel, reactivate
@@ -653,7 +661,11 @@ client/src/
 │   │   ├── DocumentBlock.jsx          # Reusable content block with edit, auto-resizing textarea
 │   │   └── PresetPills.jsx            # Quick preset job descriptions
 │   ├── BulkInviteModal.jsx            # 3-step CSV upload wizard: upload → review → success
-│   ├── ElevenLabsInterviewClient.jsx  # Voice interview UI (conversation hooks, transcript display)
+│   ├── submissions/
+│   │   ├── BehavioralGradingLiveTrace.jsx # Live agent-step trace while behavioral grading is pending
+│   │   ├── CommunicationCard.jsx          # Spoken-reasoning assessment on Summary: clarity, highlights, claim checks vs captured timeline (never part of the score)
+│   │   ├── EvidenceMomentChips.jsx        # Rubric evidence as clickable time+observation chips that seek the recording
+│   │   └── WorkflowActivityTimeline.jsx   # "What they did": prompting conversation + screen-context beats under the Recording player for `both` (click-to-seek); Summary only for leftover workflow-only
 │   ├── proctoring/
 │   │   ├── ConsentScreen.jsx          # Consent dialog before screen recording
 │   │   ├── RecordingIndicator.jsx     # Floating red recording badge
@@ -701,16 +713,17 @@ client/src/
 
 ### Data Flow: Assessment Lifecycle
 1. **Employer creates assessment**: Landing page → enters job description → stored in localStorage → CreateAssessment page auto-fills → AI generates assessment (extract requirements → generate components → quality review → behavioral checks) → saves to DB; manual path calls `generate-behavioral-checks` then create
-2. **Employer edits assessment**: AssessmentEditor page → AI chat sidebar for refinements → configure time limit, interview questions, smart interviewer, starter files, custom instructions
+2. **Employer edits assessment**: AssessmentEditor page → AI chat sidebar for refinements → configure time limit, starter files, evidence mode
 3. **Employer shares link**: Generates unique token-based URL for candidate (single or bulk via CSV upload with email invitations via Resend)
 4. **Candidate accesses assessment**: Opens token URL → CandidateAssessment page → views read-only details → starts timer (status: pending → in-progress, captures IP/user agent)
 5. **Candidate submits code**: Uploads project folder (client auto-zips) or submits GitHub link → backend stores source metadata (upload archive or pinned commit SHA) → status: submitted
-6. **Code indexing**: Repo is downloaded, chunked (200 lines/chunk, 40 line overlap), embedded via OpenAI, and upserted to Pinecone
-7. **Interview questions generated**: AI uses retrieved code context (RAG, topK=8, max 30KB) to generate targeted questions with file anchors
-8. **AI voice interview**: CandidateSubmitted page → ElevenLabs voice interview → agent calls `/api/agent-tools/get-context` for real-time code context
-9. **Post-call processing**: ElevenLabs sends transcript via webhook → stored on submission → AI generates interview summary
-10. **Scoring**: Combined employer/leaderboard score from available signals — Screen (recording/proctoring rubric via `evaluationReport`) and Behavioral (E2B check pass rate). Deprecated Trace / LLM-workflow scoring was removed.
-11. **Employer reviews**: SubmissionsDashboard → stats, filtering, dropoff analysis, evaluation modal (Final code / Recording & rubric / Agent). Agent tab shows the in-session voice companion, workflow-capture prompts, and post-submit interview when present. Observational evaluation starts automatically on submit (and the dashboard re-kicks recent/recoverable failures).
+6. **Code indexing**: Repo is downloaded, chunked (200 lines/chunk, 40 line overlap), embedded via OpenAI, and upserted to Pinecone (used by the companion context center's code section when the index is ready)
+7. **Scoring**: Combined employer/leaderboard score from available signals — Process (how-they-worked rubric via `evaluationReport`) and Behavioral (E2B check pass rate). Deprecated Trace / LLM-workflow scoring was removed.
+8. **Employer reviews**: SubmissionsDashboard → stats, filtering, dropoff analysis, and **one** candidate Review dialog. Observational evaluation starts automatically on submit (and the dashboard re-kicks recent/recoverable failures).
+
+**Candidate review is a single surface.** Clicking a row (or its `Review` button) opens one dialog via `openReview(submission, tab?)` — the only entry point. It carries a persistent scoreboard (Combined / Process / Behavioral / Time spent + status badges) that does **not** move between tabs, an `Actions` menu (GitHub, download archive, re-run grading, re-run scoring, share, delete), and four tabs: **Summary** (capture-integrity warning first when dirty, then which product checks failed, then rubric verdicts + clickable evidence chips that seek the recording, session summary, workflow metrics + episodes), **Recording** (player with criteria timeline; under `both`, the prompting conversation + screen-context beats sit under the player as the click-to-seek index of the footage — there is no screen transcript; leftover `screen` assessments still show a video OCR transcript; the tab is hidden for `none` and leftover `workflow`), **Code** (behavioral grading, per-check evidence, execution log, run project), **Conversations** (opt-out notice, in-session voice companion).
+
+This replaced a maze: a right-side detail Sheet, a separate evaluation modal, a standalone Interview Details modal, a standalone Behavioral Grading Evidence modal, and two duplicate `View screen recording` shortcuts that existed only to jump past a default tab. Four ways to open evaluation and three renderings of the same behavioral evidence made the same content feel like different features. **Do not add a second path to any of this content** — deep-link a tab with `openReview(sub, "recording")` instead of building another modal. The video-load effect is still gated on `evaluationTab === "recording"`, so the recording only fetches when that tab is open.
 
 ### Subscription / Billing Flow
 1. User clicks upgrade → `POST /api/billing/checkout` creates Stripe Checkout session
@@ -731,9 +744,9 @@ Legacy subscription (nested): `subscription.tier` (free/paid), `subscription.str
 Current subscription (top-level): `stripeCustomerId` (sparse indexed), `stripeSubscriptionId` (sparse indexed), `subscriptionStatus` (active/canceled/past_due/trialing/incomplete/incomplete_expired/unpaid/null), `currentPeriodEnd`, `cancelAtPeriodEnd`, `cancellationReason`, `cancellationDate`
 
 ### Assessment
-Fields: `userId` (ref User, indexed), `title` (max 200), `description`, `timeLimit` (minutes, min 1), `numInterviewQuestions` (1-4, default 2), `starterFilesGitHubLink`, `starterCodeFiles[]` { path, content }, `interviewerCustomInstructions`, `isSmartInterviewerEnabled` (default true), `evidenceMode` (`none` default for new assessments / `workflow` / `both` / legacy `screen` — see below), `behavioralChecks[]` (plain-language observable product behaviors; stack-agnostic), `evaluationCriteria[]` (proctoring/transcript rubric), `evaluationCriteriaGroundings` (optional)
+Fields: `userId` (ref User, indexed), `title` (max 200), `description`, `timeLimit` (minutes, min 1), `starterFilesGitHubLink`, `starterCodeFiles[]` { path, content }, `evidenceMode` (`both` default for new assessments / `none` / leftover `workflow` / leftover `screen` — see below), `behavioralChecks[]` (plain-language observable product behaviors; stack-agnostic), `evaluationCriteria[]` (proctoring/transcript rubric), `evaluationCriteriaGroundings` (optional)
 
-**`evidenceMode` — how a candidate's work is observed.** Employer choice in AssessmentEditor's timing panel is **none**, **workflow capture**, or **both**. `none` (default for new assessments): no screen recording and no capture-kit. `workflow`: hooks-first capture via `capture-kit/`, no screen share. `both`: record the screen for human playback but analyse the hook stream — the video is **not** transcribed, which is where the cost saving lives. `screen` is a legacy value (screen recording + AI video transcript) kept so existing assessments still work; it is not offered as a new choice. Documents with no field still resolve to `screen`. Resolution lives in [`server/src/utils/evidenceMode.ts`](server/src/utils/evidenceMode.ts): the per-assessment field is intersected with the server-wide `WORKFLOW_CAPTURE_ENABLED` master switch, and **the master switch always wins downward for workflow/both** — an assessment set to `workflow` on a deployment where capture is off silently falls back to `screen` rather than collecting nothing. `none` is never rewritten. Never read the raw field client-side; `GET /api/submissions/token/:token` returns the *resolved* `evidenceMode`. The candidate sees the `capture-kit` setup command on the in-progress screen when workflow capture is active. `ensureProctoringTranscriptAndEvaluate` grades the hook stream for `workflow`/`both`, runs the video transcript for legacy `screen`, and skips observational evaluation for `none`.
+**`evidenceMode` — how a candidate's work is observed.** Employer choice in AssessmentEditor's timing panel is **Observe session** (`both`, default) or **None**. `both`: record the screen for human playback and low-res surface classification, and analyse the hook stream — the video is **not** transcribed (no OCR stills, no `TRANSCRIPT_ENGINE=gemini` on that movie). `none`: no screen recording and no capture-kit. `workflow` (hooks only, no screen) and `screen` (video + AI transcript) are leftover values: still honoured for existing assessments, not offered as new choices. Documents with no field still resolve to `screen`. Resolution lives in [`server/src/utils/evidenceMode.ts`](server/src/utils/evidenceMode.ts): the assessment field is returned as-is (`none` / `workflow` / `both` / leftover `screen`). There is no `WORKFLOW_CAPTURE_ENABLED` rewrite — that flag is unused, and `/api/workflow-capture` is always mounted. Never read the raw field client-side; `GET /api/submissions/token/:token` returns the *resolved* `evidenceMode`. The candidate sees the `capture-kit` setup command on the in-progress screen when observation is on (`both` or leftover `workflow`). `ensureProctoringTranscriptAndEvaluate` grades the hook stream for `workflow`/`both`, runs the video transcript for legacy `screen`, and skips observational evaluation for `none`. PNG frames are captured only for leftover `screen` (OCR); `both` still records sidecar events (tab/blur/clipboard/idle/stream_lost — the kit does not).
 
 ### Competition
 Fields: `slug` (unique, lowercase), `assessmentId` (ref Assessment), optional `title` / `description` / `rulesMarkdown` (dashboard copy; title/description fall back to assessment), `registrationOpen`, `competitionStartsAt`, `competitionEndsAt`, `leaderboardPublic` (default true). **Ops:** create an assessment in the app, then insert or update a `Competition` document with that `assessmentId` and share `/HackathonDashboard?slug=<slug>`.
@@ -745,10 +758,6 @@ Code source: `codeSource` (`github`/`upload`), `codeUpload` { storageKey, origin
 
 GitHub: `githubLink`, `githubRepo` { owner, repo, refType (commit/branch), ref, pinnedCommitSha }
 
-Interview questions: `interviewQuestions[]` { prompt, anchors[] { path, startLine, endLine }, createdAt }
-
-Interview: `interview` { provider (default: elevenlabs), status (not_started/in_progress/completed/failed), conversationId (sparse indexed), transcript { turns[] { role (agent/candidate), text, startMs, endMs } }, summary, analysis, startedAt, completedAt, updatedAt, error { message, at, raw } }
-
 Scores (legacy bag; not used for combined ranking): `scores` { overall, completeness… } — orphaned Trace/completeness fields may remain on old Mongo docs; app logic does not write or read them for scoring.
 
 Screen evaluation: `evaluationReport`, `evaluationStatus`, `evaluationError`, `screenRecordingTranscript`, `enrichedTranscript`, `refinedTranscript`
@@ -759,7 +768,7 @@ Metadata: `metadata` { ipAddress, userAgent }
 
 Behavioral grading: `behavioralGradingStatus` (`pending`/`completed`/`failed`), `behavioralGradingError`, `behavioralGradingReport` (runbook summary, per-check verdict/evidence, artifact keys, timings, sandbox metadata), `behavioralGradingProgress`
 
-Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`, `{ "interview.conversationId": 1 }` (sparse)
+Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`
 
 ### PlayChallenge (bridge-play DB)
 Fields: `slug` (unique, lowercase `a-z0-9-`), `challengeDate` (unique, `YYYY-MM-DD` UTC), `title` (max 120), `prompt`, `tokenBudget`, `category` (`widget`/`game`/`tool`/`other`), `status` (`draft`/`published`), `makeMode` (optional `e2b`/`serverless`; unset → `SHORTS_MAKE_MODE` default — the site's Build-mode toggle), `windowStartsAt`/`windowEndsAt` (optional Date pair: explicit round window override — the challenge is live exactly while now ∈ [start, end], regardless of the cadence grid, and the round countdown/session-expiry cap use `windowEndsAt`; `challengeDate` stays the key submissions/votes/sessions attach to, so a window never rekeys data. Consumers resolve "the current round" through `getActiveChallengeDate()` in `services/shorts/challenges.ts` (window-aware), not raw `getCurrentPeriodKey()`. Set via Mongo directly — not exposed in the admin UI yet)
@@ -825,7 +834,7 @@ Transcript: `transcript` { status (not_started/generating/completed/failed), sto
 
 Video: `videoChunks[]` { storageKey, screenIndex, startTime, endTime, sizeBytes } — screen-0 entries are removed after a successful eager merge; other screens' chunk references stay so multi-monitor recordings remain playable and transcribable. Chunk entries are dedup-guarded on `storageKey` (a client retry of an already-recorded chunk neither duplicates the array entry nor double-counts stats).
 
-Merged recording (screen 0): `mergedVideo` { status (`not_started` / `merging` / `ready` / `failed`), storageKey (typically `{sessionId}/playback.webm`), sizeBytes, durationSeconds, mergedAt, error, chunksDeletedAt, mergingStartedAt }. After **complete**, **submit** (all submit paths), or **opt-out**, the server merges + remuxes chunk WebMs into one file in storage, updates Mongo, then deletes screen-0 chunk objects. The playback/download endpoints also run the merge on demand (idempotent, only once the session is `completed`/`failed`) so an early employer view persists the merged file instead of rebuilding it per request. **Memory rule for this pipeline:** video is never held whole in RAM — chunk uploads land on disk via multer diskStorage, the merge streams chunk → temp file → storage (`storeBlobFromFile`), and transcript frame extraction returns disk-backed lazy frames (`makeDiskBackedFrame`; callers own `PreparedSessionData.cleanup()`). Don't reintroduce `fs.readFile` of merged videos or all-frames-in-an-array collections. Also never write `pipeline(src, out, { end: false })` in a per-chunk loop — pipeline does not detach its error/close/finish/end listeners from a destination it didn't end, so N chunks leak ~4N listeners on one WriteStream (a 470-chunk session leaked ~1,900 and OOMed the 512 MB instance); use the `writeWithBackpressure` helper in `videoMerge.ts`. Chunk reads skip blobs missing from storage rather than aborting the whole merge — Mongo can hold `videoChunks` refs to deleted S3 objects, and a merge that fails permanently means every playback request rebuilds the recording from scratch.
+Merged recording (screen 0): `mergedVideo` { status (`not_started` / `merging` / `ready` / `failed`), storageKey (typically `{sessionId}/playback.webm`), sizeBytes, durationSeconds, mergedAt, error, chunksDeletedAt, mergingStartedAt }. After **complete**, **submit** (all submit paths), or **opt-out**, the server merges + remuxes chunk WebMs into one file in storage, updates Mongo, then deletes screen-0 chunk objects. The playback/download endpoints also run the merge on demand (idempotent, only once the session is `completed`/`failed`) so an early employer view persists the merged file instead of rebuilding it per request. **Video is never proxied through the API** — those routes only return or redirect to a presigned S3 GET. **Memory rule for this pipeline:** video is never held whole in RAM — chunk uploads land on disk via multer diskStorage, the merge streams chunk → temp file → storage (`storeBlobFromFile`), and transcript frame extraction returns disk-backed lazy frames (`makeDiskBackedFrame`; callers own `PreparedSessionData.cleanup()`). Don't reintroduce `fs.readFile` of merged videos or all-frames-in-an-array collections. Also never write `pipeline(src, out, { end: false })` in a per-chunk loop — pipeline does not detach its error/close/finish/end listeners from a destination it didn't end, so N chunks leak ~4N listeners on one WriteStream (a 470-chunk session leaked ~1,900 and OOMed the 512 MB instance); use the `writeWithBackpressure` helper in `videoMerge.ts`. Chunk reads skip blobs missing from storage rather than aborting the whole merge — Mongo can hold `videoChunks` refs to deleted S3 objects, and a merge that fails permanently means every playback request rebuilds the recording from scratch.
 
 Stats: `stats` { totalFrames, uniqueFrames, duplicatesSkipped, totalSizeBytes, captureStartedAt, captureEndedAt }
 
@@ -840,7 +849,7 @@ Hooks-first AI-workflow capture (see the `/api/workflow-capture` routes).
 
 **WorkflowEvent:** `sessionId` (ref, indexed), `type` (`session_start`/`user_prompt`/`tool_use`/`tool_result`/`assistant_message`/`session_end`/`notification`), `at`, `seq` (kit-assigned monotonic counter), `toolSessionId`, `toolName`, `text` (prompt/reply/command, capped 20k chars), `payload` (Mixed — tool input/result), `truncated`, `cwd`, `gitBranch`, `receivedAt`. Indexes: **unique `{ sessionId, seq }`** (this is what makes ingest idempotent under kit retries), `{ sessionId, at }`
 
-**WorkflowFileState:** `sessionId` (indexed), `path`, `content` (capped 100k chars), `truncated`, `sizeBytes`, `origin` (`agent` = seen via a Write tool call, `snapshot` = git scan), `revision`, `updatedAt`. Unique `{ sessionId, path }`. This is the "what does the project look like right now" view the interviewer agent reads; `Edit`/`MultiEdit` carry only a diff, so those files get contents from the next snapshot rather than the event.
+**WorkflowFileState:** `sessionId` (indexed), `path`, `content` (capped 100k chars), `truncated`, `sizeBytes`, `origin` (`agent` = Write contents, Read results, or Edit results with `originalFile`; `snapshot` = kit scan), `revision`, `updatedAt`. Unique `{ sessionId, path }`. Live code for the companion. An Edit tool_use carries only a diff — ingesting that as an empty file is forbidden (it made the voice companion tell a candidate `server.js` was empty). Contents come from the matching `tool_result` (`originalFile` + old/new strings) or a Read, and the kit snapshot fills in the rest. Snapshot uses `git status` when there is a repo; unzipped starters often have none, so the kit falls back to a bounded project walk.
 
 Events live in their own collection rather than an array on the session — a long session produces thousands, and unbounded subdocument arrays are what OOMed the proctoring pipeline (see `videoChunks` history).
 
@@ -857,13 +866,11 @@ The app uses LangChain to abstract AI providers. You can configure providers glo
 |--------------------------|-------------------------------------------|---------------------------------------|
 | Assessment generation    | `AI_PROVIDER_ASSESSMENT_GENERATION`       | Varies by provider                    |
 | Assessment chat          | `AI_PROVIDER_ASSESSMENT_CHAT`             | Varies by provider                    |
-| Interview questions      | `AI_PROVIDER_INTERVIEW_QUESTIONS`         | Varies by provider                    |
-| Interview summary        | `AI_PROVIDER_INTERVIEW_SUMMARY`           | Varies by provider                    |
 
 Global default: `AI_PROVIDER` (defaults to `openai`).
 
 Default models per provider:
-- OpenAI: `gpt-5.6-luna` (`gpt-5.6-terra` for assessment generation and interview questions)
+- OpenAI: `gpt-5.6-luna` (`gpt-5.6-terra` for assessment generation)
 - Anthropic: `claude-3-5-sonnet-20241022`
 - Gemini: `gemini-1.5-pro`
 
@@ -876,7 +883,6 @@ Per-provider per-use-case model overrides follow the pattern: `{PROVIDER}_MODEL_
 - **Database**: MongoDB Atlas (cloud).
 - **No CI/CD**: No GitHub Actions or automated pipeline configured. Deployments are triggered via Git pushes to Vercel/Render.
 - **Stripe webhooks**: Production endpoint is `https://bridge-assessements-1.onrender.com/api/billing/webhook`.
-- **ElevenLabs webhooks**: Production endpoint is `https://bridge-assessements-1.onrender.com/webhooks/elevenlabs`.
 
 ## Code Quality & Config
 

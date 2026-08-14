@@ -163,6 +163,8 @@ router.get(
 
 router.get(
   "/sessions/:sessionId/download-video",
+  verifyAuthToken,
+  ...ProctoringValidator.getPlaybackVideoValidation,
   ProctoringController.downloadSessionVideo
 );
 

@@ -247,8 +247,9 @@ workflowEventSchema.index({ sessionId: 1, at: 1 });
  *
  * The event stream is the history; this is the "what does the project look like
  * right now" view the interviewer agent needs without replaying every edit.
- * Updated from Write/Edit tool events and from the kit's periodic git snapshot
- * (which also catches files the candidate edited by hand, outside the agent).
+ * Updated from Write/Read/Edit tool events (full contents, never an empty
+ * Edit stub) and from the kit's periodic snapshot (git when available, else a
+ * bounded project walk — unzipped starters often have no repo).
  */
 export interface IWorkflowFileState extends Document {
   sessionId: Types.ObjectId;
@@ -257,7 +258,7 @@ export interface IWorkflowFileState extends Document {
   /** Set when content exceeded the per-file cap; `content` holds the head. */
   truncated: boolean;
   sizeBytes: number;
-  /** "agent" = seen via a Write/Edit tool call; "snapshot" = git/file scan. */
+  /** "agent" = Write/Read/Edit result contents; "snapshot" = kit file scan. */
   origin: "agent" | "snapshot";
   revision: number;
   updatedAt: Date;

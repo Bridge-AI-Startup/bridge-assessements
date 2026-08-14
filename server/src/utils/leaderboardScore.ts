@@ -2,7 +2,7 @@
  * Public leaderboard score — must stay in sync with client `SubmissionsDashboard.jsx`:
  * `getCombinedScore0to100` + `getCombinedScoreBreakdownParts`.
  *
- * Mean of available signals (0–100 each): screen/recording rubric and behavioral pass rate.
+ * Mean of available signals (0–100 each): process rubric and behavioral pass rate.
  */
 
 type SubmissionLike = {
@@ -44,7 +44,7 @@ function getBehavioralPass0to100(sub: SubmissionLike): number | null {
 }
 
 /**
- * Combined 0–100 score: average of whichever of (recording rubric, behavioral) exist.
+ * Combined 0–100 score: average of whichever of (process rubric, behavioral) exist.
  * Returns null if none of the signals are available.
  */
 export function getCombinedLeaderboardScore(sub: SubmissionLike): number | null {
@@ -61,7 +61,7 @@ export function getCombinedScoreBreakdownParts(sub: SubmissionLike): string[] {
   const segs: string[] = [];
   const rec = getRecordingRubric0to100(sub);
   const beh = getBehavioralPass0to100(sub);
-  if (rec != null) segs.push(`Screen ${(rec / 10).toFixed(1)}/10`);
+  if (rec != null) segs.push(`Process ${(rec / 10).toFixed(1)}/10`);
   if (beh != null) segs.push(`Behavioral ${Math.round(beh)}%`);
   return segs;
 }

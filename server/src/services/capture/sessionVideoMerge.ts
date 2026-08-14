@@ -18,7 +18,16 @@ export function mergedPlaybackStorageKey(sessionId: string): string {
   return `${sessionId}/playback.webm`;
 }
 
-const MERGING_STALE_MS = 30 * 60 * 1000;
+/**
+ * Mongo `merging` is only a live lock if THIS process is doing it, or another
+ * instance claimed it moments ago. A 30-minute stale window left recordings
+ * stuck after every nodemon/Render restart: waitForMergedPlayback polled the
+ * dead lock, evaluation never graded, Review showed "Preparing recording…".
+ * Same-process work is tracked in `inFlightMerges` (a 10-minute merge is fine).
+ * Cross-instance / crash: steal after this grace.
+ */
+const MERGE_LOCK_GRACE_MS = 20 * 1000;
+const inFlightMerges = new Set<string>();
 const MAX_CONCURRENT_MERGES = Number(
   process.env.PROCTORING_VIDEO_MERGE_MAX_CONCURRENT || 2,
 );
@@ -247,6 +256,35 @@ function sumScreenZeroChunkDurationSeconds(session: {
   return total;
 }
 
+function earliestScreenZeroStart(session: {
+  videoChunks?: Array<{ startTime?: Date; screenIndex?: number }>;
+}): Date | null {
+  let min: Date | null = null;
+  if (!session.videoChunks?.length) return null;
+  for (const ch of session.videoChunks) {
+    if ((ch.screenIndex ?? 0) !== 0) continue;
+    const start = ch.startTime ? new Date(ch.startTime) : null;
+    if (!start || !Number.isFinite(start.getTime())) continue;
+    if (!min || start < min) min = start;
+  }
+  return min;
+}
+
+/** True when another merge of this session is actually running (or just claimed). */
+export function mergeLockIsLive(
+  mv: { status?: string; mergingStartedAt?: Date | string | null } | null | undefined,
+  sessionId: string,
+  now = Date.now(),
+  inFlight: ReadonlySet<string> = inFlightMerges,
+): boolean {
+  if (mv?.status !== "merging") return false;
+  if (inFlight.has(sessionId)) return true;
+  if (!mv.mergingStartedAt) return false;
+  const started = new Date(mv.mergingStartedAt).getTime();
+  if (!Number.isFinite(started)) return false;
+  return now - started < MERGE_LOCK_GRACE_MS;
+}
+
 export type MergeSessionVideoResult = {
   ok: boolean;
   skipped?: string;
@@ -282,11 +320,17 @@ export async function mergeSessionVideo(
       return { ok: true, skipped: "already_ready" };
     }
 
-    if (mv?.status === "merging" && mv.mergingStartedAt) {
-      const age = Date.now() - new Date(mv.mergingStartedAt).getTime();
-      if (age < MERGING_STALE_MS) {
-        return { ok: true, skipped: "merging_in_progress" };
-      }
+    if (mergeLockIsLive(mv, sessionId)) {
+      return { ok: true, skipped: "merging_in_progress" };
+    }
+    if (mv?.status === "merging") {
+      const age = mv.mergingStartedAt
+        ? Date.now() - new Date(mv.mergingStartedAt).getTime()
+        : NaN;
+      console.warn(
+        `[sessionVideoMerge] reclaiming stale merge lock sessionId=${sessionId}` +
+          (Number.isFinite(age) ? ` ageMs=${Math.round(age)}` : ""),
+      );
     }
 
     const chunks = await resolveSessionVideoChunkKeys(sessionId, session, storage);
@@ -296,7 +340,7 @@ export async function mergeSessionVideo(
     }
 
     const keysToDelete = chunks.map((c) => c.storageKey);
-    const staleBefore = new Date(Date.now() - MERGING_STALE_MS);
+    const staleBefore = new Date(Date.now() - MERGE_LOCK_GRACE_MS);
 
     const claimed = await ProctoringSessionModel.findOneAndUpdate(
       {
@@ -329,17 +373,21 @@ export async function mergeSessionVideo(
     }
 
     session = claimed;
+    inFlightMerges.add(sessionId);
     const durationFromChunks =
       sumScreenZeroChunkDurationSeconds(session as any) ||
       (session.stats?.videoStats?.durationSeconds ?? 0);
+    const captureStartFallback =
+      (session.stats as { captureStartedAt?: Date | null } | undefined)
+        ?.captureStartedAt || earliestScreenZeroStart(session as any);
 
-    const tmpDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), `proctoring-merge-${sessionId}-`),
-    );
-    const mergedPath = path.join(tmpDir, "merged.webm");
-    const remuxedPath = path.join(tmpDir, "remuxed.webm");
-
+    let tmpDir: string | undefined;
     try {
+      tmpDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), `proctoring-merge-${sessionId}-`),
+      );
+      const mergedPath = path.join(tmpDir, "merged.webm");
+      const remuxedPath = path.join(tmpDir, "remuxed.webm");
       const { appendBuffersSequential } = await import("./videoMerge.js");
       await appendBuffersSequential(
         readChunksSkippingMissing(chunks, storage, ({ read, missing }) => {
@@ -362,17 +410,25 @@ export async function mergeSessionVideo(
       // concurrent transcript jobs never see chunk keys for missing objects.
       // Only the merged (screen-0) entries are pulled: other screens' chunks stay
       // referenced so multi-monitor recordings remain playable and transcribable.
+      const readySet: Record<string, unknown> = {
+        "mergedVideo.status": "ready",
+        "mergedVideo.storageKey": playbackKey,
+        "mergedVideo.sizeBytes": finalSizeBytes,
+        "mergedVideo.durationSeconds": durationFromChunks,
+        "mergedVideo.mergedAt": new Date(),
+        "mergedVideo.chunksDeletedAt": new Date(),
+        "mergedVideo.error": null,
+        "mergedVideo.mergingStartedAt": null,
+      };
+      if (
+        captureStartFallback &&
+        !(session.stats as { captureStartedAt?: Date | null } | undefined)
+          ?.captureStartedAt
+      ) {
+        readySet["stats.captureStartedAt"] = captureStartFallback;
+      }
       await ProctoringSessionModel.findByIdAndUpdate(sessionId, {
-        $set: {
-          "mergedVideo.status": "ready",
-          "mergedVideo.storageKey": playbackKey,
-          "mergedVideo.sizeBytes": finalSizeBytes,
-          "mergedVideo.durationSeconds": durationFromChunks,
-          "mergedVideo.mergedAt": new Date(),
-          "mergedVideo.chunksDeletedAt": new Date(),
-          "mergedVideo.error": null,
-          "mergedVideo.mergingStartedAt": null,
-        },
+        $set: readySet,
         $pull: {
           videoChunks: { storageKey: { $in: keysToDelete } },
         },
@@ -384,6 +440,16 @@ export async function mergeSessionVideo(
         } catch {
           /* ignore */
         }
+      }
+
+      const submissionId = (session as { submissionId?: { toString(): string } })
+        .submissionId?.toString();
+      if (submissionId) {
+        // Surface-identify the Review movie (LOW / 1fps), not OCR. Fire-and-
+        // forget: merge must not wait on Gemini.
+        void import("../workflowCapture/screenContext.js").then((m) =>
+          m.classifyAfterProctoringMerge(submissionId),
+        );
       }
 
       return { ok: true };
@@ -399,7 +465,10 @@ export async function mergeSessionVideo(
       });
       return { ok: false, error: msg };
     } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      inFlightMerges.delete(sessionId);
+      if (tmpDir) {
+        await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      }
     }
   });
 }
@@ -413,6 +482,67 @@ export function mergeSessionVideoInBackground(sessionId: string): void {
   );
 }
 
+/** Reclaim `merging` locks left behind by a process restart. */
+export async function resumeInterruptedMerges(): Promise<void> {
+  const stuck = await ProctoringSessionModel.find({
+    "mergedVideo.status": "merging",
+    status: { $in: ["completed", "failed"] },
+  })
+    .select("_id")
+    .limit(25)
+    .lean();
+  if (stuck.length === 0) return;
+  console.log(
+    `[sessionVideoMerge] resuming ${stuck.length} merge(s) interrupted by a process restart`,
+  );
+  for (const s of stuck) {
+    mergeSessionVideoInBackground(String(s._id));
+  }
+}
+
+const MERGE_WAIT_MS = 10 * 60 * 1000;
+const MERGE_POLL_MS = 2000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Wait until screen-0 playback.webm exists (or merge is impossible).
+ * Used by workflow evaluation so screen classification can run before episodes.
+ */
+export async function waitForMergedPlayback(
+  sessionId: string,
+  timeoutMs = MERGE_WAIT_MS,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const session = await ProctoringSessionModel.findById(sessionId)
+      .select("mergedVideo")
+      .lean();
+    if (!session) return false;
+    const mv = (
+      session as {
+        mergedVideo?: { status?: string; storageKey?: string | null };
+      }
+    ).mergedVideo;
+    if (mv?.status === "ready" && mv.storageKey) {
+      if (await getFrameStorage().exists(mv.storageKey)) return true;
+    }
+    if (mv?.status === "failed") return false;
+    const result = await mergeSessionVideo(sessionId);
+    if (result.skipped === "no_session" || result.skipped === "no_chunks") {
+      return false;
+    }
+    if (result.ok && (!result.skipped || result.skipped === "already_ready")) {
+      return true;
+    }
+    if (!result.ok && result.error) return false;
+    await sleep(MERGE_POLL_MS);
+  }
+  return false;
+}
+
 /** Fire-and-forget merge when a submission finishes (submit / upload / safety net). */
 export async function mergeProctoringVideoForSubmission(
   submissionId: string,
@@ -422,4 +552,28 @@ export async function mergeProctoringVideoForSubmission(
   });
   if (!session) return;
   mergeSessionVideoInBackground(session._id.toString());
+}
+
+/**
+ * End screen capture for a submission and start the merge.
+ * Idempotent: a client `POST /complete` may have already marked the session done.
+ * Every submit / opt-out / recording-only path should call this so a tab that
+ * never reached `completeSession` cannot keep uploading chunks.
+ */
+export async function completeProctoringForSubmission(
+  submissionId: string,
+): Promise<void> {
+  await ProctoringSessionModel.updateOne(
+    {
+      submissionId,
+      status: { $nin: ["completed", "failed"] },
+    },
+    {
+      $set: {
+        status: "completed",
+        "stats.captureEndedAt": new Date(),
+      },
+    },
+  );
+  await mergeProctoringVideoForSubmission(submissionId);
 }

@@ -61,7 +61,8 @@ export async function runSubmissionEvaluation(
  */
 export async function suggestCriteria(
   jobDescription: string,
-  token?: string
+  token?: string,
+  evidenceMode?: string
 ): Promise<APIResult<{ suggested_criteria: string[] }>> {
   try {
     let authToken = token;
@@ -79,7 +80,10 @@ export async function suggestCriteria(
         Authorization: `Bearer ${authToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ job_description: jobDescription }),
+      body: JSON.stringify({
+        job_description: jobDescription,
+        ...(evidenceMode ? { evidence_mode: evidenceMode } : {}),
+      }),
     });
 
     const result = await response.json();
@@ -110,7 +114,8 @@ export async function suggestCriteria(
  */
 export async function validateCriterion(
   criterion: string,
-  token?: string
+  token?: string,
+  evidenceMode?: string
 ): Promise<APIResult<{ valid: boolean; reason?: string }>> {
   try {
     let authToken = token;
@@ -128,7 +133,10 @@ export async function validateCriterion(
         Authorization: `Bearer ${authToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ criterion }),
+      body: JSON.stringify({
+        criterion,
+        ...(evidenceMode ? { evidence_mode: evidenceMode } : {}),
+      }),
     });
 
     const result = await response.json();

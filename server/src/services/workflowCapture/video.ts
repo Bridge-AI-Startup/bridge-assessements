@@ -1,13 +1,9 @@
 /**
  * Screen recording attached to a workflow capture session.
  *
- * This video is never analysed — no frame extraction, no OCR, no vision model.
- * It exists so a reviewer can *watch* the moment a timeline event points at.
- * All the analysis comes from the hook stream, which is why "both" mode is
- * dramatically cheaper than screen-recording-only mode.
- *
- * Sync origin is `video.startedAt`: a captured event's position in the
- * recording is simply `event.at - video.startedAt`.
+ * On `both`, the Review movie is the proctoring merged `playback.webm` — this
+ * kit recording is not started. These endpoints remain for the local tester
+ * (unlinked sessions). Kit video is never OCR'd.
  */
 
 import fs from "fs/promises";

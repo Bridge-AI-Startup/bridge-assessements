@@ -335,7 +335,7 @@ export default function Home() {
                 <ul className="list-disc list-inside mt-3 space-y-1 text-sm">
                   <li>All your assessments</li>
                   <li>All candidate submissions</li>
-                  <li>All interview data and transcripts</li>
+                  <li>All session recordings and transcripts</li>
                   <li>Your subscription (if active)</li>
                   <li>All code embeddings and indexed data</li>
                 </ul>

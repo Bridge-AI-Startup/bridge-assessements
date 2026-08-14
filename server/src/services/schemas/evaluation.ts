@@ -30,7 +30,7 @@ export const groundedCriterionSchema = z.object({
   definition: z.string().describe("A clear, concise definition of what this criterion means in the context of a hiring assessment"),
   positive_indicators: z.array(z.string()).describe("Observable behaviors or actions that are evidence the candidate meets this criterion"),
   negative_indicators: z.array(z.string()).describe("Observable behaviors or actions that are evidence the candidate does not meet this criterion"),
-  relevant_action_types: z.array(z.enum(["ai_prompt", "ai_response", "coding", "testing", "reading", "searching", "idle"])).describe("The action types from the transcript that are most relevant to evaluating this criterion"),
+  relevant_action_types: z.array(z.enum(["ai_prompt", "ai_response", "coding", "testing", "reading", "searching", "speaking", "idle"])).describe("The action types from the transcript that are most relevant to evaluating this criterion"),
 });
 
 export type GroundedCriterionSchema = z.infer<typeof groundedCriterionSchema>;

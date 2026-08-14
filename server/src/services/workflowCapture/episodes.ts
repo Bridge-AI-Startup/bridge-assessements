@@ -198,6 +198,11 @@ export async function computeAndStoreEpisodes(
   const startedAt = session.startedAt || session.createdAt;
 
   const episodes = await groupIntoEpisodes(events as any, { startedAt });
+  // `episodesComputedAt` means "episodes are stored", not "we tried once".
+  // Stamping it alongside an empty array used to permanently convince
+  // `finalizeCaptureSession` that someone else owned the work, so a session that
+  // produced nothing here could never get episodes from any later run.
+  if (episodes.length === 0) return episodes;
   await WorkflowCaptureSessionModel.updateOne(
     { _id: sessionId },
     { $set: { episodes, episodesComputedAt: new Date() } }

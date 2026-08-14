@@ -221,6 +221,58 @@ export async function completeSession(
   }
 }
 
+function beaconJson(url: string, body: unknown): boolean {
+  if (typeof navigator === "undefined" || typeof navigator.sendBeacon !== "function") {
+    return false;
+  }
+  return navigator.sendBeacon(
+    url,
+    new Blob([JSON.stringify(body)], { type: "application/json" })
+  );
+}
+
+/**
+ * Best-effort flush on tab close. sendBeacon is the only POST that can outlive
+ * the page; video chunks are too large for it, so this is JSON-only.
+ */
+export function beaconSidecarEvents(
+  sessionId: string,
+  token: string,
+  events: Array<{ type: string; timestamp: number; metadata?: Record<string, unknown> }>
+): boolean {
+  if (!sessionId || !token || events.length === 0) return false;
+  return beaconJson(`${API_BASE_URL}/proctoring/sessions/${sessionId}/events`, {
+    token,
+    events,
+  });
+}
+
+export function beaconCompleteSession(sessionId: string, token: string): boolean {
+  if (!sessionId || !token) return false;
+  return beaconJson(`${API_BASE_URL}/proctoring/sessions/${sessionId}/complete`, {
+    token,
+  });
+}
+
+export function beaconCompanionShutdown(
+  sessionId: string,
+  token: string,
+  conversationId: string | undefined,
+  messages: Array<{ role: string; text: string; timestampMs: number }>
+): void {
+  if (!sessionId || !token) return;
+  if (messages.length > 0) {
+    beaconJson(`${API_BASE_URL}/proctoring/sessions/${sessionId}/companion/messages`, {
+      token,
+      conversationId,
+      messages,
+    });
+  }
+  beaconJson(`${API_BASE_URL}/proctoring/sessions/${sessionId}/companion/complete`, {
+    token,
+  });
+}
+
 /**
  * Get proctoring session details.
  */
@@ -349,13 +401,8 @@ export async function getRefinedTranscriptContent(
 }
 
 /**
- * Fetch re-muxed WebM video for in-page playback (correct duration).
- *
- * Prefers a direct (presigned S3) URL from `?format=url` — the <video> element
- * then streams and seeks natively without downloading the whole recording.
- * Falls back to fetching the binary and returning an object URL (local storage
- * or unmerged sessions). Revoking with URL.revokeObjectURL is safe in both
- * cases (it is a no-op for non-blob URLs).
+ * Fetch a direct (presigned S3) URL for in-page playback.
+ * Video bytes are never downloaded through the API.
  */
 export async function getProctoringVideoPlaybackUrl(
   sessionId: string,
@@ -366,72 +413,52 @@ export async function getProctoringVideoPlaybackUrl(
       `${API_BASE_URL}/proctoring/sessions/${sessionId}/playback-video?format=url`,
       { headers: { Authorization: `Bearer ${authToken}` } }
     );
-    if (urlResponse.ok) {
-      const data = await urlResponse.json().catch(() => ({}));
-      if (data?.url) {
-        return { success: true, data: data.url };
-      }
+    const data = await urlResponse.json().catch(() => ({}));
+    if (urlResponse.ok && data?.url) {
+      return { success: true, data: data.url };
     }
-
-    const response = await fetch(
-      `${API_BASE_URL}/proctoring/sessions/${sessionId}/playback-video`,
-      { headers: { Authorization: `Bearer ${authToken}` } }
-    );
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      return {
-        success: false,
-        error: data.error || `Video unavailable (${response.status})`,
-      };
-    }
-    const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    return { success: true, data: objectUrl };
+    return {
+      success: false,
+      error:
+        data.error ||
+        (urlResponse.ok
+          ? "Direct playback URL unavailable"
+          : `Video unavailable (${urlResponse.status})`),
+    };
   } catch (error) {
     return handleAPIError(error);
   }
 }
 
 /**
- * Download merged WebM video for a session. Triggers a file download in the browser.
- * Prefers a presigned direct URL (S3) so the file never streams through the API server.
+ * Download merged WebM video for a session via a presigned S3 URL.
+ * The file never streams through the API server.
  */
 export async function downloadProctoringVideo(
-  sessionId: string
+  sessionId: string,
+  authToken: string
 ): Promise<APIResult<void>> {
   try {
     const urlResponse = await fetch(
-      `${API_BASE_URL}/proctoring/sessions/${sessionId}/download-video?format=url`
+      `${API_BASE_URL}/proctoring/sessions/${sessionId}/download-video?format=url`,
+      { headers: { Authorization: `Bearer ${authToken}` } }
     );
-    if (urlResponse.ok) {
-      const data = await urlResponse.json().catch(() => ({}));
-      if (data?.url) {
-        const a = document.createElement("a");
-        a.href = data.url;
-        a.download = `proctoring-${sessionId}.webm`;
-        a.click();
-        return { success: true };
-      }
+    const data = await urlResponse.json().catch(() => ({}));
+    if (urlResponse.ok && data?.url) {
+      const a = document.createElement("a");
+      a.href = data.url;
+      a.download = `proctoring-${sessionId}.webm`;
+      a.click();
+      return { success: true };
     }
-
-    const response = await fetch(
-      `${API_BASE_URL}/proctoring/sessions/${sessionId}/download-video`
-    );
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      return {
-        success: false,
-        error: data.error || `Download failed (${response.status})`,
-      };
-    }
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `proctoring-${sessionId}.webm`;
-    a.click();
-    URL.revokeObjectURL(url);
-    return { success: true };
+    return {
+      success: false,
+      error:
+        data.error ||
+        (urlResponse.ok
+          ? "Direct download URL unavailable"
+          : `Download failed (${urlResponse.status})`),
+    };
   } catch (error) {
     return handleAPIError(error);
   }

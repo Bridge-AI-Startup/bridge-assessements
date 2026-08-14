@@ -44,6 +44,10 @@ export const validateCriterionValidation = [
     .bail()
     .notEmpty()
     .withMessage("criterion cannot be empty"),
+  body("evidence_mode")
+    .optional()
+    .isString()
+    .withMessage("evidence_mode must be a string"),
 ];
 
 export const suggestCriteriaValidation = [
@@ -56,4 +60,8 @@ export const suggestCriteriaValidation = [
     .bail()
     .notEmpty()
     .withMessage("job_description cannot be empty"),
+  body("evidence_mode")
+    .optional()
+    .isString()
+    .withMessage("evidence_mode must be a string"),
 ];

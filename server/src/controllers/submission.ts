@@ -15,12 +15,10 @@ import {
   downloadAndExtractRepoSnapshot,
   cleanupRepoSnapshot,
 } from "../utils/repoSnapshot.js";
-import { generateInterviewQuestionsFromRetrieval } from "../services/interviewGeneration.js";
 import { indexSubmissionRepo } from "../services/repoIndexing.js";
 import { searchCodeChunks } from "../services/repoRetrieval.js";
 import RepoIndexModel from "../models/repoIndex.js";
 import { deleteNamespace } from "../utils/pinecone.js";
-import { PROMPT_INTERVIEW_AGENT } from "../prompts/index.js";
 import ProctoringSessionModel from "../models/proctoringSession.js";
 import { getProctoringTranscriptForSubmission } from "../services/evaluation/proctoringTranscriptAdapter.js";
 import { evaluateTranscript } from "../services/evaluation/orchestrator.js";
@@ -31,18 +29,22 @@ import {
   markRefinementFailed,
 } from "../services/evaluation/transcriptRefinement.js";
 import { getFrameStorage } from "../services/capture/storage.js";
-import { mergeProctoringVideoForSubmission } from "../services/capture/sessionVideoMerge.js";
 import {
   resolveEvidenceMode,
   shouldGenerateVideoTranscript,
   shouldCaptureWorkflow,
   shouldEvaluateWorkflow,
 } from "../utils/evidenceMode.js";
+import { getSubmissionTimingWindow } from "../utils/submissionTiming.js";
 import { withCaptureKit } from "../services/workflowCapture/starterKit.js";
 import {
   evaluateWorkflowSession,
   findCaptureSessionForSubmission,
 } from "../services/workflowCapture/evaluate.js";
+import { finalizeCaptureSession } from "../services/workflowCapture/finalize.js";
+import { closeAttemptSessions } from "../services/submission/closeAttempt.js";
+import { expireAttemptAndClose } from "../services/submission/finalizeExpired.js";
+import { prepareScreenContextForEvaluation } from "../services/workflowCapture/screenContext.js";
 import {
   gradeSubmissionBehavioral,
   inferFailureCategory,
@@ -59,7 +61,6 @@ import { collectBehavioralArtifactKeys } from "../utils/behavioralEvidenceKeys.j
 
 const TRANSCRIPT_POLL_INTERVAL_MS = 15000;
 const TRANSCRIPT_POLL_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
-const FINAL_SUBMISSION_GRACE_MINUTES = 5;
 const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b]);
 const SUBMISSION_SOURCE_MODE = (
   process.env.SUBMISSION_SOURCE_MODE || "both"
@@ -77,27 +78,6 @@ function isGithubSubmissionEnabled(): boolean {
 
 function isUploadSubmissionEnabled(): boolean {
   return SUBMISSION_SOURCE_MODE === "both" || SUBMISSION_SOURCE_MODE === "upload";
-}
-
-function getSubmissionTimingWindow(
-  submission: any,
-  assessment: any
-): {
-  elapsedMinutes: number | null;
-  isLate: boolean;
-  isBeyondGrace: boolean;
-} {
-  if (!assessment?.timeLimit || !submission?.startedAt) {
-    return { elapsedMinutes: null, isLate: false, isBeyondGrace: false };
-  }
-
-  const elapsedMinutes =
-    (Date.now() - new Date(submission.startedAt).getTime()) / (1000 * 60);
-  const isLate = elapsedMinutes > assessment.timeLimit;
-  const isBeyondGrace =
-    elapsedMinutes > assessment.timeLimit + FINAL_SUBMISSION_GRACE_MINUTES;
-
-  return { elapsedMinutes, isLate, isBeyondGrace };
 }
 
 async function setEvaluationFailed(
@@ -365,8 +345,7 @@ export async function ensureProctoringTranscriptAndEvaluate(
 /**
  * Grade a submission from its captured workflow (hooks + snapshots + screen
  * context) rather than from a screen-recording transcript. Produces the same
- * `evaluationReport` shape, so the dashboard, scoring and interview agent need
- * no changes.
+ * `evaluationReport` shape, so the dashboard and scoring need no changes.
  */
 async function evaluateWorkflowCaptureForSubmission(
   submissionId: string,
@@ -376,6 +355,32 @@ async function evaluateWorkflowCaptureForSubmission(
   const capture: any = await findCaptureSessionForSubmission(submissionId);
   if (!capture) {
     return false;
+  }
+
+  // Close the capture and persist episodes BEFORE grading, not after.
+  // Grading is several LLM calls long; episodes are the reviewer's (and
+  // companion context center's) narrative layer, so computing them after
+  // the rubric left the first look at a finished session without them.
+  // Idempotent, and a failure here must not stop the submission being graded.
+  try {
+    await finalizeCaptureSession(capture._id.toString());
+  } catch (err) {
+    console.error(
+      `[workflow-eval] finalizing capture ${capture._id} before grading failed:`,
+      err
+    );
+  }
+
+  try {
+    await prepareScreenContextForEvaluation(
+      submissionId,
+      capture._id.toString()
+    );
+  } catch (err) {
+    console.error(
+      `[workflow-eval] screen classification before grading failed for ${capture._id}:`,
+      err
+    );
   }
 
   try {
@@ -414,6 +419,29 @@ async function evaluateWorkflowCaptureForSubmission(
       err instanceof Error ? err.message : "Workflow evaluation failed."
     );
     return true;
+  }
+}
+
+/** Re-kick observational eval left `pending` with no report after a process restart. */
+export async function resumeInterruptedEvaluations(): Promise<void> {
+  const cutoff = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  const pending = await SubmissionModel.find({
+    evaluationStatus: "pending",
+    submittedAt: { $gte: cutoff },
+    $or: [{ evaluationReport: { $exists: false } }, { evaluationReport: null }],
+  })
+    .select("_id")
+    .limit(10)
+    .lean();
+  if (pending.length === 0) return;
+  console.log(
+    `[eval] resuming ${pending.length} evaluation(s) interrupted by a process restart`,
+  );
+  for (const s of pending) {
+    const id = String(s._id);
+    ensureProctoringTranscriptAndEvaluate(id).catch((err) => {
+      console.error(`[eval] resumeInterruptedEvaluations failed for ${id}:`, err);
+    });
   }
 }
 
@@ -456,9 +484,14 @@ export const startAssessment: RequestHandler = async (req, res, next) => {
   try {
     const { token } = req.params;
 
-    const submission = await SubmissionModel.findOne({ token }).populate(
-      "assessmentId"
-    );
+    const submission = await SubmissionModel.findOne({ token }).populate({
+      path: "assessmentId",
+      select: CANDIDATE_ASSESSMENT_FIELDS,
+      populate: {
+        path: "userId",
+        select: "companyName",
+      },
+    });
 
     if (!submission) {
       return res.status(404).json({ error: "Submission not found" });
@@ -502,7 +535,7 @@ export const startAssessment: RequestHandler = async (req, res, next) => {
       timeRemaining = assessment.timeLimit; // Full time limit at start
     }
 
-    const response: any = submission.toObject();
+    const response: any = toCandidateSubmission(submission);
     response.timeRemaining = timeRemaining;
     // Same resolved mode as GET /token — the in-progress UI shows the
     // capture-kit command from this field. Omitting it made the client fall
@@ -516,24 +549,97 @@ export const startAssessment: RequestHandler = async (req, res, next) => {
 };
 
 /**
+ * Assessment fields a candidate is allowed to see.
+ *
+ * Notably absent: `evaluationCriteria` and `behavioralChecks`. Those are the
+ * rubric they are being marked against, and handing it over turns the exercise
+ * into a checklist.
+ */
+const CANDIDATE_ASSESSMENT_FIELDS =
+  "title description timeLimit starterFilesGitHubLink starterCodeFiles evidenceMode";
+
+/**
+ * Everything the candidate's own client needs off their submission — and
+ * nothing else.
+ *
+ * The token lives in the candidate's URL, so these endpoints are effectively
+ * public to whoever holds the link. Returning the raw document handed that
+ * person the reviewer's side of the file: `evaluationReport` (rubric verdicts,
+ * per-criterion scores and the session summary), the screen transcripts, and
+ * the behavioral grading report. A whitelist rather than
+ * a delete-list, so a field added to the model later is private by default
+ * instead of leaking until someone notices.
+ */
+const CANDIDATE_SUBMISSION_FIELDS = [
+  "_id",
+  "token",
+  "assessmentId",
+  "candidateName",
+  "candidateEmail",
+  "status",
+  "startedAt",
+  "submittedAt",
+  "timeSpent",
+  "optedOut",
+  "optOutReason",
+  "optedOutAt",
+  "codeSource",
+  "codeUpload",
+  "githubLink",
+  "githubRepo",
+  "createdAt",
+  "updatedAt",
+] as const;
+
+function toCandidateSubmission(submission: any): Record<string, unknown> {
+  const full = submission.toObject();
+  const safe: Record<string, unknown> = {};
+  for (const key of CANDIDATE_SUBMISSION_FIELDS) {
+    if (full[key] !== undefined) safe[key] = full[key];
+  }
+  return safe;
+}
+
+/**
  * Get a submission by token (public endpoint - for candidate access via URL)
  */
 export const getSubmissionByToken: RequestHandler = async (req, res, next) => {
   try {
     const { token } = req.params;
 
-    const submission = await SubmissionModel.findOne({ token }).populate({
+    const candidatePopulate = {
       path: "assessmentId",
-      select:
-        "title description timeLimit starterFilesGitHubLink starterCodeFiles isSmartInterviewerEnabled evidenceMode",
+      select: CANDIDATE_ASSESSMENT_FIELDS,
       populate: {
         path: "userId",
         select: "companyName",
       },
-    });
+    } as const;
+
+    let submission = await SubmissionModel.findOne({ token }).populate(
+      candidatePopulate
+    );
 
     if (!submission) {
       return res.status(404).json({ error: "Submission not found" });
+    }
+
+    // Tab closed / abandoned: once grace has elapsed, tie the attempt out
+    // even if the candidate never came back. Same outcome as recording-only.
+    if (submission.status === "in-progress") {
+      const timing = getSubmissionTimingWindow(
+        submission,
+        submission.assessmentId as { timeLimit?: number }
+      );
+      if (timing.isBeyondGrace) {
+        await expireAttemptAndClose(submission._id.toString(), {
+          timeSpent: Math.floor(timing.elapsedMinutes ?? 0),
+        });
+        const refreshed = await SubmissionModel.findOne({ token }).populate(
+          candidatePopulate
+        );
+        if (refreshed) submission = refreshed;
+      }
     }
 
     // Calculate time remaining if assessment has started
@@ -549,11 +655,11 @@ export const getSubmissionByToken: RequestHandler = async (req, res, next) => {
       }
     }
 
-    const response: any = submission.toObject();
+    const response: any = toCandidateSubmission(submission);
     response.timeRemaining = timeRemaining;
-    // Effective mode (per-assessment setting ∩ server master switch) so the
-    // candidate client knows whether to ask for the screen, show the
-    // capture-kit command, or both. Never trust the raw field client-side.
+    // Resolved mode so the candidate client knows whether to ask for the
+    // screen, show the capture-kit command, or both. Never trust the raw
+    // field client-side.
     const effectiveMode = resolveEvidenceMode(submission.assessmentId as any);
     response.evidenceMode = effectiveMode;
 
@@ -718,6 +824,7 @@ export const submitSubmissionByToken: RequestHandler = async (
 
     // Don't allow resubmission
     if (submission.status === "submitted") {
+      await closeAttemptSessions(submission._id.toString());
       return res
         .status(400)
         .json({ error: "Assessment has already been submitted" });
@@ -729,6 +836,7 @@ export const submitSubmissionByToken: RequestHandler = async (
     if (timing.elapsedMinutes !== null) {
       submission.timeSpent = Math.floor(timing.elapsedMinutes);
       if (timing.isBeyondGrace) {
+        await closeAttemptSessions(submission._id.toString());
         return res.status(400).json({
           error:
             "Submission window has closed. You ran out of time and missed the 5-minute grace period.",
@@ -771,7 +879,7 @@ export const submitSubmissionByToken: RequestHandler = async (
 
     await submission.save();
 
-    mergeProctoringVideoForSubmission(submission._id.toString());
+    await closeAttemptSessions(submission._id.toString());
 
     const updatedSubmission = await SubmissionModel.findOne({ token }).populate(
       "assessmentId",
@@ -878,6 +986,7 @@ export const submitRecordingOnlyByToken: RequestHandler = async (
       (submission.status === "submitted" || submission.status === "expired") &&
       submission.submittedAt
     ) {
+      await closeAttemptSessions(submission._id.toString());
       const alreadySubmitted = await SubmissionModel.findOne({ token }).populate(
         "assessmentId",
         "title description timeLimit"
@@ -899,48 +1008,12 @@ export const submitRecordingOnlyByToken: RequestHandler = async (
       submission.timeSpent = Math.floor(timing.elapsedMinutes);
     }
 
-    submission.status = "expired";
-    submission.submittedAt = new Date();
-    await submission.save();
-
-    const submissionIdStr = submission._id.toString();
-    const hasEvaluationCriteria =
-      Array.isArray(assessment?.evaluationCriteria) &&
-      assessment.evaluationCriteria.length > 0;
-
-    if (hasEvaluationCriteria) {
-      await SubmissionModel.findByIdAndUpdate(submissionIdStr, {
-        $set: { evaluationStatus: "pending", evaluationError: null },
-      });
-      ensureProctoringTranscriptAndEvaluate(submissionIdStr)
-        .then(async () => {
-          // Deliberately does NOT re-derive evaluationStatus here. The
-          // evaluator already set it, and inferring "completed" from the mere
-          // presence of an evaluationReport flips a failed run back to success
-          // whenever an earlier report is still on the document — presenting
-          // stale results as current while evaluationError says otherwise.
-        })
-        .catch((err) => {
-          console.error(
-            `[submitRecordingOnlyByToken] ensureProctoringTranscriptAndEvaluate failed for ${submission._id}:`,
-            err
-          );
-          SubmissionModel.findByIdAndUpdate(submissionIdStr, {
-            $set: {
-              evaluationStatus: "failed",
-              evaluationError:
-                err instanceof Error ? err.message : "Evaluation failed.",
-            },
-          }).catch(() => {});
-        });
-    } else {
-      await SubmissionModel.findByIdAndUpdate(submissionIdStr, {
-        $set: {
-          evaluationStatus: "failed",
-          evaluationError: "Assessment has no evaluation criteria configured.",
-        },
-      });
-    }
+    await expireAttemptAndClose(submission._id.toString(), {
+      timeSpent:
+        timing.elapsedMinutes != null
+          ? Math.floor(timing.elapsedMinutes)
+          : undefined,
+    });
 
     const updatedSubmission = await SubmissionModel.findOne({ token }).populate(
       "assessmentId",
@@ -983,6 +1056,7 @@ export const uploadSubmissionByToken: RequestHandler = async (req, res, next) =>
     }
 
     if (submission.status === "submitted") {
+      await closeAttemptSessions(submission._id.toString());
       return res
         .status(400)
         .json({ error: "Assessment has already been submitted" });
@@ -994,6 +1068,7 @@ export const uploadSubmissionByToken: RequestHandler = async (req, res, next) =>
     if (timing.elapsedMinutes !== null) {
       submission.timeSpent = Math.floor(timing.elapsedMinutes);
       if (timing.isBeyondGrace) {
+        await closeAttemptSessions(submission._id.toString());
         return res.status(400).json({
           error:
             "Submission window has closed. You ran out of time and missed the 5-minute grace period.",
@@ -1031,7 +1106,7 @@ export const uploadSubmissionByToken: RequestHandler = async (req, res, next) =>
 
     await submission.save();
 
-    mergeProctoringVideoForSubmission(submission._id.toString());
+    await closeAttemptSessions(submission._id.toString());
 
     const updatedSubmission = await SubmissionModel.findOne({ token }).populate(
       "assessmentId",
@@ -1116,6 +1191,7 @@ export const submitSubmission: RequestHandler = async (req, res, next) => {
 
     // Don't allow resubmission
     if (submission.status === "submitted") {
+      await closeAttemptSessions(submission._id.toString());
       return res
         .status(400)
         .json({ error: "Assessment has already been submitted" });
@@ -1127,6 +1203,7 @@ export const submitSubmission: RequestHandler = async (req, res, next) => {
     if (timing.elapsedMinutes !== null) {
       submission.timeSpent = Math.floor(timing.elapsedMinutes);
       if (timing.isBeyondGrace) {
+        await closeAttemptSessions(submission._id.toString());
         return res.status(400).json({
           error:
             "Submission window has closed. You ran out of time and missed the 5-minute grace period.",
@@ -1177,7 +1254,7 @@ export const submitSubmission: RequestHandler = async (req, res, next) => {
 
     await submission.save();
 
-    mergeProctoringVideoForSubmission(submission._id.toString());
+    await closeAttemptSessions(submission._id.toString());
 
     const updatedSubmission = await SubmissionModel.findById(id).populate(
       "assessmentId",
@@ -1472,429 +1549,8 @@ export const getPublicAssessment: RequestHandler = async (req, res, next) => {
   }
 };
 
-/**
- * Generate interview questions from a submitted repository by token (public endpoint - for candidates)
- */
-export const generateInterviewQuestionsByToken: RequestHandler = async (
-  req,
-  res,
-  next
-) => {
-  try {
-    const { token } = req.params;
 
-    // Get submission by token
-    const submission = await SubmissionModel.findOne({ token }).populate(
-      "assessmentId"
-    );
 
-    if (!submission) {
-      return res.status(404).json({ error: "Submission not found" });
-    }
-
-    // Verify submission is submitted
-    if (submission.status !== "submitted" && submission.status !== "expired") {
-      return res.status(400).json({
-        error:
-          "Interview questions can only be generated for submitted assessments",
-      });
-    }
-
-    // Verify submission has code source metadata (GitHub or uploaded archive)
-    const hasGithubSource =
-      submission.codeSource !== "upload" &&
-      submission.githubRepo?.owner &&
-      submission.githubRepo?.repo &&
-      submission.githubRepo?.pinnedCommitSha;
-    const hasUploadSource =
-      submission.codeSource === "upload" && submission.codeUpload?.storageKey;
-    if (!hasGithubSource && !hasUploadSource) {
-      return res.status(400).json({
-        error: "Code submission information not found for this submission",
-      });
-    }
-
-    const assessment = submission.assessmentId as any;
-
-    // Validate assessment description exists
-    if (!assessment.description || !assessment.description.trim()) {
-      return res.status(400).json({
-        error:
-          "Assessment description is required to generate interview questions",
-      });
-    }
-
-    // Interview pipeline is off unless explicitly enabled on the assessment
-    const isSmartInterviewerEnabled =
-      (assessment as any).isSmartInterviewerEnabled === true;
-
-    if (!isSmartInterviewerEnabled) {
-      return res.status(403).json({
-        error: "Smart AI Interviewer is disabled for this assessment",
-      });
-    }
-
-    // Generate interview questions using Pinecone retrieval
-    let validatedQuestions;
-    let retrievedChunkCount: number = 0;
-    let chunkPaths: string[] = [];
-
-    try {
-      console.log(
-        "🔄 [generateInterviewQuestionsByToken] Starting interview question generation with retrieval..."
-      );
-      const numQuestions = (assessment as any).numInterviewQuestions ?? 2;
-      const customInstructions = (assessment as any)
-        .interviewerCustomInstructions;
-      const result = await generateInterviewQuestionsFromRetrieval(
-        submission._id.toString(),
-        assessment.description,
-        numQuestions,
-        customInstructions
-      );
-      validatedQuestions = result.questions;
-      retrievedChunkCount = result.retrievedChunkCount;
-      chunkPaths = result.chunkPaths;
-      console.log(
-        `✅ [generateInterviewQuestionsByToken] Question generation completed. Received ${
-          validatedQuestions?.length || 0
-        } questions from ${retrievedChunkCount} code chunks`
-      );
-    } catch (error) {
-      console.error("Failed to generate interview questions:", error);
-
-      // Handle specific errors
-      if (error instanceof Error) {
-        if (
-          error.message === "Repo indexed but no relevant code chunks found"
-        ) {
-          return res.status(409).json({
-            error: error.message,
-          });
-        }
-        if (error.message.includes("Assessment description is required")) {
-          return res.status(400).json({
-            error: error.message,
-          });
-        }
-        if (error.message.includes("Repo not indexed yet")) {
-          return res.status(409).json({
-            error: error.message,
-          });
-        }
-      }
-
-      return res.status(500).json({
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to generate interview questions",
-      });
-    }
-
-    // Validate questions were generated
-    if (!validatedQuestions || validatedQuestions.length === 0) {
-      console.error(
-        "❌ [generateInterviewQuestionsByToken] No questions generated or questions array is empty"
-      );
-      return res.status(500).json({
-        error: "No interview questions were generated",
-      });
-    }
-
-    // Questions are already validated and in the correct format
-    // Add createdAt if not present
-    const questionsWithTimestamps = validatedQuestions.map((q) => ({
-      prompt: q.prompt,
-      anchors: q.anchors,
-      createdAt: new Date(),
-    }));
-
-    console.log(
-      `🔄 [generateInterviewQuestionsByToken] Saving ${questionsWithTimestamps.length} questions to submission ${submission._id}...`
-    );
-    submission.interviewQuestions = questionsWithTimestamps;
-    // Mark the array as modified to ensure Mongoose saves it
-    submission.markModified("interviewQuestions");
-
-    try {
-      await submission.save();
-      console.log(
-        `✅ [generateInterviewQuestionsByToken] Submission save completed`
-      );
-    } catch (saveError) {
-      console.error(
-        "❌ [generateInterviewQuestionsByToken] Failed to save submission:",
-        saveError
-      );
-      throw saveError;
-    }
-
-    // Verify the save by reloading
-    const savedSubmission = await SubmissionModel.findById(submission._id);
-    console.log(
-      `✅ [generateInterviewQuestionsByToken] Saved ${questionsWithTimestamps.length} interview questions to submission ${submission._id}`
-    );
-    console.log(
-      `   [generateInterviewQuestionsByToken] Verified: ${
-        savedSubmission?.interviewQuestions?.length || 0
-      } questions in database`
-    );
-
-    res.status(200).json({
-      questions: questionsWithTimestamps,
-      submissionId: submission._id.toString(),
-      candidateName: submission.candidateName,
-      retrievedChunkCount,
-      chunkPaths,
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Generate interview questions from a submitted repository (employer endpoint - auth required)
- */
-export const generateInterviewQuestions: RequestHandler = async (
-  req,
-  res,
-  next
-) => {
-  try {
-    const { uid } = req.body as { uid: string };
-    const { submissionId } = req.params;
-
-    // Get MongoDB user ID from Firebase UID
-    const userId = await getUserIdFromFirebaseUid(uid);
-
-    // Get submission and verify it belongs to user's assessment
-    const submission = await SubmissionModel.findById(submissionId).populate(
-      "assessmentId"
-    );
-
-    if (!submission) {
-      return res.status(404).json({ error: "Submission not found" });
-    }
-
-    const assessment = submission.assessmentId as any;
-
-    // Verify assessment belongs to user
-    if (assessment.userId.toString() !== userId) {
-      throw AuthError.INVALID_AUTH_TOKEN;
-    }
-
-    // Verify submission is submitted
-    if (submission.status !== "submitted" && submission.status !== "expired") {
-      return res.status(400).json({
-        error:
-          "Interview questions can only be generated for submitted assessments",
-      });
-    }
-
-    // Verify submission has code source metadata (GitHub or uploaded archive)
-    const hasGithubSource =
-      submission.codeSource !== "upload" &&
-      submission.githubRepo?.owner &&
-      submission.githubRepo?.repo &&
-      submission.githubRepo?.pinnedCommitSha;
-    const hasUploadSource =
-      submission.codeSource === "upload" && submission.codeUpload?.storageKey;
-    if (!hasGithubSource && !hasUploadSource) {
-      return res.status(400).json({
-        error: "Code submission information not found for this submission",
-      });
-    }
-
-    // Validate assessment description exists
-    if (!assessment.description || !assessment.description.trim()) {
-      return res.status(400).json({
-        error:
-          "Assessment description is required to generate interview questions",
-      });
-    }
-
-    const isSmartInterviewerEnabled =
-      (assessment as any).isSmartInterviewerEnabled === true;
-
-    if (!isSmartInterviewerEnabled) {
-      return res.status(403).json({
-        error: "Smart AI Interviewer is disabled for this assessment",
-      });
-    }
-
-    // Generate interview questions using Pinecone retrieval
-    let validatedQuestions;
-    let retrievedChunkCount: number = 0;
-    let chunkPaths: string[] = [];
-
-    try {
-      console.log(
-        "🔄 [generateInterviewQuestions] Starting interview question generation with retrieval..."
-      );
-      const numQuestions = (assessment as any).numInterviewQuestions ?? 2;
-      const customInstructions = (assessment as any)
-        .interviewerCustomInstructions;
-      const result = await generateInterviewQuestionsFromRetrieval(
-        submissionId,
-        assessment.description,
-        numQuestions,
-        customInstructions
-      );
-      validatedQuestions = result.questions;
-      retrievedChunkCount = result.retrievedChunkCount;
-      chunkPaths = result.chunkPaths;
-      console.log(
-        `✅ [generateInterviewQuestions] Question generation completed. Received ${
-          validatedQuestions?.length || 0
-        } questions from ${retrievedChunkCount} code chunks`
-      );
-    } catch (error) {
-      console.error("Failed to generate interview questions:", error);
-
-      // Handle specific errors
-      if (error instanceof Error) {
-        if (
-          error.message === "Repo indexed but no relevant code chunks found"
-        ) {
-          return res.status(409).json({
-            error: error.message,
-          });
-        }
-        if (error.message.includes("Assessment description is required")) {
-          return res.status(400).json({
-            error: error.message,
-          });
-        }
-        if (error.message.includes("Repo not indexed yet")) {
-          return res.status(409).json({
-            error: error.message,
-          });
-        }
-      }
-
-      return res.status(500).json({
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to generate interview questions",
-      });
-    }
-
-    // Validate questions were generated
-    if (!validatedQuestions || validatedQuestions.length === 0) {
-      console.error(
-        "❌ [generateInterviewQuestions] No questions generated or questions array is empty"
-      );
-      return res.status(500).json({
-        error: "No interview questions were generated",
-      });
-    }
-
-    // Questions are already validated and in the correct format
-    // Add createdAt if not present
-    const questionsWithTimestamps = validatedQuestions.map((q) => ({
-      prompt: q.prompt,
-      anchors: q.anchors,
-      createdAt: new Date(),
-    }));
-
-    console.log(
-      `🔄 [generateInterviewQuestions] Saving ${questionsWithTimestamps.length} questions to submission ${submission._id}...`
-    );
-    submission.interviewQuestions = questionsWithTimestamps;
-    // Mark the array as modified to ensure Mongoose saves it
-    submission.markModified("interviewQuestions");
-
-    try {
-      await submission.save();
-      console.log(`✅ [generateInterviewQuestions] Submission save completed`);
-    } catch (saveError) {
-      console.error(
-        "❌ [generateInterviewQuestions] Failed to save submission:",
-        saveError
-      );
-      throw saveError;
-    }
-
-    // Verify the save by reloading
-    const savedSubmission = await SubmissionModel.findById(submission._id);
-    console.log(
-      `✅ [generateInterviewQuestions] Saved ${questionsWithTimestamps.length} interview questions to submission ${submission._id}`
-    );
-    console.log(
-      `   [generateInterviewQuestions] Verified: ${
-        savedSubmission?.interviewQuestions?.length || 0
-      } questions in database`
-    );
-
-    res.status(200).json({
-      questions: questionsWithTimestamps,
-      submissionId: submission._id.toString(),
-      candidateName: submission.candidateName,
-      retrievedChunkCount,
-      chunkPaths,
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Get interview agent prompt for a submission (public endpoint - auth disabled for testing)
- * Returns a formatted system prompt string for the voice interview agent
- */
-export const getInterviewAgentPrompt: RequestHandler = async (
-  req,
-  res,
-  next
-) => {
-  try {
-    const { submissionId } = req.params;
-
-    // Load the Submission
-    const submission = await SubmissionModel.findById(submissionId).populate(
-      "assessmentId"
-    );
-
-    if (!submission) {
-      return res.status(404).json({ error: "Submission not found" });
-    }
-
-    // Check if interview questions exist
-    if (
-      !submission.interviewQuestions ||
-      submission.interviewQuestions.length === 0
-    ) {
-      return res.status(409).json({
-        error: "Generate interview questions first",
-      });
-    }
-
-    // Extract question prompts and format as numbered list
-    const questionsList = submission.interviewQuestions
-      .map((q, index) => `${index + 1}. ${q.prompt}`)
-      .join("\n");
-
-    // Get custom instructions if available
-    const assessment = submission.assessmentId as any;
-    const customInstructions = assessment?.interviewerCustomInstructions;
-
-    // Build prompt using centralized prompt template
-    const prompt = PROMPT_INTERVIEW_AGENT.template(
-      submission.interviewQuestions.length,
-      questionsList,
-      customInstructions
-    );
-
-    res.status(200).json({
-      prompt,
-      questionCount: submission.interviewQuestions.length,
-    });
-  } catch (error) {
-    next(error);
-  }
-};
 
 /**
  * Index a submission's repository into Pinecone
@@ -1969,57 +1625,6 @@ export const getRepoIndexStatus: RequestHandler = async (req, res, next) => {
   }
 };
 
-/**
- * Update interview conversationId for a submission
- * PATCH /api/submissions/:submissionId/interview-conversation-id
- * Public endpoint - no auth required (called from frontend when interview starts)
- */
-export const updateInterviewConversationId: RequestHandler = async (
-  req,
-  res,
-  next
-) => {
-  try {
-    const { submissionId } = req.params;
-    const { conversationId } = req.body as { conversationId: string };
-
-    if (!conversationId) {
-      return res.status(400).json({ error: "conversationId is required" });
-    }
-
-    const submission = await SubmissionModel.findById(submissionId);
-    if (!submission) {
-      return res.status(404).json({ error: "Submission not found" });
-    }
-
-    // Initialize interview object if it doesn't exist
-    if (!submission.interview) {
-      (submission as any).interview = {};
-    }
-
-    // Update conversationId and status
-    (submission as any).interview.conversationId = conversationId;
-    (submission as any).interview.status = "in_progress";
-    (submission as any).interview.provider = "elevenlabs";
-    (submission as any).interview.startedAt = new Date();
-    (submission as any).interview.updatedAt = new Date();
-
-    submission.markModified("interview");
-    await submission.save();
-
-    console.log(
-      `✅ [updateInterviewConversationId] Stored conversationId ${conversationId} for submission ${submissionId}`
-    );
-
-    res.status(200).json({
-      message: "Conversation ID updated",
-      submissionId,
-      conversationId,
-    });
-  } catch (error) {
-    next(error);
-  }
-};
 
 /**
  * Search code chunks for a submission
@@ -2157,16 +1762,7 @@ export const optOutByToken: RequestHandler = async (req, res, next) => {
 
     await submission.save();
 
-    await ProctoringSessionModel.updateOne(
-      { submissionId: submission._id },
-      {
-        $set: {
-          status: "completed",
-          "stats.captureEndedAt": new Date(),
-        },
-      },
-    );
-    mergeProctoringVideoForSubmission(submission._id.toString());
+    await closeAttemptSessions(submission._id.toString());
 
     const updatedSubmission = await SubmissionModel.findById(
       submission._id

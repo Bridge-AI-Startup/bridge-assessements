@@ -1,22 +1,17 @@
 /**
  * P6 - Analysis workflows return to the recruiter.
- * Proves: chunk-based repo indexing (Pinecone), RAG interview-question
- * generation, and analysis fields surface back to the employer via the
- * submission record. Combined score signals are Screen (recording rubric) +
- * Behavioral (E2B) — the deprecated Trace/LLM-workflow scorer was removed.
+ * Proves: chunk-based repo indexing (Pinecone) and analysis fields surface
+ * back to the employer via the submission record. Combined score signals are
+ * Screen (recording rubric) + Behavioral (E2B) — the deprecated Trace/LLM-workflow
+ * scorer was removed. Post-submit voice interview generation is also removed.
  */
 
 import { expectOk } from "../lib/apiClient.js";
 import { BUDGETS } from "../lib/config.js";
 import { runProcess } from "../lib/runner.js";
-import {
-  directGenerateInterview,
-  directIndexRepo,
-} from "../lib/seed.js";
+import { directIndexRepo } from "../lib/seed.js";
 import type { SuiteState } from "../lib/state.js";
 import type { ProcessResult } from "../lib/types.js";
-
-const RUN_INTERVIEW_GEN = process.env.E2E_RUN_INTERVIEW_GEN !== "false";
 
 export function runP6AnalysisWorkflows(state: SuiteState): Promise<ProcessResult> {
   return runProcess(
@@ -24,7 +19,7 @@ export function runP6AnalysisWorkflows(state: SuiteState): Promise<ProcessResult
       id: "P6",
       title: "Analysis Workflows",
       description:
-        "Chunk-based repo indexing, RAG interview questions, and analysis fields surfaced to the recruiter.",
+        "Chunk-based repo indexing, and analysis fields surfaced to the recruiter.",
       scriptPath: "server/test/e2e/processes/06-analysis-workflows.ts",
     },
     async (ctx) => {
@@ -35,7 +30,7 @@ export function runP6AnalysisWorkflows(state: SuiteState): Promise<ProcessResult
       const submissionId = state.candidate.submissionId;
       ctx.blocked(
         "Employer analysis endpoints via authenticated API",
-        "index-repo / generate-interview require employer auth, which is blocked by the Firebase Admin credential issue (P1). Invoking the SAME service functions directly so the real analysis still runs against Pinecone/OpenAI."
+        "index-repo requires employer auth, which is blocked by the Firebase Admin credential issue (P1). Invoking the SAME service functions directly so the real analysis still runs against Pinecone/OpenAI."
       );
 
       const index = await ctx.step(
@@ -61,24 +56,6 @@ export function runP6AnalysisWorkflows(state: SuiteState): Promise<ProcessResult
         );
       });
 
-      if (RUN_INTERVIEW_GEN) {
-        await ctx.step(
-          "RAG interview questions (interviewGeneration.generateInterviewQuestionsFromRetrieval)",
-          async (ev) => {
-            const out = await directGenerateInterview(submissionId);
-            ev.json("questionCount", out.questions.length);
-            ev.json("retrievedChunkCount", out.retrievedChunkCount);
-            ev.json("sample", out.questions[0]);
-          },
-          BUDGETS.scoring
-        );
-      } else {
-        ctx.skip(
-          "RAG interview questions",
-          "Skipped: E2E_RUN_INTERVIEW_GEN=false"
-        );
-      }
-
       await ctx.step(
         "Analysis is readable by recruiter (GET /:id, public)",
         async (ev) => {
@@ -89,7 +66,6 @@ export function runP6AnalysisWorkflows(state: SuiteState): Promise<ProcessResult
             "hasEvaluationReport",
             Boolean((sub as any).evaluationReport)
           );
-          ev.json("interviewQuestionCount", sub.interviewQuestions?.length ?? 0);
           ev.json(
             "behavioralGradingStatus",
             sub.behavioralGradingStatus ?? null
@@ -120,7 +96,7 @@ export function runP6AnalysisWorkflows(state: SuiteState): Promise<ProcessResult
       });
 
       ctx.summary(
-        "Repo indexed into chunks, RAG interview questions generated, transcript available, and scoring endpoint functional; all surfaced via the submission record. Behavioral grading blocked (no E2B)."
+        "Repo indexed into chunks, transcript available, and scoring endpoint functional; all surfaced via the submission record. Behavioral grading blocked (no E2B)."
       );
     }
   );

@@ -25,6 +25,8 @@ const QUEUE_PATH = path.join(BRIDGE_DIR, "queue.jsonl");
 const MIRROR_PATH = path.join(BRIDGE_DIR, "sent.jsonl");
 const SEQ_PATH = path.join(BRIDGE_DIR, "seq");
 
+const { isSessionClosed, applyClosedResponse } = require("./sessionClosed");
+
 const SNAPSHOT_STAMP_PATH = path.join(BRIDGE_DIR, "last-snapshot");
 
 const REQUEST_TIMEOUT_MS = 4000;
@@ -353,13 +355,42 @@ async function post(config, route, body) {
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
+  const data = await res.json().catch(() => ({}));
+  applyClosedResponse(data);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json().catch(() => ({}));
+  return data;
+}
+
+/**
+ * Walk the project when `git status` is unavailable (unzipped starters are
+ * often not a git repo). Caps at MAX_SNAPSHOT_FILES; skips secrets / build dirs.
+ */
+function listProjectFiles(dir, prefix, acc) {
+  if (acc.length >= MAX_SNAPSHOT_FILES) return acc;
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return acc;
+  }
+  for (const ent of entries) {
+    if (acc.length >= MAX_SNAPSHOT_FILES) break;
+    const rel = prefix ? `${prefix}/${ent.name}` : ent.name;
+    if (shouldSkipPath(rel)) continue;
+    const full = path.join(dir, ent.name);
+    if (ent.isDirectory()) {
+      listProjectFiles(full, rel, acc);
+    } else if (ent.isFile()) {
+      acc.push(rel);
+    }
+  }
+  return acc;
 }
 
 /**
  * Files changed vs HEAD, so we also capture work the agent did not do —
  * hand edits, terminal-driven changes, anything outside the Write tool.
+ * Unzipped starters often have no git repo; fall back to a bounded walk.
  */
 function collectChangedFiles() {
   let names = [];
@@ -375,7 +406,7 @@ function collectChangedFiles() {
       .map((line) => line.slice(3).trim())
       .filter((p) => p && !shouldSkipPath(p));
   } catch {
-    return [];
+    names = listProjectFiles(process.cwd(), "", []);
   }
 
   const files = [];
@@ -415,6 +446,9 @@ async function sendSnapshot(config, reason) {
 
 async function main() {
   const eventName = process.argv[2] || "Unknown";
+  if (isSessionClosed()) {
+    bail("capture session already closed");
+  }
   const config = readConfig();
   if (!config?.captureToken || !config?.apiBase) {
     bail("no config — run `node .bridge/setup.js` first");

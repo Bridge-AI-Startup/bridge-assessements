@@ -7,7 +7,7 @@ import {
   WorkflowFileStateModel,
 } from "../../models/workflowCapture.js";
 import { searchCodeChunks } from "../repoRetrieval.js";
-import { getFrameStorage } from "../capture/storage.js";
+import { readCompanionMessages } from "../companion/transcript.js";
 
 /**
  * Context center for the ElevenLabs voice agent.
@@ -88,54 +88,12 @@ async function buildAssessmentSection(submission: any): Promise<Section<any>> {
   };
 }
 
-/** Read the persisted companion (voice check-in) transcript from storage. */
-async function readCompanionMessages(
-  proctoringSessionId: string
-): Promise<Array<{ role: string; text: string; timestampMs: number }>> {
-  const storage = getFrameStorage();
-  let keys: string[] = [];
-  try {
-    keys = await storage.listKeys(`${proctoringSessionId}/companion`);
-  } catch {
-    return [];
-  }
-  // Voice chunks and other artifacts may live under the same prefix.
-  keys = keys.filter((k) => k.endsWith(".jsonl")).sort();
-
-  const messages: Array<{ role: string; text: string; timestampMs: number }> =
-    [];
-  for (const key of keys) {
-    try {
-      const content = await storage.getTranscript(key);
-      for (const line of content.split("\n").filter(Boolean)) {
-        try {
-          const msg = JSON.parse(line);
-          if (msg.role && msg.text != null && typeof msg.timestampMs === "number") {
-            messages.push({
-              role: msg.role,
-              text: String(msg.text),
-              timestampMs: msg.timestampMs,
-            });
-          }
-        } catch {
-          // skip malformed line
-        }
-      }
-    } catch {
-      // skip unreadable chunk
-    }
-  }
-  messages.sort((a, b) => a.timestampMs - b.timestampMs);
-  return messages;
-}
-
 async function buildConversationSection(
   submission: any
 ): Promise<Section<any>> {
   const out: {
     companion: Array<{ role: string; text: string; timestampMs: number }>;
-    interviewTurns: Array<{ role: string; text: string }>;
-  } = { companion: [], interviewTurns: [] };
+  } = { companion: [] };
 
   try {
     const proctoringSession = await ProctoringSessionModel.findOne({
@@ -157,20 +115,7 @@ async function buildConversationSection(
     // storage/db hiccup — leave companion empty
   }
 
-  const turns = submission.interview?.transcript?.turns;
-  if (Array.isArray(turns) && turns.length > 0) {
-    out.interviewTurns = turns
-      .slice(-CONVERSATION_MAX_MESSAGES)
-      .map((t: any) => ({
-        role: t.role,
-        text:
-          typeof t.text === "string" && t.text.length > CONVERSATION_MSG_MAX
-            ? t.text.slice(0, CONVERSATION_MSG_MAX)
-            : t.text,
-      }));
-  }
-
-  if (out.companion.length === 0 && out.interviewTurns.length === 0) {
+  if (out.companion.length === 0) {
     return { available: false, reason: "no_conversation_recorded_yet" };
   }
   return { available: true, ...out };
@@ -259,6 +204,12 @@ async function buildTimelineSection(submission: any): Promise<Section<any>> {
   }
 
   // Proctoring sidecar events (tab switches, focus changes, paste).
+  //
+  // These are gathered separately from the meaningful events above and merged
+  // last, on purpose. A blur/focus pair fires on every alt-tab, so on a real
+  // session they outnumber prompts several times over; merged naively they eat
+  // the entry cap and the agent ends up seeing window churn and no prompts.
+  const sidecarEntries: TimelineEntry[] = [];
   try {
     const proctoringSession = await ProctoringSessionModel.findOne({
       submissionId: submission._id,
@@ -267,8 +218,13 @@ async function buildTimelineSection(submission: any): Promise<Section<any>> {
       .lean();
     const sidecar = (proctoringSession as any)?.sidecarEvents;
     if (Array.isArray(sidecar)) {
-      for (const e of sidecar.slice(-TIMELINE_MAX_EVENTS)) {
-        entries.push({
+      let previousType: string | null = null;
+      for (const e of sidecar) {
+        // The client can emit the same transition twice; a repeated blur says
+        // nothing the first one didn't.
+        if (e.type === previousType) continue;
+        previousType = e.type;
+        sidecarEntries.push({
           at: e.timestamp,
           source: "proctoring",
           type: e.type,
@@ -279,17 +235,42 @@ async function buildTimelineSection(submission: any): Promise<Section<any>> {
     // ignore
   }
 
-  if (entries.length === 0) {
+  if (entries.length === 0 && sidecarEntries.length === 0) {
     return { available: false, reason: "no_timeline_recorded_yet" };
   }
 
-  entries.sort(
+  // Meaningful events get first claim on the budget; sidecar fills what is left.
+  const meaningful = entries
+    .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
+    .slice(-TIMELINE_MAX_EVENTS);
+  const sidecarBudget = Math.max(0, TIMELINE_MAX_EVENTS - meaningful.length);
+  const merged = [...meaningful, ...sidecarEntries.slice(-sidecarBudget)].sort(
     (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime()
   );
+
+  // Relative ages let the agent say "you just..." vs "earlier you..." without
+  // doing clock arithmetic on ISO strings mid-conversation.
+  const now = Date.now();
+  const withAge = merged.map((e) => ({
+    ...e,
+    secondsAgo: Math.max(0, Math.round((now - new Date(e.at).getTime()) / 1000)),
+  }));
+
   return {
     available: true,
     captureStatus,
-    events: entries.slice(-TIMELINE_MAX_EVENTS),
+    /** Most recent meaningful activity — what a proactive question should be about. */
+    latest: withAge
+      .filter((e) => e.source !== "proctoring")
+      .slice(-8)
+      .reverse(),
+    events: withAge,
+    counts: {
+      prompts: merged.filter((e) => e.type === "user_prompt").length,
+      toolCalls: merged.filter((e) => e.type === "tool_use").length,
+      windowSwitches: sidecarEntries.filter((e) => e.type === "window_blur")
+        .length,
+    },
   };
 }
 
@@ -467,24 +448,24 @@ async function buildCodeSection(
         .limit(LIVE_FILES_MAX)
         .select("path content sizeBytes updatedAt origin truncated")
         .lean();
-      if (files.length > 0) {
+      const withContent = (files as any[]).filter(
+        (f) => typeof f.content === "string" && f.content.length > 0
+      );
+      if (withContent.length > 0) {
         return {
           available: true,
           mode: "live_files",
-          files: (files as any[]).map((f) => ({
+          files: withContent.map((f) => ({
             path: f.path,
             updatedAt: f.updatedAt,
             origin: f.origin,
             sizeBytes: f.sizeBytes,
             content:
-              typeof f.content === "string" &&
               f.content.length > LIVE_FILE_CONTENT_MAX
                 ? f.content.slice(0, LIVE_FILE_CONTENT_MAX)
                 : f.content,
             truncated:
-              Boolean(f.truncated) ||
-              (typeof f.content === "string" &&
-                f.content.length > LIVE_FILE_CONTENT_MAX),
+              Boolean(f.truncated) || f.content.length > LIVE_FILE_CONTENT_MAX,
           })),
         };
       }

@@ -87,13 +87,21 @@ export async function getCaptureSessionBySubmission(
   }
 }
 
-/** Metrics + gradable timeline + episodes. Null when unavailable. */
+/**
+ * Metrics + gradable timeline + episodes. Null when unavailable.
+ *
+ * `episodes` costs an LLM call server-side, so it is opt-in per request: the
+ * dashboard reads the persisted `session.episodes` first and only passes
+ * `withEpisodes` when a reviewer explicitly asks to build them.
+ */
 export async function getWorkflowAnalysis(
   sessionId: string,
-  token: string
+  token: string,
+  options: { withEpisodes?: boolean } = {}
 ): Promise<WorkflowAnalysis | null> {
   try {
-    const response = await get(`${BASE}/sessions/${sessionId}/analysis`, {
+    const query = options.withEpisodes ? "?episodes=true" : "";
+    const response = await get(`${BASE}/sessions/${sessionId}/analysis${query}`, {
       Authorization: `Bearer ${token}`,
     });
     return (await response.json()) as WorkflowAnalysis;

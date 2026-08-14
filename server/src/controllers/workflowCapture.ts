@@ -22,6 +22,7 @@ import fsp from "fs/promises";
 
 import SubmissionModel from "../models/submission.js";
 import ProctoringSessionModel from "../models/proctoringSession.js";
+import { resolveEvidenceMode } from "../utils/evidenceMode.js";
 import { getFrameStorage } from "../services/capture/storage.js";
 import {
   buildPlaybackVideo,
@@ -35,10 +36,9 @@ import {
   videoOffsetForSessionSeconds,
 } from "../services/workflowCapture/timeline.js";
 import { classifyScreenGaps } from "../services/workflowCapture/screenContext.js";
-import {
-  groupIntoEpisodes,
-  computeAndStoreEpisodes,
-} from "../services/workflowCapture/episodes.js";
+import { computeAndStoreEpisodes } from "../services/workflowCapture/episodes.js";
+import { finalizeCaptureSession } from "../services/workflowCapture/finalize.js";
+import { fileUpdatesFromCaptureEvents } from "../services/workflowCapture/fileState.js";
 import { getUserIdFromFirebaseUid } from "../utils/auth.js";
 
 /** Per-event text cap. Long tool results get truncated, never dropped. */
@@ -94,13 +94,26 @@ export async function createCaptureSession(
     let submissionId: mongoose.Types.ObjectId | undefined;
     if (submissionToken) {
       const submission = await SubmissionModel.findOne({ token: submissionToken })
-        .select("_id candidateName")
+        .select("_id candidateName status")
         .lean();
       if (!submission) {
         res.status(404).json({ error: "submission_not_found" });
         return;
       }
       submissionId = (submission as any)._id;
+      const status = (submission as any).status;
+      if (
+        status === "submitted" ||
+        status === "expired" ||
+        status === "opted-out"
+      ) {
+        res.status(409).json({
+          error: "submission_closed",
+          closed: true,
+          message: "This assessment attempt has already ended.",
+        });
+        return;
+      }
     }
 
     const captureToken = crypto.randomBytes(32).toString("hex");
@@ -148,7 +161,11 @@ export async function ingestEvents(
     }
     if (session.status === "completed") {
       // Not an error: the kit may flush a late queue after submit.
-      res.status(202).json({ accepted: 0, note: "session_completed" });
+      res.status(202).json({
+        accepted: 0,
+        closed: true,
+        note: "session_completed",
+      });
       return;
     }
 
@@ -163,7 +180,6 @@ export async function ingestEvents(
     let promptCount = 0;
     let toolUseCount = 0;
     let payloadBytes = 0;
-    const fileUpdates: Array<{ path: string; content: string | null }> = [];
 
     for (const raw of batch) {
       const type = String(raw?.type || "") as WorkflowEventType;
@@ -191,20 +207,7 @@ export async function ingestEvents(
       if (type === "user_prompt") promptCount++;
       if (type === "tool_use") toolUseCount++;
 
-      // A Write tool call carries the full new contents — that is live code state.
       const toolName = raw?.toolName ? String(raw.toolName) : null;
-      if (type === "tool_use" && toolName && /^(Write|Edit|MultiEdit)$/i.test(toolName)) {
-        const input = (raw?.payload as any)?.tool_input ?? (raw?.payload as any)?.input;
-        const filePath = input?.file_path ?? input?.path;
-        if (typeof filePath === "string" && filePath.trim()) {
-          fileUpdates.push({
-            path: filePath.trim(),
-            // Edit/MultiEdit only carry a diff; leave content null and let the
-            // kit's snapshot fill it in rather than storing a partial file.
-            content: typeof input?.content === "string" ? input.content : null,
-          });
-        }
-      }
 
       docs.push({
         sessionId: session._id,
@@ -238,10 +241,17 @@ export async function ingestEvents(
       }
     }
 
-    await applyFileUpdates(session._id, fileUpdates, "agent");
+    // Live file state: Write contents, Read results, and Edit results with
+    // originalFile — never an Edit tool_use with no content (that upserted
+    // empty files and made the companion claim server.js was empty).
+    await applyFileUpdates(
+      session._id,
+      fileUpdatesFromCaptureEvents(batch),
+      "agent"
+    );
 
     await WorkflowCaptureSessionModel.updateOne(
-      { _id: session._id },
+      { _id: session._id, status: { $ne: "completed" } },
       {
         $set: { lastEventAt: new Date(), status: "active" },
         $inc: {
@@ -276,6 +286,11 @@ export async function ingestSnapshot(
       return;
     }
 
+    if (session.status === "completed") {
+      res.status(202).json({ files: 0, closed: true, note: "session_completed" });
+      return;
+    }
+
     const files = Array.isArray(req.body?.files) ? req.body.files : [];
     const updates = files
       .filter((f: any) => typeof f?.path === "string" && f.path.trim())
@@ -286,7 +301,7 @@ export async function ingestSnapshot(
 
     await applyFileUpdates(session._id, updates, "snapshot");
     await WorkflowCaptureSessionModel.updateOne(
-      { _id: session._id },
+      { _id: session._id, status: { $ne: "completed" } },
       { $set: { lastEventAt: new Date() } }
     );
 
@@ -301,27 +316,31 @@ async function applyFileUpdates(
   updates: Array<{ path: string; content: string | null }>,
   origin: "agent" | "snapshot"
 ): Promise<void> {
-  if (updates.length === 0) return;
-  const ops = updates.map(({ path, content }) => {
+  const ops = [];
+  for (const { path, content } of updates) {
+    // Skip null/empty — upserting those created phantom empty files (schema
+    // default sizeBytes: 0) that the companion then read as "the file is empty".
+    if (typeof content !== "string" || content.length === 0) continue;
     const { text, truncated } = truncate(content, MAX_FILE_CHARS);
-    const set: Record<string, unknown> = {
-      origin,
-      truncated,
-      updatedAt: new Date(),
-    };
-    // Never overwrite known contents with null (Edit events carry only a diff).
-    if (text != null) {
-      set.content = text;
-      set.sizeBytes = text.length;
-    }
-    return {
+    if (text == null || text.length === 0) continue;
+    ops.push({
       updateOne: {
         filter: { sessionId, path },
-        update: { $set: set, $inc: { revision: 1 } },
+        update: {
+          $set: {
+            origin,
+            truncated,
+            updatedAt: new Date(),
+            content: text,
+            sizeBytes: text.length,
+          },
+          $inc: { revision: 1 },
+        },
         upsert: true,
       },
-    };
-  });
+    });
+  }
+  if (ops.length === 0) return;
   await WorkflowFileStateModel.bulkWrite(ops, { ordered: false });
 }
 
@@ -343,6 +362,8 @@ export async function completeCaptureSession(
       { _id: session._id },
       { $set: { status: "completed", completedAt: new Date() } }
     );
+    // Episodes are an LLM call — don't block the kit's complete hook on them.
+    void finalizeCaptureSession(session._id.toString());
     res.status(200).json({ ok: true });
   } catch (error) {
     next(error);
@@ -469,10 +490,34 @@ export async function getCaptureSessionBySubmission(
   }
 }
 
+async function rejectKitRecorderOnBoth(
+  session: { submissionId?: unknown; submissionToken?: string },
+  res: Response
+): Promise<boolean> {
+  if (!session.submissionId && !session.submissionToken) return false;
+  const sub: any = session.submissionId
+    ? await SubmissionModel.findById(session.submissionId)
+        .populate("assessmentId")
+        .lean()
+    : await SubmissionModel.findOne({ token: session.submissionToken })
+        .populate("assessmentId")
+        .lean();
+  if (resolveEvidenceMode(sub?.assessmentId) !== "both") return false;
+  res.status(409).json({
+    error: "screen_recorded_by_proctoring",
+    message:
+      "This assessment already records the screen for review. Do not start a second capture-kit recording.",
+  });
+  return true;
+}
+
 /**
  * POST /api/workflow-capture/video/start   (Bearer capture token)
  * Marks the sync origin. Everything else about video alignment derives from
  * this instant, so it is recorded server-side rather than trusting the client.
+ *
+ * Refused on `both`: that assessment already records via proctoring. A second
+ * kit film would desync classification from the Review player.
  */
 export async function startVideo(
   req: Request,
@@ -485,6 +530,11 @@ export async function startVideo(
       res.status(401).json({ error: "invalid_capture_token" });
       return;
     }
+    if (session.status === "completed") {
+      res.status(409).json({ error: "Session is no longer recording" });
+      return;
+    }
+    if (await rejectKitRecorderOnBoth(session, res)) return;
     const startedAt = new Date();
     const segments = (session.video?.segments ?? []) as any[];
     const resuming = segments.length > 0;
@@ -504,7 +554,7 @@ export async function startVideo(
     if (!resuming) update["video.startedAt"] = startedAt;
 
     await WorkflowCaptureSessionModel.updateOne(
-      { _id: session._id },
+      { _id: session._id, status: { $ne: "completed" } },
       {
         $set: update,
         $push: {
@@ -539,6 +589,11 @@ export async function uploadVideoChunk(
       res.status(401).json({ error: "invalid_capture_token" });
       return;
     }
+    if (session.status === "completed") {
+      res.status(409).json({ error: "Session is no longer recording" });
+      return;
+    }
+    if (await rejectKitRecorderOnBoth(session, res)) return;
     if (!file) {
       res.status(400).json({ error: "no_chunk" });
       return;
@@ -550,7 +605,7 @@ export async function uploadVideoChunk(
     await getFrameStorage().storeVideoChunk(key, buffer);
 
     await WorkflowCaptureSessionModel.updateOne(
-      { _id: session._id },
+      { _id: session._id, status: { $ne: "completed" } },
       {
         $push: {
           "video.chunks": {
@@ -606,10 +661,10 @@ export async function stopVideo(
     );
     res.status(200).json({ ok: true, reason });
 
-    // Classify the recording automatically — there is nothing for a candidate
-    // (or a reviewer) to click. Deliberately after the response and unawaited:
-    // it merges + uploads the video and takes tens of seconds, and the client
-    // stopping a recording must not wait on any of that.
+    // Tester-only: unlinked sessions still classify the kit recording.
+    // Linked `both` attempts classify the proctoring WebM after merge.
+    if (session.submissionId) return;
+
     void (async () => {
       const id = session._id.toString();
       try {
@@ -621,8 +676,6 @@ export async function stopVideo(
         );
       }
       try {
-        // After classification, so episodes can describe what happened during
-        // stretches the hooks were silent for.
         await computeAndStoreEpisodes(id);
       } catch (err) {
         console.error(
@@ -750,14 +803,33 @@ export async function getSessionAnalysis(
     const startedAt = session.startedAt || session.createdAt;
     const metrics = computeMetrics(events as any, files as any, { startedAt });
     const timeline = buildTranscriptEvents(events as any, { startedAt });
-    const segments = (session.video?.segments ?? []) as any[];
+    const kitSegments = (session.video?.segments ?? []) as any[];
+    const videoSync = await resolveVideoSync(session.submissionId, events);
+    const segments = videoSync
+      ? [
+          {
+            wallStartedAt: videoSync.meta.captureStartedAt as Date,
+            wallEndedAt: (videoSync.meta.captureEndedAt as Date | null) ?? null,
+            videoOffsetStart: 0,
+          },
+        ]
+      : kitSegments;
 
     // Episodes cost an LLM call, so they are opt-in per request rather than
     // computed on every poll of this endpoint.
-    let episodes: unknown[] = [];
-    if (req.query.episodes === "true") {
+    //
+    // Reuse what is stored, and store what we build. This used to group into a
+    // local variable and throw it away: the reviewer paid for a fresh LLM call
+    // on every click, the summary vanished when the dialog closed, and — worse —
+    // the interviewer agent reads only the *persisted* episodes, so a reviewer
+    // could be looking at a summary the agent would never see. Persisting makes
+    // this button the repair path for a session whose close was interrupted.
+    let episodes: unknown[] = Array.isArray(session.episodes)
+      ? session.episodes
+      : [];
+    if (req.query.episodes === "true" && episodes.length === 0) {
       try {
-        episodes = await groupIntoEpisodes(events as any, { startedAt });
+        episodes = await computeAndStoreEpisodes(session._id.toString());
       } catch (err) {
         console.error(
           "[workflow-capture] episode grouping failed:",

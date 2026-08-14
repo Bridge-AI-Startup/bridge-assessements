@@ -28,6 +28,8 @@ const CONFIG_PATH = path.join(BRIDGE_DIR, "config.json");
 const STATE_PATH = path.join(BRIDGE_DIR, "cursor-state.json");
 const MIRROR_PATH = path.join(BRIDGE_DIR, "sent.jsonl");
 
+const { isSessionClosed, applyClosedResponse } = require("./sessionClosed");
+
 const MAX_TEXT = 20_000;
 const WATCH_INTERVAL_MS = 30_000;
 /** Most-recent conversations per workspace to scan. An assessment is a few. */
@@ -385,6 +387,10 @@ async function upload(config, events) {
     body: JSON.stringify({ events: payload }),
     signal: AbortSignal.timeout(15_000),
   });
+  const data = await res.json().catch(() => ({}));
+  if (applyClosedResponse(data)) {
+    throw new Error("session_closed");
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
   fs.writeFileSync(seqPath, String(seq));
@@ -399,6 +405,7 @@ async function upload(config, events) {
 }
 
 async function syncOnce(config) {
+  if (isSessionClosed()) return 0;
   const state = readState();
   const events = extractNewEvents(state.sentKeys || []);
   if (events.length === 0) return 0;
@@ -429,6 +436,10 @@ async function main() {
   if (args.includes("--watch")) {
     console.log("Watching Cursor chat store (Ctrl-C to stop)…");
     for (;;) {
+      if (isSessionClosed()) {
+        console.log("Capture session closed — stopping.");
+        return;
+      }
       try {
         const n = await syncOnce(config);
         if (n > 0) console.log(`  +${n} message(s)`);

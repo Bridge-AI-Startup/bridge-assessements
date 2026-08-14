@@ -51,6 +51,11 @@ export function actionTypeFor(e: WorkflowEventLike): ActionType {
       return "ai_prompt";
     case "assistant_message":
       return "ai_response";
+    // In-session voice companion. Both directions are "speaking": the
+    // companion's question is the context that makes the candidate's answer
+    // interpretable, and a criterion targeting speech wants the exchange.
+    case "voice_utterance":
+      return "speaking";
     case "screen_context": {
       const label = String((e.payload as any)?.label || "");
       if (label === "browser:search") return "searching";
@@ -96,6 +101,12 @@ function describe(e: WorkflowEventLike): string {
     case "screen_context": {
       const label = (e.payload as any)?.label || "screen";
       return `On screen (${label})${text ? `: ${text}` : ""}`;
+    }
+    case "voice_utterance": {
+      const role = (e.payload as any)?.role;
+      return role === "candidate"
+        ? `Candidate said aloud: "${text}"`
+        : `Voice companion asked: "${text}"`;
     }
     case "session_start":
       return "Session started";

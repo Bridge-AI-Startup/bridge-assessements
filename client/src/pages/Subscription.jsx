@@ -67,7 +67,7 @@ export default function Subscription() {
       features: [
         "1 assessment",
         "Unlimited candidate submissions",
-        "Full AI follow-up interview",
+        "In-session voice companion",
         "Assessment drop off analytics",
       ],
       cta: isCanceled
@@ -91,7 +91,7 @@ export default function Subscription() {
       features: [
         "Unlimited submissions",
         "Unlimited assessments",
-        "Full AI follow-up interview",
+        "In-session voice companion",
         "Assessment drop off analytics",
       ],
       cta: isCanceled

@@ -24,8 +24,6 @@ export type AIUseCase =
   | "assessment_generation" // Generate assessment components from job description
   | "starter_code_generation" // Generate starter code files for an assessment
   | "assessment_chat" // Chat with assessment AI assistant
-  | "interview_questions" // Generate interview questions from code
-  | "interview_summary" // Generate interview summary from transcript
   | "workflow_evaluation" // Behavioral grading LLM calls (planner/judge)
   | "transcript_evaluation" // Evaluate candidate screen recording transcripts
   | "suggest_criteria" // Suggest evaluation criteria from a job description
@@ -91,7 +89,6 @@ export function getModelForProvider(
     const openaiUseCaseDefaults: Partial<Record<AIUseCase, string>> = {
       // Terra = mid tier ($2/$12), successor to the gpt-4o quality slot
       assessment_generation: "gpt-5.6-terra",
-      interview_questions: "gpt-5.6-terra",
     };
     const useCaseDefault = openaiUseCaseDefaults[useCase];
     if (useCaseDefault) {
@@ -416,8 +413,6 @@ export function initializeLangChainAI(): void {
   const useCases: AIUseCase[] = [
     "assessment_generation",
     "assessment_chat",
-    "interview_questions",
-    "interview_summary",
     "workflow_evaluation",
     "transcript_evaluation",
     "suggest_criteria",

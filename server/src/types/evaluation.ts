@@ -1,5 +1,7 @@
-// The action types a candidate can perform during a screen recording session
-export type ActionType = "ai_prompt" | "ai_response" | "coding" | "testing" | "reading" | "searching" | "idle"
+// The action types a candidate can perform during a captured session.
+// "speaking" is the candidate talking out loud to the in-session voice
+// companion — the only stream that records reasoning they never typed.
+export type ActionType = "ai_prompt" | "ai_response" | "coding" | "testing" | "reading" | "searching" | "speaking" | "idle"
 
 // A single event from the Stage 1 VLM transcript
 export type TranscriptEvent = {

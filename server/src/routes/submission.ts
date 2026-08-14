@@ -4,10 +4,6 @@ import multer from "multer";
 import { DEFAULT_SUBMISSION_UPLOAD_MAX_BYTES } from "../config/uploadLimits.js";
 import * as SubmissionController from "../controllers/submission.js";
 import { verifyAuthToken } from "../validators/auth.js";
-import {
-  verifySubmissionAccess,
-  verifySubmissionToken,
-} from "../validators/submissionAuth.js";
 import * as SubmissionValidator from "../validators/submissionValidation.js";
 
 const router = express.Router();
@@ -81,32 +77,6 @@ router.delete(
   SubmissionController.deleteSubmission
 );
 
-// Employer endpoint - Generate interview questions for a submission (auth required)
-// Must come before /:id route
-router.post(
-  "/:submissionId/generate-interview",
-  [verifyAuthToken],
-  SubmissionController.generateInterviewQuestions
-);
-
-// Get interview agent prompt for a submission
-// Accessible by: employer (auth) or candidate (token)
-// Must come before /:id route
-router.get(
-  "/:submissionId/interview-agent-prompt",
-  verifySubmissionAccess,
-  SubmissionController.getInterviewAgentPrompt
-);
-
-// Update interview conversationId (called when interview starts)
-// Accessible by: employer (auth) or candidate (token)
-// Must come before /:id route
-router.patch(
-  "/:submissionId/interview-conversation-id",
-  verifySubmissionAccess,
-  SubmissionController.updateInterviewConversationId
-);
-
 // Employer endpoint - Index repository into Pinecone (auth required)
 // Must come before /:id route
 router.post(
@@ -151,12 +121,6 @@ router.post(
   "/token/:token/upload",
   archiveUpload,
   SubmissionController.uploadSubmissionByToken
-);
-
-// Public endpoint - Generate interview questions by token (for candidates)
-router.post(
-  "/token/:token/generate-interview",
-  SubmissionController.generateInterviewQuestionsByToken
 );
 
 // Public endpoint - Opt out of assessment by token

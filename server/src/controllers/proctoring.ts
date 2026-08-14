@@ -3,9 +3,7 @@ import { validationResult } from "express-validator";
 import crypto from "crypto";
 import mongoose from "mongoose";
 import path from "path";
-import { createReadStream } from "fs";
 import fs from "fs/promises";
-import { pipeline } from "stream/promises";
 import validationErrorParser from "../utils/validationErrorParser.js";
 import ProctoringSessionModel from "../models/proctoringSession.js";
 import SubmissionModel from "../models/submission.js";
@@ -16,11 +14,16 @@ import {
   storeVideoChunkFromFile,
 } from "../services/capture/frameStorage.js";
 import {
-  buildSessionWebmForPlayback,
   mergeSessionVideo,
   mergeSessionVideoInBackground,
 } from "../services/capture/sessionVideoMerge.js";
 import { getUserIdFromFirebaseUid } from "../utils/auth.js";
+import { resolveEvidenceMode } from "../utils/evidenceMode.js";
+import {
+  buildCompanionFirstMessage,
+  companionSetupPromptNotes,
+  type CompanionSetupFacts,
+} from "../services/companion/firstMessage.js";
 
 // POST /api/proctoring/sessions
 export const createSession: RequestHandler = async (req, res, next) => {
@@ -98,7 +101,9 @@ export const uploadFrame: RequestHandler = async (req, res, next) => {
     if (session.token !== token) {
       return res.status(403).json({ error: "Invalid token" });
     }
-    if (session.status !== "active") throw ProctoringError.SESSION_NOT_ACTIVE;
+    if (session.status !== "active") {
+      return res.status(409).json({ error: "Session is no longer recording" });
+    }
 
     const result = await storeFrame(sessionId, file.buffer, {
       screenIndex: parseInt(req.body.screenIndex) || 0,
@@ -136,6 +141,9 @@ export const recordSidecarEvents: RequestHandler = async (req, res, next) => {
     if (!session) throw ProctoringError.SESSION_NOT_FOUND;
     if (session.token !== token) {
       return res.status(403).json({ error: "Invalid token" });
+    }
+    if (session.status !== "active") {
+      return res.status(409).json({ error: "Session is no longer recording" });
     }
 
     const formatted = events.map(
@@ -369,6 +377,9 @@ export const uploadVideoChunk: RequestHandler = async (req, res, next) => {
     if (session.token !== token) {
       return res.status(403).json({ error: "Invalid token" });
     }
+    if (session.status !== "active") {
+      return res.status(409).json({ error: "Session is no longer recording" });
+    }
 
     const startRaw = req.body.startTime ?? Date.now();
     const endRaw = req.body.endTime;
@@ -404,68 +415,6 @@ export const uploadVideoChunk: RequestHandler = async (req, res, next) => {
     }
   }
 };
-
-/** Parse an HTTP Range header against a known total size. Returns null when absent/invalid. */
-function parseRangeHeader(
-  rangeHeader: string | undefined,
-  totalSize: number,
-): { start: number; end: number } | null {
-  if (!rangeHeader) return null;
-  const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
-  if (!m || (m[1] === "" && m[2] === "")) return null;
-  let start: number;
-  let end: number;
-  if (m[1] === "") {
-    // suffix range: last N bytes
-    const suffix = parseInt(m[2], 10);
-    if (suffix === 0) return null;
-    start = Math.max(0, totalSize - suffix);
-    end = totalSize - 1;
-  } else {
-    start = parseInt(m[1], 10);
-    end = m[2] === "" ? totalSize - 1 : parseInt(m[2], 10);
-  }
-  if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= totalSize) {
-    return null;
-  }
-  return { start, end: Math.min(end, totalSize - 1) };
-}
-
-/**
- * Stream a stored blob to the response with Range support so the HTML5 player
- * can seek without re-downloading the whole recording.
- */
-async function streamStoredVideoWithRange(
-  req: Parameters<RequestHandler>[0],
-  res: Parameters<RequestHandler>[1],
-  storage: import("../services/capture/storage.js").IFrameStorage,
-  key: string,
-  contentDisposition: string,
-): Promise<void> {
-  const totalSize = await storage.sizeOf(key);
-  res.setHeader("Content-Type", "video/webm");
-  res.setHeader("Content-Disposition", contentDisposition);
-  res.setHeader("Accept-Ranges", "bytes");
-
-  const range =
-    totalSize != null
-      ? parseRangeHeader(req.headers.range as string | undefined, totalSize)
-      : null;
-  if (range && totalSize != null) {
-    res.status(206);
-    res.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${totalSize}`);
-    res.setHeader("Content-Length", String(range.end - range.start + 1));
-    const stream = await storage.openReadStream(key, range);
-    await pipeline(stream, res);
-    return;
-  }
-
-  if (totalSize != null) {
-    res.setHeader("Content-Length", String(totalSize));
-  }
-  const stream = await storage.openReadStream(key);
-  await pipeline(stream, res);
-}
 
 /**
  * Make sure the session's eager merge has run (idempotent, slot-queued), then
@@ -513,10 +462,44 @@ async function ensureMergedPlayback(
   return null;
 }
 
+async function requireEmployerOwnsProctoringSession(
+  req: { user?: { uid?: string } },
+  res: { status: (code: number) => { json: (body: unknown) => unknown } },
+  sessionId: string,
+): Promise<{ session: InstanceType<typeof ProctoringSessionModel> } | null> {
+  const uid = req.user?.uid;
+  if (!uid) {
+    dv("[requireEmployerOwnsProctoringSession] no uid, returning 401");
+    res.status(401).json({ error: "Authentication required" });
+    return null;
+  }
+
+  const session = await ProctoringSessionModel.findById(sessionId);
+  if (!session) {
+    throw ProctoringError.SESSION_NOT_FOUND;
+  }
+
+  const submission = await SubmissionModel.findById(session.submissionId);
+  if (!submission) {
+    throw ProctoringError.SESSION_NOT_FOUND;
+  }
+  const assessment = await AssessmentModel.findById(submission.assessmentId);
+  if (!assessment) {
+    res.status(403).json({ error: "Access denied to this session" });
+    return null;
+  }
+  const userId = await getUserIdFromFirebaseUid(uid);
+  const assessmentOwnerId = assessment.userId?.toString?.() ?? assessment.userId;
+  if (!userId || assessmentOwnerId !== userId.toString()) {
+    res.status(403).json({ error: "Access denied to this session" });
+    return null;
+  }
+  return { session };
+}
+
 // GET /api/proctoring/sessions/:sessionId/playback-video
-// Returns re-muxed WebM for in-page playback (correct duration). Auth required; employer must own the submission.
-// `?format=url` returns JSON `{ url }` — a presigned direct URL on S3 (null on local storage),
-// which the client can put straight into a <video> src for native Range/seek support.
+// Video bytes are never proxied through this API. Auth required; employer must own the submission.
+// `?format=url` returns JSON `{ url }` — a presigned S3 GET. Without that query, 302 to the same URL.
 export const getPlaybackVideo: RequestHandler = async (req, res, next) => {
   const errors = validationResult(req);
   try {
@@ -524,82 +507,31 @@ export const getPlaybackVideo: RequestHandler = async (req, res, next) => {
 
     const { sessionId } = req.params;
     dv("[getPlaybackVideo] step 1: param sessionId =", sessionId, "type:", typeof sessionId);
-    const uid = (req as any).user?.uid;
-    if (!uid) {
-      dv("[getPlaybackVideo] step 2: no uid, returning 401");
-      return res.status(401).json({ error: "Authentication required" });
-    }
-
-    const session = await ProctoringSessionModel.findById(sessionId);
-    if (!session) {
-      dv("[getPlaybackVideo] step 3: session NOT FOUND for sessionId:", sessionId);
-      throw ProctoringError.SESSION_NOT_FOUND;
-    }
-    dv("[getPlaybackVideo] step 3: session FOUND. session.submissionId =", session.submissionId, "type:", typeof session.submissionId);
-
-    const submission = await SubmissionModel.findById(session.submissionId);
-    if (!submission) {
-      dv("[getPlaybackVideo] step 4: submission NOT FOUND for session.submissionId:", session.submissionId);
-      throw ProctoringError.SESSION_NOT_FOUND;
-    }
-    const assessment = await AssessmentModel.findById(submission.assessmentId);
-    if (!assessment) {
-      dv("[getPlaybackVideo] step 4: assessment NOT FOUND for submission.assessmentId:", submission.assessmentId);
-      return res.status(403).json({ error: "Access denied to this session" });
-    }
-    const userId = await getUserIdFromFirebaseUid(uid);
-    const assessmentOwnerId = assessment.userId?.toString?.() ?? assessment.userId;
-    dv("[getPlaybackVideo] step 4: assessment.userId =", assessment.userId, "current userId =", userId, "match =", assessmentOwnerId === userId?.toString());
-    if (!userId || assessmentOwnerId !== userId.toString()) {
-      dv("[getPlaybackVideo] step 4: access DENIED (userId mismatch), returning 403");
-      return res.status(403).json({ error: "Access denied to this session" });
-    }
+    const owned = await requireEmployerOwnsProctoringSession(req as any, res, sessionId);
+    if (!owned) return;
 
     const { getFrameStorage } = await import("../services/capture/storage.js");
     const storage = getFrameStorage();
 
     const mergedKey = await ensureMergedPlayback(sessionId, storage);
+    if (!mergedKey) {
+      dv("[getPlaybackVideo] step 5: no merged playback key");
+      return res.status(404).json({ error: "Video is not ready for playback" });
+    }
+
+    const url = await storage.getSignedDownloadUrl(mergedKey);
+    dv("[getPlaybackVideo] step 5: mergedKey =", mergedKey, "presigned =", url != null);
+    if (!url) {
+      return res.status(503).json({
+        error: "Direct S3 playback URL unavailable. Video is not proxied through this API.",
+        url: null,
+      });
+    }
 
     if (req.query.format === "url") {
-      const url = mergedKey ? await storage.getSignedDownloadUrl(mergedKey) : null;
-      dv("[getPlaybackVideo] format=url: mergedKey =", mergedKey, "presigned =", url != null);
       return res.json({ url });
     }
-
-    if (mergedKey) {
-      dv("[getPlaybackVideo] step 5: streaming merged file key =", mergedKey);
-      await streamStoredVideoWithRange(req, res, storage, mergedKey, "inline");
-      return;
-    }
-
-    dv("[getPlaybackVideo] step 5: merge unavailable, calling buildSessionWebmForPlayback");
-    const result = await buildSessionWebmForPlayback(sessionId, session, storage);
-    if (!result) {
-      dv("[getPlaybackVideo] step 6: buildSessionWebmForPlayback returned null, returning 404");
-      return res.status(404).json({ error: "No video chunks found for this session" });
-    }
-    try {
-      const st = await fs.stat(result.filePath);
-      dv("[getPlaybackVideo] step 6: streaming file bytes =", st.size, "remuxed =", result.remuxed);
-      res.setHeader("Content-Type", "video/webm");
-      res.setHeader("Content-Disposition", "inline");
-      res.setHeader("Accept-Ranges", "bytes");
-      const range = parseRangeHeader(req.headers.range as string | undefined, st.size);
-      if (range) {
-        res.status(206);
-        res.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${st.size}`);
-        res.setHeader("Content-Length", String(range.end - range.start + 1));
-        await pipeline(
-          createReadStream(result.filePath, { start: range.start, end: range.end }),
-          res,
-        );
-      } else {
-        res.setHeader("Content-Length", String(st.size));
-        await pipeline(createReadStream(result.filePath), res);
-      }
-    } finally {
-      await result.cleanup();
-    }
+    return res.redirect(302, url);
   } catch (error) {
     dv("[getPlaybackVideo] CAUGHT ERROR:", (error as Error)?.message ?? error);
     next(error);
@@ -607,56 +539,39 @@ export const getPlaybackVideo: RequestHandler = async (req, res, next) => {
 };
 
 // GET /api/proctoring/sessions/:sessionId/download-video
-// Returns re-muxed WebM for the session (screen 0) so downloaded file has correct duration. Same pipeline as playback.
-// `?format=url` returns JSON `{ url }` — a presigned S3 URL with attachment disposition (null on local storage).
+// Same as playback: S3 only, auth + ownership required. `?format=url` returns JSON `{ url }`; otherwise 302.
 export const downloadSessionVideo: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
   try {
+    validationErrorParser(errors);
+
     const { sessionId } = req.params;
+    const owned = await requireEmployerOwnsProctoringSession(req as any, res, sessionId);
+    if (!owned) return;
+
     const { getFrameStorage } = await import("../services/capture/storage.js");
     const storage = getFrameStorage();
 
-    const session = await ProctoringSessionModel.findById(sessionId);
-    if (!session) throw ProctoringError.SESSION_NOT_FOUND;
-
     const filename = `proctoring-${sessionId}.webm`;
     const mergedKey = await ensureMergedPlayback(sessionId, storage);
+    if (!mergedKey) {
+      return res.status(404).json({ error: "Video is not ready for download" });
+    }
+
+    const url = await storage.getSignedDownloadUrl(mergedKey, {
+      downloadFilename: filename,
+    });
+    if (!url) {
+      return res.status(503).json({
+        error: "Direct S3 download URL unavailable. Video is not proxied through this API.",
+        url: null,
+      });
+    }
 
     if (req.query.format === "url") {
-      const url = mergedKey
-        ? await storage.getSignedDownloadUrl(mergedKey, { downloadFilename: filename })
-        : null;
       return res.json({ url });
     }
-
-    if (mergedKey) {
-      await streamStoredVideoWithRange(
-        req,
-        res,
-        storage,
-        mergedKey,
-        `attachment; filename="${filename}"`
-      );
-      return;
-    }
-
-    const result = await buildSessionWebmForPlayback(sessionId, session, storage);
-
-    if (!result) {
-      return res.status(404).json({ error: "No video chunks found for this session" });
-    }
-
-    try {
-      const st = await fs.stat(result.filePath);
-      res.setHeader("Content-Type", "video/webm");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${filename}"`
-      );
-      res.setHeader("Content-Length", String(st.size));
-      await pipeline(createReadStream(result.filePath), res);
-    } finally {
-      await result.cleanup();
-    }
+    return res.redirect(302, url);
   } catch (error) {
     next(error);
   }
@@ -973,20 +888,48 @@ export const interpretRawTranscript: RequestHandler = async (
  * narrate their thinking. Deliberately near-silent — it never gives solutions, hints,
  * or code, so it captures reasoning without changing the difficulty of the assessment.
  */
-const COMPANION_PROMPT_BASE = `You are a pair-programming companion during a coding assessment. Your only goal is to listen while the candidate explains their thought process.
+const COMPANION_PROMPT_BASE = `You are a pair-programming companion sitting alongside a candidate during a coding assessment. Your job is to draw out their reasoning — why they are making the choices they are making — so their thinking is captured alongside their code.
 
-You have already introduced yourself once. Do NOT repeat that introduction. Do NOT ask if they are still there, and do not check in on your own — only speak when spoken to.
+You have already introduced yourself and walked them through the setup steps for this assessment. Do not repeat that briefing unless they ask what to do first.
 
-When the candidate says something, briefly acknowledge it. Ask at most one short follow-up question, and only when it would genuinely help them articulate their reasoning.
+## You can see what they are doing
 
-Do NOT give solutions, hints, code, debugging help, or opinions about their approach. If they ask for help, say once that you're only here to listen, then stay quiet.
+You have a tool, \`get_candidate_context\`. Call it with topics ["timeline"] to see their recent activity: the prompts they sent their AI assistant, the commands and file edits that followed, and when each happened.
 
-If the tool \`get_candidate_context\` is available, you may call it silently — with topics ["episodes"] or ["timeline"] — so a follow-up is about what they are actually working on. Rules for it: never request the "code" topic (seeing their code makes it far too easy to slip into hinting), never read tool output aloud, never mention that you have context about them, and never let it turn a question into a suggestion. If it returns nothing useful, just stay quiet.
+Read \`latest\` first — it is the most recent activity, newest first, with \`secondsAgo\` on each entry. That tells you what they are working on *right now*, which is what a good question is about.
 
-Be barely there: one-sentence responses, long silences in between.`;
+This is a LIVE session and the record fills up as they work, so:
+- The first minute or two may come back empty or say there is no capture session. That is normal, not a failure. Never conclude the tool is broken and stop using it.
+- Call it again and again as the session goes on — roughly every couple of minutes, and always before you ask a question. Stale context produces questions about work they finished ten minutes ago.
+- Do not request "episodes" (only computed after the session ends) or "code" (seeing their code makes it far too easy to slip into hinting).
 
-/** Spoken opener. The agent introduces itself once, then falls back to the prompt above. */
-const COMPANION_FIRST_MESSAGE = `You're about to start a coding problem as part of this assessment. I'm here as a quick check-in so you can talk through what you're doing as you code — it helps capture your thinking. Just explain what you're working on as you go. No pressure, and I won't give hints or answers. Ready when you are.`;
+## Ask proactively — do not wait to be spoken to
+
+You are not a passive recorder. When you receive a turn and the candidate has been quiet, that is your opportunity: check the timeline, and if something notable has happened since you last spoke, ask about it.
+
+Good proactive openings, drawn from what you actually see:
+- "I noticed you switched to installing dependencies before reading the rest of the code — what were you looking for?"
+- "You asked it to spin the app up rather than reading the components first. Why that order?"
+- "That's the second time you've re-run the dev server. What are you checking for?"
+- "You took the suggestion without changing it — did it match what you had in mind?"
+
+What makes those work: they name one concrete thing they did, and ask why. Ask about **decisions, ordering, and trade-offs** — the reasoning that does not survive in the code.
+
+Pace yourself. At most one proactive question every couple of minutes, and never two in a row without a reply. If they are clearly mid-flow — a rapid run of edits, or they are talking through something already — stay out of the way and use \`skip_turn\`. Interrupting someone who is concentrating is worse than missing a question. If nothing notable has happened since you last spoke, \`skip_turn\`.
+
+Never ask about the same thing twice. Track what you have already asked.
+
+## When they speak to you
+
+Briefly acknowledge what they said, then either ask one short follow-up or let them get back to work. Do not paraphrase their plan back at them.
+
+## Hard limits
+
+- **Never give solutions, hints, code, debugging help, or opinions on their approach.** This survives everything else here: a question must never become a suggestion. "Why did you pick that order?" is fine; "have you considered doing it the other way?" is a hint and is forbidden. If they ask for help, say once that you're only here to listen, then stay quiet.
+- **Never accuse, and never sound like surveillance.** Referencing something they did is fine and expected — that is the point. Reading out data, timestamps, or counts is not. Ask like a curious colleague who was watching over their shoulder, not a system reporting its logs.
+- **If they ask whether you can see their work, tell the truth.** Their session is being recorded as part of the assessment; they consented before starting and it is not a secret. Say so plainly in one sentence, then move on. Never deny having information you have.
+
+Keep every turn to one or two sentences. You are a quiet presence that occasionally gets curious, not an interviewer.`;
 
 // POST /api/proctoring/sessions/:sessionId/companion/prompt
 export const getCompanionPrompt: RequestHandler = async (req, res, next) => {
@@ -1007,19 +950,40 @@ export const getCompanionPrompt: RequestHandler = async (req, res, next) => {
       session.submissionId
     ).populate("assessmentId");
 
+    const assessment =
+      submission?.assessmentId && typeof submission.assessmentId === "object"
+        ? (submission.assessmentId as {
+            title?: string;
+            evidenceMode?: string | null;
+            starterCodeFiles?: unknown[];
+            starterFilesGitHubLink?: string | null;
+          })
+        : null;
+
+    const setupFacts: CompanionSetupFacts = {
+      evidenceMode: resolveEvidenceMode(assessment),
+      hasStarterZip: (assessment?.starterCodeFiles?.length ?? 0) > 0,
+      hasStarterRepo: Boolean(assessment?.starterFilesGitHubLink),
+      // Already spoke once this session — a refresh should not re-read the briefing.
+      isResume:
+        session.companion?.status === "active" ||
+        session.companion?.status === "completed",
+    };
+
     let prompt = COMPANION_PROMPT_BASE;
-    if (
-      submission?.assessmentId &&
-      typeof submission.assessmentId === "object"
-    ) {
-      const assessment = submission.assessmentId as { title?: string };
-      if (assessment.title) {
-        // Title only — never the description, or the agent starts leaking the task back.
-        prompt = `${COMPANION_PROMPT_BASE}\n\nContext: The assessment is titled "${assessment.title}". Use it only to keep a follow-up question relevant; never hint at how to solve the task.`;
-      }
+    const setupNotes = companionSetupPromptNotes(setupFacts);
+    if (setupNotes) {
+      prompt = `${prompt}\n\n${setupNotes}`;
+    }
+    if (assessment?.title) {
+      // Title only — never the description, or the agent starts leaking the task back.
+      prompt = `${prompt}\n\nContext: The assessment is titled "${assessment.title}". Use it only to keep a follow-up question relevant; never hint at how to solve the task.`;
     }
 
-    res.json({ prompt, firstMessage: COMPANION_FIRST_MESSAGE });
+    res.json({
+      prompt,
+      firstMessage: buildCompanionFirstMessage(setupFacts),
+    });
   } catch (error) {
     next(error);
   }

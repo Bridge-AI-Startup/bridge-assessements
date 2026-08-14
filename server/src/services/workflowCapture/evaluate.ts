@@ -24,6 +24,8 @@ import type { TranscriptEvent } from "../../types/evaluation.js";
 import { buildTranscriptEvents } from "./timeline.js";
 import { computeMetrics } from "./metrics.js";
 import { validateAllEvidence } from "./evidenceValidator.js";
+import { getVoiceEventsForSubmission } from "../companion/transcript.js";
+import { assessCommunication } from "../evaluation/communication.js";
 import { logTs } from "../../ai/transcript/logger.js";
 
 /**
@@ -196,13 +198,59 @@ export async function evaluateWorkflowSession(
     .select("path sizeBytes origin")
     .lean();
 
+  // Voice: what the candidate said aloud to the in-session companion. Merged
+  // into the same timeline so the judge sees "said X" beside "did Y" — spoken
+  // intent is evidence exactly like a prompt, and citing it works the same way.
+  // Fail-soft by construction: no proctoring session or no speech → [].
+  let submissionId: string | null = session.submissionId
+    ? String(session.submissionId)
+    : null;
+  if (!submissionId && session.submissionToken) {
+    const sub: any = await SubmissionModel.findOne({
+      token: session.submissionToken,
+    })
+      .select("_id")
+      .lean();
+    submissionId = sub ? String(sub._id) : null;
+  }
+  const voiceEvents = submissionId
+    ? await getVoiceEventsForSubmission(submissionId)
+    : [];
+
   const startedAt = session.startedAt || session.createdAt;
-  const timeline = buildTranscriptEvents(events as any, { startedAt });
+  const merged = [...(events as any[]), ...voiceEvents].sort(
+    (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime()
+  );
+  const timeline = buildTranscriptEvents(merged as any, { startedAt });
+  // Metrics stay voice-free on purpose: they are the deterministic behavioural
+  // floor (reads, writes, tests), and speech volume must not move them.
   const metrics = computeMetrics(events as any, files as any, { startedAt });
 
   const report: any = await evaluateTranscript(timeline, criteria, {
     groundings: options?.groundings as any,
   });
+
+  // Communication is judged from the same merged timeline, but reported beside
+  // the score, never inside it — narration volume is temperament, not skill.
+  const communication =
+    voiceEvents.length > 0
+      ? await assessCommunication(timeline)
+      : {
+          available: false,
+          reason: "no_voice_companion_transcript",
+          utteranceCount: 0,
+          wordCount: 0,
+          clarity: null,
+          summary: null,
+          highlights: [],
+          claimChecks: [],
+        };
+  if (communication.available) {
+    logTs(
+      "workflow-eval",
+      `communication: ${communication.utteranceCount} utterances, clarity=${communication.clarity}, ${communication.claimChecks.length} claim check(s)`
+    );
+  }
 
   const validated = validateReportEvidence(report, timeline);
   if (validated.reasons.length > 0) {
@@ -219,6 +267,9 @@ export async function evaluateWorkflowSession(
       // Deterministic counts travel with the report so a reviewer sees the
       // factual floor beside the judged scores.
       workflowMetrics: metrics,
+      // Spoken-reasoning assessment (voice companion). Supplementary — shown
+      // beside the score, deliberately excluded from any combined score.
+      communication,
       evidenceIntegrity: {
         citationsKept: validated.totalKept,
         citationsDropped: validated.totalDropped,

@@ -14,6 +14,7 @@ import {
   getCompanionPrompt,
   recordCompanionMessages,
   completeCompanion,
+  beaconCompanionShutdown,
 } from "@/api/proctoring";
 import { cn } from "@/lib/utils";
 
@@ -318,6 +319,30 @@ const CompanionPanel = forwardRef(function CompanionPanel(
       void endAndFlushRef.current?.();
     };
   }, []);
+
+  // Tab close / refresh: sendBeacon so the last lines and hang-up outlive the page.
+  useEffect(() => {
+    if (!sessionId || !token) return undefined;
+    const onPageHide = () => {
+      if (endedRef.current) return;
+      endedRef.current = true;
+      const buf = messageBufferRef.current;
+      messageBufferRef.current = [];
+      beaconCompanionShutdown(
+        sessionId,
+        token,
+        conversationRef.current?.getId?.() || undefined,
+        buf
+      );
+      try {
+        conversationRef.current?.endSession?.();
+      } catch {
+        /* already closed */
+      }
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, [sessionId, token]);
 
   if (!agentId) return null;
 

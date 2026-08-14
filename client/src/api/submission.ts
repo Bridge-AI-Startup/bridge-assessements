@@ -1,4 +1,4 @@
-import { APIResult, post, get, patch, del, handleAPIError } from "./requests";
+import { APIResult, post, get, del, handleAPIError } from "./requests";
 import { auth } from "@/firebase/firebase";
 import { API_BASE_URL } from "@/config/api";
 
@@ -44,38 +44,6 @@ export type Submission = {
   optedOut?: boolean;
   optOutReason?: string;
   optedOutAt?: string;
-  interviewQuestions?: Array<{
-    prompt: string;
-    anchors?: Array<{
-      path: string;
-      startLine: number;
-      endLine: number;
-    }>;
-    createdAt: string;
-  }>;
-  interview?: {
-    provider: string;
-    status: "not_started" | "in_progress" | "completed" | "failed";
-    conversationId?: string;
-    transcript: {
-      turns: Array<{
-        role: "agent" | "candidate";
-        text: string;
-        startMs?: number;
-        endMs?: number;
-      }>;
-    };
-    summary?: string;
-    analysis?: any; // Mixed type from provider
-    startedAt?: string;
-    completedAt?: string;
-    updatedAt?: string;
-    error?: {
-      message?: string;
-      at?: string;
-      raw?: any;
-    };
-  };
   timeRemaining?: number | null; // Minutes remaining (calculated server-side)
   createdAt: string;
   updatedAt: string;
@@ -401,102 +369,6 @@ export async function getSubmissionsForAssessment(
       success: false,
       error: result.error || "Failed to load submissions",
     };
-  } catch (error) {
-    return handleAPIError(error);
-  }
-}
-
-export type GenerateInterviewResponse = {
-  questions: string[];
-  submissionId: string;
-  candidateName?: string;
-};
-
-/**
- * Generate interview questions for a submission by token (candidate endpoint)
- */
-export async function generateInterviewQuestionsByToken(
-  submissionToken: string
-): Promise<APIResult<GenerateInterviewResponse>> {
-  try {
-    const response = await post(
-      `/submissions/token/${submissionToken}/generate-interview`,
-      {}
-    );
-
-    const result = await response.json();
-
-    if (result && result.questions && Array.isArray(result.questions)) {
-      return { success: true, data: result as GenerateInterviewResponse };
-    }
-
-    return {
-      success: false,
-      error: result.error || "Failed to generate interview questions",
-    };
-  } catch (error) {
-    return handleAPIError(error);
-  }
-}
-
-/**
- * Generate interview questions for a submission (employer endpoint)
- */
-export async function generateInterviewQuestions(
-  submissionId: string,
-  token?: string
-): Promise<APIResult<GenerateInterviewResponse>> {
-  try {
-    // Get Firebase ID token - use provided token or get from current user
-    let authToken = token;
-    if (!authToken) {
-      const user = auth.currentUser;
-      if (!user) {
-        return { success: false, error: "No user is currently signed in" };
-      }
-      authToken = await user.getIdToken();
-    }
-
-    const response = await post(
-      `/submissions/${submissionId}/generate-interview`,
-      {},
-      {
-        Authorization: `Bearer ${authToken}`,
-      }
-    );
-
-    const result = await response.json();
-
-    if (result && result.questions && Array.isArray(result.questions)) {
-      return { success: true, data: result as GenerateInterviewResponse };
-    }
-
-    return {
-      success: false,
-      error: result.error || "Failed to generate interview questions",
-    };
-  } catch (error) {
-    return handleAPIError(error);
-  }
-}
-
-/**
- * Update interview conversationId for a submission
- */
-export async function updateInterviewConversationId(
-  submissionId: string,
-  conversationId: string,
-  token?: string
-): Promise<APIResult<{ message: string }>> {
-  try {
-    // Include token in query params if provided (for candidate access)
-    const url = token
-      ? `/submissions/${submissionId}/interview-conversation-id?token=${token}`
-      : `/submissions/${submissionId}/interview-conversation-id`;
-    const response = await patch(url, { conversationId });
-
-    const result = await response.json();
-    return { success: true, data: result };
   } catch (error) {
     return handleAPIError(error);
   }

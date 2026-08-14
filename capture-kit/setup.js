@@ -202,8 +202,8 @@ async function main() {
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       const disabledHint =
-        res.status === 404 || res.status === 503
-          ? "\n  Capture routes are off on this server. For a local test: set WORKFLOW_CAPTURE_ENABLED=true in server/config.env, restart, and pass --local (or --api=http://localhost:5050)."
+        res.status === 404
+          ? "\n  Capture routes were not found. Check --api (or --local) points at the running server."
           : "";
       throw new Error(`HTTP ${res.status} ${body.slice(0, 200)}${disabledHint}`);
     }
@@ -232,9 +232,17 @@ async function main() {
     "cursor-adapter.js",
     "codex-adapter.js",
     "view.js",
+    "sessionClosed.js",
   ]) {
     fs.copyFileSync(path.join(__dirname, script), path.join(bridgeDir, script));
   }
+  // Hooks run `node .bridge/bridge-capture.js`. Same ESM trap as setup.js:
+  // without a nested package.json, a starter with `"type": "module"` treats
+  // these copies as ESM and every hook throws `require is not defined`.
+  fs.writeFileSync(
+    path.join(bridgeDir, "package.json"),
+    JSON.stringify({ type: "commonjs" }, null, 2) + "\n"
+  );
 
   // Codex hooks, best-effort. Codex documents the same event names as Claude
   // Code but its repo-local hook file is trust-gated and we have not verified

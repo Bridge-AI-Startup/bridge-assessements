@@ -15,6 +15,44 @@ export const HIGHLIGHT_CATEGORY_COLORS = {
 };
 
 /**
+ * Palette assigned per distinct category present on the timeline.
+ *
+ * The map above only matches four hardcoded demo labels. Real criteria are
+ * whole sentences ("Reads requirements and identifies MongoDB, Express, …"),
+ * so every highlight fell through to `default` and the entire timeline came out
+ * the same grey — nothing told a reviewer which band belonged to which
+ * criterion. Colour is therefore assigned by position in the distinct-category
+ * list: stable within a session, and never all-grey.
+ *
+ * Note these are Tailwind literals on purpose. This project's config remaps the
+ * cool ramps (blue/indigo/violet/cyan/teal) onto one warm neutral, so those
+ * would land back at indistinguishable grey; the hues below survive the remap.
+ */
+const HIGHLIGHT_PALETTE = [
+  { bg: "bg-amber-500", border: "border-amber-500", dot: "bg-amber-400" },
+  { bg: "bg-emerald-500", border: "border-emerald-500", dot: "bg-emerald-400" },
+  { bg: "bg-rose-500", border: "border-rose-500", dot: "bg-rose-400" },
+  { bg: "bg-orange-500", border: "border-orange-500", dot: "bg-orange-400" },
+  { bg: "bg-lime-500", border: "border-lime-500", dot: "bg-lime-400" },
+  { bg: "bg-pink-500", border: "border-pink-500", dot: "bg-pink-400" },
+  { bg: "bg-yellow-500", border: "border-yellow-500", dot: "bg-yellow-400" },
+  { bg: "bg-green-500", border: "border-green-500", dot: "bg-green-400" },
+];
+
+/** Short label for a criterion sentence — legends and chips need a few words, not a paragraph. */
+export function shortCategoryLabel(category, maxWords = 5) {
+  if (!category) return "Moment";
+  const words = String(category).trim().split(/\s+/);
+  if (words.length <= maxWords) return words.join(" ");
+  return `${words.slice(0, maxWords).join(" ")}…`;
+}
+
+/** True once the element can accept currentTime (HAVE_METADATA). */
+function videoHasMetadata(video) {
+  return Boolean(video && video.readyState >= 1);
+}
+
+/**
  * Video (or placeholder) with a timeline bar below it. Timeline shows highlights
  * that map to criteria or events; clicking a highlight seeks and shows detail.
  * Duration and current time come only from the HTML5 video element (loadedmetadata / timeupdate).
@@ -25,6 +63,9 @@ export const HIGHLIGHT_CATEGORY_COLORS = {
  * @param {number} [placeholderDurationSec] - Duration when no video (placeholder mode); default 1
  * @param {number} [durationHintSec] - Fallback duration from API when video element does not report valid duration (e.g. re-mux failed)
  * @param {Array<{ regionType: string, x: number, y: number, width: number, height: number, confidence?: number }>} [regions]
+ * @param {number} [seekToSec] - External seek request; applied after HAVE_METADATA, never before
+ * @param {number} [seekNonce] - Bump to re-trigger a seek to the same second
+ * @param {function} [onPlaybackError] - Signed URL expired or media failed; parent may refresh
  * @param {string} [className]
  */
 export default function VideoTimelineWithCriteria({
@@ -34,6 +75,9 @@ export default function VideoTimelineWithCriteria({
   placeholderDurationSec = 1,
   durationHintSec,
   regions = null,
+  seekToSec = null,
+  seekNonce = null,
+  onPlaybackError,
   className,
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -42,6 +86,20 @@ export default function VideoTimelineWithCriteria({
   const [videoDurationSec, setVideoDurationSec] = useState(null);
   const videoRef = useRef(null);
   const timelineRef = useRef(null);
+
+  // Distinct categories in first-appearance order → stable colour per criterion.
+  const categoryOrder = [
+    ...new Set(highlights.map((h) => h.category).filter(Boolean)),
+  ];
+  const colorsFor = (category) => {
+    if (!category) return HIGHLIGHT_CATEGORY_COLORS.default;
+    if (HIGHLIGHT_CATEGORY_COLORS[category]) {
+      return HIGHLIGHT_CATEGORY_COLORS[category];
+    }
+    const idx = categoryOrder.indexOf(category);
+    if (idx < 0) return HIGHLIGHT_CATEGORY_COLORS.default;
+    return HIGHLIGHT_PALETTE[idx % HIGHLIGHT_PALETTE.length];
+  };
 
   // Reset duration when video source changes
   useEffect(() => {
@@ -71,10 +129,51 @@ export default function VideoTimelineWithCriteria({
     }
   }, [videoUrl, isPlaying, effectiveDuration]);
 
-  // When user seeks, sync video currentTime (only for real video)
+  // External seek (a reviewer clicking a rubric chip or activity-timeline row).
+  // Held in a ref because the request usually arrives before the video has
+  // metadata. Setting currentTime before HAVE_METADATA is silently dropped
+  // and can leave the element blank (the Summary → evidence-chip race).
+  const pendingSeekRef = useRef(null);
+  const playAfterSeekRef = useRef(false);
+  const highlightsRef = useRef(highlights);
+  highlightsRef.current = highlights;
+
+  const flushPendingSeek = (video = videoRef.current) => {
+    const pending = pendingSeekRef.current;
+    if (pending == null || !Number.isFinite(pending) || !videoHasMetadata(video)) {
+      return false;
+    }
+    const d = video.duration;
+    const target =
+      Number.isFinite(d) && d > 0
+        ? Math.max(0, Math.min(pending, d))
+        : Math.max(0, pending);
+    pendingSeekRef.current = null;
+    const wantPlay = playAfterSeekRef.current;
+    playAfterSeekRef.current = false;
+    video.currentTime = target;
+    setCurrentSec(target);
+    if (wantPlay) {
+      const play = () => {
+        setIsPlaying(true);
+        video.play().catch(() => {});
+      };
+      video.addEventListener("seeked", play, { once: true });
+      // seeked does not fire if we were already at this time.
+      if (Math.abs(video.currentTime - target) < 0.05) play();
+    }
+    return true;
+  };
+
+  // Keep the element in sync with playhead state — but never before metadata,
+  // or a chip-click that set currentSec early will blank the player.
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !videoUrl) return;
+    if (!videoHasMetadata(video) || !videoUrl) return;
+    if (pendingSeekRef.current != null) {
+      flushPendingSeek(video);
+      return;
+    }
     if (Math.abs(video.currentTime - currentSec) > 0.25) {
       video.currentTime = currentSec;
     }
@@ -86,7 +185,7 @@ export default function VideoTimelineWithCriteria({
     if (!video || !videoUrl) return;
     if (isPlaying) {
       video.play().catch(() => {});
-    } else {
+    } else if (videoHasMetadata(video)) {
       video.pause();
     }
   }, [isPlaying, videoUrl]);
@@ -95,8 +194,46 @@ export default function VideoTimelineWithCriteria({
     const max = effectiveDuration;
     const clamped = Math.max(0, Math.min(sec, max));
     setCurrentSec(clamped);
-    if (videoRef.current) videoRef.current.currentTime = clamped;
+    const video = videoRef.current;
+    if (videoHasMetadata(video)) {
+      video.currentTime = clamped;
+    } else {
+      pendingSeekRef.current = clamped;
+    }
   };
+
+  const selectHighlightAt = (sec) => {
+    const list = highlightsRef.current || [];
+    let best = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < list.length; i++) {
+      const start = Number(list[i].startSec);
+      if (!Number.isFinite(start)) continue;
+      const endRaw = Number(list[i].endSec);
+      const end = Number.isFinite(endRaw) && endRaw > start ? endRaw : start;
+      if (sec >= start - 0.5 && sec <= end + 0.5) {
+        const dist = Math.abs(sec - start);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = i;
+        }
+      }
+    }
+    if (best >= 0) setSelectedHighlight(best);
+  };
+
+  useEffect(() => {
+    if (seekToSec == null || !Number.isFinite(seekToSec)) return;
+    pendingSeekRef.current = seekToSec;
+    playAfterSeekRef.current = true;
+    selectHighlightAt(seekToSec);
+    setCurrentSec(Math.max(0, seekToSec));
+    const video = videoRef.current;
+    if (!videoUrl || !videoHasMetadata(video)) return;
+    flushPendingSeek(video);
+    // `seekNonce` changes on every click so re-clicking the same moment still
+    // seeks (an identical `seekToSec` alone would not re-run this).
+  }, [seekToSec, seekNonce, videoUrl]);
 
   const formatTime = (sec) => {
     const m = Math.floor(sec / 60);
@@ -112,18 +249,31 @@ export default function VideoTimelineWithCriteria({
           <video
             ref={videoRef}
             src={videoUrl}
-            preload="metadata"
+            preload={seekToSec != null ? "auto" : "metadata"}
             className="w-full h-full object-contain"
             onLoadedMetadata={(e) => {
               const d = e.target.duration;
               if (Number.isFinite(d) && d > 0) setVideoDurationSec(d);
+              flushPendingSeek(e.target);
+            }}
+            onLoadedData={(e) => {
+              const d = e.target.duration;
+              if (Number.isFinite(d) && d > 0) setVideoDurationSec(d);
+              flushPendingSeek(e.target);
             }}
             onDurationChange={(e) => {
               const d = e.target.duration;
               if (Number.isFinite(d) && d > 0) setVideoDurationSec(d);
+              flushPendingSeek(e.target);
+            }}
+            onCanPlay={(e) => {
+              flushPendingSeek(e.target);
             }}
             onTimeUpdate={(e) => setCurrentSec(e.target.currentTime)}
             onEnded={() => setIsPlaying(false)}
+            onError={() => {
+              if (typeof onPlaybackError === "function") onPlaybackError();
+            }}
           />
         ) : placeholderImageUrl ? (
           <img
@@ -154,13 +304,24 @@ export default function VideoTimelineWithCriteria({
           {formatTime(currentSec)} / {formatTime(effectiveDuration)}
         </span>
         <div className="flex-1" />
-        <button
-          type="button"
-          className="p-2 rounded-lg hover:bg-gray-100 text-gray-500"
-          aria-label="Fullscreen"
-        >
-          <Maximize2 className="w-4 h-4" />
-        </button>
+        {videoUrl ? (
+          <button
+            type="button"
+            onClick={() => {
+              const el = videoRef.current;
+              if (!el) return;
+              const request =
+                el.requestFullscreen ||
+                el.webkitRequestFullscreen ||
+                el.webkitEnterFullscreen; // iOS Safari only exposes this one
+              if (request) void request.call(el);
+            }}
+            className="p-2 rounded-lg hover:bg-gray-100 text-gray-500"
+            aria-label="Fullscreen"
+          >
+            <Maximize2 className="w-4 h-4" />
+          </button>
+        ) : null}
       </div>
 
       {/* Timeline with highlights */}
@@ -182,7 +343,7 @@ export default function VideoTimelineWithCriteria({
             const endSec = h.endSec ?? h.startSec;
             const endPct = effectiveDuration > 0 ? (endSec / effectiveDuration) * 100 : 0;
             const isRange = (h.endSec != null && h.endSec > h.startSec);
-            const colors = HIGHLIGHT_CATEGORY_COLORS[h.category] ?? HIGHLIGHT_CATEGORY_COLORS.default;
+            const colors = colorsFor(h.category);
             const isSelected = selectedHighlight === i;
 
             return (
@@ -208,7 +369,7 @@ export default function VideoTimelineWithCriteria({
                   seekTo(h.startSec);
                   setSelectedHighlight(selectedHighlight === i ? null : i);
                 }}
-                title={h.label}
+                title={h.category ? `${h.category} — ${h.label}` : h.label}
               >
                 <span className={cn("block h-full min-w-full", colors.bg, isRange ? "opacity-80" : "opacity-100")} />
               </motion.button>
@@ -222,18 +383,31 @@ export default function VideoTimelineWithCriteria({
           />
         </div>
 
-        {/* Legend: categories */}
-        <div className="flex flex-wrap gap-3 mt-2 text-[10px] text-gray-500">
-          {[...new Set(highlights.map((h) => h.category).filter(Boolean))].map((cat) => {
-            const c = HIGHLIGHT_CATEGORY_COLORS[cat] ?? HIGHLIGHT_CATEGORY_COLORS.default;
-            return (
-              <span key={cat} className="flex items-center gap-1">
-                <span className={cn("w-2 h-2 rounded-full", c.dot)} />
-                {cat}
-              </span>
-            );
-          })}
-        </div>
+        {/* Legend: one entry per criterion actually on the timeline */}
+        {categoryOrder.length > 0 && (
+          <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-[10px] text-gray-500">
+            {categoryOrder.map((cat) => {
+              const c = colorsFor(cat);
+              const count = highlights.filter((h) => h.category === cat).length;
+              return (
+                <span
+                  key={cat}
+                  className="flex items-center gap-1"
+                  title={cat}
+                >
+                  <span className={cn("w-2 h-2 rounded-full shrink-0", c.dot)} />
+                  {shortCategoryLabel(cat)}
+                  <span className="text-gray-400">({count})</span>
+                </span>
+              );
+            })}
+          </div>
+        )}
+        {highlights.length > 0 && (
+          <p className="mt-1.5 text-[10px] text-gray-400">
+            Click a coloured band to jump the video to that moment.
+          </p>
+        )}
       </div>
 
       {/* Selected highlight detail panel */}
@@ -245,7 +419,13 @@ export default function VideoTimelineWithCriteria({
         >
           <div className="flex items-center gap-2 mb-1">
             <Tag className="w-3.5 h-3.5 text-gray-400" />
-            <span className="text-xs font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
+            <span
+              className={cn(
+                "w-2 h-2 rounded-full shrink-0",
+                colorsFor(highlights[selectedHighlight].category).dot
+              )}
+            />
+            <span className="text-xs font-medium text-gray-500">
               {highlights[selectedHighlight].category ?? "Moment"}
             </span>
             {highlights[selectedHighlight].score != null && (

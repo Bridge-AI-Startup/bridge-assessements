@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveSessionVideoChunkKeys } from "../../src/services/capture/sessionVideoMerge.js";
+import {
+  mergeLockIsLive,
+  resolveSessionVideoChunkKeys,
+} from "../../src/services/capture/sessionVideoMerge.js";
 
 const fakeStorage = {
   listKeys: async (prefix: string) => fakeStorage._keys.filter((k) => k.startsWith(prefix)),
@@ -39,5 +42,48 @@ describe("sessionVideoMerge.resolveSessionVideoChunkKeys", () => {
     fakeStorage._keys = [];
     const out = await resolveSessionVideoChunkKeys("none", null, fakeStorage as any);
     expect(out).toEqual([]);
+  });
+});
+
+describe("sessionVideoMerge.mergeLockIsLive", () => {
+  const now = Date.parse("2026-08-13T21:35:00.000Z");
+
+  it("is live when this process is merging the session", () => {
+    expect(
+      mergeLockIsLive(
+        { status: "merging", mergingStartedAt: new Date(now - 60_000) },
+        "s1",
+        now,
+        new Set(["s1"]),
+      ),
+    ).toBe(true);
+  });
+
+  it("is dead after a restart (not in-process, lock older than grace)", () => {
+    expect(
+      mergeLockIsLive(
+        { status: "merging", mergingStartedAt: new Date(now - 60_000) },
+        "s1",
+        now,
+        new Set(),
+      ),
+    ).toBe(false);
+  });
+
+  it("is live for a brand-new claim from another instance", () => {
+    expect(
+      mergeLockIsLive(
+        { status: "merging", mergingStartedAt: new Date(now - 5_000) },
+        "s1",
+        now,
+        new Set(),
+      ),
+    ).toBe(true);
+  });
+
+  it("is not a lock when status is not merging", () => {
+    expect(
+      mergeLockIsLive({ status: "ready" }, "s1", now, new Set()),
+    ).toBe(false);
   });
 });

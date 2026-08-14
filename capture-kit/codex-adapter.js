@@ -25,6 +25,8 @@ const STATE_PATH = path.join(BRIDGE_DIR, "codex-state.json");
 const MIRROR_PATH = path.join(BRIDGE_DIR, "sent.jsonl");
 const SEQ_PATH = path.join(BRIDGE_DIR, "seq");
 
+const { isSessionClosed, applyClosedResponse } = require("./sessionClosed");
+
 const MAX_TEXT = 20_000;
 const WATCH_INTERVAL_MS = 20_000;
 
@@ -199,6 +201,7 @@ function probe() {
 }
 
 async function importNew(config) {
+  if (isSessionClosed()) return 0;
   const here = process.cwd();
   const state = readState();
   const files = findRolloutFiles();
@@ -247,6 +250,8 @@ async function importNew(config) {
       body: JSON.stringify({ events }),
       signal: AbortSignal.timeout(20_000),
     });
+    const data = await res.json().catch(() => ({}));
+    if (applyClosedResponse(data)) break;
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
     state.imported[f.path] = recs.length;
@@ -287,6 +292,10 @@ async function main() {
   if (args.includes("--watch")) {
     console.log("Watching Codex sessions (Ctrl-C to stop)…");
     for (;;) {
+      if (isSessionClosed()) {
+        console.log("Capture session closed — stopping.");
+        return;
+      }
       try {
         const n = await importNew(config);
         if (n > 0) console.log(`  +${n} event(s)`);

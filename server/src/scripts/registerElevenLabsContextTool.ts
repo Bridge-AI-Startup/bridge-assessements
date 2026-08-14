@@ -7,11 +7,6 @@
  *   npx tsx src/scripts/registerElevenLabsContextTool.ts [--dry-run]
  *     [--agent=agent_xxx] [--url=https://.../api/agent-tools/context]
  *
- *   --sync-prompt
- *             also overwrite the agent's dashboard system prompt + opening line
- *             with the baseline interviewer prompt from src/prompts. Sessions
- *             that pass their own overrides are unaffected; this only fixes what
- *             a session WITHOUT overrides (and the dashboard test widget) gets.
  *   --local   point the tool at the ngrok tunnel currently forwarding to the
  *             local backend (auto-discovered from ngrok's API on :4040), so a
  *             live call hits this machine instead of Render. Free ngrok URLs
@@ -28,7 +23,6 @@
  * full-replace list, so we read-modify-write).
  */
 import "../config/loadEnv.js";
-import { PROMPT_INTERVIEW_AGENT } from "../prompts/index.js";
 
 const API_BASE = "https://api.elevenlabs.io";
 const TOOL_NAME = "get_candidate_context";
@@ -42,7 +36,6 @@ const agentSecret = process.env.AGENT_SECRET;
 
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
-const syncPrompt = args.includes("--sync-prompt");
 const useProd = args.includes("--prod");
 // --prod is the default, but naming it explicitly makes "switch back" obvious
 // and keeps a stray --local from silently winning.
@@ -263,30 +256,17 @@ async function main() {
   const alreadyAttached = toolId !== "<new>" && currentIds.includes(toolId);
   const nextIds = alreadyAttached ? currentIds : [...currentIds, toolId];
 
-  // 4. Optionally sync the baseline prompt so an un-overridden session behaves
-  //    like an interviewer instead of a generic assistant.
-  const agentPatch: Record<string, any> = {
-    conversation_config: { agent: { prompt: {} } },
-  };
-  if (!alreadyAttached) agentPatch.conversation_config.agent.prompt.tool_ids = nextIds;
-  if (syncPrompt) {
-    agentPatch.conversation_config.agent.prompt.prompt =
-      PROMPT_INTERVIEW_AGENT.template(0, "");
-    agentPatch.conversation_config.agent.first_message =
-      "Hi — thanks for making the time. I'd like to talk through the project you just built. Whenever you're ready, give me a quick overview of what you made.";
-  }
-
-  if (alreadyAttached && !syncPrompt) {
+  if (alreadyAttached) {
     console.log("✅ Tool already attached — nothing to do.");
     return;
   }
+
+  const agentPatch: Record<string, any> = {
+    conversation_config: { agent: { prompt: { tool_ids: nextIds } } },
+  };
+
   if (dryRun) {
-    if (!alreadyAttached)
-      console.log(`🤖 [dry-run] would attach tool → tool_ids ${JSON.stringify(nextIds)}`);
-    if (syncPrompt)
-      console.log(
-        `🤖 [dry-run] would overwrite system prompt (${agentPatch.conversation_config.agent.prompt.prompt.length} chars) + first message`
-      );
+    console.log(`🤖 [dry-run] would attach tool → tool_ids ${JSON.stringify(nextIds)}`);
     return;
   }
 
@@ -294,8 +274,7 @@ async function main() {
   if (patch.status < 200 || patch.status >= 300)
     fail("Update agent", patch.status, patch.json);
 
-  if (!alreadyAttached) console.log("🤖 Attached tool to agent");
-  if (syncPrompt) console.log("🤖 Synced baseline system prompt + opening line");
+  console.log("🤖 Attached tool to agent");
   console.log("✅ Done. The agent can now call get_candidate_context during calls.");
   console.log(
     "   Verify in the dashboard: Conversational AI → your agent → Tools."

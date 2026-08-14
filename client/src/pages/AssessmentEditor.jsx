@@ -15,7 +15,7 @@ import {
   ListChecks,
   Trash2,
   FileCode,
-  ClipboardList,
+  PlayCircle,
 } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -35,7 +35,7 @@ import {
   updateAssessment,
   chatWithAssessment,
 } from "@/api/assessment";
-import { suggestCriteria, validateCriterion } from "@/api/evaluation";
+import { validateCriterion } from "@/api/evaluation";
 import { generateShareLink, sendInvites } from "@/api/submission";
 import { auth } from "@/firebase/firebase";
 import { onAuthStateChanged } from "firebase/auth";
@@ -72,8 +72,8 @@ export default function AssessmentEditor() {
   const [emailSent, setEmailSent] = useState(false);
   const [contextSections, setContextSections] = useState([]);
   const [timeLimit, setTimeLimit] = useState({ hours: 4, minutes: 0 });
-  // "none" (default for new assessments) | "workflow" | "both" | legacy "screen"
-  const [evidenceMode, setEvidenceMode] = useState("none");
+  // "both" (default) | "none" | leftover "workflow" / "screen"
+  const [evidenceMode, setEvidenceMode] = useState("both");
   const [startDeadline, setStartDeadline] = useState(7);
   const [timeLimitSaveTimeout, setTimeLimitSaveTimeout] = useState(null);
   const [starterFilesGitHubLink, setStarterFilesGitHubLink] = useState("");
@@ -81,7 +81,6 @@ export default function AssessmentEditor() {
   const [editedStarterFilesLink, setEditedStarterFilesLink] = useState("");
   const [behavioralChecks, setBehavioralChecks] = useState([]);
   const [evaluationCriteria, setEvaluationCriteria] = useState([]);
-  const [isSuggestingCriteria, setIsSuggestingCriteria] = useState(false);
   /** Validation result per criterion text: { [criterion]: { valid: boolean, reason?: string } } */
   const [criteriaValidation, setCriteriaValidation] = useState({});
   const [starterCodeFiles, setStarterCodeFiles] = useState([]);
@@ -613,6 +612,17 @@ export default function AssessmentEditor() {
     );
   }
 
+  // What the evaluation criteria are actually judged against depends on how the
+  // session is observed — saying "screen recording" under workflow capture is
+  // what made these two lists hard to tell apart.
+  const observationIsOff = evidenceMode === "none";
+  const observedEvidenceLabel =
+    evidenceMode === "workflow"
+      ? "the candidate's AI prompts, replies, and code changes"
+      : evidenceMode === "both"
+        ? "the candidate's AI prompts, replies, and code changes (the screen recording is kept for playback)"
+        : "the candidate's screen recording";
+
   return (
     <div className="min-h-screen bg-[#FAF9F2]">
       <div className="max-w-7xl mx-auto px-6 py-8">
@@ -828,10 +838,12 @@ export default function AssessmentEditor() {
                     How we observe the session
                   </label>
                   <p className="text-xs text-gray-500 mb-3">
-                    Workflow capture records the candidate&apos;s AI chat and
-                    code changes — they run a short setup command and work in
-                    their own environment. Both also records the screen for
-                    playback. None turns observation off.
+                    Observation records the screen for you to watch and captures
+                    the candidate&apos;s AI prompts, replies, and code changes
+                    for scoring — they run a short setup command and work in
+                    their own environment. None turns that off. Evaluation
+                    criteria are judged against this record; behavioral checks
+                    still run on the submitted code either way.
                   </p>
                   <div className="space-y-2">
                     {[
@@ -844,20 +856,24 @@ export default function AssessmentEditor() {
                             },
                           ]
                         : []),
+                      ...(evidenceMode === "workflow"
+                        ? [
+                            {
+                              value: "workflow",
+                              label: "Workflow capture",
+                              hint: "Records AI prompts, replies, and code changes with no screen share. Previous option — pick another to change it.",
+                            },
+                          ]
+                        : []),
+                      {
+                        value: "both",
+                        label: "Observe session (default)",
+                        hint: "Records the screen for playback; scoring uses the captured AI workflow.",
+                      },
                       {
                         value: "none",
                         label: "None",
-                        hint: "No screen recording and no workflow capture.",
-                      },
-                      {
-                        value: "workflow",
-                        label: "Workflow capture",
-                        hint: "Records AI prompts, replies, and code changes. No screen share.",
-                      },
-                      {
-                        value: "both",
-                        label: "Both",
-                        hint: "Records the screen for playback; analysis comes from the workflow capture.",
+                        hint: "No screen recording and no capture of the candidate's AI workflow.",
                       },
                     ].map((option) => (
                       <label
@@ -1031,10 +1047,46 @@ export default function AssessmentEditor() {
               </div>
             </DocumentBlock>
 
+            {/* Scoring overview — the two lists below are easy to confuse, so
+                contrast them before either one is shown. */}
+            <div className="bg-white rounded-xl border border-gray-200 px-5 py-4">
+              <span className="eyebrow text-gray-500">Scoring</span>
+              <p className="text-sm text-gray-700 mt-1.5 mb-3">
+                Each submission is scored on two separate things.
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="flex gap-2.5">
+                  <PlayCircle className="w-4 h-4 text-gray-600 mt-0.5 shrink-0" />
+                  <span>
+                    <span className="text-sm font-medium text-gray-800 block">
+                      Behavioral checks — what they built
+                    </span>
+                    <span className="text-xs text-gray-500">
+                      We run their submitted code and check the product actually
+                      does these things.
+                    </span>
+                  </span>
+                </div>
+                <div className="flex gap-2.5">
+                  <ListChecks className="w-4 h-4 text-gray-600 mt-0.5 shrink-0" />
+                  <span>
+                    <span className="text-sm font-medium text-gray-800 block">
+                      Evaluation criteria — how they worked
+                    </span>
+                    <span className="text-xs text-gray-500">
+                      We judge the observed session — their process, not the
+                      finished product — against these.
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </div>
+
             {/* Behavioral checks (shared product bar for all candidates) */}
             <DocumentBlock
               title="Behavioral checks"
-              icon={ClipboardList}
+              subtitle="What the finished product must do"
+              icon={PlayCircle}
               isActive={false}
               isHighlighted={highlightedSection === "behavioralChecks"}
               onSelect={() => {}}
@@ -1044,9 +1096,11 @@ export default function AssessmentEditor() {
               <div className="space-y-4">
                 <p className="text-xs text-gray-500">
                   Plain-language behaviors every submission on this assessment
-                  should satisfy (e.g. “User can add a note”). They are
-                  stack-agnostic—not tied to a specific API or file. Edit or add
-                  lines below, then save.
+                  should satisfy (e.g. “User can add a note”). We verify them by
+                  running the candidate&apos;s submitted code, so they say
+                  nothing about how the candidate got there — that&apos;s
+                  evaluation criteria below. Keep them stack-agnostic: not tied
+                  to a specific API or file. Edit or add lines below, then save.
                 </p>
                 {behavioralChecks.length === 0 ? (
                   <p className="text-sm text-gray-500 italic border border-dashed border-gray-200 rounded-lg px-3 py-4 bg-gray-50/80">
@@ -1122,9 +1176,10 @@ export default function AssessmentEditor() {
               </div>
             </DocumentBlock>
 
-            {/* Evaluation criteria (screen recording) */}
+            {/* Evaluation criteria (judged from the observed session) */}
             <DocumentBlock
               title="Evaluation criteria"
+              subtitle="How the candidate worked to get there"
               icon={ListChecks}
               isActive={false}
               isHighlighted={highlightedSection === "evaluationCriteria"}
@@ -1134,9 +1189,21 @@ export default function AssessmentEditor() {
             >
               <div className="space-y-4">
                 <p className="text-xs text-gray-500">
-                  Criteria used to evaluate the candidate's screen recording. Add,
-                  edit, or suggest from the project description.
+                  Criteria used to judge {observedEvidenceLabel} — the process,
+                  not whether the finished product works (that&apos;s behavioral
+                  checks above). Add, edit, or suggest from the project
+                  description.
                 </p>
+                {observationIsOff && (
+                  <p className="text-xs text-amber-700 border border-amber-200 bg-amber-50 rounded-lg px-3 py-2">
+                    Observation is currently off, so these criteria aren&apos;t
+                    scored. Pick “Observe session” under{" "}
+                    <span className="font-medium">
+                      Time &amp; Deadlines → How we observe the session
+                    </span>{" "}
+                    to use them. Behavioral checks still run either way.
+                  </p>
+                )}
                 <div className="space-y-2">
                   {evaluationCriteria.map((criterion, idx) => {
                     const validation = criteriaValidation[criterion];
@@ -1199,30 +1266,6 @@ export default function AssessmentEditor() {
                   </Button>
                   <Button
                     type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={async () => {
-                      if (!assessmentData?.description) return;
-                      setIsSuggestingCriteria(true);
-                      try {
-                        const res = await suggestCriteria(
-                          assessmentData.description,
-                          await auth.currentUser?.getIdToken()
-                        );
-                        if (res.success && res.data?.suggested_criteria?.length) {
-                          setEvaluationCriteria(res.data.suggested_criteria);
-                        }
-                      } finally {
-                        setIsSuggestingCriteria(false);
-                      }
-                    }}
-                    disabled={!assessmentData?.description || isSuggestingCriteria}
-                    className="text-sm"
-                  >
-                    {isSuggestingCriteria ? "Suggesting…" : "Suggest from description"}
-                  </Button>
-                  <Button
-                    type="button"
                     size="sm"
                     onClick={async () => {
                       const criteria = evaluationCriteria
@@ -1232,7 +1275,9 @@ export default function AssessmentEditor() {
                       setEvaluationCriteria(criteria);
                       const token = await auth.currentUser?.getIdToken();
                       const results = await Promise.all(
-                        criteria.map((c) => validateCriterion(c, token))
+                        criteria.map((c) =>
+                          validateCriterion(c, token, evidenceMode)
+                        )
                       );
                       const nextValidation = {};
                       criteria.forEach((c, i) => {

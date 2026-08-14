@@ -18,7 +18,14 @@ export interface StarterFile {
   content: string;
 }
 
-/** Files the candidate needs. README included so the disclosure travels too. */
+/**
+ * Files the candidate needs. README included so the disclosure travels too.
+ *
+ * `package.json` is load-bearing: it pins `"type": "commonjs"`. Without it,
+ * `node capture-kit/setup.js` fails inside any starter whose root
+ * package.json has `"type": "module"` (Node then treats every `.js` file as
+ * ESM, and the kit's `require()` calls throw).
+ */
 const KIT_FILES = [
   "setup.js",
   "bridge-capture.js",
@@ -26,6 +33,8 @@ const KIT_FILES = [
   "codex-adapter.js",
   "view.js",
   "README.md",
+  "package.json",
+  "sessionClosed.js",
 ];
 
 function resolveKitDir(): string | null {

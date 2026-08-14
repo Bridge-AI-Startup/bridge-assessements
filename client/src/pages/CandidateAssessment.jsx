@@ -33,6 +33,9 @@ import {
   grantConsent,
   recordSidecarEvents,
   completeSession as completeProctoringSession,
+  beaconSidecarEvents,
+  beaconCompleteSession,
+  uploadVideoChunk,
 } from "@/api/proctoring";
 import useScreenshotCapture from "@/hooks/useScreenshotCapture";
 import useFrameUpload from "@/hooks/useFrameUpload";
@@ -42,7 +45,6 @@ import ProctoringCompanionNotch from "@/components/proctoring/ProctoringCompanio
 import { COMPANION_ENABLED } from "@/config/companion";
 import { API_BASE_URL } from "@/config/api";
 import { createVideoRecorder } from "@/lib/captureUtils";
-import { uploadVideoChunk } from "@/api/proctoring";
 import StarterCodeIDE from "@/components/StarterCodeIDE";
 import SubmissionFileDropzone from "@/components/assessment/SubmissionFileDropzone";
 import {
@@ -52,7 +54,7 @@ import {
   triggerBlobDownload,
 } from "@/lib/downloadStarterCode";
 
-const FINAL_SUBMISSION_GRACE_SECONDS = 5 * 60;
+const FINAL_SUBMISSION_GRACE_SECONDS = 5 * 60; // keep in lockstep with server FINAL_SUBMISSION_GRACE_MINUTES
 const CAPTURE_API_ORIGIN = API_BASE_URL.replace(/\/api\/?$/, "");
 
 function formatHms(totalSeconds) {
@@ -133,6 +135,9 @@ export default function CandidateAssessment() {
     evidenceMode === "workflow" || evidenceMode === "both";
   const usesScreenRecording =
     evidenceMode === "screen" || evidenceMode === "both";
+  // PNG frames only feed the OCR transcript (legacy `screen`). `both` keeps
+  // video + sidecar; skip the screenshot pipeline.
+  const usesFrameCapture = evidenceMode === "screen";
   const [captureCmdCopied, setCaptureCmdCopied] = useState(false);
   const starterZipUrlRef = useRef(null);
   const [proctoringEnabled, setProctoringEnabled] = useState(false);
@@ -144,9 +149,9 @@ export default function CandidateAssessment() {
   /** In-session voice companion; endAndFlush() must run before the session completes. */
   const companionRef = useRef(null);
 
-  // Screenshot capture (only when proctoring is active)
+  // Screenshot capture (legacy `screen` only — OCR transcript input)
   const { consumeFrames } = useScreenshotCapture(screenCapture.streams, {
-    enabled: proctoringEnabled && screenCapture.isSharing,
+    enabled: usesFrameCapture && proctoringEnabled && screenCapture.isSharing,
   });
 
   // Frame upload pipeline
@@ -154,7 +159,7 @@ export default function CandidateAssessment() {
     sessionId: proctoringSessionId,
     token,
     consumeFrames,
-    enabled: proctoringEnabled && !!proctoringSessionId,
+    enabled: usesFrameCapture && proctoringEnabled && !!proctoringSessionId,
   });
 
   // Frame dedup
@@ -169,9 +174,12 @@ export default function CandidateAssessment() {
   /** True when prompting because of page reload / remount (stream was never started this visit). */
   const [reshareIsResume, setReshareIsResume] = useState(false);
   const timeoutTriggeredRef = useRef(false);
-  const timeoutCleanupRunningRef = useRef(false);
+  const stopProctoringPromiseRef = useRef(null);
   const buzzerPlayedRef = useRef(false);
   const recordingOnlySubmitTriggeredRef = useRef(false);
+  const proctoringStoppedRef = useRef(false);
+  const timeRemainingRef = useRef(null);
+  const [recorderEpoch, setRecorderEpoch] = useState(0);
 
   // Video recording refs
   const videoRecordersRef = useRef([]);
@@ -288,7 +296,17 @@ export default function CandidateAssessment() {
     const syncTime = async () => {
       try {
         const result = await getSubmissionByToken(token);
-        if (result.success && result.data.timeRemaining !== null) {
+        if (!result.success) return;
+        const status = result.data.status;
+        if (status === "submitted" || status === "expired") {
+          navigate(`${createPageUrl("CandidateSubmitted")}?token=${token}`);
+          return;
+        }
+        if (status === "opted-out") {
+          setSubmission(result.data);
+          return;
+        }
+        if (result.data.timeRemaining !== null) {
           setTimeRemaining(result.data.timeRemaining);
         }
       } catch (error) {
@@ -302,7 +320,7 @@ export default function CandidateAssessment() {
     // Then sync every 30 seconds
     const interval = setInterval(syncTime, 30000);
     return () => clearInterval(interval);
-  }, [token, submission]);
+  }, [token, submission, navigate]);
 
   // Update time display every second
   useEffect(() => {
@@ -335,27 +353,71 @@ export default function CandidateAssessment() {
     return () => clearInterval(interval);
   }, [timeRemaining]);
 
-  const stopProctoringForTimeout = useCallback(async () => {
-    if (timeoutCleanupRunningRef.current) return;
-    timeoutCleanupRunningRef.current = true;
-    try {
-      if (!proctoringEnabled) return;
-      // End the voice check-in first so its final lines land before the session closes.
-      if (companionRef.current?.endAndFlush) {
-        await companionRef.current.endAndFlush();
+  timeRemainingRef.current = timeRemaining;
+
+  /** Stop recorders and flush sidecar/frames. Leaves the session open so a
+   *  failed submit can keep recording. */
+  const flushPendingCapture = useCallback(async () => {
+    const recorders = videoRecordersRef.current;
+    videoRecordersRef.current = [];
+    await Promise.all(
+      recorders.map(async (r) => {
+        try {
+          await r.stop();
+        } catch {
+          /* already stopped */
+        }
+        try {
+          await r.uploads;
+        } catch {
+          /* upload failure already logged */
+        }
+      })
+    );
+    await flushFrames();
+    const sidecar = sidecarBufferRef.current.splice(0);
+    if (sidecar.length > 0 && proctoringSessionId) {
+      try {
+        await recordSidecarEvents(proctoringSessionId, token, sidecar);
+      } catch {
+        /* session may already be closed */
       }
-      await flushFrames();
-      if (proctoringSessionId) {
-        await completeProctoringSession(proctoringSessionId, token);
-      }
-      screenCapture.stopCapture();
-      setProctoringEnabled(false);
-    } catch (error) {
-      console.error("Failed to stop proctoring at timeout:", error);
-    } finally {
-      timeoutCleanupRunningRef.current = false;
     }
-  }, [proctoringEnabled, flushFrames, proctoringSessionId, token, screenCapture]);
+  }, [flushFrames, proctoringSessionId, token]);
+
+  const stopProctoringCapture = useCallback(() => {
+    if (stopProctoringPromiseRef.current) return stopProctoringPromiseRef.current;
+    if (!proctoringEnabled && !proctoringSessionId) return Promise.resolve();
+
+    const run = (async () => {
+      proctoringStoppedRef.current = true;
+      try {
+        // End the voice check-in first so its final lines land before the session closes.
+        if (companionRef.current?.endAndFlush) {
+          await companionRef.current.endAndFlush();
+        }
+        await flushPendingCapture();
+        if (proctoringSessionId) {
+          await completeProctoringSession(proctoringSessionId, token);
+        }
+      } catch (error) {
+        console.error("Failed to stop proctoring:", error);
+        stopProctoringPromiseRef.current = null;
+      } finally {
+        screenCapture.stopCapture();
+        setProctoringEnabled(false);
+      }
+    })();
+
+    stopProctoringPromiseRef.current = run;
+    return run;
+  }, [
+    proctoringEnabled,
+    flushPendingCapture,
+    proctoringSessionId,
+    token,
+    screenCapture,
+  ]);
 
   // Timeout handling: buzzer + stop recording + 5-minute final submission grace.
   useEffect(() => {
@@ -375,7 +437,7 @@ export default function CandidateAssessment() {
       setIsGracePeriodActive(false);
       setGraceSecondsRemaining(0);
       setHasMissedGracePeriod(true);
-      stopProctoringForTimeout();
+      stopProctoringCapture();
       return;
     }
 
@@ -385,7 +447,7 @@ export default function CandidateAssessment() {
         buzzerPlayedRef.current = true;
         playBuzzerSound();
       }
-      stopProctoringForTimeout();
+      stopProctoringCapture();
     }
 
     setHasMissedGracePeriod(false);
@@ -397,7 +459,7 @@ export default function CandidateAssessment() {
     timeRemaining,
     isGracePeriodActive,
     hasMissedGracePeriod,
-    stopProctoringForTimeout,
+    stopProctoringCapture,
   ]);
 
   useEffect(() => {
@@ -425,6 +487,7 @@ export default function CandidateAssessment() {
 
     const finalizeRecordingOnly = async () => {
       try {
+        await stopProctoringCapture();
         const result = await submitRecordingOnlyAssessment(token);
         if (result.success) {
           navigate(`${createPageUrl("CandidateSubmitted")}?token=${token}`);
@@ -442,7 +505,7 @@ export default function CandidateAssessment() {
     };
 
     finalizeRecordingOnly();
-  }, [hasMissedGracePeriod, token, navigate]);
+  }, [hasMissedGracePeriod, token, navigate, stopProctoringCapture]);
 
   // Sidecar event capture: blur/focus/visibilitychange/copy/paste
   useEffect(() => {
@@ -523,17 +586,30 @@ export default function CandidateAssessment() {
 
       try {
         const { recorder, chunks, stop } = createVideoRecorder(stream, 30000);
-        const recorderEntry = { screenIndex, recorder, chunks, stop };
+        const recorderEntry = {
+          screenIndex,
+          recorder,
+          chunks,
+          stop,
+          uploads: Promise.resolve(),
+        };
 
-        // Upload chunks as they arrive
-        recorder.ondataavailable = async (e) => {
-          if (e.data.size > 0 && proctoringSessionId) {
-            await uploadVideoChunk(proctoringSessionId, token, e.data, {
-              screenIndex,
-              startTime: Date.now() - 30000,
-              endTime: Date.now(),
+        // Upload chunks as they arrive. Chain uploads so stop can await the last one
+        // before POST /complete — otherwise the final 30s lands after the session
+        // is closed and is rejected.
+        recorder.ondataavailable = (e) => {
+          if (e.data.size === 0 || !proctoringSessionId) return;
+          recorderEntry.uploads = recorderEntry.uploads
+            .then(() =>
+              uploadVideoChunk(proctoringSessionId, token, e.data, {
+                screenIndex,
+                startTime: Date.now() - 30000,
+                endTime: Date.now(),
+              })
+            )
+            .catch((err) => {
+              console.warn("Video chunk upload failed:", err);
             });
-          }
         };
 
         videoRecordersRef.current.push(recorderEntry);
@@ -547,11 +623,39 @@ export default function CandidateAssessment() {
       videoRecordersRef.current.forEach((r) => r.stop());
       videoRecordersRef.current = [];
     };
-  }, [proctoringEnabled, proctoringSessionId, token, screenCapture.streams]);
+  }, [proctoringEnabled, proctoringSessionId, token, screenCapture.streams, recorderEpoch]);
 
-  // beforeunload — flush remaining frames
+  // pagehide: flush JSON we can (sidecar) and complete recording only if the
+  // main timer is already up. Do not complete mid-attempt — reload must resume.
   useEffect(() => {
-    if (!proctoringEnabled) return;
+    if (!proctoringEnabled || !proctoringSessionId || !token) return undefined;
+
+    const onPageHide = () => {
+      const sidecar = sidecarBufferRef.current.splice(0);
+      if (sidecar.length > 0) {
+        beaconSidecarEvents(proctoringSessionId, token, sidecar);
+      }
+      videoRecordersRef.current.forEach((r) => {
+        try {
+          r.stop();
+        } catch {
+          /* page is dying */
+        }
+      });
+      videoRecordersRef.current = [];
+      const remaining = timeRemainingRef.current;
+      if (remaining !== null && remaining <= 0) {
+        beaconCompleteSession(proctoringSessionId, token);
+      }
+    };
+
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, [proctoringEnabled, proctoringSessionId, token]);
+
+  // beforeunload — flush remaining frames (legacy screen OCR only)
+  useEffect(() => {
+    if (!proctoringEnabled || !usesFrameCapture) return;
 
     const onBeforeUnload = () => {
       flushFrames();
@@ -559,7 +663,7 @@ export default function CandidateAssessment() {
 
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [proctoringEnabled, flushFrames]);
+  }, [proctoringEnabled, usesFrameCapture, flushFrames]);
 
   const handleReshare = async () => {
     const stream = await screenCapture.startCapture();
@@ -622,6 +726,8 @@ export default function CandidateAssessment() {
         setProctoringSessionId(sid);
         if (subId) setProctoringSubmissionId(subId);
         await grantConsent(sid, token, 1);
+        proctoringStoppedRef.current = false;
+        stopProctoringPromiseRef.current = null;
         setProctoringEnabled(true);
       }
 
@@ -713,22 +819,13 @@ export default function CandidateAssessment() {
 
     setIsSubmitting(true);
     try {
-      if (proctoringEnabled) {
-        // End the voice check-in first so its final lines land before the session closes.
-        if (companionRef.current?.endAndFlush) {
-          await companionRef.current.endAndFlush();
-        }
-        await flushFrames();
-        if (proctoringSessionId) {
-          await completeProctoringSession(proctoringSessionId, token);
-        }
-        screenCapture.stopCapture();
-      }
+      await flushPendingCapture();
 
       const result = uploadArchive
         ? await uploadAssessmentArchive(token, uploadArchive)
         : await submitAssessment(token, githubUrl.trim());
       if (result.success) {
+        await stopProctoringCapture();
         navigate(`${createPageUrl("CandidateSubmitted")}?token=${token}`);
       } else {
         const errorMsg =
@@ -739,12 +836,16 @@ export default function CandidateAssessment() {
         ) {
           setIsGracePeriodActive(false);
           setHasMissedGracePeriod(true);
+          await stopProctoringCapture();
+        } else {
+          setRecorderEpoch((n) => n + 1);
         }
         alert(errorMsg);
         setIsSubmitting(false);
       }
     } catch (error) {
       console.error("Error submitting assessment:", error);
+      setRecorderEpoch((n) => n + 1);
       alert("Failed to submit assessment");
       setIsSubmitting(false);
     }
@@ -758,22 +859,26 @@ export default function CandidateAssessment() {
 
     setIsOptingOut(true);
     try {
+      await flushPendingCapture();
       const result = await optOutAssessment(
         token,
         optOutReason.trim() || undefined
       );
       if (result.success) {
+        await stopProctoringCapture();
         // Update local state to show opted out screen
         setSubmission(result.data);
         setShowOptOutModal(false);
         setOptOutReason("");
       } else {
+        setRecorderEpoch((n) => n + 1);
         const errorMsg = "error" in result ? result.error : "Failed to opt out";
         alert(errorMsg);
         setIsOptingOut(false);
       }
     } catch (error) {
       console.error("Error opting out:", error);
+      setRecorderEpoch((n) => n + 1);
       alert("Failed to opt out");
       setIsOptingOut(false);
     }

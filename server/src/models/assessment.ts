@@ -32,14 +32,6 @@ const AssessmentSchema = new mongoose.Schema(
       min: 1, // At least 1 minute
     },
 
-    // Number of interview questions to generate
-    numInterviewQuestions: {
-      type: Number,
-      default: 2,
-      min: 1,
-      max: 4, // Maximum 4 questions
-    },
-
     // GitHub link to starter files repository
     starterFilesGitHubLink: {
       type: String,
@@ -59,34 +51,20 @@ const AssessmentSchema = new mongoose.Schema(
       select: true,
     },
 
-    // Custom instructions for the AI interviewer
-    interviewerCustomInstructions: {
-      type: String,
-      default: null,
-      trim: true,
-    },
-
-    // Whether smart AI interviewer is enabled (legacy; product no longer runs voice interviews)
-    isSmartInterviewerEnabled: {
-      type: Boolean,
-      default: false,
-    },
-
     /**
      * Evidence mode for this assessment — how we observe the candidate working.
-     *   "none"     — no screen recording, no workflow capture (default for new assessments)
-     *   "workflow" — hooks-first AI-workflow capture via capture-kit
-     *   "both"     — record the screen for playback, but analyse the hook stream
-     *   "screen"   — legacy screen recording + AI transcript (kept so existing assessments still work)
+     * Offered in the editor: "both" (default) or "none".
+     *   "both"     — record the screen for playback, analyse the hook stream
+     *   "none"     — no screen recording, no workflow capture
+     * Leftover (still honoured): "workflow" (hooks only) and "screen" (video + OCR)
      *
-     * "workflow" and "both" additionally require the server-side
-     * WORKFLOW_CAPTURE_ENABLED master switch, so an assessment can never
-     * silently depend on an unconfigured deployment.
+     * New assessments default to "both". Documents with no field still resolve
+     * to "screen" at read time (legacy video + OCR path).
      */
     evidenceMode: {
       type: String,
       enum: ["none", "workflow", "both", "screen"],
-      default: "none",
+      default: "both",
     },
 
     // Stack-agnostic observable behaviors (product-level bar for all candidates on this assessment)

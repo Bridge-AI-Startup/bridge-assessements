@@ -44,9 +44,6 @@ const verifyAgentAuth = (
 // Apply auth middleware to all agent tool routes
 router.use(verifyAgentAuth);
 
-// Get context endpoint (legacy: code search only, requires indexed repo)
-router.post("/get-context", AgentToolsController.getContext);
-
 // Context center: assessment + conversation + timeline + code in one call
 router.post("/context", AgentToolsController.getContextCenter);
 

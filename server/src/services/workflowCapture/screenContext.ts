@@ -7,14 +7,11 @@
  * thing they just built. That silence is exactly where several of the most
  * interesting signals live.
  *
- * So we classify **only the gaps**. A 90-minute session might have 35 minutes of
- * silence; at one frame per five seconds and LOW media resolution that is a few
- * hundred frames and well under a cent. Classifying the whole recording would
- * cost dollars and mostly re-describe what the hooks already captured perfectly.
- *
- * This is classification, NOT transcription. LOW resolution is deliberate and is
- * the opposite of the transcript engine's HIGH: we only need to know which
- * surface is on screen, not to read the text on it.
+ * Classifies the **proctoring** merged `playback.webm` (the Review movie) for
+ * linked `both` attempts. Unlinked tester sessions may still use the kit
+ * recording. This is classification, NOT transcription: LOW resolution is
+ * deliberate and is the opposite of the transcript engine's HIGH — we only
+ * need to know which surface is on screen, not to read the text on it.
  */
 
 import fs from "fs/promises";
@@ -28,9 +25,11 @@ import {
   WorkflowCaptureSessionModel,
   WorkflowEventModel,
 } from "../../models/workflowCapture.js";
+import ProctoringSessionModel from "../../models/proctoringSession.js";
 import { getFrameStorage } from "../capture/storage.js";
 import { buildPlaybackVideo, offsetIntoVideo, type VideoSegment } from "./video.js";
 import { logTs } from "../../ai/transcript/logger.js";
+import { findCaptureSessionForSubmission } from "./evaluate.js";
 
 /** Labels kept few and evaluation-relevant; a long taxonomy just adds noise. */
 export const SCREEN_LABELS = [
@@ -282,15 +281,34 @@ export function findSilentWindows(
   });
 }
 
-async function materializeVideo(
-  sessionId: string
+/**
+ * One wall-clock segment covering the proctoring recording. Offset 0 is
+ * captureStartedAt — the same origin Review uses to seek (`event.at − start`).
+ */
+export function segmentFromProctoringStats(stats: {
+  captureStartedAt?: Date | string | null;
+  captureEndedAt?: Date | string | null;
+} | null | undefined): VideoSegment[] | null {
+  if (!stats?.captureStartedAt) return null;
+  return [
+    {
+      wallStartedAt: stats.captureStartedAt,
+      wallEndedAt: stats.captureEndedAt ?? null,
+      videoOffsetStart: 0,
+    },
+  ];
+}
+
+async function materializeStorageKey(
+  key: string,
+  label: string
 ): Promise<{ filePath: string; cleanup: () => Promise<void> } | null> {
-  const built = await buildPlaybackVideo(sessionId);
-  if (!built) return null;
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), `wfc-screen-${sessionId}-`));
+  const storage = getFrameStorage();
+  if (!(await storage.exists(key))) return null;
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), `wfc-screen-${label}-`));
   const filePath = path.join(dir, "playback.webm");
   await pipeline(
-    await getFrameStorage().openReadStream(built.key),
+    await storage.openReadStream(key),
     createWriteStream(filePath)
   );
   return {
@@ -300,6 +318,62 @@ async function materializeVideo(
     },
   };
 }
+
+async function resolveClassificationVideo(session: {
+  _id: { toString(): string };
+  submissionId?: unknown;
+  video?: { segments?: VideoSegment[] };
+}): Promise<{
+  filePath: string;
+  cleanup: () => Promise<void>;
+  segments: VideoSegment[];
+} | null> {
+  if (session.submissionId) {
+    const proctoring: any = await ProctoringSessionModel.findOne({
+      submissionId: session.submissionId,
+    })
+      .select("mergedVideo stats.captureStartedAt stats.captureEndedAt")
+      .lean();
+    const key = proctoring?.mergedVideo?.storageKey as string | undefined;
+    const segments = segmentFromProctoringStats(proctoring?.stats);
+    if (
+      proctoring?.mergedVideo?.status === "ready" &&
+      key &&
+      segments &&
+      (await getFrameStorage().exists(key))
+    ) {
+      const file = await materializeStorageKey(key, session._id.toString());
+      if (!file) return null;
+      return { ...file, segments };
+    }
+    // Linked attempt: classify the Review movie only. Do not fall through to
+    // the capture-kit recorder — `both` must not grow a second film.
+    return null;
+  }
+
+  // Tester / unlinked sessions: optional kit recording.
+  const kitSegments = (session.video?.segments ?? []) as VideoSegment[];
+  if (!kitSegments.length) return null;
+  const built = await buildPlaybackVideo(session._id.toString());
+  if (!built) return null;
+  const file = await materializeStorageKey(built.key, session._id.toString());
+  if (!file) return null;
+  return { ...file, segments: kitSegments };
+}
+
+const classifying = new Map<string, Promise<ScreenContextResult>>();
+
+const EMPTY_RESULT: ScreenContextResult = {
+  windowsConsidered: 0,
+  gapWindows: 0,
+  activeWindows: 0,
+  windowsClassified: 0,
+  eventsCreated: 0,
+  eventsSuppressed: 0,
+  promptTokens: 0,
+  completionTokens: 0,
+  model: "",
+};
 
 export interface ScreenContextResult {
   windowsConsidered: number;
@@ -315,20 +389,45 @@ export interface ScreenContextResult {
 }
 
 /**
- * Classify hook-silent stretches and write them back as `screen_context` events
- * on the same timeline, so downstream grading treats them as ordinary evidence.
+ * Classify the Review movie (proctoring `playback.webm` when the capture is
+ * linked to a submission; kit recording only for unlinked tester sessions)
+ * and write `screen_context` events onto the timeline.
+ *
+ * This is surface identification at LOW / 1fps — not OCR, not TRANSCRIPT_ENGINE.
  */
 export async function classifyScreenGaps(
+  sessionId: string,
+  options?: { replaceExisting?: boolean }
+): Promise<ScreenContextResult> {
+  const pending = classifying.get(sessionId);
+  if (pending) return pending;
+  const run = classifyScreenGapsImpl(sessionId, options).finally(() => {
+    if (classifying.get(sessionId) === run) classifying.delete(sessionId);
+  });
+  classifying.set(sessionId, run);
+  return run;
+}
+
+async function classifyScreenGapsImpl(
   sessionId: string,
   options?: { replaceExisting?: boolean }
 ): Promise<ScreenContextResult> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
 
+  const replaceExisting = options?.replaceExisting !== false;
+  if (!replaceExisting) {
+    const already = await WorkflowEventModel.exists({
+      sessionId,
+      type: "screen_context",
+    });
+    if (already) return { ...EMPTY_RESULT, model: MODEL() };
+  }
+
   // Re-classifying covers the whole recording again, so clear prior results
   // first. Appending would duplicate every span each time recording is stopped
   // and resumed, and a band drawn from duplicates is unreadable.
-  if (options?.replaceExisting !== false) {
+  if (replaceExisting) {
     await WorkflowEventModel.deleteMany({ sessionId, type: "screen_context" });
   }
 
@@ -345,7 +444,8 @@ export async function classifyScreenGaps(
     .filter((e: any) => e.type !== "screen_context")
     .map((e: any) => e.at);
 
-  const segments = (session.video?.segments ?? []) as VideoSegment[];
+  const video = await resolveClassificationVideo(session);
+  const segments = video?.segments ?? [];
   const windows = planClassificationWindows(hookTimes, segments).slice(0, MAX_WINDOWS());
 
   const result: ScreenContextResult = {
@@ -359,10 +459,11 @@ export async function classifyScreenGaps(
     completionTokens: 0,
     model: MODEL(),
   };
-  if (windows.length === 0) return result;
-
-  const video = await materializeVideo(sessionId);
   if (!video) return result;
+  if (windows.length === 0) {
+    await video.cleanup().catch(() => {});
+    return result;
+  }
 
   const ai = new GoogleGenAI({ apiKey });
   let file;
@@ -513,5 +614,53 @@ export async function classifyScreenGaps(
   } finally {
     if (file?.name) await ai.files.delete({ name: file.name }).catch(() => {});
     await video.cleanup().catch(() => {});
+  }
+}
+
+/**
+ * After the proctoring merge lands `{sessionId}/playback.webm`, classify that
+ * file onto the linked capture session. No-op when there is no capture kit
+ * session, no Gemini key, or screen_context already exists.
+ */
+export async function classifyAfterProctoringMerge(
+  submissionId: string
+): Promise<void> {
+  try {
+    const capture: any = await findCaptureSessionForSubmission(submissionId);
+    if (!capture || !process.env.GEMINI_API_KEY) return;
+    await classifyScreenGaps(capture._id.toString(), { replaceExisting: false });
+  } catch (err) {
+    console.error(
+      `[workflow-capture] classify after proctoring merge failed for submission ${submissionId}:`,
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
+/**
+ * Wait for the Review movie, classify it, then (re)build episodes so hook-silent
+ * stretches have screen_context. No-op classify when there is no proctoring
+ * recording (`workflow` mode).
+ */
+export async function prepareScreenContextForEvaluation(
+  submissionId: string,
+  captureSessionId: string
+): Promise<void> {
+  const proctoring = await ProctoringSessionModel.findOne({ submissionId })
+    .select("_id")
+    .lean();
+  if (proctoring) {
+    const { waitForMergedPlayback } = await import("../capture/sessionVideoMerge.js");
+    const ready = await waitForMergedPlayback(proctoring._id.toString());
+    if (ready && process.env.GEMINI_API_KEY) {
+      await classifyScreenGaps(captureSessionId, { replaceExisting: false });
+    }
+    // Episodes were skipped in finalize while the movie was still merging.
+    await WorkflowCaptureSessionModel.updateOne(
+      { _id: captureSessionId },
+      { $set: { episodes: [], episodesComputedAt: null } }
+    );
+    const { computeAndStoreEpisodes } = await import("./episodes.js");
+    await computeAndStoreEpisodes(captureSessionId);
   }
 }

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   resolveEvidenceMode,
@@ -9,43 +9,36 @@ import {
 } from "../../src/utils/evidenceMode.js";
 
 describe("resolveEvidenceMode", () => {
-  const original = process.env.WORKFLOW_CAPTURE_ENABLED;
-
-  afterEach(() => {
-    if (original === undefined) {
-      delete process.env.WORKFLOW_CAPTURE_ENABLED;
-    } else {
-      process.env.WORKFLOW_CAPTURE_ENABLED = original;
-    }
-  });
-
   it("treats a missing field as legacy screen recording", () => {
     expect(resolveEvidenceMode({})).toBe("screen");
     expect(resolveEvidenceMode(null)).toBe("screen");
+    expect(resolveEvidenceMode(undefined)).toBe("screen");
+    expect(resolveEvidenceMode({ evidenceMode: "nope" })).toBe("screen");
   });
 
-  it("keeps none even when workflow capture is off", () => {
-    process.env.WORKFLOW_CAPTURE_ENABLED = "false";
+  it("returns the assessment field as-is, including none and leftover screen", () => {
     expect(resolveEvidenceMode({ evidenceMode: "none" })).toBe("none");
-  });
-
-  it("keeps screen regardless of the master switch", () => {
-    process.env.WORKFLOW_CAPTURE_ENABLED = "true";
     expect(resolveEvidenceMode({ evidenceMode: "screen" })).toBe("screen");
-    process.env.WORKFLOW_CAPTURE_ENABLED = "false";
-    expect(resolveEvidenceMode({ evidenceMode: "screen" })).toBe("screen");
-  });
-
-  it("returns workflow and both when the master switch is on", () => {
-    process.env.WORKFLOW_CAPTURE_ENABLED = "true";
     expect(resolveEvidenceMode({ evidenceMode: "workflow" })).toBe("workflow");
     expect(resolveEvidenceMode({ evidenceMode: "both" })).toBe("both");
   });
 
-  it("falls workflow and both back to screen when capture is off", () => {
-    process.env.WORKFLOW_CAPTURE_ENABLED = "false";
-    expect(resolveEvidenceMode({ evidenceMode: "workflow" })).toBe("screen");
-    expect(resolveEvidenceMode({ evidenceMode: "both" })).toBe("screen");
+  it("does not rewrite workflow/both based on WORKFLOW_CAPTURE_ENABLED", () => {
+    const original = process.env.WORKFLOW_CAPTURE_ENABLED;
+    try {
+      delete process.env.WORKFLOW_CAPTURE_ENABLED;
+      expect(resolveEvidenceMode({ evidenceMode: "workflow" })).toBe("workflow");
+      expect(resolveEvidenceMode({ evidenceMode: "both" })).toBe("both");
+      process.env.WORKFLOW_CAPTURE_ENABLED = "false";
+      expect(resolveEvidenceMode({ evidenceMode: "workflow" })).toBe("workflow");
+      expect(resolveEvidenceMode({ evidenceMode: "both" })).toBe("both");
+    } finally {
+      if (original === undefined) {
+        delete process.env.WORKFLOW_CAPTURE_ENABLED;
+      } else {
+        process.env.WORKFLOW_CAPTURE_ENABLED = original;
+      }
+    }
   });
 });
 

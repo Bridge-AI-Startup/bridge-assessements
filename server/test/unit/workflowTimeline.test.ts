@@ -8,7 +8,9 @@ import { computeMetrics, extractTokenUsage } from "../../src/services/workflowCa
 import {
   findSilentWindows,
   planClassificationWindows,
+  segmentFromProctoringStats,
 } from "../../src/services/workflowCapture/screenContext.js";
+import { offsetIntoVideo } from "../../src/services/workflowCapture/video.js";
 
 const T0 = new Date("2026-08-12T10:00:00Z");
 const at = (sec: number) => new Date(T0.getTime() + sec * 1000);
@@ -109,6 +111,17 @@ describe("videoOffsetForSessionSeconds", () => {
     expect(videoOffsetForSessionSeconds(60, T0, segments)).toBeNull();
     expect(videoOffsetForSessionSeconds(500, T0, segments)).toBeNull();
     expect(videoOffsetForSessionSeconds(10, T0, [])).toBeNull();
+  });
+
+  it("maps proctoring captureStartedAt onto video offset 0", () => {
+    const segs = segmentFromProctoringStats({
+      captureStartedAt: at(0),
+      captureEndedAt: at(100),
+    });
+    expect(segs?.[0].videoOffsetStart).toBe(0);
+    expect(offsetIntoVideo(at(40), segs)).toBe(40);
+    expect(offsetIntoVideo(at(150), segs)).toBeNull();
+    expect(segmentFromProctoringStats({})).toBeNull();
   });
 });
 

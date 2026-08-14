@@ -284,13 +284,14 @@ async function verifyPlayback(idToken: string, sessionId: string): Promise<any> 
   const headers = { Authorization: `Bearer ${idToken}` };
   const out: any = {};
   try {
-    const r = await fetch(`${RENDER_API}/api/proctoring/sessions/${sessionId}/playback-video`, {
-      headers,
-    });
+    const r = await fetch(
+      `${RENDER_API}/api/proctoring/sessions/${sessionId}/playback-video?format=url`,
+      { headers }
+    );
     out.status = r.status;
     if (r.ok) {
-      const buf = Buffer.from(await r.arrayBuffer());
-      out.bytes = buf.length;
+      const data = await r.json().catch(() => ({}));
+      out.hasUrl = Boolean(data?.url);
     }
   } catch (e: any) {
     out.error = e?.message || String(e);
@@ -417,7 +418,6 @@ async function main() {
       "live transcript + evaluation pipeline; see the accuracy report for cross-checks " +
       "against the behavior deliberately built into each clip.",
     timeLimit: 90,
-    numInterviewQuestions: 2,
     evaluationCriteria: criteria,
     behavioralChecks: [
       "Token bucket enforces the per-destination rate limit",

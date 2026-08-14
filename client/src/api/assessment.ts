@@ -12,11 +12,8 @@ export type Assessment = {
   title: string;
   description: string;
   timeLimit: number;
-  numInterviewQuestions?: number;
   starterFilesGitHubLink?: string;
   starterCodeFiles?: StarterCodeFile[];
-  interviewerCustomInstructions?: string;
-  isSmartInterviewerEnabled?: boolean;
   evidenceMode?: EvidenceMode;
   behavioralChecks?: string[];
   evaluationCriteria?: string[];
@@ -28,10 +25,8 @@ export type AssessmentCreate = {
   title: string;
   description: string;
   timeLimit: number;
-  numInterviewQuestions?: number;
   starterFilesGitHubLink?: string;
   starterCodeFiles?: StarterCodeFile[];
-  interviewerCustomInstructions?: string;
   behavioralChecks?: string[];
   evaluationCriteria?: string[];
 };
@@ -40,11 +35,8 @@ export type AssessmentUpdate = {
   title?: string;
   description?: string;
   timeLimit?: number;
-  numInterviewQuestions?: number;
   starterFilesGitHubLink?: string;
   starterCodeFiles?: StarterCodeFile[];
-  interviewerCustomInstructions?: string;
-  isSmartInterviewerEnabled?: boolean;
   evidenceMode?: EvidenceMode;
   behavioralChecks?: string[];
   evaluationCriteria?: string[];
@@ -235,11 +227,8 @@ export async function updateAssessment(
       title?: string;
       description?: string;
       timeLimit?: number;
-      numInterviewQuestions?: number;
       starterFilesGitHubLink?: string;
       starterCodeFiles?: StarterCodeFile[];
-      interviewerCustomInstructions?: string;
-      isSmartInterviewerEnabled?: boolean;
       evidenceMode?: EvidenceMode;
       behavioralChecks?: string[];
       evaluationCriteria?: string[];
@@ -254,21 +243,11 @@ export async function updateAssessment(
     if (data.timeLimit !== undefined) {
       updateBody.timeLimit = data.timeLimit;
     }
-    if (data.numInterviewQuestions !== undefined) {
-      updateBody.numInterviewQuestions = data.numInterviewQuestions;
-    }
     if (data.starterFilesGitHubLink !== undefined) {
       updateBody.starterFilesGitHubLink = data.starterFilesGitHubLink;
     }
     if (data.starterCodeFiles !== undefined) {
       updateBody.starterCodeFiles = data.starterCodeFiles;
-    }
-    if (data.interviewerCustomInstructions !== undefined) {
-      updateBody.interviewerCustomInstructions =
-        data.interviewerCustomInstructions;
-    }
-    if (data.isSmartInterviewerEnabled !== undefined) {
-      updateBody.isSmartInterviewerEnabled = data.isSmartInterviewerEnabled;
     }
     // Must be copied explicitly — a whitelist body that omits this field is
     // why the editor radio used to snap back to screen recording.
