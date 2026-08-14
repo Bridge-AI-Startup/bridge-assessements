@@ -3,6 +3,7 @@ import multer from "multer";
 
 import { DEFAULT_SUBMISSION_UPLOAD_MAX_BYTES } from "../config/uploadLimits.js";
 import * as SubmissionController from "../controllers/submission.js";
+import * as RuntimeSetupController from "../controllers/runtimeSetup.js";
 import { verifyAuthToken } from "../validators/auth.js";
 import * as SubmissionValidator from "../validators/submissionValidation.js";
 
@@ -50,6 +51,29 @@ router.post(
 // Public endpoint - Get submission by token (for candidate access via URL)
 // Must come before /:id route
 router.get("/token/:token", SubmissionController.getSubmissionByToken);
+
+// Candidate runtime setup (token-based). Feature-gated in the service layer.
+router.put(
+  "/token/:token/runtime/config",
+  RuntimeSetupController.putConfig
+);
+router.post(
+  "/token/:token/runtime/session",
+  RuntimeSetupController.postSession
+);
+router.post(
+  "/token/:token/runtime/restart",
+  RuntimeSetupController.postRestart
+);
+router.post("/token/:token/runtime/run", RuntimeSetupController.postRun);
+router.get("/token/:token/runtime/status", RuntimeSetupController.getStatus);
+router.get("/token/:token/runtime/logs", RuntimeSetupController.getLogLines);
+router.post("/token/:token/runtime/pause", RuntimeSetupController.postPause);
+router.post("/token/:token/runtime/resume", RuntimeSetupController.postResume);
+router.post(
+  "/token/:token/runtime/finalize",
+  RuntimeSetupController.postFinalize
+);
 
 // Public endpoint - Start assessment (update status to "in-progress")
 // Must come before /:id route
@@ -143,6 +167,27 @@ router.get(
   "/:submissionId/code-archive",
   [verifyAuthToken],
   SubmissionController.getSubmissionCodeArchiveHandler
+);
+
+router.post(
+  "/:submissionId/runtime/preview",
+  [verifyAuthToken],
+  RuntimeSetupController.postReplay
+);
+router.get(
+  "/:submissionId/runtime/preview/status",
+  [verifyAuthToken],
+  RuntimeSetupController.getReplayStatusHandler
+);
+router.get(
+  "/:submissionId/runtime/preview/logs",
+  [verifyAuthToken],
+  RuntimeSetupController.getReplayLogLines
+);
+router.post(
+  "/:submissionId/runtime/preview/stop",
+  [verifyAuthToken],
+  RuntimeSetupController.postReplayStop
 );
 
 // Public endpoint - Final submission

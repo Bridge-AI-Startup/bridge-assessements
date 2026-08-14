@@ -15,6 +15,13 @@ export type GenerateShareLinkResponse = {
   candidateName: string;
 };
 
+/**
+ * Outcome of one behavioral check. `blocked` means grading never judged it
+ * because the environment could not support it — distinct from `inconclusive`,
+ * where the judge looked and could not tell.
+ */
+export type BehavioralVerdict = "pass" | "fail" | "inconclusive" | "blocked";
+
 export type Submission = {
   _id: string;
   token: string;
@@ -81,7 +88,8 @@ export type Submission = {
     completedChecks?: Array<{
       checkIndex: number;
       checkText: string;
-      verdict: "pass" | "fail" | "inconclusive";
+      verdict: BehavioralVerdict;
+      verifiedBy?: string;
     }>;
     startedAt?: string;
     updatedAt?: string;
@@ -126,15 +134,34 @@ export type Submission = {
         logTail?: string;
       };
     };
-    failureCategory?: "setup" | "judge" | "timeout" | "disabled" | "unknown" | null;
+    failureCategory?:
+      | "setup"
+      | "environment"
+      | "interrupted"
+      | "disabled"
+      | "judge"
+      | "timeout"
+      | "unknown"
+      | null;
     cases?: Array<{
       checkText: string;
       checkIndex?: number;
-      verdict: "pass" | "fail" | "inconclusive";
+      verdict: BehavioralVerdict;
       evidence?: unknown[];
       artifacts?: string[];
       isolation?: "fresh_browser_context";
     }>;
+    /** Computed server-side; the only figure the UI should score from. */
+    score?: {
+      total: number;
+      decided: number;
+      passed: number;
+      failed: number;
+      inconclusive: number;
+      blocked: number;
+      coverage: number;
+      passRate: number | null;
+    };
     startedAt?: string;
     completedAt?: string;
     reportArtifactKey?: string;

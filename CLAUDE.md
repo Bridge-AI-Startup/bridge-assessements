@@ -184,6 +184,17 @@ See `server/config.env.example` for the full list. Key variables:
 - `BEHAVIORAL_GRADING_MAX_CONCURRENT` -- Max concurrent behavioral grading jobs (default: `2`)
 - `BEHAVIORAL_GRADING_UPLOAD_ENABLED` -- Enable behavioral grading for uploaded archives (default: `true`)
 
+**Runtime setup (post-submit candidate-authored run config):**
+- `RUNTIME_SETUP_ENABLED` -- Gate candidate runtime-setup routes and UI (default: disabled)
+- `RUNTIME_SETUP_MAX_CONCURRENT` -- Cap on **running or provisioning** setup sandboxes (default: `3`). `provisioning` counts because the box is already being created; `paused` does not, since a paused E2B box is cheap and resuming it creates nothing
+- `RUNTIME_SETUP_SANDBOX_TTL_MS` -- Hard cap per live sandbox (default: `1800000` = 30m)
+- `RUNTIME_SETUP_IDLE_PAUSE_MS` -- Idle → E2B pause (default: `240000` = 4m). Any status **or log** poll from a client watching a live box counts as activity, so a preview someone is clicking through is not reaped mid-use
+- `RUNTIME_SETUP_INSTALL_TIMEOUT_MS` / `RUNTIME_SETUP_BUILD_TIMEOUT_MS` -- per-step caps
+- `RUNTIME_SETUP_RUN_MAX_MS` -- **whole-run** budget (default: `900000` = 15m). Install, build, start, and the health wait share it; each step gets whichever is smaller, its own timeout or the time left (`createRunDeadline` in `services/runtimeSetup/run.ts`). There is no `RUNTIME_SETUP_CPU` / `RUNTIME_SETUP_MEM_MIB` — sandbox size is fixed by the E2B template, not by `Sandbox.create`
+- `RUNTIME_SETUP_DENY_EGRESS_AT_RUNTIME` -- After start, lock outbound traffic except `declaredEgressDomains` (default: `true`; requires E2B `updateNetwork`, SDK ≈2.28+)
+- `RUNTIME_SETUP_RUNS_PER_HOUR` -- Per-submission run cap (default: `12`)
+- `RUNTIME_SETUP_HEALTH_WAIT_MS` -- Poll for app ready after start (default: `90000`)
+
 **Shorts (consumer daily challenge):**
 - `SHORTS_ENABLED` -- Gate `/api/shorts` feature routes (default: disabled); `GET /api/shorts/health` always on
 - `SHORTS_DB_NAME` -- Mongo database for Shorts product (default: `bridge-play`, same Atlas cluster)
@@ -271,6 +282,7 @@ server/src/
 │   ├── assessment.ts      # Assessment schema (title, description, time limit, settings)
 │   ├── competition.ts     # Competition / hackathon: slug, assessmentId, rules, registration window, leaderboard flag
 │   ├── submission.ts      # Submission schema (token, candidate info, GitHub repo, scores, LLM workflow)
+│   ├── runtimeSetupSession.ts # Ephemeral E2B box for candidate runtime setup / recruiter replay
 │   ├── repoIndex.ts       # Repository indexing metadata for Pinecone
 │   └── proctoringSession.ts  # Proctoring session (frames, events, transcript, video chunks)
 ├── routes/
@@ -286,6 +298,7 @@ server/src/
 │   ├── user.ts            # User creation, login (with tier limits), account deletion
 │   ├── assessment.ts      # Assessment CRUD, AI generation, chat
 │   ├── submission.ts      # All submission handlers (share links, submissions, grading)
+│   ├── runtimeSetup.ts    # Candidate/recruiter runtime setup (config, run, pause, finalize, replay)
 │   ├── competition.ts     # Public competitions: get by slug, join (creates pending submission), leaderboard
 │   ├── ops.ts             # Ops workload aggregation (employer attribution for heavy jobs)
 │   ├── billing.ts         # Stripe checkout, status, cancel, reactivate, webhook handler
@@ -305,13 +318,32 @@ server/src/
 │   ├── companion/
 │   │   └── firstMessage.ts    # Spoken opener after Start: title + unzip/command walkthrough; resume is a short welcome-back
 │   ├── behavioralGrading/
-│   │   ├── index.ts           # E2B behavioral grading orchestrator + in-process concurrency queue
+│   │   ├── index.ts           # E2B behavioral grading orchestrator + in-process concurrency queue + in-flight dedupe + boot sweep
+│   │   ├── log.ts             # [behavioral] stdout logger; run context stamps submissionId on every line
+│   │   ├── progress.ts        # Live behavioralGradingProgress writer (throttled); shared by real runs and the stress demo
 │   │   ├── planner.ts         # LLM: README → runbook plan (install/test/start)
+│   │   ├── runtimeConfigRunbook.ts # Candidate's finalized+verified runtimeConfig → runbook (skips the LLM planner)
 │   │   ├── schema.ts          # Zod schemas for runbook
-│   │   ├── executor.ts        # Executes runbook commands; saves report JSON; readmeFromSandbox
+│   │   ├── executor.ts        # Executes runbook commands with per-step timeouts; optional candidate envVars; secret-scrubbed evidence
+│   │   ├── checkSpecs.ts      # Zod BehavioralCheckSpec + resolver (legacy strings → kind agent)
+│   │   ├── compileCheckSpec.ts # Grade-time leftover agent check → link inventory IDs + purpose template (invalid → inconclusive)
+│   │   ├── extractUiControls.ts # Heuristic scan of candidate source → button/textbox/link catalog (Playwright locators come from here, never getByText); nameless buttons kept
+│   │   ├── extractCapabilities.ts # Unified inventory: UI controls + fetch/Express routes with source file:line
+│   │   ├── linkCheckCapabilities.ts # Heuristic (then constrained LLM) purpose tags; IDs must exist in the inventory
+│   │   ├── synthesizeAcceptance.ts # Purpose templates: create / toggle_done+reload / delete-in-row / health
+│   │   ├── deterministicChecks.ts # http/http_sequence/restart_persistence/cli/ui acceptance runner (no LLM; UI clicks are getByRole exact or click_in_row; never getByText)
+│   │   ├── scoring.ts         # report.score: decided/total, passRate excludes inconclusive/blocked
+│   │   ├── proofGuards.ts     # Reject agent passes that cite only inline probes; reject UI fails unless a fill/click succeeded and browser_expect ran
+│   │   ├── specSuggestions.ts # LLM acceptance suggestions → validated specs (UI walkthrough or grounded HTTP; invented paths dropped)
 │   │   ├── judge.ts           # One-shot LLM judge (stdout/source/HTTP seed)
-│   │   ├── agentJudge.ts      # Tool-using judge (run_command/read_file in sandbox, then finish)
+│   │   ├── agentJudge.ts      # Tool-using judge (run_command/read_file in sandbox, then finish); browser_fill retries textbox/placeholder
 │   │   └── artifacts.ts       # collectJudgeArtifacts + bashLc helpers
+│   ├── runtimeSetup/
+│   │   ├── sessions.ts        # Persistent E2B lifecycle (create/pause/resume/run/finalize)
+│   │   ├── run.ts             # Candidate runtimeConfig → install/build/start + health
+│   │   ├── sandbox.ts         # Long-lived sandbox (does not auto-kill like grader)
+│   │   ├── network.ts         # Two-phase egress via updateNetwork
+│   │   └── schema.ts          # Zod runtimeConfig + secret redaction helpers
 │   ├── play/
 │   │   ├── challenges.ts      # Shorts daily challenge CRUD + UTC today lookup + public past-rounds archive
 │   │   ├── account.ts         # Consumer accounts: claim anonymousIds, cross-round submission history
@@ -387,6 +419,8 @@ server/src/
     ├── backfillMergedProctoringVideos.ts # Merge legacy WebM chunks → playback.webm + mergedVideo
     ├── listSubmissions.ts
     ├── seedCompetition.ts   # Link Mongo Competition slug → assessment (hackathon dashboard)
+    ├── seedRuntimeSetupMernDemo.ts # Upsert MERN Notes Board assessment + candidate link under demo@bridgeai-demo.com; submit folder is demos/runtime-setup-mern
+    ├── seedRuntimeSetupPathfinderDemo.ts # Upsert Warehouse Pathfinder (Python A*/TSP) assessment + candidate link; submit folder is demos/runtime-setup-pathfinder
     ├── seedShortsChallenge.ts # Upsert Shorts daily challenge from shorts/challenges/*.json
     ├── seedShortsLaunchRound.ts # Cold-start round seed driven by shorts/seed-builds/<date>/seed.json: upsert challenge, insert seeded builds + simulated vote graph (--date=YYYY-MM-DD, dry-run unless --apply; refuses if the round already has submissions)
     ├── moveShortsLaunchRound.ts # One-off: re-dated the week-1 seeded round from 2026-08-03 onto 2026-07-27 (kept as a template for date moves)
@@ -501,9 +535,13 @@ Hooks-first capture of the candidate's AI-agent conversation + code changes, as 
 - `POST /:submissionId/index-repo` -- Index submitted code snapshot into Pinecone (GitHub or uploaded archive)
 - `GET /:submissionId/repo-index/status` -- Check repo indexing status
 - `POST /:submissionId/search-code` -- Search indexed code (debug)
-- `POST /:submissionId/grade-behavioral` -- Trigger manual behavioral grading re-run (E2B + evidence capture)
+- `POST /:submissionId/grade-behavioral` -- Trigger manual behavioral grading re-run (E2B + evidence capture); **409** if a run is already in flight for that submission
 - `GET /:submissionId/behavioral-artifact` -- Retrieve stored behavioral grading artifacts (screenshots/report files)
 - `GET /:submissionId/code-archive` -- Download uploaded candidate archive (upload-source submissions only)
+- `POST /:submissionId/runtime/preview` -- Recruiter replay: accept a `kind: "replay"` sandbox job for the **finalized** runtime config (auth + ownership); returns quickly (`accepted`) and runs install/build/start in the background. A session that is already `ready` and still listening is **reused** rather than rebuilt; pass `{ restart: true }` (the panel's Restart) to kill the box and reinstall from scratch. **409** if any behavioral grade is in flight — new replay sandboxes are refused so they cannot evict the grading box; warm reconnect is still allowed
+- `GET /:submissionId/runtime/preview/status` -- Recruiter poll: session state + redacted config + previewUrl/health (auth + ownership)
+- `GET /:submissionId/runtime/preview/logs` -- Recruiter poll: build/runtime logs (`?after=` seq; auth + ownership)
+- `POST /:submissionId/runtime/preview/stop` -- Kill the recruiter replay sandbox (auth + ownership)
 
 *Candidate endpoints (no auth, token-based):*
 - `GET /assessments/public/:id` -- Get public assessment details
@@ -513,6 +551,14 @@ Hooks-first capture of the candidate's AI-agent conversation + code changes, as 
 - `POST /token/:token/submit-recording-only` -- Finalize timed-out attempts with proctoring/screen-recording evidence only (no code repo required); marks submission `expired`. Also run by a process reaper (`ATTEMPT_REAPER_*`) and by `GET /token/:token` once grace has elapsed.
 - `POST /token/:token/upload` -- Submit code by archive upload (`multipart/form-data`, field `archive`), stores upload metadata, starts indexing, auto-triggers behavioral grading; same 5-minute post-time-limit grace window as GitHub submit
 - `POST /token/:token/opt-out` -- Opt out with reason
+- `PUT /token/:token/runtime/config` -- Autosave runtime config (feature-gated: `RUNTIME_SETUP_ENABLED`)
+- `POST /token/:token/runtime/session` -- Create or resume the setup sandbox (loads snapshot; reconnects paused/running box)
+- `POST /token/:token/runtime/restart` -- Kill the current sandbox (if any) and provision a fresh one from the submitted snapshot
+- `POST /token/:token/runtime/run` -- Install → build → start using saved config; requires a live setup sandbox (`running`/`paused`); **409** if the environment has not been started; returns previewUrl
+- `GET /token/:token/runtime/status` -- Session state + previewUrl + health + last run
+- `GET /token/:token/runtime/logs` -- Poll build/runtime logs (`?after=` seq)
+- `POST /token/:token/runtime/pause` / `.../resume` -- Idle pause / reconnect
+- `POST /token/:token/runtime/finalize` -- Persist config, mark verified, tear down sandbox
 - `PATCH /:id` -- Update submission (auto-save)
 - `GET /:id` -- Get submission by ID
 - `POST /:id/submit` -- Final submission (legacy, also auto-triggers behavioral grading)
@@ -632,7 +678,7 @@ conversation id comes from `getId()`, and `onMessage` receives **raw socket even
 ### AI Prompts (`server/src/prompts/index.ts`)
 - `PROMPT_EXTRACT_ASSESSMENT_REQUIREMENTS` -- Extract requirements, infer stack/level from job description
 - `PROMPT_GENERATE_ASSESSMENT_COMPONENTS` -- Generate assessment title, description, timeLimit (with few-shot examples)
-- `PROMPT_GENERATE_BEHAVIORAL_CHECKS` -- Generate stack-agnostic behavioral checks from title, description, and requirements summary. The prompt spells out **how a check gets verified** — a sandbox agent that installs and starts the repo, drives it in a real Playwright browser, curls it, and reads source — and therefore what it must not ask for: third-party credentials or paid services, two simultaneous users, the passage of real time, absent hardware, pre-seeded data the candidate was never told to create, aesthetic judgement, or unbounded "is fast/secure" claims. One outcome per check (no "and")
+- `PROMPT_GENERATE_BEHAVIORAL_CHECKS` -- Generate stack-agnostic behavioral checks from title, description, and requirements summary, plus default UI/HTTP acceptance specs (agent is the rare leftover). The prompt spells out **how a check gets verified** — a sandbox agent that installs and starts the repo, drives it in a real Playwright browser, curls it, and reads source — and therefore what it must not ask for: third-party credentials or paid services, two simultaneous users, the passage of real time, absent hardware, pre-seeded data the candidate was never told to create, aesthetic judgement, or unbounded "is fast/secure" claims. One outcome per check (no "and")
 - `PROMPT_SUGGEST_CRITERIA` / `PROMPT_VALIDATE_CRITERION` -- Evaluation criteria (the *process* rubric). Both `system` fields are **functions of a `CriterionEvidenceProfile`** (`"workflow"` default | `"screen"`), which splices in `EVIDENCE_INVENTORY` — an explicit list of what that record does and does not contain. This is not cosmetic: the hook stream knows every prompt and command verbatim but records **no reading at all** and no accept/reject event, while a screen recording is the reverse. Criteria written for the wrong record get scored on evidence that was never collected. Under `workflow` the prompts actively reject the old favourites ("reads the requirements before coding", "reviews AI-generated code before accepting") and steer to recorded equivalents ("inspects existing files before the first edit", "edits agent-written code rather than leaving it untouched"). Profile comes from the request's optional `evidence_mode`; only legacy `screen` maps to the screen profile — `workflow`/`both`/`none` all map to `workflow` (an employer writing criteria under `none` is writing them for the mode they'd turn on). Suggestions are re-validated under the same profile before being returned. Eval cases are pinned per profile in `src/scripts/runEvals.ts`
 - `PROMPT_ASSESSMENT_QUALITY_REVIEW` -- Review and validate generated assessment quality
 - `PROMPT_ASSESSMENT_CHAT` -- System prompt for AI assistant editing assessments
@@ -659,10 +705,11 @@ client/src/
 │   ├── AssessmentEditor.jsx    # Edit assessment -- title, desc, time, starter files, share links, bulk invite
 │   ├── CandidateAssessment.jsx # Candidate views assessment -- workspace setup (screen/starters/capture-kit) before the timer; Start gated on entire-screen share when recording is required (no skip); then brief + submit; capture flushes before submit and only completes after success; pagehide beacons sidecar/companion; past-grace attempts redirect after the server reaper
 │   ├── CandidateSubmission.jsx # Shows mock submission data with code review
-│   ├── CandidateSubmitted.jsx  # Post-submission confirmation (you're done)
+│   ├── CandidateSubmitted.jsx  # Post-submission confirmation; CTA into RuntimeSetup when enabled
+│   ├── RuntimeSetup.jsx        # Candidate runtime config + one-button "Run project" (provisions if needed) + live preview/logs + Restart environment + Finalize
 │   ├── HackathonDashboard.jsx  # Challenge join + dashboard/leaderboard only; marketing landing may live on Framer (slug: `?slug=` > env > `config/competition.js`)
 │   ├── OpsDashboard.jsx        # Internal ops workload dashboard (OPS_ADMIN_EMAIL); heavy merge/transcript/grading attribution
-│   ├── SubmissionsDashboard.jsx # Employer views submissions -- stats, filtering, dropoff analysis, and the single candidate Review dialog
+│   ├── SubmissionsDashboard.jsx # Employer views submissions -- stats, filtering, dropoff analysis, and the single candidate Review dialog (incl. runtime replay)
 │   ├── Subscription.jsx        # Billing plans -- Free tier vs Early Access
 │   ├── Pricing.jsx             # Public pricing page
 │   ├── BillingSuccess.jsx      # Stripe success redirect
@@ -670,9 +717,10 @@ client/src/
 │   ├── CancelSubscription.jsx  # Cancellation form with reason
 │   └── Contact.jsx             # Contact/support page
 ├── api/
-│   ├── requests.ts        # Base HTTP client (fetch wrapper: get/post/put/patch/del with error handling)
+│   ├── requests.ts        # Base HTTP client (fetch wrapper: get/post/put/patch/del; parses JSON error bodies so a user sees `error`/`message`, not the raw payload)
 │   ├── assessment.ts      # Assessment API: create, list, get, update, delete, generate, chat
 │   ├── submission.ts      # Submission API: generateLink, bulk, invites, start, submit, optOut, uploadTrace
+│   ├── runtimeSetup.ts    # Candidate runtime setup + recruiter replay (preview/status/logs/stop)
 │   ├── competition.ts     # Public competition API: get by slug, join, leaderboard
 │   ├── ops.ts             # Ops workload API (admin allowlist)
 │   ├── billing.ts         # Billing API: checkout, status, cancel, reactivate
@@ -682,6 +730,7 @@ client/src/
 │   ├── assessment/
 │   │   ├── AISidebar.jsx               # AI chat sidebar for assessment editing (quick action chips)
 │   │   ├── AssessmentSetup.jsx        # Pre-timer gate: entire-screen share required to enable Start when recording is on; zip/brief wait until start
+│   │   ├── BehavioralCheckVerification.jsx # Per-check "How is this verified?" editor (UI walkthrough default; agent opt-in)
 │   │   ├── CandidatePreviewModal.jsx   # Candidate assessment preview modal
 │   │   ├── DocumentBlock.jsx          # Reusable content block with edit, auto-resizing textarea
 │   │   └── PresetPills.jsx            # Quick preset job descriptions
@@ -690,6 +739,7 @@ client/src/
 │   │   ├── BehavioralGradingLiveTrace.jsx # Live agent-step trace while behavioral grading is pending
 │   │   ├── CommunicationCard.jsx          # Spoken-reasoning assessment on Summary: clarity, highlights, claim checks vs captured timeline (never part of the score)
 │   │   ├── EvidenceMomentChips.jsx        # Rubric evidence as clickable time+observation chips that seek the recording
+│   │   ├── RuntimeReplayPanel.jsx         # Recruiter read-only runtime config + finalized-run evidence card + Run project / Restart preview/logs (stops the replay sandbox on unmount)
 │   │   └── WorkflowActivityTimeline.jsx   # "What they did": prompting conversation + screen-context beats under the Recording player for `both` (click-to-seek); Summary only for leftover workflow-only
 │   ├── proctoring/
 │   │   ├── ConsentScreen.jsx          # Consent dialog before screen recording (no Skip when recording is required)
@@ -769,7 +819,7 @@ Legacy subscription (nested): `subscription.tier` (free/paid), `subscription.str
 Current subscription (top-level): `stripeCustomerId` (sparse indexed), `stripeSubscriptionId` (sparse indexed), `subscriptionStatus` (active/canceled/past_due/trialing/incomplete/incomplete_expired/unpaid/null), `currentPeriodEnd`, `cancelAtPeriodEnd`, `cancellationReason`, `cancellationDate`
 
 ### Assessment
-Fields: `userId` (ref User, indexed), `title` (max 200), `description`, `timeLimit` (minutes, min 1), `starterFilesGitHubLink`, `starterCodeFiles[]` { path, content }, `evidenceMode` (`both` default for new assessments / `none` / leftover `workflow` / leftover `screen` — see below), `behavioralChecks[]` (plain-language observable product behaviors; stack-agnostic), `evaluationCriteria[]` (proctoring/transcript rubric), `evaluationCriteriaGroundings` (optional)
+Fields: `userId` (ref User, indexed), `title` (max 200), `description`, `timeLimit` (minutes, min 1), `starterFilesGitHubLink`, `starterCodeFiles[]` { path, content }, `evidenceMode` (`both` default for new assessments / `none` / leftover `workflow` / leftover `screen` — see below), `behavioralChecks[]` (plain-language observable product behaviors; stack-agnostic), `behavioralCheckSpecs[]` (optional Zod-validated acceptance specs with stable ids; never read raw — resolve via `resolveBehavioralCheckSpecs`), `evaluationCriteria[]` (proctoring/transcript rubric), `evaluationCriteriaGroundings` (optional)
 
 **`evidenceMode` — how a candidate's work is observed.** Employer choice in AssessmentEditor's timing panel is **Observe session** (`both`, default) or **None**. `both`: record the screen for human playback and low-res surface classification, and analyse the hook stream — the video is **not** transcribed (no OCR stills, no `TRANSCRIPT_ENGINE=gemini` on that movie). `none`: no screen recording and no capture-kit. `workflow` (hooks only, no screen) and `screen` (video + AI transcript) are leftover values: still honoured for existing assessments, not offered as new choices. Documents with no field still resolve to `screen`. Resolution lives in [`server/src/utils/evidenceMode.ts`](server/src/utils/evidenceMode.ts): the assessment field is returned as-is (`none` / `workflow` / `both` / leftover `screen`). There is no `WORKFLOW_CAPTURE_ENABLED` rewrite — that flag is unused, and `/api/workflow-capture` is always mounted. Never read the raw field client-side; `GET /api/submissions/token/:token` returns the *resolved* `evidenceMode`. The candidate sees the `capture-kit` setup command on the in-progress screen when observation is on (`both` or leftover `workflow`). `ensureProctoringTranscriptAndEvaluate` grades the hook stream for `workflow`/`both`, runs the video transcript for legacy `screen`, and skips observational evaluation for `none`. PNG frames are captured only for leftover `screen` (OCR); `both` still records sidecar events (tab/blur/clipboard/idle/stream_lost — the kit does not).
 
@@ -791,9 +841,30 @@ Opt-out: `optedOut`, `optOutReason`, `optedOutAt`
 
 Metadata: `metadata` { ipAddress, userAgent }
 
-Behavioral grading: `behavioralGradingStatus` (`pending`/`completed`/`failed`), `behavioralGradingError`, `behavioralGradingReport` (runbook summary, per-check verdict/evidence, artifact keys, timings, sandbox metadata), `behavioralGradingProgress`
+Behavioral grading: `behavioralGradingStatus` (`pending`/`completed`/`failed`), `behavioralGradingError`, `behavioralGradingReport` (runbook summary, per-check verdict/evidence including `blocked`, `verifiedBy`, artifact keys, timings, sandbox metadata, `runbookSource`, optional `runbookFallbackReason`, `score` `{ total, decided, passed, failed, inconclusive, blocked, coverage, passRate }`, `failureCategory`), `behavioralGradingProgress` (live trace written by real E2B runs and the stress-demo simulator; `$unset` when the run completes or fails). Grep server logs with `[behavioral]` plus the submission id.
+
+`failureCategory` is `setup` (candidate project did not install/start), `environment` (E2B/clone/extract/storage), `interrupted` (server restart mid-run), `disabled`, `judge`, `timeout`, or `unknown`. Platform categories (`environment`/`interrupted`/`disabled`) render as amber "our side" in the recruiter UI, never as a red candidate fail. On boot, `sweepInterruptedBehavioralGrading` marks leftover `pending` rows `failed`/`interrupted` because the in-process queue dies with the process. Submit + manual re-run share an in-flight claim so two sandboxes cannot race one submission (`409` on the manual route).
+
+**Grading prefers the candidate's verified commands.** When `runtimeSetup.status === "finalized"` and `verified`, [`runtimeConfigRunbook.ts`](server/src/services/behavioralGrading/runtimeConfigRunbook.ts) maps `runtimeConfig` onto a runbook (install → `install`, build → `setup`, start → `start`, `port` → `portsHint`, `rootDir` → step `cwd`, all steps `origin: "readme"` since nothing is guessed) and the README→runbook LLM call is skipped entirely; the candidate's `envVars` — secrets included, plus `PORT` when the config pins one and the candidate did not — are sourced into every step so the app starts the way it did for them, and secret values are scrubbed out of step evidence. If that attempt does not reach ready, grading kills whatever bound the config's ports, falls back to the planner, and records `runbookFallbackReason`. `runbookSource` (`candidate_config` | `llm`) makes a failure attributable, and the recruiter UI follows it: "README: pass/fail" is meaningless for a run that never read the README, so the badge reads `Commands: candidate setup` instead. Checks with a resolved acceptance spec run through `deterministicChecks.ts` (no LLM). After clone, `extractCapabilities.ts` builds a source-grounded command inventory (named and nameless UI controls plus `fetch`/Express routes); leftover `kind: "agent"` checks are linked to those IDs by purpose (`linkCheckCapabilities.ts`) and instantiated from templates (`synthesizeAcceptance.ts`), not page-text search. UI clicks are `getByRole({ exact: true })` or `click_in_row` (listitem filtered by nonce); leftover `click_text` binds to a catalog name or is `inconclusive` — never `getByText`. An invalid link is `inconclusive` — the agent judge is not asked for a verdict. HTTP `bodyContains` matches compact JSON and object subsets, so `"ok": true` passes against `{"ok":true}` and `{"title":"…"}` passes against a larger created-resource body. Subjective leftovers may still emit `kind: "agent"` and stay on the agent. Procedure errors (fill/click/goto/transport timeout) are `inconclusive`; only a failed assertion after a completed procedure is a candidate `fail`. Setup-failed checks that need a running app are `blocked`, not judged. `passRate` is `passed / decided`; inconclusive and blocked leave the denominator, and coverage under 50% publishes `null`.
+
+**Proof guards cut both ways (`proofGuards.ts`).** A `pass` must rest on the candidate's files, an HTTP response, or a rendered page. A `fail` on a UI-shaped check is *also* rejected when a fill or click timed out and the agent never both mutated the page *and* ran `browser_expect` — `unproven_ui_fail`, which resolves to `inconclusive` after `MAX_GUARD_REJECTIONS`. A successful `browser_goto` alone is not a walkthrough: that is the test5 hole, where `input[type=text]` timed out on an untyped field after the page loaded. A fail built on source review or curl, with no browser mutation, still stands. Related: `browser_snapshot` returns ARIA roles, and `browser_fill`/`browser_click` take **CSS** — role names belong in `browser_fill_role`/`browser_click_role`. `browser_fill` coerces `input[type=text]` to role=textbox (an untyped `<input>` is not `[type=text]`), retries `getByRole('textbox')` / `getByPlaceholder` / the first input after a CSS timeout, and says so in the tool output so the agent stops retrying the dead selector.
+
+Runtime setup: `runtimeConfig` { rootDir, runtime (`auto`/`node20`/`python312` — **stored but never read at execution time**; the E2B image decides which runtimes exist and the start command picks one, so the control is gone from both UIs and the field survives only so old documents parse), installCommand, buildCommand, startCommand, port, healthPath, executionProfile (`web_server`/`cli_stdout`/`unclear`), envVars[] { key, value, secret }, declaredEgressDomains[] }; `runtimeSetup` { status (`not_started`/`in_progress`/`finalized`), verified, lastRunAt, lastRunResult, finalizedAt, snapshotSha256, evidence { healthOk, healthSummary, port, capturedAt, logTail[] } }.
+
+Secret env values are write-only — never returned on GET. Because a blanked secret is otherwise indistinguishable from one that was never filled in, `publicRuntimeConfig` adds `hasValue: boolean` per row and the candidate form renders a "Saved" chip beside an empty secret input.
+
+`runtimeSetup.evidence` is captured **at finalize**, the one moment the health result, resolved port, and log tail are all still in hand, and is what makes `Verified` readable in the recruiter panel without booting a sandbox.
 
 Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`
+
+### RuntimeSetupSession
+Ephemeral E2B box for candidate setup (`kind: setup`) or recruiter replay (`kind: replay`). Durable record is `Submission.runtimeConfig` + the stored code snapshot.
+
+Fields: `submissionId` (indexed), `token`, `kind` (`setup`/`replay`), `e2bSandboxId`, `status` (`provisioning`/`running`/`paused`/`dead`), `runPhase`, `repoPath`, `port`, `previewUrl`, `health`, `startedAt`, `lastActiveAt`, `pausedAt`, `error`, `logLines[]`, `codeLoaded`
+
+Indexes: unique `{ submissionId: 1, kind: 1 }`
+
+`lastActiveAt` is bumped by status **and** log polls, so the idle reaper cannot pause a preview someone is watching. `logLines` are **not** reset on resume — only an explicit restart clears them, so a refresh keeps the history. A recruiter `Run project` on a session that is already `ready` reconnects and reuses the warm box (health re-probed via `appStillListening`); the kill-and-reinstall path lives behind the panel's explicit **Restart**.
 
 ### PlayChallenge (bridge-play DB)
 Fields: `slug` (unique, lowercase `a-z0-9-`), `challengeDate` (unique, `YYYY-MM-DD` UTC), `title` (max 120), `prompt`, `tokenBudget`, `category` (`widget`/`game`/`tool`/`other`), `status` (`draft`/`published`), `makeMode` (optional `e2b`/`serverless`; unset → `SHORTS_MAKE_MODE` default — the site's Build-mode toggle), `windowStartsAt`/`windowEndsAt` (optional Date pair: explicit round window override — the challenge is live exactly while now ∈ [start, end], regardless of the cadence grid, and the round countdown/session-expiry cap use `windowEndsAt`; `challengeDate` stays the key submissions/votes/sessions attach to, so a window never rekeys data. Consumers resolve "the current round" through `getActiveChallengeDate()` in `services/shorts/challenges.ts` (window-aware), not raw `getCurrentPeriodKey()`. Set via Mongo directly — not exposed in the admin UI yet)

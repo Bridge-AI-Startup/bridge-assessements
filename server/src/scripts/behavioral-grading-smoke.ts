@@ -25,11 +25,8 @@ async function main(): Promise<void> {
   const report = await gradeSubmissionBehavioral(submissionId);
   const elapsedMs = Date.now() - started;
 
-  const passed = report.cases.filter((c) => c.verdict === "pass").length;
-  const failed = report.cases.filter((c) => c.verdict === "fail").length;
-  const inconclusive = report.cases.filter(
-    (c) => c.verdict === "inconclusive"
-  ).length;
+  const { passed, failed, inconclusive, blocked, decided, total, passRate } =
+    report.score;
 
   console.log("Behavioral grading completed");
   console.log("elapsedMs:", elapsedMs);
@@ -37,7 +34,13 @@ async function main(): Promise<void> {
   console.log("readmeRequirementPassed:", report.runbook.readmeRequirementPassed);
   console.log("setupStatus:", report.setup?.status);
   console.log("setupSummary:", report.setup?.summary?.slice(0, 200));
-  console.log("caseCounts:", { passed, failed, inconclusive });
+  console.log("caseCounts:", { passed, failed, inconclusive, blocked });
+  console.log(
+    "score:",
+    passRate == null
+      ? `not published (${decided}/${total} checks decided)`
+      : `${Math.round(passRate)}% over ${decided}/${total} decided checks`
+  );
   console.log("reportArtifactKey:", report.reportArtifactKey ?? "n/a");
 }
 

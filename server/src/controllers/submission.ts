@@ -46,10 +46,15 @@ import { closeAttemptSessions } from "../services/submission/closeAttempt.js";
 import { expireAttemptAndClose } from "../services/submission/finalizeExpired.js";
 import { prepareScreenContextForEvaluation } from "../services/workflowCapture/screenContext.js";
 import {
+  claimBehavioralGradingRun,
   gradeSubmissionBehavioral,
   inferFailureCategory,
   isBehavioralGradingEnabled,
+  isBehavioralGradingInFlight,
+  releaseBehavioralGradingRun,
 } from "../services/behavioralGrading/index.js";
+import { behavioralInfo } from "../services/behavioralGrading/log.js";
+import { queuedBehavioralProgress } from "../services/behavioralGrading/progress.js";
 import {
   isStressDemoAssessment,
   beginStressDemoBehavioralSimulation,
@@ -58,6 +63,11 @@ import {
 import { getGradingEvidenceStorage } from "../services/gradingEvidence/storage.js";
 import { getSubmissionCodeStorage } from "../services/submissionCode/storage.js";
 import { collectBehavioralArtifactKeys } from "../utils/behavioralEvidenceKeys.js";
+import {
+  isRuntimeSetupEnabled,
+  markRuntimeSetupInProgress,
+  publicRuntimeConfig,
+} from "../services/runtimeSetup/index.js";
 
 const TRANSCRIPT_POLL_INTERVAL_MS = 15000;
 const TRANSCRIPT_POLL_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
@@ -116,21 +126,31 @@ async function setBehavioralGradingFailed(
         cases: [],
       },
     },
+    $unset: { behavioralGradingProgress: "" },
   });
 }
 
 function triggerBehavioralGradingInBackground(
   submissionId: string,
   source: "submitSubmissionByToken" | "submitSubmission" | "manual"
-): void {
+): boolean {
   if (!isBehavioralGradingEnabled()) {
-    return;
+    return false;
   }
+  if (!claimBehavioralGradingRun(submissionId)) {
+    behavioralInfo("grade_skipped_in_flight", { submissionId, source });
+    console.log(
+      `[${source}] Behavioral grading already in flight for ${submissionId}; skipping.`
+    );
+    return false;
+  }
+  behavioralInfo("grade_claimed", { submissionId, source });
   SubmissionModel.findByIdAndUpdate(submissionId, {
     $set: {
       behavioralGradingStatus: "pending",
       behavioralGradingError: null,
       behavioralGradingReport: null,
+      behavioralGradingProgress: queuedBehavioralProgress(),
     },
   })
     .then(() => gradeSubmissionBehavioral(submissionId))
@@ -141,6 +161,7 @@ function triggerBehavioralGradingInBackground(
           behavioralGradingError: null,
           behavioralGradingReport: report,
         },
+        $unset: { behavioralGradingProgress: "" },
       })
     )
     .catch((err) => {
@@ -157,7 +178,11 @@ function triggerBehavioralGradingInBackground(
         submissionId,
         message
       ).catch(() => {});
+    })
+    .finally(() => {
+      releaseBehavioralGradingRun(submissionId);
     });
+  return true;
 }
 
 /**
@@ -662,6 +687,10 @@ export const getSubmissionByToken: RequestHandler = async (req, res, next) => {
     // field client-side.
     const effectiveMode = resolveEvidenceMode(submission.assessmentId as any);
     response.evidenceMode = effectiveMode;
+    response.runtimeSetupEnabled = isRuntimeSetupEnabled();
+    if (response.runtimeConfig) {
+      response.runtimeConfig = publicRuntimeConfig(response.runtimeConfig);
+    }
 
     // Ship the capture kit inside the starter files whenever the candidate is
     // expected to run it. Without this they are told to run
@@ -876,6 +905,7 @@ export const submitSubmissionByToken: RequestHandler = async (
     submission.status =
       submission.status === "expired" ? "expired" : "submitted";
     submission.submittedAt = new Date();
+    markRuntimeSetupInProgress(submission);
 
     await submission.save();
 
@@ -1103,6 +1133,7 @@ export const uploadSubmissionByToken: RequestHandler = async (req, res, next) =>
     submission.status =
       submission.status === "expired" ? "expired" : "submitted";
     submission.submittedAt = new Date();
+    markRuntimeSetupInProgress(submission);
 
     await submission.save();
 
@@ -1251,6 +1282,7 @@ export const submitSubmission: RequestHandler = async (req, res, next) => {
     submission.status =
       submission.status === "expired" ? "expired" : "submitted";
     submission.submittedAt = new Date();
+    markRuntimeSetupInProgress(submission);
 
     await submission.save();
 
@@ -1338,7 +1370,14 @@ export const getSubmissionsForAssessment: RequestHandler = async (
       })
       .lean();
 
-    res.status(200).json(submissions);
+    const runtimeSetupEnabled = isRuntimeSetupEnabled();
+    const shaped = submissions.map((row) => ({
+      ...row,
+      runtimeSetupEnabled,
+      runtimeConfig: publicRuntimeConfig(row.runtimeConfig as never) || row.runtimeConfig,
+    }));
+
+    res.status(200).json(shaped);
   } catch (error) {
     next(error);
   }
@@ -1821,6 +1860,12 @@ export const gradeBehavioralHandler: RequestHandler = async (
       return res.status(503).json({
         error:
           "Behavioral grading (E2B) is currently disabled. Set BEHAVIORAL_GRADING_ENABLED=true on the server to enable.",
+      });
+    }
+
+    if (isBehavioralGradingInFlight(submissionId)) {
+      return res.status(409).json({
+        error: "Behavioral grading is already running for this submission.",
       });
     }
 

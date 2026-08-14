@@ -60,6 +60,25 @@ export function summarizeFailedRunbookSteps(
 }
 
 /**
+ * Checks that talk about the repository rather than the running product. A
+ * behavioral check is normally an observable behavior ("someone can add a
+ * note"), which cannot be verified when the app never started — but employers do
+ * occasionally write a source-level one, and those stay judgeable from the clone.
+ */
+const SOURCE_ONLY_CHECK =
+  /\b(source code|codebase|code base|repository|repo|readme|documentation|docs|comments?|committed|file exists|\.md)\b/i;
+
+/**
+ * Whether verifying this check requires the candidate's app to be running. Used
+ * to decide what can still be graded after the environment failed to come up:
+ * passing a runtime check without ever running the app is exactly the verdict a
+ * candidate could dispute, so those checks are reported as blocked instead.
+ */
+export function checkRequiresRunningApp(checkText: string): boolean {
+  return !SOURCE_ONLY_CHECK.test(checkText || "");
+}
+
+/**
  * Run mutating UI/API checks after read-only checks to reduce cross-check pollution.
  * Preserves original index on each item for stable reporting.
  */
@@ -327,20 +346,62 @@ export function buildCliSetupStatus(
 }
 
 export type GradingFailureCategory =
+  /** The candidate's project did not install, build, or come up. */
   | "setup"
+  /** Our side broke: E2B, the clone/extract, storage, a missing key. */
+  | "environment"
+  /** The server died mid-run (deploy, restart); nothing was concluded. */
+  | "interrupted"
+  /** Grading is switched off for this deployment or source. */
+  | "disabled"
   | "judge"
   | "timeout"
-  | "disabled"
   | "unknown";
+
+/**
+ * Who a failure belongs to.
+ *
+ * Rendering every failure as one red "failed" made our own outages read as a
+ * candidate who cannot ship working code, which is the single most damaging
+ * thing this report can get wrong. `timeout` and `judge` stay `unknown`: a hung
+ * install could be either a heavy project or a slow mirror, and we do not
+ * pretend to know which.
+ */
+export function gradingFaultOwner(
+  category: GradingFailureCategory | null | undefined
+): "platform" | "candidate" | "unknown" {
+  switch (category) {
+    case "environment":
+    case "interrupted":
+    case "disabled":
+      return "platform";
+    case "setup":
+      return "candidate";
+    default:
+      return "unknown";
+  }
+}
 
 export function inferFailureCategory(message: string): GradingFailureCategory {
   const m = message.toLowerCase();
   if (m.includes("disabled") || m.includes("not set")) return "disabled";
+  if (m.includes("interrupted") || m.includes("restarted")) return "interrupted";
+  // Platform markers are checked before project markers: "failed to extract
+  // uploaded archive" is our storage, not their code, and it matches both.
+  if (
+    m.includes("e2b") ||
+    m.includes("sandbox") ||
+    m.includes("api key") ||
+    m.includes("archive") ||
+    m.includes("storage") ||
+    m.includes("clone") ||
+    m.includes("extract")
+  ) {
+    return "environment";
+  }
   if (m.includes("timeout") || m.includes("timed out")) return "timeout";
   if (
     m.includes("runbook") ||
-    m.includes("clone") ||
-    m.includes("extract") ||
     m.includes("readme") ||
     m.includes("no behavioral checks")
   ) {

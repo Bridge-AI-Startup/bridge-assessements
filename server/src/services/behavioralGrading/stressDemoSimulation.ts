@@ -7,6 +7,15 @@ import crypto from "crypto";
 import SubmissionModel from "../../models/submission.js";
 import { getGradingEvidenceStorage } from "../gradingEvidence/storage.js";
 import type { BehavioralGradingReport } from "./index.js";
+import { computeBehavioralScore } from "./scoring.js";
+import {
+  clearBehavioralProgress,
+  writeBehavioralProgress,
+  type BehavioralGradingProgress,
+  type BehavioralProgressStep,
+} from "./progress.js";
+
+export type { BehavioralGradingProgress };
 
 export const DEFAULT_STRESS_DEMO_ASSESSMENT_ID = "6a30cb825c1e8969b7c21110";
 
@@ -349,6 +358,7 @@ export function buildStressDemoBehavioralReport(
     },
     failureCategory: null,
     cases,
+    score: computeBehavioralScore(cases),
     startedAt: isoAt(startedMs),
     completedAt: isoAt(completedMs),
     reportArtifactKey: `submissions/${submissionId}/report.json`,
@@ -362,44 +372,7 @@ function simulationDelayMs(): number {
   return Number.isFinite(n) && n >= 3_000 ? n : DEFAULT_SIMULATION_MS;
 }
 
-export type SimAgentStep = {
-  iteration: number;
-  tool: string;
-  detail: string;
-  status: "pending" | "running" | "done";
-  outputPreview?: string;
-};
-
-export type BehavioralGradingProgress = {
-  phase: "sandbox" | "install" | "test" | "start" | "judge";
-  phaseLabel: string;
-  checkIndex: number | null;
-  checksTotal: number;
-  checkText?: string;
-  agentSteps: SimAgentStep[];
-  completedChecks: Array<{
-    checkIndex: number;
-    checkText: string;
-    verdict: Verdict;
-  }>;
-  startedAt: string;
-  updatedAt: string;
-};
-
-async function writeBehavioralProgress(
-  submissionId: string,
-  progress: BehavioralGradingProgress,
-): Promise<void> {
-  await SubmissionModel.findByIdAndUpdate(submissionId, {
-    $set: { behavioralGradingProgress: progress },
-  });
-}
-
-async function clearBehavioralProgress(submissionId: string): Promise<void> {
-  await SubmissionModel.findByIdAndUpdate(submissionId, {
-    $unset: { behavioralGradingProgress: "" },
-  });
-}
+export type SimAgentStep = BehavioralProgressStep;
 
 function stepOutputPreview(checkIndex: number, iteration: number): string | undefined {
   if (iteration === 1) {

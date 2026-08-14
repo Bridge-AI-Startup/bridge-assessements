@@ -122,7 +122,7 @@ export default function CreateAssessment() {
     try {
       const token = await currentUser.getIdToken();
 
-      /** @type {{ title: string; description: string; timeLimit: number; behavioralChecks?: string[]; evaluationCriteria?: string[]; starterFilesGitHubLink?: string }} */
+      /** @type {{ title: string; description: string; timeLimit: number; behavioralChecks?: string[]; behavioralCheckSpecs?: unknown[]; evaluationCriteria?: string[]; starterFilesGitHubLink?: string }} */
       let assessmentData;
 
       if (creationMode === "ai") {
@@ -199,6 +199,7 @@ export default function CreateAssessment() {
           description: generatedDescription,
           timeLimit,
           behavioralChecks,
+          behavioralCheckSpecs,
           starterCodeFiles,
         } = generateResult.data;
 
@@ -207,6 +208,7 @@ export default function CreateAssessment() {
           description: generatedDescription,
           timeLimit: timeLimit,
           ...(behavioralChecks?.length ? { behavioralChecks } : {}),
+          ...(behavioralCheckSpecs?.length ? { behavioralCheckSpecs } : {}),
           ...(starterCodeFiles?.length ? { starterCodeFiles } : {}),
         };
 
@@ -268,6 +270,10 @@ export default function CreateAssessment() {
           );
         } else if (bcResult.data.behavioralChecks?.length) {
           assessmentData.behavioralChecks = bcResult.data.behavioralChecks;
+          if (bcResult.data.behavioralCheckSpecs?.length) {
+            assessmentData.behavioralCheckSpecs =
+              bcResult.data.behavioralCheckSpecs;
+          }
         }
       }
 

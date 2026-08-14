@@ -1,8 +1,15 @@
+import { setTimeout as delay } from "timers/promises";
+
 import {
   createChatCompletionWithStructuredOutput,
   type ChatMessage,
 } from "../langchainAI.js";
+import { behavioralInfo } from "./log.js";
 import { runbookPlanSchema, type RunbookPlan } from "./schema.js";
+
+/** One malformed model response used to kill the whole grading run. */
+const MAX_PARSE_RETRIES = 3;
+const RETRY_DELAY_MS = 500;
 
 export type RunbookPlanningInput = {
   readmeText: string;
@@ -56,15 +63,39 @@ Rules:
     },
   ];
 
-  const { result } = await createChatCompletionWithStructuredOutput(
-    "workflow_evaluation",
-    messages,
-    runbookPlanSchema,
-    {
-      temperature: 0,
-      maxTokens: 1800,
+  behavioralInfo("planner_llm_start", {
+    readmeChars: input.readmeText.length,
+    layoutChars: input.repoLayoutProbe?.length ?? 0,
+  });
+  const t0 = Date.now();
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_PARSE_RETRIES; attempt++) {
+    try {
+      const { result } = await createChatCompletionWithStructuredOutput(
+        "workflow_evaluation",
+        messages,
+        runbookPlanSchema,
+        {
+          temperature: 0,
+          maxTokens: 1800,
+        }
+      );
+      behavioralInfo("planner_llm_done", {
+        steps: result.steps.length,
+        profile: result.executionProfile,
+        ms: Date.now() - t0,
+      });
+      return result;
+    } catch (err) {
+      lastError = err;
+      if (attempt < MAX_PARSE_RETRIES) {
+        behavioralInfo("planner_llm_retry", {
+          attempt,
+          error: (err instanceof Error ? err.message : String(err)).slice(0, 400),
+        });
+        await delay(RETRY_DELAY_MS * attempt);
+      }
     }
-  );
-
-  return result;
+  }
+  throw lastError;
 }

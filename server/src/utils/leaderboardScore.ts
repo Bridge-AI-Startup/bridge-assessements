@@ -3,12 +3,22 @@
  * `getCombinedScore0to100` + `getCombinedScoreBreakdownParts`.
  *
  * Mean of available signals (0–100 each): process rubric and behavioral pass rate.
+ *
+ * The behavioral half is not derived here — it comes from the score stored on the
+ * report by `behavioralGrading/scoring.ts`, so the leaderboard, the dashboard and
+ * the report itself cannot disagree about what a candidate scored.
  */
+
+import {
+  resolveBehavioralScore,
+  type BehavioralScore,
+} from "../services/behavioralGrading/scoring.js";
 
 type SubmissionLike = {
   behavioralGradingStatus?: string | null;
   behavioralGradingReport?: {
     cases?: Array<{ verdict?: string }>;
+    score?: BehavioralScore | null;
     failureCategory?: string | null;
   } | null;
   evaluationReport?: {
@@ -30,17 +40,11 @@ function getRecordingRubric0to100(sub: SubmissionLike): number | null {
 
 function getBehavioralPass0to100(sub: SubmissionLike): number | null {
   if (sub.behavioralGradingStatus !== "completed") return null;
-  // Setup failure = grading environment problem, not candidate performance;
-  // the mostly-inconclusive verdicts it produces must not average in as ~50%.
+  // Setup failure = grading environment problem, not candidate performance. New
+  // runs report those checks as blocked and score null on their own; this still
+  // guards legacy reports whose cases hold inconclusive verdicts instead.
   if (sub.behavioralGradingReport?.failureCategory === "setup") return null;
-  const cases = sub.behavioralGradingReport?.cases;
-  if (!Array.isArray(cases) || cases.length === 0) return null;
-  let pts = 0;
-  for (const c of cases) {
-    if (c.verdict === "pass") pts += 1;
-    else if (c.verdict === "inconclusive") pts += 0.5;
-  }
-  return (pts / cases.length) * 100;
+  return resolveBehavioralScore(sub.behavioralGradingReport).passRate;
 }
 
 /**
@@ -62,6 +66,15 @@ export function getCombinedScoreBreakdownParts(sub: SubmissionLike): string[] {
   const rec = getRecordingRubric0to100(sub);
   const beh = getBehavioralPass0to100(sub);
   if (rec != null) segs.push(`Process ${(rec / 10).toFixed(1)}/10`);
-  if (beh != null) segs.push(`Behavioral ${Math.round(beh)}%`);
+  if (beh != null) {
+    const score = resolveBehavioralScore(sub.behavioralGradingReport);
+    // Say how much of the assessment the percentage actually covers, so a rate
+    // over 4 of 6 checks is never mistaken for a rate over all 6.
+    const coverage =
+      score.decided > 0 && score.decided < score.total
+        ? ` (${score.decided}/${score.total} checks decided)`
+        : "";
+    segs.push(`Behavioral ${Math.round(beh)}%${coverage}`);
+  }
   return segs;
 }

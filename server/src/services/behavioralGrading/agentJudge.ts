@@ -19,8 +19,11 @@ import {
   MAX_BEHAVIORAL_CITATIONS,
 } from "./judge.js";
 import { behavioralInfo } from "./log.js";
+import { checkProofGuards, type ProofGuardCode } from "./proofGuards.js";
 
 const MAX_AGENT_ITERATIONS = 16;
+/** Rejections of the same proof guard before the pass is downgraded to inconclusive. */
+const MAX_GUARD_REJECTIONS = 2;
 const MAX_TOOL_OUTPUT = 12_000;
 const MAX_FILE_SNIPPET = 16_000;
 const BROWSER_GOTO_TIMEOUT_MS = 35_000;
@@ -54,6 +57,7 @@ export type AgentToolTraceEntry = {
     | "browser_click_role"
     | "browser_click_text"
     | "browser_fill"
+    | "browser_fill_role"
     | "browser_screenshot"
     | "browser_snapshot"
     | "browser_expect";
@@ -105,6 +109,14 @@ const agentTurnSchema = z.discriminatedUnion("step", [
     thought: z.string().max(600).optional(),
   }),
   z.object({
+    step: z.literal("browser_fill_role"),
+    role: z.enum(BROWSER_ROLE_VALUES),
+    name: z.string().max(200).optional(),
+    exact: z.boolean().optional(),
+    value: z.string().max(4000),
+    thought: z.string().max(600).optional(),
+  }),
+  z.object({
     step: z.literal("browser_screenshot"),
     label: z.string().max(200).optional(),
     fullPage: z.boolean().optional(),
@@ -147,6 +159,8 @@ function summarizeAgentAction(r: AgentTurn): string {
       return r.text.length > 80 ? `${r.text.slice(0, 80)}…` : r.text;
     case "browser_fill":
       return `${r.selector} ← ${r.value.length} chars`;
+    case "browser_fill_role":
+      return `${r.name ? `${r.role} "${r.name}"` : r.role} ← ${r.value.length} chars`;
     case "browser_screenshot":
       return r.label?.trim() || "viewport";
     case "browser_snapshot":
@@ -158,6 +172,93 @@ function summarizeAgentAction(r: AgentTurn): string {
     default:
       return String((r as { step: string }).step);
   }
+}
+
+/** Anything that could only be CSS — a bare role name has none of it. */
+const CSS_SYNTAX = /[.#[\]>+~:*,()="'\s]/;
+
+/**
+ * Whether a `browser_fill` selector is really an ARIA role copied out of a
+ * `browser_snapshot`. `page.fill` takes CSS only, so `textbox` there looks for a
+ * `<textbox>` element, finds none, and times out — which the agent then reads as
+ * "the app has no input" and fails an app that works.
+ */
+export function isAriaRoleToken(selector: string): boolean {
+  const trimmed = selector.trim().toLowerCase();
+  if (!trimmed || CSS_SYNTAX.test(trimmed)) return false;
+  return (BROWSER_ROLE_VALUES as readonly string[]).includes(trimmed);
+}
+
+/**
+ * `input[type='text']` does not match `<input>` with no type attribute — CSS
+ * requires the attribute to be present. That is the test5 miss: the agent
+ * guessed a typed-text selector, Playwright waited 20s, and the check failed
+ * an app whose field was an untyped textbox.
+ */
+export function isImplicitTextInputSelector(selector: string): boolean {
+  const compact = selector.trim().toLowerCase().replace(/\s+/g, "");
+  return (
+    compact === "input[type='text']" ||
+    compact === 'input[type="text"]' ||
+    compact === "input[type=text]"
+  );
+}
+
+export type FillAttempt =
+  | { strategy: "role"; role: string; reason: string }
+  | { strategy: "css"; selector: string; reason: string }
+  | { strategy: "placeholder"; placeholder: string; reason: string }
+  | { strategy: "first_input"; reason: string };
+
+/**
+ * Ordered locators to try for `browser_fill`. The first attempt is what the
+ * agent asked for (coerced to a role when that is what they actually passed);
+ * later attempts only run after a timeout, so a real CSS selector still wins
+ * when it matches.
+ */
+export function planFillAttempts(selector: string): FillAttempt[] {
+  const trimmed = selector.trim();
+  if (isAriaRoleToken(trimmed)) {
+    return [
+      {
+        strategy: "role",
+        role: trimmed.toLowerCase(),
+        reason: `\`${trimmed}\` is an ARIA role, not a CSS selector — filled by role.`,
+      },
+    ];
+  }
+  if (isImplicitTextInputSelector(trimmed)) {
+    return [
+      {
+        strategy: "role",
+        role: "textbox",
+        reason:
+          "`input[type=text]` does not match an untyped `<input>`; filled by role=textbox instead.",
+      },
+    ];
+  }
+
+  const attempts: FillAttempt[] = [
+    { strategy: "css", selector: trimmed, reason: "css" },
+    {
+      strategy: "role",
+      role: "textbox",
+      reason: "CSS fill missed; retried getByRole('textbox').",
+    },
+  ];
+  // A selector with no CSS grammar is likely a placeholder or accessible name.
+  if (!/[.#\[\]>+~:=]/.test(trimmed)) {
+    attempts.push({
+      strategy: "placeholder",
+      placeholder: trimmed,
+      reason: "CSS fill missed; retried getByPlaceholder.",
+    });
+  }
+  attempts.push({
+    strategy: "first_input",
+    reason: "CSS fill missed; retried the first input/textarea.",
+  });
+  return attempts;
 }
 
 function isSafeShellCommand(cmd: string): boolean {
@@ -172,32 +273,6 @@ function isCandidateTestCommand(cmd: string): boolean {
   return /\b(npm\s+test|npm\s+run\s+test|pnpm\s+test|pnpm\s+run\s+test|yarn\s+test|yarn\s+run\s+test|pytest\b|jest\b|vitest\b|mocha\b|cargo\s+test|go\s+test\b|dotnet\s+test|phpunit|rspec\b|ava\b|tap\b.*\btest\b)/i.test(
     cmd
   );
-}
-
-function behavioralCheckNeedsHttpProbe(
-  check: string,
-  executionProfile: string
-): boolean {
-  if (executionProfile === "cli_stdout") return false;
-  return /\b(GET|POST|PATCH|PUT|DELETE|HTTP|endpoint|\/api\/|\/tickets|\/stats|\?priority|\?search|returns?\s+(HTTP\s+)?\d{3})\b/i.test(
-    check
-  );
-}
-
-function agentTraceHasCurlProbe(
-  trace: AgentToolTraceEntry[],
-  sandboxAppOrigin?: string
-): boolean {
-  const origin = sandboxAppOrigin?.trim();
-  return trace.some((t) => {
-    if (t.tool !== "run_command" || !/\bcurl\b/i.test(t.detail)) return false;
-    if (!origin) return true;
-    return (
-      t.detail.includes(origin) ||
-      /\b127\.0\.0\.1:\d+/.test(t.detail) ||
-      /\blocalhost:\d+/.test(t.detail)
-    );
-  });
 }
 
 /**
@@ -393,6 +468,14 @@ export type AgentJudgeContext = BehavioralJudgeInput & {
   browserSession?: BehavioralBrowserSession;
   /** When false with browserSession, do not close browser in finally (default true). */
   manageBrowserLifecycle?: boolean;
+  /**
+   * Called after each tool action is recorded. Used for live progress; must
+   * not throw (the judge swallows).
+   */
+  onAgentStep?: (
+    entry: AgentToolTraceEntry,
+    trace: AgentToolTraceEntry[]
+  ) => void | Promise<void>;
 };
 
 /**
@@ -403,6 +486,7 @@ export async function runAgentBehavioralJudge(
   input: AgentJudgeContext
 ): Promise<BehavioralJudgeResult & { agentTrace: AgentToolTraceEntry[] }> {
   const trace: AgentToolTraceEntry[] = [];
+  const guardRejections = new Map<ProofGuardCode, number>();
   const useSharedSession = Boolean(input.browserSession);
   const shouldCloseLocalBrowser =
     input.manageBrowserLifecycle !== false && !useSharedSession;
@@ -415,6 +499,27 @@ export async function runAgentBehavioralJudge(
     process.env.BEHAVIORAL_SKIP_BROWSER === "true"
       ? "[browser disabled] BEHAVIORAL_SKIP_BROWSER is set; use read_file, run_command, and the seed HTTP excerpt instead of browser_* tools."
       : null);
+
+  const pushTrace = async (entry: AgentToolTraceEntry) => {
+    trace.push(entry);
+    if (entry.tool === "read_file") {
+      behavioralInfo("agent_read_file_done", {
+        iteration: entry.iteration,
+        success: entry.success,
+      });
+    } else if (entry.tool.startsWith("browser_")) {
+      behavioralInfo("agent_browser_done", {
+        iteration: entry.iteration,
+        tool: entry.tool,
+        success: entry.success,
+      });
+    }
+    try {
+      await input.onAgentStep?.(entry, trace);
+    } catch {
+      // Live progress must not fail the judge.
+    }
+  };
 
   const ensureBrowserPage = async (): Promise<Page> => {
     if (browserLaunchError) {
@@ -459,11 +564,12 @@ export async function runAgentBehavioralJudge(
 
   const browserHint = input.baseUrl
     ? `- step=browser_goto: open a path on the candidate's running app (urlPath like \`/\` or \`/orders\`). Waits for network idle when possible. Same origin only.
-- step=browser_snapshot: accessibility tree of the current page (roles/names). Prefer over guessing CSS selectors.
-- step=browser_click: click a CSS selector on the **current** page; then visible text snapshot.
+- step=browser_snapshot: accessibility tree of the current page (roles/names). Prefer over guessing CSS selectors — but feed what you read there to the **_role** tools below, never to \`selector\`.
+- step=browser_click: click a **CSS selector** on the **current** page; then visible text snapshot.
 - step=browser_click_role: click by ARIA role + optional accessible name (e.g. role=button, name="Add note"). Prefer over raw CSS when labels exist.
 - step=browser_click_text: click visible text (substring match; set exact=true for full match).
-- step=browser_fill: type into an input/textarea (\`selector\` + \`value\`). Clears then fills like Playwright. Then visible text snapshot.
+- step=browser_fill: type into an input/textarea (\`selector\` + \`value\`). \`selector\` is a **CSS selector** (e.g. \`#title\`, \`input[name="title"]\`, \`.note-input\`) — **not** an ARIA role. Clears then fills like Playwright. Then visible text snapshot.
+- step=browser_fill_role: type into a field by ARIA role + optional accessible name (\`role\` + optional \`name\`/\`exact\` + \`value\`). **Use this** for role names such as \`textbox\` / \`searchbox\` / \`combobox\` taken from \`browser_snapshot\`; those are roles, not CSS, and passing them to \`browser_fill\` will time out and tell you nothing about the app.
 - step=browser_screenshot: capture PNG of the viewport (or fullPage=true for tall pages). Stored server-side; you get an artifact key + short confirmation. Use after UI changes you need to preserve visually.
 - step=browser_expect: assert on **visible** text — mode \`contains\` | \`not_contains\` | \`regex\` plus \`pattern\` (substring or JS regex source). Returns pass/fail + text excerpt. Use after navigation or actions.`
     : `- (Browser tools are disabled: no app URL was available for this run — CLI/script only. Do not emit browser_* steps; they will error.)`;
@@ -492,11 +598,12 @@ Rules:
 - **Missing code (critical):** After reasonable probing (repository layout, \`routes/index.ts\`, \`rg\`/grep for symbols from the behavioral check), if **no relevant implementation** exists in the clone (wrong paths resolved, still nothing; or no route/handler/validator to evaluate), finish with **fail** — the submission does not demonstrate the required code. **Do not** choose **inconclusive** only because files were missing or paths were guessed wrong.
 - **Single-check scope (critical):** You grade **only** the one sentence in \`Behavioral check to evaluate\` below. The full assessment description is context; **other behavioral checks** (if listed) are scored in **separate** agent runs. Do **not** fail this check because the submission would fail a **different** check, unless the **current** sentence explicitly requires that behavior. **Do not double-penalize:** e.g. a wrong discount threshold belongs in the check that mentions that threshold—not in a check that only asks whether output **includes** fields such as item, quantity, cost, and discount **lines** (pass those on presence/readability of those fields; ignore whether the discount **amount** matches the spec unless this sentence says so).
 - If a behavioral check needs an edge case (e.g. empty list), propose a concrete command that exercises it (e.g. python -c "import ..." or a here-doc) when possible.
-- For **UI / website** behavioral checks and **baseUrl** is available: use **browser_goto**, **browser_click**, **browser_fill**, **browser_expect**, and **browser_screenshot** as needed; use **read_file** for implementation details.
+- For **UI / website** behavioral checks and **baseUrl** is available: use **browser_goto**, **browser_snapshot**, **browser_click_role** / **browser_fill_role** (or **browser_click** / **browser_fill** with real CSS), **browser_expect**, and **browser_screenshot** as needed; use **read_file** for implementation details.
 - Do not require stdout to contain internal variable names unless the assignment demands it.
 - **When THIS check explicitly** asks about correctness, thresholds, "correctly", or specific discount rules: compare code/stdout/UI to the assessment description and fail if they disagree.
 - **When THIS check is only** about presence, labels, or format (e.g. "output includes …", "displays each …"): pass if those elements appear in the relevant output; do **not** import failures from unrelated requirements (e.g. wrong dollar threshold) unless THIS sentence ties pass/fail to that value.
-- **Citation integrity (critical):** \`citations\` must be verbatim text from (1) **seed evidence**, OR (2) \`read_file\` from the repo, OR (3) **browser_*** visible text for UI checks, OR (4) **curl / HTTP** output from \`run_command\` when the check is about **actual API responses** (status/body/leaks). **Never** cite generic \`run_command\` stdout as proof of **source file** content unless that output is clearly a **file read** (e.g. \`cat\`) from the repo.
+- **Citation integrity (critical, enforced):** \`citations\` must be verbatim text from (1) **seed evidence**, OR (2) \`read_file\` from the repo, OR (3) **browser_*** visible text for UI checks, OR (4) **curl / HTTP** output from \`run_command\` when the check is about **actual API responses** (status/body/leaks). **Never** cite generic \`run_command\` stdout as proof of **source file** content unless that output is clearly a **file read** (e.g. \`cat\`) from the repo. A \`finish\` with **pass** whose citations come only from output your **own** inline script produced (\`python -c\`, \`node -e\`, a here-doc, \`echo\`) is **rejected automatically** — that output is yours, not the candidate's.
+- **UI proof (enforced):** when BROWSER_BASE_URL exists and this check is about what a user sees, a **pass** needs at least one successful \`browser_expect\` or \`browser_screenshot\`. Reading the component that is supposed to render something does not establish that it rendered.
 - For "source contains guard X": use **read_file** and **fail** if absent. For "page shows Y": use **browser_*** when baseUrl exists; **browser_expect** gives a deterministic pass/fail for substrings/regex on visible text.
 - **run_command** is for **curl** probes, \`rg\`/\`grep\`, or small snippets — **not** \`npm test\`, \`pytest\`, \`jest\`, or other candidate test runners (those commands are blocked). Prefer **read_file** over shell for source claims.
 - **Paths:** The **Repository layout** section shows real directories in this clone. Paths for \`read_file\` are **relative to the repository root** (the folder that contains the layout). **Do not** prefix with the root folder name again (e.g. if layout shows \`server/\` at the top, use \`server/src/routes/…\` not \`assessment/server/…\`). Prefer \`.ts\` / \`src/routes/\` when the repo is TypeScript—check the layout for \`package.json\` and actual file paths.
@@ -575,27 +682,43 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
       }
 
       if (result.step === "finish") {
-        const needsCurl =
-          result.verdict === "pass" &&
-          Boolean(input.sandboxAppOrigin?.trim()) &&
-          behavioralCheckNeedsHttpProbe(
-            input.behavioralCheck,
-            input.executionProfile
-          );
-        if (needsCurl && !agentTraceHasCurlProbe(trace, input.sandboxAppOrigin)) {
-          behavioralInfo("agent_finish_blocked_no_curl", {
+        const violation = checkProofGuards({
+          behavioralCheck: input.behavioralCheck,
+          executionProfile: input.executionProfile,
+          verdict: result.verdict,
+          citations: result.citations,
+          trace,
+          sandboxAppOrigin: input.sandboxAppOrigin,
+          browserBaseUrl: input.baseUrl,
+        });
+
+        if (violation) {
+          const priorRejections = guardRejections.get(violation.code) ?? 0;
+          behavioralInfo("agent_finish_blocked", {
             submissionId: input.submissionId,
             iteration: iter,
+            guard: violation.code,
+            attempt: priorRejections + 1,
           });
+
+          // Give the agent room to go get the proof, but do not let it spend the
+          // whole iteration budget arguing: after two rejections the honest
+          // outcome is "not verified", which now costs the candidate nothing.
+          if (priorRejections + 1 >= MAX_GUARD_REJECTIONS) {
+            return {
+              verdict: "inconclusive",
+              rationale: `${violation.explanation} The ${result.verdict} verdict was therefore not accepted. Judge's reasoning: ${result.rationale}`,
+              citations: result.citations,
+              agentTrace: trace,
+            };
+          }
+
+          guardRejections.set(violation.code, priorRejections + 1);
           messages.push({
             role: "assistant",
             content: JSON.stringify(result),
           });
-          messages.push({
-            role: "user",
-            content:
-              "finish rejected: this check requires runtime HTTP proof. Run at least one `curl` against SANDBOX_APP_ORIGIN (e.g. curl -sS -i with the path from the behavioral check) before finish with pass. Do not use npm test or pytest.",
-          });
+          messages.push({ role: "user", content: violation.instruction });
           continue;
         }
 
@@ -651,7 +774,7 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
           }`;
           outputPreview = combined.slice(0, MAX_TOOL_OUTPUT);
         }
-        trace.push({
+        await pushTrace({
           iteration: iter,
           tool: "run_command",
           detail: result.cmd,
@@ -705,7 +828,7 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
               .join(", ")}. Last: ${lastErr}`;
           }
         }
-        trace.push({
+        await pushTrace({
           iteration: iter,
           tool: "read_file",
           detail: result.relativePath,
@@ -738,7 +861,7 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
             }`;
           }
         }
-        trace.push({
+        await pushTrace({
           iteration: iter,
           tool: "browser_goto",
           detail: result.urlPath,
@@ -773,7 +896,7 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
             }`;
           }
         }
-        trace.push({
+        await pushTrace({
           iteration: iter,
           tool: "browser_click",
           detail: result.selector,
@@ -810,7 +933,7 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
             }`;
           }
         }
-        trace.push({
+        await pushTrace({
           iteration: iter,
           tool: "browser_click_role",
           detail: summarizeAgentAction(result),
@@ -844,7 +967,7 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
             }`;
           }
         }
-        trace.push({
+        await pushTrace({
           iteration: iter,
           tool: "browser_click_text",
           detail: summarizeAgentAction(result),
@@ -861,25 +984,53 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
       if (result.step === "browser_fill") {
         let outputPreview = "";
         let success = false;
+        const attempts = planFillAttempts(result.selector);
         if (!input.baseUrl?.trim()) {
           outputPreview =
             "[error] browser_fill requires a running app URL (web_server profile).";
         } else {
-          try {
-            const pg = await ensureBrowserPage();
-            await pg.fill(result.selector, result.value, {
-              timeout: BROWSER_FILL_TIMEOUT_MS,
-            });
-            await delay(200);
-            outputPreview = await snapshotPageText(pg);
-            success = true;
-          } catch (e) {
-            outputPreview = `[error] ${
-              e instanceof Error ? e.message : String(e)
-            }`;
+          const pg = await ensureBrowserPage();
+          const errors: string[] = [];
+          for (let i = 0; i < attempts.length; i += 1) {
+            const attempt = attempts[i];
+            try {
+              if (attempt.strategy === "role") {
+                await pg
+                  .getByRole(attempt.role as AriaRole)
+                  .fill(result.value, { timeout: BROWSER_FILL_TIMEOUT_MS });
+              } else if (attempt.strategy === "placeholder") {
+                await pg
+                  .getByPlaceholder(attempt.placeholder)
+                  .fill(result.value, { timeout: BROWSER_FILL_TIMEOUT_MS });
+              } else if (attempt.strategy === "first_input") {
+                await pg
+                  .locator("input, textarea")
+                  .first()
+                  .fill(result.value, { timeout: BROWSER_FILL_TIMEOUT_MS });
+              } else {
+                await pg.fill(attempt.selector, result.value, {
+                  timeout: BROWSER_FILL_TIMEOUT_MS,
+                });
+              }
+              await delay(200);
+              const note =
+                attempt.reason !== "css"
+                  ? `(${attempt.reason} Use browser_fill_role / fill_placeholder for roles and placeholders; browser_fill's selector is CSS.)\n\n`
+                  : "";
+              outputPreview = `${note}${await snapshotPageText(pg)}`;
+              success = true;
+              break;
+            } catch (e) {
+              errors.push(
+                `${attempt.strategy}: ${e instanceof Error ? e.message : String(e)}`
+              );
+            }
+          }
+          if (!success) {
+            outputPreview = `[error] ${errors[errors.length - 1] ?? "fill failed"}`;
           }
         }
-        trace.push({
+        await pushTrace({
           iteration: iter,
           tool: "browser_fill",
           detail: `${result.selector} ← ${result.value.length} chars`,
@@ -889,6 +1040,45 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
         messages.push({
           role: "user",
           content: `browser_fill result:\n${outputPreview}`,
+        });
+        continue;
+      }
+
+      if (result.step === "browser_fill_role") {
+        let outputPreview = "";
+        let success = false;
+        if (!input.baseUrl?.trim()) {
+          outputPreview =
+            "[error] browser_fill_role requires a running app URL (web_server profile).";
+        } else {
+          try {
+            const pg = await ensureBrowserPage();
+            const locator = pg.getByRole(result.role as AriaRole, {
+              name: result.name,
+              exact: result.exact,
+            });
+            await locator.fill(result.value, {
+              timeout: BROWSER_FILL_TIMEOUT_MS,
+            });
+            await delay(200);
+            outputPreview = await snapshotPageAccessibility(pg);
+            success = true;
+          } catch (e) {
+            outputPreview = `[error] ${
+              e instanceof Error ? e.message : String(e)
+            }`;
+          }
+        }
+        await pushTrace({
+          iteration: iter,
+          tool: "browser_fill_role",
+          detail: summarizeAgentAction(result),
+          outputPreview,
+          success,
+        });
+        messages.push({
+          role: "user",
+          content: `browser_fill_role result:\n${outputPreview}`,
         });
         continue;
       }
@@ -926,7 +1116,7 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
             }`;
           }
         }
-        trace.push({
+        await pushTrace({
           iteration: iter,
           tool: "browser_screenshot",
           detail: result.label?.trim() || "screenshot",
@@ -958,7 +1148,7 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
             }`;
           }
         }
-        trace.push({
+        await pushTrace({
           iteration: iter,
           tool: "browser_snapshot",
           detail: "accessibility tree",
@@ -999,7 +1189,7 @@ You may use tools to gather more evidence for THIS behavioral check only. Start 
             }`;
           }
         }
-        trace.push({
+        await pushTrace({
           iteration: iter,
           tool: "browser_expect",
           detail: `${result.mode}: ${result.pattern.slice(0, 120)}${result.pattern.length > 120 ? "…" : ""}`,

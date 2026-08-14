@@ -1,4 +1,4 @@
-import { Loader2, CheckCircle2, Circle, XCircle, HelpCircle } from "lucide-react";
+import { Loader2, CheckCircle2, Circle, XCircle, HelpCircle, MinusCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 function stepIcon(status) {
@@ -18,13 +18,27 @@ function verdictIcon(verdict) {
   if (verdict === "fail") {
     return <XCircle className="h-4 w-4 shrink-0 text-red-600" />;
   }
+  // Blocked is not a judgement of the candidate's work, so it stays neutral.
+  if (verdict === "blocked") {
+    return <MinusCircle className="h-4 w-4 shrink-0 text-gray-400" />;
+  }
   return <HelpCircle className="h-4 w-4 shrink-0 text-amber-600" />;
 }
 
 function verdictBadgeClass(verdict) {
   if (verdict === "pass") return "bg-green-100 text-green-700";
   if (verdict === "fail") return "bg-red-100 text-red-700";
+  if (verdict === "blocked") return "bg-gray-100 text-gray-600";
   return "bg-amber-100 text-amber-800";
+}
+
+function verdictLabel(verdict) {
+  return verdict === "blocked" ? "not run" : verdict;
+}
+
+function verifiedByLabel(verifiedBy) {
+  if (!verifiedBy || verifiedBy === "agent") return null;
+  return verifiedBy.replace(/_/g, " ");
 }
 
 /**
@@ -42,11 +56,6 @@ export default function BehavioralGradingLiveTrace({ progress, behavioralChecks 
   const phaseLabel = progress?.phaseLabel ?? "Starting behavioral grading…";
   const doneCount = completed.length;
   const pct = checksTotal > 0 ? Math.round((doneCount / checksTotal) * 100) : 0;
-  const isRealE2bWaiting =
-    agentSteps.length === 0 &&
-    completed.length === 0 &&
-    (progress?.phaseLabel?.includes("Queued") ||
-      phaseLabel === "Starting behavioral grading…");
 
   return (
     <div className="rounded-lg border border-amber-200 bg-gradient-to-b from-amber-50/80 to-white p-3 space-y-3">
@@ -65,14 +74,6 @@ export default function BehavioralGradingLiveTrace({ progress, behavioralChecks 
         )}
       </div>
 
-      {isRealE2bWaiting && (
-        <p className="text-xs text-amber-900/80 leading-relaxed">
-          Real E2B grading is running in the background. Step-by-step animation
-          only appears on the Webhook VP demo — this can take 5–15 minutes with
-          no live progress until checks finish.
-        </p>
-      )}
-
       {checksTotal > 0 && (
         <div className="h-1.5 w-full rounded-full bg-amber-100 overflow-hidden">
           <div
@@ -87,18 +88,26 @@ export default function BehavioralGradingLiveTrace({ progress, behavioralChecks 
           <p className="text-[10px] font-medium uppercase font-mono tracking-[0.03em] text-gray-500">
             Completed
           </p>
-          {completed.map((c) => (
+          {completed.map((c) => {
+            const how = verifiedByLabel(c.verifiedBy);
+            return (
             <div
               key={c.checkIndex}
               className="flex items-start gap-2 rounded border border-gray-100 bg-white px-2 py-1.5"
             >
               {verdictIcon(c.verdict)}
               <span className="flex-1 text-xs text-gray-700 leading-snug">{c.checkText}</span>
-              <Badge className={`shrink-0 text-[10px] ${verdictBadgeClass(c.verdict)}`}>
-                {c.verdict}
-              </Badge>
+              <div className="shrink-0 flex flex-col items-end gap-0.5">
+                <Badge className={`text-[10px] ${verdictBadgeClass(c.verdict)}`}>
+                  {verdictLabel(c.verdict)}
+                </Badge>
+                {how ? (
+                  <span className="text-[10px] text-gray-500 font-mono">{how}</span>
+                ) : null}
+              </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

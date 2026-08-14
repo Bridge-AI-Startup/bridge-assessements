@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { getSubmissionByToken } from "@/api/submission";
 import { createPageUrl } from "@/utils";
+import { Button } from "@/components/ui/button";
 
 export default function CandidateSubmitted() {
   const [searchParams] = useSearchParams();
@@ -299,7 +300,17 @@ export default function CandidateSubmitted() {
             </p>
           </div>
 
-          <div className="text-center">
+          <div className="text-center space-y-3">
+            {submission.runtimeSetupEnabled &&
+            submission.runtimeSetup?.status !== "finalized" ? (
+              <Button
+                onClick={() =>
+                  navigate(`${createPageUrl("RuntimeSetup")}?token=${token}`)
+                }
+              >
+                Set up how your project runs
+              </Button>
+            ) : null}
             <p className="text-sm text-gray-500">
               You can close this page. Your submission has been saved.
             </p>

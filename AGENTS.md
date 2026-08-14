@@ -166,6 +166,17 @@ See `server/config.env.example` for the full list. Key variables:
 - `BEHAVIORAL_GRADING_MAX_CONCURRENT` -- Max concurrent behavioral grading jobs (default: `2`)
 - `BEHAVIORAL_GRADING_UPLOAD_ENABLED` -- Enable behavioral grading for uploaded archives (default: `true`)
 
+**Runtime setup (post-submit candidate-authored run config):**
+- `RUNTIME_SETUP_ENABLED` -- Gate candidate runtime-setup routes and UI (default: disabled)
+- `RUNTIME_SETUP_MAX_CONCURRENT` -- Cap on **running or provisioning** setup sandboxes (default: `3`); `paused` boxes are excluded on purpose
+- `RUNTIME_SETUP_SANDBOX_TTL_MS` -- Hard cap per live sandbox (default: `1800000` = 30m)
+- `RUNTIME_SETUP_IDLE_PAUSE_MS` -- Idle → E2B pause (default: `240000` = 4m); status **and log** polls count as activity
+- `RUNTIME_SETUP_INSTALL_TIMEOUT_MS` / `RUNTIME_SETUP_BUILD_TIMEOUT_MS` -- per-step caps
+- `RUNTIME_SETUP_RUN_MAX_MS` -- whole-run budget shared by install/build/start/health (default: `900000`). No CPU/memory env knobs: sandbox size is a template property in E2B
+- `RUNTIME_SETUP_DENY_EGRESS_AT_RUNTIME` -- After start, lock outbound traffic except `declaredEgressDomains` (default: `true`; requires E2B `updateNetwork`, SDK ≈2.28+)
+- `RUNTIME_SETUP_RUNS_PER_HOUR` -- Per-submission run cap (default: `12`)
+- `RUNTIME_SETUP_HEALTH_WAIT_MS` -- Poll for app ready after start (default: `90000`)
+
 **Play (consumer daily challenge):**
 - `PLAY_ENABLED` -- Gate `/api/play` feature routes (default: disabled); `GET /api/play/health` always on
 - `PLAY_DB_NAME` -- Mongo database for Play product (default: `bridge-play`, same Atlas cluster)
@@ -232,6 +243,7 @@ server/src/
 │   ├── assessment.ts      # Assessment schema (title, description, time limit, settings)
 │   ├── competition.ts     # Competition / hackathon: slug, assessmentId, rules, registration window, leaderboard flag
 │   ├── submission.ts      # Submission schema (token, candidate info, GitHub repo, scores)
+│   ├── runtimeSetupSession.ts # Ephemeral E2B box for candidate runtime setup / recruiter replay
 │   ├── repoIndex.ts       # Repository indexing metadata for Pinecone
 │   └── proctoringSession.ts  # Proctoring session (frames, events, transcript, video chunks)
 ├── routes/
@@ -247,6 +259,7 @@ server/src/
 │   ├── user.ts            # User creation, login (with tier limits), account deletion
 │   ├── assessment.ts      # Assessment CRUD, AI generation, chat
 │   ├── submission.ts      # All submission handlers (share links, submissions, scoring)
+│   ├── runtimeSetup.ts    # Candidate/recruiter runtime setup (config, run, pause, finalize, replay)
 │   ├── competition.ts     # Public competitions: get by slug, join (creates pending submission), leaderboard
 │   ├── ops.ts             # Ops workload aggregation (employer attribution for heavy jobs)
 │   ├── billing.ts         # Stripe checkout, status, cancel, reactivate, webhook handler
@@ -264,11 +277,19 @@ server/src/
 │   ├── behavioralGrading/
 │   │   ├── index.ts           # E2B behavioral grading orchestrator + in-process concurrency queue
 │   │   ├── planner.ts         # LLM: README → runbook plan (install/test/start)
+│   │   ├── runtimeConfigRunbook.ts # Candidate's finalized+verified runtimeConfig → runbook (skips the LLM planner)
 │   │   ├── schema.ts          # Zod schemas for runbook
-│   │   ├── executor.ts        # Executes runbook commands; saves report JSON; readmeFromSandbox
+│   │   ├── executor.ts        # Executes runbook commands (optional candidate envVars, secret-scrubbed evidence); saves report JSON; readmeFromSandbox
+│   │   ├── extractUiControls.ts # Source-grounded button/textbox/link catalog; UI locators come from here
 │   │   ├── judge.ts           # One-shot LLM judge (stdout/source/HTTP seed)
 │   │   ├── agentJudge.ts      # Tool-using judge (run_command/read_file in sandbox, then finish)
 │   │   └── artifacts.ts       # collectJudgeArtifacts + bashLc helpers
+│   ├── runtimeSetup/
+│   │   ├── sessions.ts        # Persistent E2B lifecycle (create/pause/resume/run/finalize)
+│   │   ├── run.ts             # Candidate runtimeConfig → install/build/start + health
+│   │   ├── sandbox.ts         # Long-lived sandbox (does not auto-kill like grader)
+│   │   ├── network.ts         # Two-phase egress via updateNetwork
+│   │   └── schema.ts          # Zod runtimeConfig + secret redaction helpers
 │   ├── play/
 │   │   ├── challenges.ts      # Play daily challenge CRUD + UTC today lookup
 │   │   ├── sandbox.ts         # Play E2B create/getUrls/kill (custom template)
@@ -342,6 +363,8 @@ server/src/
     ├── duplicateSubmissionWithTrace.ts
     ├── listSubmissions.ts
     ├── seedCompetition.ts   # Link Mongo Competition slug → assessment (hackathon dashboard)
+    ├── seedRuntimeSetupMernDemo.ts # Upsert MERN Notes Board assessment + candidate link; submit folder is demos/runtime-setup-mern
+    ├── seedRuntimeSetupPathfinderDemo.ts # Upsert Warehouse Pathfinder (Python A*/TSP) assessment + candidate link; submit folder is demos/runtime-setup-pathfinder
     ├── seedPlayChallenge.ts # Upsert Play daily challenge from play/challenges/*.json
     ├── play-sandbox-smoke.ts # Create Play E2B template sandbox; print preview URL + Codex check
     ├── replaceSubmissionWithGeneratedMarkdown.ts
@@ -425,6 +448,10 @@ server/src/
 - `POST /:submissionId/grade-behavioral` -- Trigger manual behavioral grading re-run (E2B + evidence capture)
 - `GET /:submissionId/behavioral-artifact` -- Retrieve stored behavioral grading artifacts (screenshots/report files)
 - `GET /:submissionId/code-archive` -- Download uploaded candidate archive (upload-source submissions only)
+- `POST /:submissionId/runtime/preview` -- Recruiter replay: accept a `kind: "replay"` sandbox job for the **finalized** runtime config (auth + ownership); returns quickly (`accepted`) and runs install/build/start in the background. Reuses a `ready`, still-listening box; `{ restart: true }` forces a cold rebuild. **409** if any behavioral grade is in flight in this process — a new replay sandbox must not evict the grading box; warm reconnect is still allowed
+- `GET /:submissionId/runtime/preview/status` -- Recruiter poll: session state + redacted config + previewUrl/health (auth + ownership)
+- `GET /:submissionId/runtime/preview/logs` -- Recruiter poll: build/runtime logs (`?after=` seq; auth + ownership)
+- `POST /:submissionId/runtime/preview/stop` -- Kill the recruiter replay sandbox (auth + ownership)
 
 *Candidate endpoints (no auth, token-based):*
 - `GET /assessments/public/:id` -- Get public assessment details
@@ -434,6 +461,14 @@ server/src/
 - `POST /token/:token/submit-recording-only` -- Finalize timed-out attempts with proctoring/screen-recording evidence only (no code repo required); marks submission `expired`
 - `POST /token/:token/upload` -- Submit code by archive upload (`multipart/form-data`, field `archive`), stores upload metadata, starts indexing, auto-triggers behavioral grading; same 5-minute post-time-limit grace window as GitHub submit
 - `POST /token/:token/opt-out` -- Opt out with reason
+- `PUT /token/:token/runtime/config` -- Autosave runtime config (feature-gated: `RUNTIME_SETUP_ENABLED`)
+- `POST /token/:token/runtime/session` -- Create or resume the setup sandbox (loads snapshot; reconnects paused/running box)
+- `POST /token/:token/runtime/restart` -- Kill the current sandbox (if any) and provision a fresh one from the submitted snapshot
+- `POST /token/:token/runtime/run` -- Install → build → start using saved config; requires a live setup sandbox (`running`/`paused`); **409** if the environment has not been started; returns previewUrl
+- `GET /token/:token/runtime/status` -- Session state + previewUrl + health + last run
+- `GET /token/:token/runtime/logs` -- Poll build/runtime logs (`?after=` seq)
+- `POST /token/:token/runtime/pause` / `.../resume` -- Idle pause / reconnect
+- `POST /token/:token/runtime/finalize` -- Persist config, mark verified, tear down sandbox
 - `PATCH /:id` -- Update submission (auto-save)
 - `GET /:id` -- Get submission by ID
 - `POST /:id/submit` -- Final submission (legacy, also auto-triggers behavioral grading)
@@ -490,7 +525,7 @@ server/src/
 ### AI Prompts (`server/src/prompts/index.ts`)
 - `PROMPT_EXTRACT_ASSESSMENT_REQUIREMENTS` -- Extract requirements, infer stack/level from job description
 - `PROMPT_GENERATE_ASSESSMENT_COMPONENTS` -- Generate assessment title, description, timeLimit (with few-shot examples)
-- `PROMPT_GENERATE_BEHAVIORAL_CHECKS` -- Generate stack-agnostic behavioral checks from title, description, and requirements summary
+- `PROMPT_GENERATE_BEHAVIORAL_CHECKS` -- Generate stack-agnostic behavioral checks plus default UI/HTTP acceptance specs (agent is the rare leftover)
 - `PROMPT_ASSESSMENT_QUALITY_REVIEW` -- Review and validate generated assessment quality
 - `PROMPT_ASSESSMENT_CHAT` -- System prompt for AI assistant editing assessments
 - `LEVEL_INSTRUCTIONS` -- Role-specific guidance for junior/mid/senior difficulty levels
@@ -516,10 +551,11 @@ client/src/
 │   ├── AssessmentEditor.jsx    # Edit assessment -- title, desc, time, starter files, share links, bulk invite
 │   ├── CandidateAssessment.jsx # Candidate views assessment -- workspace setup before the timer (Start gated on entire-screen share when recording is required; no skip), then brief + submit local folder upload (auto-zipped client-side), opt-out
 │   ├── CandidateSubmission.jsx # Shows mock submission data with code review
-│   ├── CandidateSubmitted.jsx  # Post-submission confirmation (you're done)
+│   ├── CandidateSubmitted.jsx  # Post-submission confirmation; CTA into RuntimeSetup when enabled
+│   ├── RuntimeSetup.jsx        # Candidate runtime config + one-button "Run project" (provisions if needed) + live preview/logs + Restart environment + Finalize
 │   ├── HackathonDashboard.jsx  # Challenge join + dashboard/leaderboard only; marketing landing may live on Framer (slug: `?slug=` > env > `config/competition.js`)
 │   ├── OpsDashboard.jsx        # Internal ops workload dashboard (OPS_ADMIN_EMAIL); heavy merge/transcript/grading attribution
-│   ├── SubmissionsDashboard.jsx # Employer views submissions -- stats, filtering, dropoff analysis, Review dialog
+│   ├── SubmissionsDashboard.jsx # Employer views submissions -- stats, filtering, dropoff analysis, Review dialog (incl. runtime replay)
 │   ├── Subscription.jsx        # Billing plans -- Free tier vs Early Access
 │   ├── Pricing.jsx             # Public pricing page
 │   ├── BillingSuccess.jsx      # Stripe success redirect
@@ -527,9 +563,10 @@ client/src/
 │   ├── CancelSubscription.jsx  # Cancellation form with reason
 │   └── Contact.jsx             # Contact/support page
 ├── api/
-│   ├── requests.ts        # Base HTTP client (fetch wrapper: get/post/put/patch/del with error handling)
+│   ├── requests.ts        # Base HTTP client (fetch wrapper: get/post/put/patch/del; parses JSON error bodies so a user sees `error`/`message`, not the raw payload)
 │   ├── assessment.ts      # Assessment API: create, list, get, update, delete, generate, chat
 │   ├── submission.ts      # Submission API: generateLink, bulk, invites, start, submit, optOut, uploadTrace
+│   ├── runtimeSetup.ts    # Candidate runtime setup + recruiter replay (preview/status/logs/stop)
 │   ├── competition.ts     # Public competition API: get by slug, join, leaderboard
 │   ├── ops.ts             # Ops workload API (admin allowlist)
 │   ├── billing.ts         # Billing API: checkout, status, cancel, reactivate
@@ -547,6 +584,9 @@ client/src/
 │   │   ├── DocumentBlock.jsx          # Reusable content block with edit, auto-resizing textarea
 │   │   └── PresetPills.jsx            # Quick preset job descriptions
 │   ├── BulkInviteModal.jsx            # 3-step CSV upload wizard: upload → review → success
+│   ├── submissions/
+│   │   ├── BehavioralGradingLiveTrace.jsx # Live behavioral-grading progress while grading is pending
+│   │   └── RuntimeReplayPanel.jsx     # Recruiter read-only runtime config + finalized-run evidence card + Run project / Restart preview/logs (stops the replay sandbox on unmount)
 │   ├── proctoring/
 │   │   ├── ConsentScreen.jsx          # Consent dialog before screen recording (no Skip when recording is required)
 │   │   ├── ScreenShareSetup.jsx       # Multi-monitor picker UI
@@ -644,7 +684,20 @@ Scores bag may still exist on old docs; Trace/llmWorkflow scoring was removed. C
 
 Behavioral grading: `behavioralGradingStatus` (`pending`/`completed`/`failed`), `behavioralGradingError`, `behavioralGradingReport` (runbook summary, per-check verdict/evidence, artifact keys, timings, sandbox metadata)
 
+Runtime setup: `runtimeConfig` { rootDir, runtime (`auto`/`node20`/`python312` — stored but never read at execution time; not surfaced in either UI), installCommand, buildCommand, startCommand, port, healthPath, executionProfile (`web_server`/`cli_stdout`/`unclear`), envVars[] { key, value, secret }, declaredEgressDomains[] }; `runtimeSetup` { status (`not_started`/`in_progress`/`finalized`), verified, lastRunAt, lastRunResult, finalizedAt, snapshotSha256, evidence { healthOk, healthSummary, port, capturedAt, logTail[] } — captured at finalize so the recruiter panel can show what `Verified` means without booting a sandbox }. Secret env values are write-only (never returned on GET); redacted rows carry `hasValue` so a saved secret is distinguishable from an empty one.
+
+Behavioral grading prefers these commands over the README planner: when setup is `finalized` and `verified`, `services/behavioralGrading/runtimeConfigRunbook.ts` maps the config onto a runbook (candidate `envVars` + `PORT` applied to every step), the LLM planner call is skipped, and the report carries `runbookSource: "candidate_config" | "llm"` plus `runbookFallbackReason` when the candidate config failed to come up and grading re-planned from the README.
+
 Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`
+
+### RuntimeSetupSession
+Ephemeral E2B box for candidate setup (`kind: setup`) or recruiter replay (`kind: replay`). Durable record is `Submission.runtimeConfig` + the stored code snapshot.
+
+Fields: `submissionId` (indexed), `token`, `kind` (`setup`/`replay`), `e2bSandboxId`, `status` (`provisioning`/`running`/`paused`/`dead`), `runPhase`, `repoPath`, `port`, `previewUrl`, `health`, `startedAt`, `lastActiveAt`, `pausedAt`, `error`, `logLines[]`, `codeLoaded`
+
+Indexes: unique `{ submissionId: 1, kind: 1 }`
+
+Status **and** log polls bump `lastActiveAt` so a watched preview is not idle-paused; `logLines` survive resume (only an explicit restart clears them); a recruiter re-`Run` on a `ready` session reuses the warm box, and cold rebuild is the panel's separate **Restart**.
 
 ### PlayChallenge (bridge-play DB)
 Fields: `slug` (unique, lowercase `a-z0-9-`), `challengeDate` (unique, `YYYY-MM-DD` UTC), `title` (max 120), `prompt`, `tokenBudget`, `timeLimitMinutes` (optional), `category` (`widget`/`game`/`tool`/`other`), `status` (`draft`/`published`)

@@ -65,6 +65,10 @@ import BehavioralGradingLiveTrace from "@/components/submissions/BehavioralGradi
 import EvidenceMomentChips from "@/components/submissions/EvidenceMomentChips";
 import WorkflowActivityTimeline from "@/components/submissions/WorkflowActivityTimeline";
 import CommunicationCard from "@/components/submissions/CommunicationCard";
+import RuntimeReplayPanel, {
+  shouldShowRuntimeReplay,
+} from "@/components/submissions/RuntimeReplayPanel";
+import { stopRuntimeReplay } from "@/api/runtimeSetup";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   DropdownMenu,
@@ -198,20 +202,133 @@ function ScoringPendingNote({ children, className = "" }) {
   );
 }
 
-/** Behavioral checks → 0–100 (pass=1, inconclusive=0.5, fail=0), when grading completed. */
+/** Share of decided checks below which no percentage is published. Mirrors server scoring.ts. */
+const MIN_DECIDED_COVERAGE = 0.5;
+
+/**
+ * Behavioral score for a report. Prefers the `score` the server stored; derives it
+ * with the same rules for reports written before that field existed.
+ *
+ * Undecided checks (inconclusive, blocked) leave the denominator rather than
+ * earning half credit, and a run that decided less than half its checks
+ * publishes no percentage at all.
+ */
+function getBehavioralScore(sub) {
+  const report = sub.behavioralGradingReport;
+  const stored = report?.score;
+  if (stored && typeof stored.total === "number" && typeof stored.decided === "number") {
+    return stored;
+  }
+  const cases = Array.isArray(report?.cases) ? report.cases : [];
+  const passed = cases.filter((c) => c.verdict === "pass").length;
+  const failed = cases.filter((c) => c.verdict === "fail").length;
+  const blocked = cases.filter((c) => c.verdict === "blocked").length;
+  const decided = passed + failed;
+  const total = cases.length;
+  const coverage = total === 0 ? 0 : decided / total;
+  const publishable = total > 0 && decided > 0 && coverage >= MIN_DECIDED_COVERAGE;
+  return {
+    total,
+    decided,
+    passed,
+    failed,
+    blocked,
+    inconclusive: total - decided - blocked,
+    coverage,
+    passRate: publishable ? (passed / decided) * 100 : null,
+  };
+}
+
+/**
+ * A blocked check is not an amber "we're unsure" — nothing was judged, because
+ * the environment could not support it. Neutral grey keeps it visually distinct
+ * from a verdict about the candidate's work.
+ */
+function behavioralVerdictBadgeClass(verdict) {
+  if (verdict === "pass") return "bg-green-100 text-green-700";
+  if (verdict === "fail") return "bg-red-100 text-red-700";
+  if (verdict === "blocked") return "bg-gray-100 text-gray-600";
+  return "bg-amber-100 text-amber-800";
+}
+
+function behavioralVerdictLabel(verdict) {
+  return verdict === "blocked" ? "not run" : verdict;
+}
+
+/**
+ * How this verdict was reached. A recruiter defending a rejection needs to know
+ * whether a model decided or a recorded request did; older reports predate the
+ * distinction and say nothing rather than guess.
+ */
+function behavioralVerifiedByLabel(caseResult) {
+  switch (caseResult?.verifiedBy) {
+    case "http":
+      return "Verified by a request";
+    case "http_sequence":
+      return "Verified by a sequence of requests";
+    case "restart_persistence":
+      return "Verified by writing, restarting the app, and reading back";
+    case "cli":
+      return "Verified by running a command";
+    case "ui":
+      return "Verified by driving the page in a browser";
+    case "agent":
+      return "Verified by the AI reviewer";
+    default:
+      return "Verified by the AI reviewer";
+  }
+}
+
+/** Who a grading failure belongs to — never render our outage as their fail. */
+function gradingFaultOwner(category) {
+  if (
+    category === "environment" ||
+    category === "interrupted" ||
+    category === "disabled"
+  ) {
+    return "platform";
+  }
+  if (category === "setup") return "candidate";
+  return "unknown";
+}
+
+function failureCategoryLabel(category) {
+  switch (category) {
+    case "environment":
+      return "Platform issue";
+    case "interrupted":
+      return "Interrupted — re-run to grade";
+    case "disabled":
+      return "Grading disabled";
+    case "setup":
+      return "Project did not start";
+    case "timeout":
+      return "Timed out";
+    case "judge":
+      return "Reviewer error";
+    case "unknown":
+      return "Could not finish";
+    default:
+      return category || "";
+  }
+}
+
+function behavioralFailedIsPlatform(sub) {
+  return (
+    sub?.behavioralGradingStatus === "failed" &&
+    gradingFaultOwner(sub?.behavioralGradingReport?.failureCategory) ===
+      "platform"
+  );
+}
+
+/** Behavioral pass rate over decided checks (0–100), when grading completed. */
 function getBehavioralPass0to100(sub) {
   if (sub.behavioralGradingStatus !== "completed") return null;
-  // Setup failure = grading environment problem, not candidate performance;
-  // the mostly-inconclusive verdicts it produces must not average in as ~50%.
+  // A setup failure is the candidate's project; platform failures never reach
+  // completed. This still guards legacy reports that stamped setup and then
+  // scored inconclusive checks as half credit.
   if (sub.behavioralGradingReport?.failureCategory === "setup") return null;
-  const cases = sub.behavioralGradingReport?.cases;
-  if (!Array.isArray(cases) || cases.length === 0) return null;
-  let pts = 0;
-  for (const c of cases) {
-    if (c.verdict === "pass") pts += 1;
-    else if (c.verdict === "inconclusive") pts += 0.5;
-  }
-  return (pts / cases.length) * 100;
+  return getBehavioralScore(sub).passRate;
 }
 
 /**
@@ -232,7 +349,16 @@ function getCombinedScoreBreakdownParts(sub) {
   const rec = getRecordingRubric0to100(sub);
   const beh = getBehavioralPass0to100(sub);
   if (rec != null) segs.push(`Process ${(rec / 10).toFixed(1)}/10`);
-  if (beh != null) segs.push(`Behavioral ${Math.round(beh)}%`);
+  if (beh != null) {
+    const score = getBehavioralScore(sub);
+    // Say how much of the assessment the percentage covers, so a rate over 4 of
+    // 6 checks is never mistaken for a rate over all 6.
+    const coverage =
+      score.decided > 0 && score.decided < score.total
+        ? ` (${score.decided}/${score.total} checks decided)`
+        : "";
+    segs.push(`Behavioral ${Math.round(beh)}%${coverage}`);
+  }
   return segs;
 }
 
@@ -462,6 +588,9 @@ function BehavioralCaseEvidenceBody({
 }) {
   return (
     <>
+      <p className="eyebrow text-[10px] text-gray-500 mb-2">
+        {behavioralVerifiedByLabel(caseResult)}
+      </p>
       <div className="space-y-2">
         {(caseResult.evidence || []).map((entry, i) => (
           <div
@@ -486,10 +615,11 @@ function BehavioralCaseEvidenceBody({
                 {entry.type === "judge" &&
                   behavioralAgentTraceLooksProbed(entry.agentTrace) && (
                     <p className="text-[10px] text-amber-900 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 mt-2 leading-snug">
-                      A probe-style run_command was used (e.g. python -c). Treat
-                      citations as proof of the candidate&apos;s repo only if the
-                      same text appears in read_file output or the seed source
-                      excerpt—expand Agent tool trace and compare.
+                      A probe-style run_command was used (e.g. python -c). A pass
+                      whose citations trace only to that probe is rejected
+                      automatically, so this one also cites a repo read, an HTTP
+                      response, or rendered page text — expand Agent tool trace to
+                      see which.
                     </p>
                   )}
                 {Array.isArray(entry.agentTrace) && entry.agentTrace.length > 0 && (
@@ -527,6 +657,25 @@ function BehavioralCaseEvidenceBody({
                 {entry.input.entryCommand}
                 {entry.input?.mainSourcePath ? ` · ${entry.input.mainSourcePath}` : ""}
               </p>
+            )}
+            {/* The curl is the point of a deterministic check: anyone can re-run it. */}
+            {entry.input?.curl && (
+              <p className="text-gray-600 mt-1 font-mono text-[11px] break-all">
+                {entry.input.curl}
+              </p>
+            )}
+            {entry.http && (
+              <div className="mt-1">
+                <p className="text-gray-700">
+                  Responded {entry.http.status}
+                  {entry.input?.label ? ` · ${entry.input.label}` : ""}
+                </p>
+                {entry.http.bodySnippet && (
+                  <pre className="mt-1 whitespace-pre-wrap text-[11px] text-gray-600 max-h-40 overflow-y-auto">
+                    {entry.http.bodySnippet}
+                  </pre>
+                )}
+              </div>
             )}
             {entry.stdoutSnippet && (
               <pre className="mt-1 whitespace-pre-wrap text-[11px] text-gray-600">
@@ -573,7 +722,8 @@ function BehavioralCaseEvidenceBody({
   );
 }
 
-function behavioralSetupTone(setup) {
+function behavioralSetupTone(setup, failureCategory) {
+  if (gradingFaultOwner(failureCategory) === "platform") return "platform";
   if (!setup?.status) return "neutral";
   if (setup.status === "ready") return "ok";
   if (setup.status === "degraded") return "warn";
@@ -583,20 +733,25 @@ function behavioralSetupTone(setup) {
 function BehavioralSetupPanel({ report }) {
   const setup = report?.setup;
   if (!setup?.summary) return null;
-  const tone = behavioralSetupTone(setup);
+  const owner = gradingFaultOwner(report?.failureCategory);
+  const tone = behavioralSetupTone(setup, report?.failureCategory);
   const border =
     tone === "ok"
       ? "border-green-200 bg-green-50 text-green-900"
-      : tone === "warn"
+      : tone === "warn" || tone === "platform"
         ? "border-amber-200 bg-amber-50 text-amber-900"
         : "border-red-200 bg-red-50 text-red-900";
+  const heading =
+    owner === "platform"
+      ? "Grading could not finish"
+      : `Environment setup: ${setup.status}`;
   return (
     <div className={`rounded-md border p-3 text-sm space-y-2 ${border}`}>
       <p className="font-medium">
-        Environment setup: {setup.status}
+        {heading}
         {report?.failureCategory ? (
           <span className="font-normal text-xs ml-2 opacity-80">
-            ({report.failureCategory})
+            ({failureCategoryLabel(report.failureCategory)})
           </span>
         ) : null}
       </p>
@@ -624,6 +779,60 @@ function BehavioralSetupPanel({ report }) {
           </pre>
         </details>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Grading plans commands from the candidate's finalized runtime setup when there
+ * is one, and from the README otherwise. "README: fail" says nothing about a run
+ * that never read the README, so recruiter copy follows the source.
+ */
+function usedCandidateRuntimeConfig(report) {
+  return report?.runbookSource === "candidate_config";
+}
+
+function BehavioralRunbookSourcePanel({ report }) {
+  const runbook = report?.runbook;
+  if (!runbook) return null;
+  const fromConfig = usedCandidateRuntimeConfig(report);
+  const detail = runbook.readmeRequirementDetail;
+  return (
+    <div className="text-sm text-gray-700">
+      {fromConfig ? (
+        <p>
+          Commands:{" "}
+          <span className="font-medium">
+            the candidate&apos;s verified runtime setup
+          </span>
+        </p>
+      ) : (
+        <p>
+          README requirement:{" "}
+          <span className="font-medium">
+            {runbook.readmeRequirementPassed ? "passed" : "failed"}
+          </span>
+        </p>
+      )}
+      {!fromConfig && detail?.summary && (
+        <p className="text-xs text-gray-600 mt-1 leading-snug">
+          {detail.summary}
+        </p>
+      )}
+      {report?.runbookFallbackReason && (
+        <p className="text-xs text-amber-700 mt-1 leading-snug">
+          Fell back to the README planner: {report.runbookFallbackReason}
+        </p>
+      )}
+      {detail?.notes && (
+        <p className="text-xs text-gray-500 mt-1 italic">
+          {fromConfig ? "Notes: " : "Planner notes: "}
+          {detail.notes}
+        </p>
+      )}
+      <p className="text-xs text-gray-500 mt-1">
+        {runbook.summary || "No runbook summary"}
+      </p>
     </div>
   );
 }
@@ -711,8 +920,22 @@ function formatBehavioralGradingDebugExport(submission, assessment) {
 
   if (runbook) {
     push("--- Runbook ---");
+    push(
+      `Commands source: ${
+        usedCandidateRuntimeConfig(report)
+          ? "candidate verified runtime config"
+          : "README planner (LLM)"
+      }`
+    );
+    if (report?.runbookFallbackReason) {
+      push(`Planner fallback reason: ${report.runbookFallbackReason}`);
+    }
     push(`Execution profile: ${runbook.executionProfile ?? "?"}`);
-    push(`README requirement: ${runbook.readmeRequirementPassed ? "pass" : "fail"}`);
+    if (!usedCandidateRuntimeConfig(report)) {
+      push(
+        `README requirement: ${runbook.readmeRequirementPassed ? "pass" : "fail"}`
+      );
+    }
     if (runbook.readmeRequirementDetail?.summary) {
       push(`README detail: ${runbook.readmeRequirementDetail.summary}`);
     }
@@ -836,7 +1059,9 @@ function formatBehavioralGradingDebugExport(submission, assessment) {
 
   if (report?.failureCategory) {
     push("");
-    push(`Failure category: ${report.failureCategory}`);
+    push(
+      `Failure: ${failureCategoryLabel(report.failureCategory)} (${report.failureCategory}; ${gradingFaultOwner(report.failureCategory)})`
+    );
   }
   if (report?.reportArtifactKey) {
     push(`Report artifact: ${report.reportArtifactKey}`);
@@ -2130,7 +2355,7 @@ export default function SubmissionsDashboard() {
       behavioralGradingReport: null,
       behavioralGradingProgress: {
         phase: "sandbox",
-        phaseLabel: "Queued — provisioning E2B sandbox…",
+        phaseLabel: "Queued — waiting for a grading slot",
         checkIndex: null,
         checksTotal,
         agentSteps: [],
@@ -2182,7 +2407,8 @@ export default function SubmissionsDashboard() {
 
       toast({
         title: "Behavioral grading queued",
-        description: "Agent is running checks in the sandbox — trace updates live below.",
+        description:
+          "The trace below will update as the sandbox clones, installs, and runs each check.",
       });
       await loadSubmissions();
     } catch (error) {
@@ -2749,12 +2975,19 @@ export default function SubmissionsDashboard() {
                                           ?.status === "degraded"
                                       ? "bg-amber-100 text-amber-800"
                                       : "bg-green-100 text-green-700"
+                                  : behavioralFailedIsPlatform(submission)
+                                  ? "bg-amber-100 text-amber-800"
                                   : submission.behavioralGradingStatus === "failed"
                                   ? "bg-red-100 text-red-700"
                                   : "bg-amber-100 text-amber-800"
                               }`}
                             >
-                              Behavioral: {submission.behavioralGradingStatus}
+                              {behavioralFailedIsPlatform(submission)
+                                ? `Behavioral: ${failureCategoryLabel(
+                                    submission.behavioralGradingReport
+                                      ?.failureCategory
+                                  )}`
+                                : `Behavioral: ${submission.behavioralGradingStatus}`}
                               {submission.behavioralGradingStatus === "completed" &&
                               submission.behavioralGradingReport?.setup?.status &&
                               submission.behavioralGradingReport.setup.status !==
@@ -2766,12 +2999,16 @@ export default function SubmissionsDashboard() {
                           {submission.behavioralGradingStatus === "failed" &&
                             submission.behavioralGradingError && (
                               <p
-                                className="text-xs text-red-600 max-w-xs truncate"
+                                className={`text-xs max-w-xs truncate ${
+                                  behavioralFailedIsPlatform(submission)
+                                    ? "text-amber-800"
+                                    : "text-red-600"
+                                }`}
                                 title={submission.behavioralGradingError}
                               >
                                 {submission.behavioralGradingError}
-                            </p>
-                          )}
+                              </p>
+                            )}
                         </div>
                       </td>
                       <td className="px-5 py-4 text-sm text-gray-600">
@@ -3387,6 +3624,10 @@ export default function SubmissionsDashboard() {
           open={showEvaluationModal}
           onOpenChange={(open) => {
             if (!open) {
+              const id = selectedEvaluationSubmission?._id;
+              if (id && shouldShowRuntimeReplay(selectedEvaluationSubmission)) {
+                void stopRuntimeReplay(id);
+              }
               setShowEvaluationModal(false);
               setSelectedEvaluationSubmission(null);
               setRecordingSeekSec(null);
@@ -4047,6 +4288,12 @@ export default function SubmissionsDashboard() {
                         ) : null}
                       </div>
 
+                      {shouldShowRuntimeReplay(selectedEvaluationSubmission) ? (
+                        <RuntimeReplayPanel
+                          submission={selectedEvaluationSubmission}
+                        />
+                      ) : null}
+
                       {/* Behavioral grading summary (real pipeline data) */}
                       <div className="rounded-lg border border-gray-200 bg-white p-3 space-y-3">
                         <div className="flex items-center justify-between gap-3">
@@ -4060,6 +4307,10 @@ export default function SubmissionsDashboard() {
                                   selectedEvaluationSubmission?.behavioralGradingStatus ===
                                   "completed"
                                     ? "bg-green-100 text-green-700"
+                                    : behavioralFailedIsPlatform(
+                                        selectedEvaluationSubmission
+                                      )
+                                    ? "bg-amber-100 text-amber-800"
                                     : selectedEvaluationSubmission?.behavioralGradingStatus ===
                                       "failed"
                                     ? "bg-red-100 text-red-700"
@@ -4069,38 +4320,58 @@ export default function SubmissionsDashboard() {
                                     : "bg-gray-100 text-gray-600"
                                 }
                               >
-                                {selectedEvaluationSubmission?.behavioralGradingStatus
-                                  ? `Status: ${selectedEvaluationSubmission.behavioralGradingStatus}`
-                                  : "Not run yet"}
+                                {behavioralFailedIsPlatform(
+                                  selectedEvaluationSubmission
+                                )
+                                  ? failureCategoryLabel(
+                                      selectedEvaluationSubmission
+                                        .behavioralGradingReport
+                                        ?.failureCategory
+                                    )
+                                  : selectedEvaluationSubmission?.behavioralGradingStatus
+                                    ? `Status: ${selectedEvaluationSubmission.behavioralGradingStatus}`
+                                    : "Not run yet"}
                               </Badge>
                               {selectedEvaluationSubmission?.behavioralGradingReport
-                                ?.runbook && (
-                                <Badge
-                                  className={
-                                    selectedEvaluationSubmission
+                                ?.runbook &&
+                                (usedCandidateRuntimeConfig(
+                                  selectedEvaluationSubmission.behavioralGradingReport
+                                ) ? (
+                                  <Badge
+                                    className="bg-gray-100 text-gray-700"
+                                    title="Grading reused the install and start commands the candidate verified during runtime setup."
+                                  >
+                                    Commands: candidate setup
+                                  </Badge>
+                                ) : (
+                                  <Badge
+                                    className={
+                                      selectedEvaluationSubmission
+                                        .behavioralGradingReport?.runbook
+                                        ?.readmeRequirementPassed
+                                        ? "bg-green-100 text-green-700"
+                                        : "bg-red-100 text-red-700"
+                                    }
+                                    title={
+                                      selectedEvaluationSubmission
+                                        .behavioralGradingReport?.runbook
+                                        ?.readmeRequirementDetail?.summary || ""
+                                    }
+                                  >
+                                    README:{" "}
+                                    {selectedEvaluationSubmission
                                       .behavioralGradingReport?.runbook
                                       ?.readmeRequirementPassed
-                                      ? "bg-green-100 text-green-700"
-                                      : "bg-red-100 text-red-700"
-                                  }
-                                  title={
-                                    selectedEvaluationSubmission
-                                      .behavioralGradingReport?.runbook
-                                      ?.readmeRequirementDetail?.summary ||
-                                    ""
-                                  }
-                                >
-                                  README:{" "}
-                                  {selectedEvaluationSubmission
-                                    .behavioralGradingReport?.runbook
-                                    ?.readmeRequirementPassed
-                                    ? "pass"
-                                    : "fail"}
-                                </Badge>
-                              )}
+                                      ? "pass"
+                                      : "fail"}
+                                  </Badge>
+                                ))}
                             </div>
                             {selectedEvaluationSubmission?.behavioralGradingReport
                               ?.runbook?.readmeRequirementDetail?.summary &&
+                              !usedCandidateRuntimeConfig(
+                                selectedEvaluationSubmission.behavioralGradingReport
+                              ) &&
                               !selectedEvaluationSubmission
                                 ?.behavioralGradingReport?.runbook
                                 ?.readmeRequirementPassed && (
@@ -4112,13 +4383,26 @@ export default function SubmissionsDashboard() {
                                   }
                                 </p>
                               )}
+                            {selectedEvaluationSubmission
+                              ?.behavioralGradingReport
+                              ?.runbookFallbackReason && (
+                              <p className="mt-1 text-[11px] text-amber-700 leading-snug max-w-xl">
+                                Candidate config did not come up; planned from
+                                the README instead.
+                              </p>
+                            )}
                             {selectedEvaluationSubmission?.behavioralGradingError && (
                               <p className="mt-2 text-xs text-red-600">
                                 {selectedEvaluationSubmission.behavioralGradingError}
                               </p>
                             )}
-                            <div className="mt-2">
+                            <div className="mt-2 space-y-2">
                               <BehavioralSetupPanel
+                                report={
+                                  selectedEvaluationSubmission?.behavioralGradingReport
+                                }
+                              />
+                              <BehavioralRunbookSourcePanel
                                 report={
                                   selectedEvaluationSubmission?.behavioralGradingReport
                                 }
@@ -4222,16 +4506,8 @@ export default function SubmissionsDashboard() {
                                         {c.checkText}
                                       </span>
                                     </span>
-                                    <Badge
-                                      className={
-                                        c.verdict === "pass"
-                                          ? "bg-green-100 text-green-700"
-                                          : c.verdict === "fail"
-                                          ? "bg-red-100 text-red-700"
-                                          : "bg-amber-100 text-amber-800"
-                                      }
-                                    >
-                                      {c.verdict}
+                                    <Badge className={behavioralVerdictBadgeClass(c.verdict)}>
+                                      {behavioralVerdictLabel(c.verdict)}
                                     </Badge>
                                   </CollapsibleTrigger>
                                   <CollapsibleContent className="border-t border-gray-100 bg-white px-2 py-2 max-h-[50vh] overflow-y-auto space-y-2">

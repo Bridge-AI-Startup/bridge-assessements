@@ -233,6 +233,74 @@ const SubmissionSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: null,
     },
+
+    // Candidate-authored runtime config (Railway-style). Secrets live here write-only.
+    runtimeConfig: {
+      rootDir: { type: String, default: "." },
+      runtime: {
+        type: String,
+        enum: ["auto", "node20", "python312"],
+        default: "auto",
+      },
+      installCommand: { type: String, default: "" },
+      buildCommand: { type: String, default: null },
+      startCommand: { type: String, default: "" },
+      port: { type: Number, default: null },
+      healthPath: { type: String, default: null },
+      executionProfile: {
+        type: String,
+        enum: ["cli_stdout", "web_server", "unclear"],
+        default: "unclear",
+      },
+      envVars: {
+        type: [
+          {
+            key: { type: String, required: true },
+            value: { type: String, default: "" },
+            secret: { type: Boolean, default: false },
+          },
+        ],
+        default: [],
+      },
+      declaredEgressDomains: { type: [String], default: [] },
+    },
+
+    runtimeSetup: {
+      status: {
+        type: String,
+        enum: ["not_started", "in_progress", "finalized"],
+        default: "not_started",
+      },
+      verified: { type: Boolean, default: false },
+      lastRunAt: { type: Date, default: null },
+      lastRunResult: {
+        ok: { type: Boolean, default: null },
+        exitCode: { type: Number, default: null },
+        error: { type: String, default: null },
+        startedAt: { type: Date, default: null },
+        endedAt: { type: Date, default: null },
+      },
+      finalizedAt: { type: Date, default: null },
+      snapshotSha256: { type: String, default: null },
+      // Snapshot of the setup box taken at finalize, so a recruiter can read
+      // what "verified" means without paying to boot a sandbox.
+      evidence: {
+        healthOk: { type: Boolean, default: null },
+        healthSummary: { type: String, default: null },
+        port: { type: Number, default: null },
+        capturedAt: { type: Date, default: null },
+        logTail: {
+          type: [
+            {
+              stream: { type: String, default: "stdout" },
+              text: { type: String, default: "" },
+              t: { type: Date, default: null },
+            },
+          ],
+          default: [],
+        },
+      },
+    },
   },
   {
     timestamps: true, // Adds createdAt and updatedAt automatically

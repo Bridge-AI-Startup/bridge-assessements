@@ -17,6 +17,7 @@
     "test:unit": "vitest run test/unit",
     "e2e": "tsx test/e2e/runAll.ts",
     "test:video-eval": "tsx test/video-eval/runVideoEvaluation.ts",
+    "test:grading-eval": "tsx test/grading-eval/runGradingEvaluation.ts",
     "gen:stress-videos": "tsx test/video-eval/generateStressVideos.ts",
     "seed:stress-demo": "tsx --env-file=config.env test/video-eval/seedStressDemo.ts",
     "seed:stress-demo-behavioral": "tsx --env-file=config.env test/video-eval/seedStressDemoBehavioralGrading.ts",

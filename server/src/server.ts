@@ -28,6 +28,8 @@ import { startIncrementalScheduler } from "./ai/transcript/incrementalScheduler.
 import { startAttemptReaper } from "./services/submission/finalizeExpired.js";
 import { resumeInterruptedMerges } from "./services/capture/sessionVideoMerge.js";
 import { resumeInterruptedEvaluations } from "./controllers/submission.js";
+import { startRuntimeSetupReaper } from "./services/runtimeSetup/index.js";
+import { sweepInterruptedBehavioralGrading } from "./services/behavioralGrading/index.js";
 
 // Node 15+ terminates the process on an unhandled rejection. Without these
 // handlers a background async failure (E2B, Mongo, a stray promise) kills the
@@ -375,6 +377,10 @@ console.log("     - GET /api/submissions/assessments/public/:id");
 console.log("     - GET /api/submissions/token/:token");
 console.log("     - POST /api/submissions/token/:token/start");
 console.log("     - POST /api/submissions/token/:token/submit");
+console.log("     - PUT  /api/submissions/token/:token/runtime/config");
+console.log("     - POST /api/submissions/token/:token/runtime/session");
+console.log("     - POST /api/submissions/token/:token/runtime/run");
+console.log("     - GET  /api/submissions/token/:token/runtime/status");
 console.log("     - GET /api/submissions/:id");
 console.log("     - PATCH /api/submissions/:id");
 console.log("     - POST /api/submissions/:id/submit");
@@ -496,6 +502,15 @@ const startServer = async () => {
     await connectPlayMongoose();
     console.log("   ✅ MongoDB Play connected");
 
+    // Behavioral grading queues in memory, so anything left `pending` by the
+    // previous process is gone. Retire those before serving traffic.
+    const sweptGrades = await sweepInterruptedBehavioralGrading();
+    if (sweptGrades > 0) {
+      console.log(
+        `   🧹 Marked ${sweptGrades} interrupted behavioral grading run(s) as failed`
+      );
+    }
+
     // Start Express server
     console.log("\n🚀 Starting Express server...");
     app.listen(PORT, () => {
@@ -507,6 +522,7 @@ const startServer = async () => {
       console.log(`${"=".repeat(60)}\n`);
       startIncrementalScheduler();
       startAttemptReaper();
+      startRuntimeSetupReaper();
       void resumeInterruptedMerges().catch((err) =>
         console.error("[sessionVideoMerge] resumeInterruptedMerges failed:", err),
       );

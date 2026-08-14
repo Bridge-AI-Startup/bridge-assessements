@@ -14,6 +14,10 @@ import {
 } from "../services/assessmentGeneration.js";
 import { processAssessmentChat } from "../services/assessmentChat.js";
 import { groundCriterion } from "../services/evaluation/grounder.js";
+import {
+  parseBehavioralCheckSpecs,
+  type BehavioralCheckSpec,
+} from "../services/behavioralGrading/checkSpecs.js";
 import { shouldEnforceFreeTierAssessmentLimit } from "../utils/subscription.js";
 import { isEvidenceMode } from "../utils/evidenceMode.js";
 
@@ -29,6 +33,8 @@ export type GenerateResponse = {
   description: string;
   timeLimit: number;
   behavioralChecks: string[];
+  /** Machine-checkable acceptance for the subset of checks the description pinned. */
+  behavioralCheckSpecs: BehavioralCheckSpec[];
   starterCodeFiles: Array<{ path: string; content: string }>;
 };
 
@@ -39,6 +45,7 @@ export type CreateRequest = {
   starterFilesGitHubLink?: string;
   starterCodeFiles?: Array<{ path: string; content: string }>;
   behavioralChecks?: string[];
+  behavioralCheckSpecs?: unknown;
   evaluationCriteria?: string[];
   uid: string; // Added by verifyAuthToken middleware
 };
@@ -51,9 +58,28 @@ export type UpdateRequest = {
   starterCodeFiles?: Array<{ path: string; content: string }>;
   evidenceMode?: "none" | "workflow" | "both" | "screen";
   behavioralChecks?: string[];
+  behavioralCheckSpecs?: unknown;
   evaluationCriteria?: string[];
   uid: string; // Added by verifyAuthToken middleware
 };
+
+/**
+ * Keep stored specs tied to the sentences they verify.
+ *
+ * A spec whose `text` is no longer among the assessment's behavioral checks
+ * grades nothing (`resolveBehavioralCheckSpecs` ignores it), so dropping it on
+ * write stops orphans accumulating behind an edited check. When the caller is not
+ * touching the check list, `checks` is undefined and everything valid is kept.
+ */
+function normalizeCheckSpecs(
+  raw: unknown,
+  checks: string[] | undefined
+): BehavioralCheckSpec[] {
+  const { specs } = parseBehavioralCheckSpecs(raw);
+  if (!checks) return specs;
+  const wanted = new Set(checks.map((c) => c.trim()));
+  return specs.filter((s) => wanted.has(s.text.trim()));
+}
 
 // Helper function to get user ID from Firebase UID
 async function getUserIdFromFirebaseUid(firebaseUid: string): Promise<string> {
@@ -79,6 +105,7 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
       starterFilesGitHubLink,
       starterCodeFiles,
       behavioralChecks,
+      behavioralCheckSpecs,
       evaluationCriteria,
       uid,
     } = req.body as CreateRequest;
@@ -127,6 +154,7 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
       starterFilesGitHubLink?: string;
       starterCodeFiles?: Array<{ path: string; content: string }>;
       behavioralChecks?: string[];
+      behavioralCheckSpecs?: unknown;
       evaluationCriteria?: string[];
     } = {
       userId,
@@ -153,6 +181,14 @@ export const createAssessment: RequestHandler = async (req, res, next) => {
       assessmentData.behavioralChecks = behavioralChecks.filter(
         (c): c is string => typeof c === "string" && c.trim().length > 0
       );
+    }
+
+    const createSpecs = normalizeCheckSpecs(
+      behavioralCheckSpecs,
+      assessmentData.behavioralChecks
+    );
+    if (createSpecs.length > 0) {
+      assessmentData.behavioralCheckSpecs = createSpecs;
     }
 
     // Only include evaluationCriteria if provided (array of strings)
@@ -251,6 +287,7 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
       starterCodeFiles,
       evidenceMode,
       behavioralChecks,
+      behavioralCheckSpecs,
       evaluationCriteria,
       uid,
     } = req.body as UpdateRequest;
@@ -305,6 +342,19 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
           )
         : [];
       (assessment as any).behavioralChecks = checks;
+    }
+    if (behavioralCheckSpecs !== undefined) {
+      // Prune against the *resulting* check list, so editing a sentence and its
+      // spec in one request keeps the spec instead of orphaning it.
+      const liveChecks: string[] = Array.isArray(
+        (assessment as any).behavioralChecks
+      )
+        ? (assessment as any).behavioralChecks
+        : [];
+      const specs = normalizeCheckSpecs(behavioralCheckSpecs, liveChecks);
+      (assessment as any).behavioralCheckSpecs =
+        specs.length > 0 ? specs : undefined;
+      assessment.markModified("behavioralCheckSpecs");
     }
     if (evaluationCriteria !== undefined) {
       const criteria = Array.isArray(evaluationCriteria)
@@ -494,6 +544,7 @@ export const generateAssessmentData: RequestHandler = async (
       description: generatedDescription,
       timeLimit,
       behavioralChecks,
+      behavioralCheckSpecs,
       starterCodeFiles,
     } = await generateAssessmentComponents(description, options);
 
@@ -515,6 +566,7 @@ export const generateAssessmentData: RequestHandler = async (
       description: generatedDescription || description, // Fallback to input if missing
       timeLimit,
       behavioralChecks,
+      behavioralCheckSpecs,
       starterCodeFiles,
     };
 
@@ -581,13 +633,14 @@ export const generateBehavioralChecksData: RequestHandler = async (
 
     const requirementsSummary =
       description.length > 2000 ? description.slice(0, 2000) : description;
-    const behavioralChecks = await generateBehavioralChecks({
-      title: title.trim(),
-      description,
-      requirementsSummary,
-    });
+    const { checks: behavioralChecks, specs: behavioralCheckSpecs } =
+      await generateBehavioralChecks({
+        title: title.trim(),
+        description,
+        requirementsSummary,
+      });
 
-    res.status(200).json({ behavioralChecks });
+    res.status(200).json({ behavioralChecks, behavioralCheckSpecs });
   } catch (error) {
     console.error("❌ [generateBehavioralChecksData] Error:", error);
     next(error);

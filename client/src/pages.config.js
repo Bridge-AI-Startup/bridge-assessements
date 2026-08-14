@@ -4,6 +4,7 @@ import CandidateSubmission from "./pages/CandidateSubmission";
 import SubmissionsDashboard from "./pages/SubmissionsDashboard";
 import CandidateAssessment from "./pages/CandidateAssessment";
 import CandidateSubmitted from "./pages/CandidateSubmitted";
+import RuntimeSetup from "./pages/RuntimeSetup";
 import Home from "./pages/Home";
 import AppIndex from "./pages/AppIndex";
 import Login from "./pages/Login";
@@ -26,6 +27,7 @@ export const PAGES = {
   SubmissionsDashboard: SubmissionsDashboard,
   CandidateAssessment: CandidateAssessment,
   CandidateSubmitted: CandidateSubmitted,
+  RuntimeSetup: RuntimeSetup,
   Home: Home,
   AppIndex: AppIndex,
   Login: Login,

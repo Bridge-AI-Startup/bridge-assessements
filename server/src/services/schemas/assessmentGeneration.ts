@@ -29,6 +29,75 @@ export const assessmentOutputSchema = z.object({
 
 export type AssessmentOutput = z.infer<typeof assessmentOutputSchema>;
 
+/**
+ * One suggested request in a machine-checkable acceptance criterion.
+ *
+ * Deliberately flatter and looser than the real `BehavioralCheckSpec` schema in
+ * `behavioralGrading/checkSpecs.ts`: an LLM producing a deep discriminated union
+ * fails in ways that are tedious to recover from, so it emits this shape and the
+ * server converts + strictly validates. A suggestion that will not convert is
+ * dropped, leaving the check to the agent judge.
+ */
+const suggestedRequestSchema = z.object({
+  method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
+  path: z.string().min(1).max(300).describe("Path only, starting with /"),
+  jsonBody: z
+    .string()
+    .max(4000)
+    .optional()
+    .describe("Request body as a JSON string, when the request sends one"),
+  expectStatus: z
+    .array(z.coerce.number().int().min(100).max(599))
+    .max(5)
+    .optional()
+    .describe("Acceptable response status codes"),
+  expectBodyContains: z
+    .array(z.string().min(1).max(500))
+    .max(5)
+    .optional()
+    .describe("Substrings the response body must contain"),
+});
+
+/**
+ * One UI walkthrough step. Flatter than `uiStepSchema` so the generator does
+ * not have to emit a discriminated union.
+ */
+export const suggestedUiStepSchema = z.object({
+  action: z.enum([
+    "goto",
+    "fill_placeholder",
+    "fill_role",
+    "click_role",
+    "click_text",
+    "expect_text",
+  ]),
+  path: z.string().max(500).optional(),
+  placeholder: z.string().max(200).optional(),
+  role: z
+    .enum(["textbox", "searchbox", "combobox", "button", "link", "checkbox"])
+    .optional(),
+  name: z.string().max(200).optional(),
+  exact: z.boolean().optional(),
+  text: z.string().max(500).optional(),
+  value: z.string().max(2000).optional(),
+  absent: z.boolean().optional(),
+});
+
+export const suggestedAcceptanceSchema = z.object({
+  text: z
+    .string()
+    .min(1)
+    .max(400)
+    .describe("Must exactly match one entry in checks"),
+  kind: z
+    .enum(["http", "http_sequence", "restart_persistence", "ui", "agent"])
+    .describe(
+      "ui = drive the page; http* only when the description already names the path"
+    ),
+  requests: z.array(suggestedRequestSchema).max(4).optional(),
+  uiSteps: z.array(suggestedUiStepSchema).max(12).optional(),
+});
+
 /** Plain-language behavioral checks (stack-agnostic, observable). */
 export const behavioralChecksOutputSchema = z.object({
   checks: z
@@ -36,9 +105,20 @@ export const behavioralChecksOutputSchema = z.object({
     .min(5)
     .max(18)
     .describe("Observable behaviors any reasonable implementation should satisfy"),
+  acceptance: z
+    .array(suggestedAcceptanceSchema)
+    .max(18)
+    .optional()
+    .describe(
+      "One entry per check that can be settled by a UI walkthrough or a pinned HTTP contract"
+    ),
 });
 
 export type BehavioralChecksOutput = z.infer<typeof behavioralChecksOutputSchema>;
+export type SuggestedAcceptance = NonNullable<
+  BehavioralChecksOutput["acceptance"]
+>[number];
+export type SuggestedUiStep = z.infer<typeof suggestedUiStepSchema>;
 
 /** Step 1: requirements extraction + stack/level with confidence */
 export const requirementsExtractionSchema = z.object({
