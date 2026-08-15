@@ -176,7 +176,9 @@ See `server/config.env.example` for the full list. Key variables:
 **Behavioral Grading Sandbox:**
 - `E2B_API_KEY` -- API key for E2B sandbox execution
 - `GRADING_STORAGE_DIR` -- Local directory for behavioral grading artifacts/reports (default: `./storage/grading`)
-- `SUBMISSION_UPLOAD_STORAGE_DIR` -- Local directory for uploaded submission archives (default: `./storage/submissions`)
+- `SUBMISSION_UPLOAD_STORAGE_DIR` -- Local directory for uploaded submission archives when not using S3 (default: `./storage/submissions`)
+- `SUBMISSION_UPLOAD_STORAGE_BACKEND` -- `s3` or `local`. If unset, S3 is used whenever `SUBMISSION_S3_BUCKET` / `PROCTORING_S3_BUCKET` / `AWS_S3_BUCKET` is set (same durable-storage rule as proctoring). Production must use S3 — Render's disk is ephemeral, and a missing zip breaks runtime setup and behavioral grading.
+- `SUBMISSION_S3_BUCKET` -- Optional bucket override for submission zips (default: the proctoring/AWS bucket). Objects are stored under `submissions/{submissionId}/archives/…`
 - `SUBMISSION_SOURCE_MODE` -- Allowed candidate submission sources (`both`/`github`/`upload`, default: `both`)
 - `SUBMISSION_UPLOAD_MAX_BYTES` -- Max upload bytes accepted by `/api/submissions/token/:token/upload` (default: `104857600`)
 - `SUBMISSION_UPLOAD_MAX_EXTRACTED_BYTES` -- Max bytes after archive extraction for indexing/execution (default: `314572800`)

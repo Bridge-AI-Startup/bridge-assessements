@@ -1,5 +1,11 @@
 import fs from "fs/promises";
 import path from "path";
+import {
+  MISSING_SUBMISSION_ARCHIVE_MESSAGE,
+  S3SubmissionCodeStorage,
+} from "./s3Storage.js";
+
+export { MISSING_SUBMISSION_ARCHIVE_MESSAGE };
 
 export interface ISubmissionCodeStorage {
   storeArchive(key: string, buffer: Buffer): Promise<void>;
@@ -35,7 +41,15 @@ export class LocalSubmissionCodeStorage implements ISubmissionCodeStorage {
   }
 
   async readArchive(key: string): Promise<Buffer> {
-    return fs.readFile(this.resolvePath(key));
+    try {
+      return await fs.readFile(this.resolvePath(key));
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === "ENOENT") {
+        throw new Error(MISSING_SUBMISSION_ARCHIVE_MESSAGE);
+      }
+      throw err;
+    }
   }
 
   async exists(key: string): Promise<boolean> {
@@ -56,11 +70,37 @@ export class LocalSubmissionCodeStorage implements ISubmissionCodeStorage {
   }
 }
 
+export function shouldUseS3SubmissionStorage(): boolean {
+  const backend = process.env.SUBMISSION_UPLOAD_STORAGE_BACKEND?.trim().toLowerCase();
+  if (backend === "local") return false;
+  if (backend === "s3") return true;
+  return Boolean(
+    process.env.SUBMISSION_S3_BUCKET?.trim() ||
+      process.env.PROCTORING_S3_BUCKET?.trim() ||
+      process.env.AWS_S3_BUCKET?.trim()
+  );
+}
+
 let storageInstance: ISubmissionCodeStorage | null = null;
 
 export function getSubmissionCodeStorage(): ISubmissionCodeStorage {
   if (!storageInstance) {
-    storageInstance = new LocalSubmissionCodeStorage();
+    if (shouldUseS3SubmissionStorage()) {
+      storageInstance = new S3SubmissionCodeStorage();
+      console.log(
+        `[${new Date().toISOString()}] Submission archive storage: S3 bucket=${
+          process.env.SUBMISSION_S3_BUCKET ||
+          process.env.PROCTORING_S3_BUCKET ||
+          process.env.AWS_S3_BUCKET
+        }`
+      );
+    } else {
+      storageInstance = new LocalSubmissionCodeStorage();
+    }
   }
   return storageInstance;
+}
+
+export function resetSubmissionCodeStorageForTests(): void {
+  storageInstance = null;
 }
