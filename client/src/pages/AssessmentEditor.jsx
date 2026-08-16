@@ -137,7 +137,7 @@ export default function AssessmentEditor() {
   const [emailSent, setEmailSent] = useState(false);
   const [contextSections, setContextSections] = useState([]);
   const [timeLimit, setTimeLimit] = useState({ hours: 4, minutes: 0 });
-  // "both" (default) | "none" | leftover "workflow" / "screen"
+  // "both" (default) | "none" | leftover "workflow"
   const [evidenceMode, setEvidenceMode] = useState("both");
   const [startDeadline, setStartDeadline] = useState(7);
   const [timeLimitSaveTimeout, setTimeLimitSaveTimeout] = useState(null);
@@ -257,7 +257,15 @@ export default function AssessmentEditor() {
         const minutes = totalMinutes % 60;
         setTimeLimit({ hours, minutes });
       }
-      setEvidenceMode(assessmentData.evidenceMode ?? "screen");
+      // Legacy documents may hold no field, or the removed "screen"; both
+      // resolve to "both" server-side, so mirror that rather than showing the
+      // editor a mode that no longer exists.
+      setEvidenceMode(
+        assessmentData.evidenceMode === "workflow" ||
+          assessmentData.evidenceMode === "none"
+          ? assessmentData.evidenceMode
+          : "both"
+      );
       if (assessmentData.behavioralChecks?.length) {
         const checks = assessmentData.behavioralChecks.filter(
           (c) => typeof c === "string"
@@ -921,15 +929,6 @@ export default function AssessmentEditor() {
                   </p>
                   <div className="space-y-2">
                     {[
-                      ...(evidenceMode === "screen"
-                        ? [
-                            {
-                              value: "screen",
-                              label: "Screen recording",
-                              hint: "Records the screen and transcribes it with AI. Previous default — pick another option to change it.",
-                            },
-                          ]
-                        : []),
                       ...(evidenceMode === "workflow"
                         ? [
                             {

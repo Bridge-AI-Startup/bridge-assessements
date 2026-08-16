@@ -56,14 +56,18 @@ const AssessmentSchema = new mongoose.Schema(
      * Offered in the editor: "both" (default) or "none".
      *   "both"     — record the screen for playback, analyse the hook stream
      *   "none"     — no screen recording, no workflow capture
-     * Leftover (still honoured): "workflow" (hooks only) and "screen" (video + OCR)
+     * Leftover (still honoured): "workflow" (hooks only)
      *
-     * New assessments default to "both". Documents with no field still resolve
-     * to "screen" at read time (legacy video + OCR path).
+     * New assessments default to "both". Documents with no field — or holding
+     * the removed "screen" value — resolve to "both" at read time via
+     * `resolveEvidenceMode`, so nothing has to be migrated for correctness.
+     * The enum no longer accepts "screen"; run
+     * `scripts/migrateEvidenceModeOffScreen.ts` so stored values match, or an
+     * unmigrated document fails validation the next time it is saved.
      */
     evidenceMode: {
       type: String,
-      enum: ["none", "workflow", "both", "screen"],
+      enum: ["none", "workflow", "both"],
       default: "both",
     },
 

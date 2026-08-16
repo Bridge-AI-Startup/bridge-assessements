@@ -6,6 +6,7 @@ import Submission from "./pages/Submission";
 import MySubmissions from "./pages/MySubmissions";
 import Admin from "./pages/Admin";
 import QueuePreview from "./pages/QueuePreview";
+import About from "./pages/About";
 
 export const PAGES = {
   Home,
@@ -14,6 +15,7 @@ export const PAGES = {
   Gallery,
   Submission,
   MySubmissions,
+  About,
   Admin,
   QueuePreview,
 };

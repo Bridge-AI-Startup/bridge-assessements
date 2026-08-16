@@ -169,15 +169,11 @@ async function main() {
   }
 
   const answer = await ask("  Type 'agree' to start the assessment with capture on: ");
+  closePrompts();
   if (answer.toLowerCase() !== "agree") {
-    closePrompts();
     console.log("\n  Setup cancelled. Nothing was recorded or sent.\n");
     process.exit(1);
   }
-
-  const candidateName =
-    argValue("--name") || (await ask("  Your name (for the reviewer): "));
-  closePrompts();
 
   const apiBase = DEFAULT_API.replace(/\/$/, "");
   let session;
@@ -187,7 +183,9 @@ async function main() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         submissionToken: submissionToken || undefined,
-        candidateName: candidateName || undefined,
+        // Optional; real assessments copy the name from the submission.
+        // `--name=` only labels unlinked `--local` tester runs.
+        candidateName: argValue("--name") || undefined,
         source: "claude-code",
         consentGranted: true,
         environment: {

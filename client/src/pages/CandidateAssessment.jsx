@@ -61,6 +61,26 @@ const SETUP_STORAGE_PREFIX = "bridge-assessment-setup:";
 
 const FINAL_SUBMISSION_GRACE_SECONDS = 5 * 60; // keep in lockstep with server FINAL_SUBMISSION_GRACE_MINUTES
 const CAPTURE_API_ORIGIN = API_BASE_URL.replace(/\/api\/?$/, "");
+/** MediaRecorder timeslice. Chunks are uploaded (and dropped) as they arrive — never buffered whole. */
+const VIDEO_CHUNK_MS = 30000;
+
+/**
+ * Stop a recorder entry at most once and memoize the stop promise.
+ * MediaRecorder.stop() flushes a final `dataavailable` before `onstop`, so
+ * awaiting this and then `entry.uploads` guarantees the last chunk is uploaded
+ * before the proctoring session is completed.
+ */
+function stopRecorderEntry(entry) {
+  if (!entry.stopPromise) {
+    entry.stopped = true;
+    entry.stopPromise = Promise.resolve()
+      .then(() => entry.stop?.())
+      .catch(() => {
+        /* already stopped */
+      });
+  }
+  return entry.stopPromise;
+}
 
 function formatHms(totalSeconds) {
   const safeSeconds = Math.max(0, Math.floor(totalSeconds));
@@ -135,16 +155,16 @@ export default function CandidateAssessment() {
   const [showConsent, setShowConsent] = useState(false);
   // Client-only: consent + workspace setup happen while status is still pending.
   const [inSetup, setInSetup] = useState(false);
-  // Server-resolved evidence mode: "none" | "workflow" | "both" | legacy "screen".
+  // Server-resolved evidence mode: "none" | "workflow" | "both".
   // Drives whether we ask for the screen, show the capture-kit command, or both.
-  const evidenceMode = submission?.evidenceMode || "screen";
+  const evidenceMode = submission?.evidenceMode || "both";
   const usesWorkflowCapture =
     evidenceMode === "workflow" || evidenceMode === "both";
-  const usesScreenRecording =
-    evidenceMode === "screen" || evidenceMode === "both";
-  // PNG frames only feed the OCR transcript (legacy `screen`). `both` keeps
-  // video + sidecar; skip the screenshot pipeline.
-  const usesFrameCapture = evidenceMode === "screen";
+  const usesScreenRecording = evidenceMode === "both";
+  // PNG stills existed only to feed the OCR transcript, which went away with
+  // the "screen" mode. `both` records video for playback and keeps the sidecar
+  // events; nothing consumes screenshots, so the pipeline is never armed.
+  const usesFrameCapture = false;
   const hasStarterZip = (assessment?.starterCodeFiles?.length ?? 0) > 0;
   const hasStarterRepo = Boolean(assessment?.starterFilesGitHubLink);
   const needsWorkspaceSetup =
@@ -185,8 +205,16 @@ export default function CandidateAssessment() {
   const [showResharePrompt, setShowResharePrompt] = useState(false);
   /** True when prompting because of page reload / remount (stream was never started this visit). */
   const [reshareIsResume, setReshareIsResume] = useState(false);
+  /**
+   * True while we believe screen sharing is down (track ended, or a reload left
+   * us with no stream). Single source of truth for the lost/restored pair, so
+   * neither event can be emitted twice nor skipped.
+   */
+  const sharingDownRef = useRef(false);
   /** Incremented on every in-progress stream loss / resume so the companion speaks each time. */
   const [companionReshareTick, setCompanionReshareTick] = useState(0);
+  const [companionShareRestoredTick, setCompanionShareRestoredTick] =
+    useState(0);
   const timeoutTriggeredRef = useRef(false);
   const stopProctoringPromiseRef = useRef(null);
   const buzzerPlayedRef = useRef(false);
@@ -246,8 +274,8 @@ export default function CandidateAssessment() {
             }
             if (setupMarked) {
               setInSetup(true);
-              const mode = result.data.evidenceMode || "screen";
-              const screenOn = mode === "screen" || mode === "both";
+              const mode = result.data.evidenceMode || "both";
+              const screenOn = mode === "both";
               if (screenOn) {
                 try {
                   const pRes = await getSessionByCandidateToken(token);
@@ -262,6 +290,8 @@ export default function CandidateAssessment() {
                       setProctoringSessionId(sess._id);
                       setProctoringSubmissionId(String(result.data._id));
                       setProctoringEnabled(true);
+                      // A reload ends screen capture: we are down until they reshare.
+                      sharingDownRef.current = true;
                       setReshareIsResume(true);
                       setShowResharePrompt(true);
                       // Companion is not mounted during setup — UI reshare is enough.
@@ -288,6 +318,8 @@ export default function CandidateAssessment() {
                   setProctoringSessionId(sess._id);
                   setProctoringSubmissionId(String(result.data._id));
                   setProctoringEnabled(true);
+                  // A reload ends screen capture: we are down until they reshare.
+                  sharingDownRef.current = true;
                   setReshareIsResume(true);
                   setShowResharePrompt(true);
                   setCompanionReshareTick((n) => n + 1);
@@ -414,12 +446,14 @@ export default function CandidateAssessment() {
   /** Stop recorders and flush sidecar/frames. Leaves the session open so a
    *  failed submit can keep recording. */
   const flushPendingCapture = useCallback(async () => {
+    // Includes recorders already stopped by a stream ending — their final chunk
+    // upload still has to land before the session is completed.
     const recorders = videoRecordersRef.current;
     videoRecordersRef.current = [];
     await Promise.all(
       recorders.map(async (r) => {
         try {
-          await r.stop();
+          await stopRecorderEntry(r);
         } catch {
           /* already stopped */
         }
@@ -603,71 +637,127 @@ export default function CandidateAssessment() {
     };
   }, [proctoringEnabled, proctoringSessionId, token]);
 
+  /** Screen sharing went away. Idempotent — a second track ending is not a second loss. */
+  const noteSharingLost = useCallback(({ isResume = false, details } = {}) => {
+    setReshareIsResume(isResume);
+    setShowResharePrompt(true);
+    if (sharingDownRef.current) return;
+    sharingDownRef.current = true;
+    if (inProgressRef.current) {
+      setCompanionReshareTick((n) => n + 1);
+    }
+    sidecarBufferRef.current.push({
+      type: "stream_lost",
+      timestamp: Date.now(),
+      // Browsers never say WHY a track ended; the hook's context ring (recent
+      // focus/visibility/page events) is the only correlation there is, and a
+      // candidate cannot be relied on to keep DevTools open. Persist it.
+      metadata: details || {},
+    });
+  }, []);
+
+  /**
+   * Screen sharing is live again. Idempotent, and the ONLY writer of
+   * `stream_restored` — every resume path (modal reshare, setup reshare, the
+   * hook's own restored callback) funnels here so exactly one event is recorded.
+   */
+  const noteSharingResumed = useCallback(() => {
+    setShowResharePrompt(false);
+    setReshareIsResume(false);
+    if (!sharingDownRef.current) return;
+    sharingDownRef.current = false;
+    // Unlatch the voice companion. The lost contextual update is often spoken
+    // seconds AFTER the candidate has already reshared (a contextual update
+    // does not force a turn), and without a positive restore signal the agent
+    // keeps insisting the share is down against a healthy stream.
+    setCompanionShareRestoredTick((n) => n + 1);
+    sidecarBufferRef.current.push({
+      type: "stream_restored",
+      timestamp: Date.now(),
+      metadata: {},
+    });
+  }, []);
+
   // Stream lost/restored handlers
   useEffect(() => {
     if (!proctoringEnabled) return;
+    screenCapture.onStreamLost((details) => noteSharingLost({ details }));
+    screenCapture.onStreamRestored(() => noteSharingResumed());
+  }, [proctoringEnabled, screenCapture, noteSharingLost, noteSharingResumed]);
 
-    screenCapture.onStreamLost(() => {
-      setReshareIsResume(false);
-      setShowResharePrompt(true);
-      if (inProgressRef.current) {
-        setCompanionReshareTick((n) => n + 1);
-      }
-      sidecarBufferRef.current.push({
-        type: "stream_lost",
-        timestamp: Date.now(),
-        metadata: {},
-      });
-    });
-
-    screenCapture.onStreamRestored(() => {
-      setShowResharePrompt(false);
-      setReshareIsResume(false);
-      sidecarBufferRef.current.push({
-        type: "stream_restored",
-        timestamp: Date.now(),
-        metadata: {},
-      });
-    });
-  }, [proctoringEnabled, screenCapture]);
+  /**
+   * Backstop: the reshare modal must never sit on top of a live share, and the
+   * companion must never be told to nag when sharing is in fact up. Whatever
+   * path produced the stream (modal, setup panel, hook callback), a live stream
+   * closes the loop exactly once.
+   */
+  useEffect(() => {
+    if (!proctoringEnabled || !screenCapture.isSharing) return;
+    noteSharingResumed();
+  }, [proctoringEnabled, screenCapture.isSharing, noteSharingResumed]);
 
   useEffect(() => {
     inProgressRef.current = submission?.status === "in-progress";
   }, [submission?.status]);
 
-  // Video recording — start MediaRecorder for each stream
+  // Video recording — one MediaRecorder per live MediaStream.
+  //
+  // Recorders are keyed by the MediaStream object, NOT by screenIndex: a reshare
+  // produces a brand-new stream that reuses screenIndex 0, and an index-keyed
+  // check would have skipped it, leaving the rest of the session unrecorded.
+  // Entries are kept after stopping so `flushPendingCapture` still awaits their
+  // final chunk upload before POST /complete.
   useEffect(() => {
-    if (!proctoringEnabled || !proctoringSessionId || !token) return;
-    if (screenCapture.streams.length === 0) return;
+    const live =
+      proctoringEnabled && proctoringSessionId && token
+        ? screenCapture.streams
+        : [];
 
-    // Start recorders for new streams that don't have one yet
-    const currentRecorders = videoRecordersRef.current;
-    const existingIndices = new Set(currentRecorders.map((r) => r.screenIndex));
+    for (const entry of videoRecordersRef.current) {
+      if (entry.stopped) continue;
+      if (live.some((s) => s.stream === entry.stream)) continue;
+      void stopRecorderEntry(entry);
+    }
 
-    for (const { stream, screenIndex } of screenCapture.streams) {
-      if (existingIndices.has(screenIndex)) continue;
+    if (live.length === 0) return undefined;
+
+    for (const { stream, screenIndex } of live) {
+      const alreadyRecording = videoRecordersRef.current.some(
+        (r) => r.stream === stream && !r.stopped
+      );
+      if (alreadyRecording) continue;
 
       try {
-        const { recorder, chunks, stop } = createVideoRecorder(stream, 30000);
         const recorderEntry = {
           screenIndex,
-          recorder,
-          chunks,
-          stop,
+          stream,
+          stopped: false,
+          stopPromise: null,
           uploads: Promise.resolve(),
+          // Real start of the next chunk. The old code hard-coded
+          // `Date.now() - 30000` for every chunk, so partial chunks (one per
+          // recorder, plus every reshare gap) were reported to the server as a
+          // full 30s — and the server sums these to get mergedVideo duration.
+          lastChunkAt: Date.now(),
         };
+        const { recorder, stop } = createVideoRecorder(stream, VIDEO_CHUNK_MS);
+        recorderEntry.recorder = recorder;
+        recorderEntry.stop = stop;
 
         // Upload chunks as they arrive. Chain uploads so stop can await the last one
         // before POST /complete — otherwise the final 30s lands after the session
         // is closed and is rejected.
         recorder.ondataavailable = (e) => {
           if (e.data.size === 0 || !proctoringSessionId) return;
+          const startTime = recorderEntry.lastChunkAt;
+          const endTime = Date.now();
+          recorderEntry.lastChunkAt = endTime;
           recorderEntry.uploads = recorderEntry.uploads
             .then(() =>
               uploadVideoChunk(proctoringSessionId, token, e.data, {
                 screenIndex,
-                startTime: Date.now() - 30000,
-                endTime: Date.now(),
+                startTime,
+                endTime,
               })
             )
             .catch((err) => {
@@ -681,12 +771,23 @@ export default function CandidateAssessment() {
       }
     }
 
+    return undefined;
+  }, [proctoringEnabled, proctoringSessionId, token, screenCapture.streams, recorderEpoch]);
+
+  // Recorder teardown belongs to unmount, not to every streams change: the old
+  // cleanup stopped and rebuilt every recorder whenever the array changed.
+  useEffect(() => {
     return () => {
-      // Stop all recorders on cleanup
-      videoRecordersRef.current.forEach((r) => r.stop());
+      videoRecordersRef.current.forEach((r) => {
+        try {
+          void stopRecorderEntry(r);
+        } catch {
+          /* page is going away */
+        }
+      });
       videoRecordersRef.current = [];
     };
-  }, [proctoringEnabled, proctoringSessionId, token, screenCapture.streams, recorderEpoch]);
+  }, []);
 
   // pagehide: flush JSON we can (sidecar) and complete recording only if the
   // main timer is already up. Do not complete mid-attempt — reload must resume.
@@ -700,12 +801,11 @@ export default function CandidateAssessment() {
       }
       videoRecordersRef.current.forEach((r) => {
         try {
-          r.stop();
+          void stopRecorderEntry(r);
         } catch {
           /* page is dying */
         }
       });
-      videoRecordersRef.current = [];
       const remaining = timeRemainingRef.current;
       if (remaining !== null && remaining <= 0) {
         beaconCompleteSession(proctoringSessionId, token);
@@ -731,8 +831,9 @@ export default function CandidateAssessment() {
   const handleReshare = async () => {
     const stream = await screenCapture.startCapture();
     if (stream) {
-      setShowResharePrompt(false);
-      setReshareIsResume(false);
+      // Records `stream_restored` and clears the prompt. Idempotent, so the
+      // hook's own restored callback firing as well costs nothing.
+      noteSharingResumed();
     }
   };
 
@@ -1362,6 +1463,8 @@ export default function CandidateAssessment() {
           token={token}
           submissionId={proctoringSubmissionId}
           reshareRequestId={companionReshareTick}
+          shareRestoredRequestId={companionShareRestoredTick}
+          screenShareLive={screenCapture.isSharing}
         />
       )}
 

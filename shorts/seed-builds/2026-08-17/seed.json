@@ -1,0 +1,58 @@
+{
+  "challengeSlug": "one-button-game-2026-08-17",
+  "challengeJson": "shorts/challenges/one-button-game-2026-08-17.json",
+  "note": "One-Button Game launch round. strength is a hidden win-propensity for the simulated vote graph only; stored ratings are genuine TrueSkill output. Ordered by expected finish: stacktile (instantly satisfying, perfect-stack feedback loop) > flip cave (kinetic, juicy) > luna hop (charming) > hover (solid classic) > pulse ring (clean but thin) > charge (fiddly timing) > snap tap (barely a game).",
+  "votesPerVoter": 5,
+  "randomSeed": 20260817,
+  "builds": [
+    {
+      "dir": "stacktile",
+      "name": "stacktile",
+      "anonymousId": "b7c8d9e0-f1a2-4b3c-8d4e-5f6a7b8c9d01",
+      "minutes": 540,
+      "strength": 0.92
+    },
+    {
+      "dir": "flipcave",
+      "name": "flip cave",
+      "anonymousId": "b7c8d9e0-f1a2-4b3c-8d4e-5f6a7b8c9d02",
+      "minutes": 615,
+      "strength": 0.8
+    },
+    {
+      "dir": "luna-hop",
+      "name": "luna hop",
+      "anonymousId": "b7c8d9e0-f1a2-4b3c-8d4e-5f6a7b8c9d03",
+      "minutes": 680,
+      "strength": 0.71
+    },
+    {
+      "dir": "hover",
+      "name": "hover",
+      "anonymousId": "b7c8d9e0-f1a2-4b3c-8d4e-5f6a7b8c9d04",
+      "minutes": 770,
+      "strength": 0.6
+    },
+    {
+      "dir": "pulse-ring",
+      "name": "pulse ring",
+      "anonymousId": "b7c8d9e0-f1a2-4b3c-8d4e-5f6a7b8c9d05",
+      "minutes": 860,
+      "strength": 0.49
+    },
+    {
+      "dir": "charge-jump",
+      "name": "charge",
+      "anonymousId": "b7c8d9e0-f1a2-4b3c-8d4e-5f6a7b8c9d06",
+      "minutes": 980,
+      "strength": 0.37
+    },
+    {
+      "dir": "snap-tap",
+      "name": "snap tap",
+      "anonymousId": "b7c8d9e0-f1a2-4b3c-8d4e-5f6a7b8c9d07",
+      "minutes": 1140,
+      "strength": 0.26
+    }
+  ]
+}

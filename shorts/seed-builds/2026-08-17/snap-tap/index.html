@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>snap tap</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  #app{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;color:#fff;background:#34495e;transition:background .12s;padding:0 24px;box-sizing:border-box}
+  h1{font-size:34px;margin:0 0 10px}
+  p{font-size:17px;margin:4px 0;opacity:.9}
+  .big{font-size:56px;font-weight:700;margin:6px 0}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+"use strict";
+const app = document.getElementById("app");
+const ROUNDS = 5;
+let state = "intro";      // intro | wait | go | early | result | done
+let timer = null, goAt = 0, round = 0, times = [], bestEver = null;
+
+function render(html, bg){
+  app.style.background = bg;
+  app.innerHTML = html;
+}
+function show(){
+  if (state === "intro"){
+    render(`<h1>snap tap</h1>
+      <p>when the screen turns green, tap as fast as you can.</p>
+      <p>${ROUNDS} rounds.</p>
+      <p style="margin-top:24px;opacity:.7">tap to start</p>`, "#34495e");
+  } else if (state === "wait"){
+    render(`<p style="opacity:.8">round ${round + 1} of ${ROUNDS}</p>
+      <h1>wait for it&hellip;</h1>`, "#c0392b");
+  } else if (state === "go"){
+    render(`<h1 class="big">TAP!</h1>`, "#27ae60");
+  } else if (state === "early"){
+    render(`<h1>too early!</h1><p>wait for green.</p>
+      <p style="margin-top:24px;opacity:.7">tap to retry the round</p>`, "#8e44ad");
+  } else if (state === "result"){
+    const ms = times[times.length - 1];
+    render(`<p style="opacity:.8">round ${round} of ${ROUNDS}</p>
+      <div class="big">${ms} ms</div>
+      <p>${ms < 220 ? "lightning." : ms < 300 ? "quick!" : ms < 400 ? "not bad." : "asleep?"}</p>
+      <p style="margin-top:24px;opacity:.7">tap for the next round</p>`, "#2c3e50");
+  } else if (state === "done"){
+    const avg = Math.round(times.reduce((a, b) => a + b, 0) / times.length);
+    const best = Math.min(...times);
+    if (bestEver === null || avg < bestEver) bestEver = avg;
+    render(`<h1>done!</h1>
+      <div class="big">${avg} ms</div>
+      <p>average of ${ROUNDS} · fastest ${best} ms · best avg ${bestEver} ms</p>
+      <p style="margin-top:24px;opacity:.7">tap to play again</p>`, "#2c3e50");
+  }
+}
+function startWait(){
+  state = "wait"; show();
+  timer = setTimeout(() => {
+    state = "go"; goAt = performance.now(); show();
+  }, 1200 + Math.random() * 2600);
+}
+function press(){
+  if (state === "intro"){ round = 0; times = []; startWait(); }
+  else if (state === "wait"){ clearTimeout(timer); state = "early"; show(); }
+  else if (state === "early"){ startWait(); }
+  else if (state === "go"){
+    times.push(Math.round(performance.now() - goAt));
+    round++;
+    state = round >= ROUNDS ? "done" : "result";
+    show();
+  }
+  else if (state === "result"){ startWait(); }
+  else if (state === "done"){ round = 0; times = []; startWait(); }
+}
+addEventListener("pointerdown", press);
+addEventListener("keydown", e => {
+  if (e.code === "Space" && !e.repeat){ e.preventDefault(); press(); }
+});
+show();
+</script>
+</body>
+</html>

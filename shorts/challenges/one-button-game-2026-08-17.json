@@ -1,0 +1,10 @@
+{
+  "slug": "one-button-game-2026-08-17",
+  "challengeDate": "2026-08-17",
+  "title": "Build a One-Button Game",
+  "prompt": "Build a game that's played entirely with one button — a tap, a click, or the spacebar. Nothing else.\n\n**Entry:** Preview opens `index.html` — put everything there (inline CSS/JS, or CDN links). No Vite/npm.\n\nRequirements:\n\n- The whole game is controlled with a single input: tap/click anywhere, or press space (support both)\n- A run can end — you can lose, crash, or finish — and the same button starts the next one\n- Shows a score, distance, streak, or some other measure of how the run went\n- No instructions needed — a stranger should figure it out on their first attempt\n\nJump, flip, stack, hover, charge, time it — one button is enough for a lot. Make it look good and feel good; people vote on these.\n\nYou're done when you can play, lose, and retry a full run in Preview using nothing but taps.",
+  "tokenBudget": 40000,
+  "category": "game",
+  "status": "published",
+  "makeMode": "serverless"
+}

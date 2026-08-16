@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>pulse ring</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#101425;touch-action:none;
+    user-select:none;-webkit-user-select:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+let vw, vh;
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  vw = innerWidth; vh = innerHeight;
+  cv.width = vw * dpr; cv.height = vh * dpr;
+  cv.style.width = vw + "px"; cv.style.height = vh + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+resize();
+addEventListener("resize", resize);
+
+// traveled-space target: arc occupies [gap, gap+tw] radians of travel from a0
+let a, a0, dir, speed, gap, tw, tr, score, state, t, hitPulse, best = 0;
+
+function placeTarget(){
+  a0 = a;
+  gap = 1.0 + Math.random() * 1.5;
+  tr = 0;
+}
+function reset(){
+  a = -Math.PI / 2; dir = 1; speed = 2.1; tw = 1.0;
+  score = 0; t = 0; hitPulse = 0;
+  state = "play";
+  placeTarget();
+}
+function press(){
+  if (state === "over"){ reset(); return; }
+  if (tr >= gap && tr <= gap + tw){
+    score++;
+    hitPulse = 1;
+    dir *= -1;
+    speed = Math.min(5.4, speed + 0.14);
+    tw = Math.max(0.36, tw * 0.965);
+    placeTarget();
+  } else {
+    state = "over";
+    best = Math.max(best, score);
+  }
+}
+addEventListener("pointerdown", press);
+addEventListener("keydown", e => {
+  if (e.code === "Space" && !e.repeat){ e.preventDefault(); press(); }
+});
+
+let last = performance.now();
+function frame(now){
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  t += dt;
+  if (hitPulse > 0) hitPulse = Math.max(0, hitPulse - dt * 2.4);
+
+  if (state === "play"){
+    const da = speed * dt;
+    a += dir * da;
+    tr += da;
+    if (tr > gap + tw){
+      state = "over";
+      best = Math.max(best, score);
+    }
+  }
+
+  ctx.fillStyle = "#101425";
+  ctx.fillRect(0, 0, vw, vh);
+
+  const cx = vw / 2, cy = vh / 2;
+  const R = Math.min(vw, vh) * 0.3;
+
+  // ring
+  ctx.strokeStyle = "rgba(255,255,255,0.16)";
+  ctx.lineWidth = 10;
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+
+  // target arc (screen angles from traveled-space)
+  const s0 = a0 + dir * gap, s1 = a0 + dir * (gap + tw);
+  ctx.strokeStyle = "#ffd166";
+  ctx.shadowColor = "#ffd166"; ctx.shadowBlur = 14;
+  ctx.lineWidth = 12;
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, Math.min(s0, s1), Math.max(s0, s1));
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // needle
+  ctx.strokeStyle = "#7de3ff";
+  ctx.shadowColor = "#7de3ff"; ctx.shadowBlur = 10;
+  ctx.lineWidth = 5;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(cx + Math.cos(a) * (R - 22), cy + Math.sin(a) * (R - 22));
+  ctx.lineTo(cx + Math.cos(a) * (R + 22), cy + Math.sin(a) * (R + 22));
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // hit pulse
+  if (hitPulse > 0){
+    ctx.strokeStyle = `rgba(255,209,102,${hitPulse * 0.8})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R + (1 - hitPulse) * 40, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // score
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.font = "700 56px ui-monospace,monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(score), cx, cy);
+  ctx.textBaseline = "alphabetic";
+
+  if (state === "play" && score === 0){
+    ctx.fillStyle = `rgba(255,255,255,${0.55 + 0.35 * Math.sin(t * 4)})`;
+    ctx.font = "500 15px ui-monospace,monospace";
+    ctx.fillText("tap when the needle is in the gold", cx, cy + R + 48);
+  }
+  if (state === "over"){
+    ctx.fillStyle = "rgba(9,11,24,0.78)";
+    ctx.fillRect(0, 0, vw, vh);
+    ctx.fillStyle = "#ffd166";
+    ctx.font = "700 30px ui-monospace,monospace";
+    ctx.fillText("missed the beat", cx, vh * 0.42);
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.font = "500 17px ui-monospace,monospace";
+    ctx.fillText(`streak ${score}   ·   best ${best}`, cx, vh * 0.42 + 36);
+    ctx.fillStyle = `rgba(125,227,255,${0.6 + 0.4 * Math.sin(t * 4)})`;
+    ctx.font = "500 15px ui-monospace,monospace";
+    ctx.fillText("tap to go again", cx, vh * 0.42 + 72);
+  }
+  requestAnimationFrame(frame);
+}
+function boot(){
+  resize();
+  if (vw > 0 && vh > 0){ reset(); requestAnimationFrame(frame); }
+  else requestAnimationFrame(boot);
+}
+boot();
+</script>
+</body>
+</html>

@@ -1245,7 +1245,7 @@ export default function SubmissionsDashboard() {
   const evidenceModeForReview =
     selectedEvaluationSubmission?.evidenceMode ||
     assessment?.evidenceMode ||
-    "screen";
+    "both";
   const recordsScreen =
     evidenceModeForReview !== "workflow" && evidenceModeForReview !== "none";
   const activityTimelineOnRecording = evidenceModeForReview === "both";
@@ -1557,10 +1557,12 @@ export default function SubmissionsDashboard() {
           return;
         }
         setRecordingSession(session);
-        // Video OCR only exists for leftover `screen` assessments. `both`
-        // never transcribes — the hook stream is the text index of the footage.
+        // Keyed on the transcript existing, not on the assessment's mode.
+        // Nothing generates these any more — the video-OCR "screen" mode is
+        // gone — but submissions graded under it still have one, and gating on
+        // the current mode would have hidden every one of those the moment the
+        // mode was removed.
         if (
-          evidenceModeForReview === "screen" &&
           session.transcript?.status === "completed" &&
           session.transcript?.storageKey &&
           !selectedEvaluationSubmission?.enrichedTranscript
@@ -2285,7 +2287,7 @@ export default function SubmissionsDashboard() {
     if (tab) {
       reviewTabOverrideRef.current = true;
       const mode =
-        submission?.evidenceMode || assessment?.evidenceMode || "screen";
+        submission?.evidenceMode || assessment?.evidenceMode || "both";
       const canShowRecording = mode !== "workflow" && mode !== "none";
       setEvaluationTab(
         tab === "recording" && !canShowRecording ? "summary" : tab
@@ -4818,10 +4820,13 @@ export default function SubmissionsDashboard() {
                     />
                   ) : null}
 
-                  {/* Leftover `screen` assessments still have a video OCR
-                      transcript. Current modes never generate one. */}
-                  {evidenceModeForReview === "screen" &&
-                    selectedEvaluationSubmission && (
+                  {/* Historical only: submissions graded under the removed
+                      video-OCR mode. Shown when the transcript actually exists
+                      rather than by mode, so removing the mode did not make
+                      past transcripts unviewable. */}
+                  {selectedEvaluationSubmission &&
+                    (selectedEvaluationSubmission.enrichedTranscript ||
+                      recordingTranscript?.length > 0) && (
                     <div className="space-y-3">
                       <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
                         <FileText className="w-4 h-4 text-[#21201C]" />

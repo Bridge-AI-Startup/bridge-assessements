@@ -8,6 +8,7 @@ import {
   periodPossessive,
 } from "@/lib/challengePeriod";
 import ShortsHeader from "@/components/ShortsHeader";
+import ShortsFooter from "@/components/ShortsFooter";
 import SubmissionCard from "@/components/gallery/SubmissionCard";
 
 export default function Gallery() {
@@ -116,13 +117,13 @@ export default function Gallery() {
   const possessive = periodPossessive(period?.cadence || "weekly");
 
   return (
-    <div className="min-h-screen bg-paper">
+    <div className="flex min-h-screen flex-col bg-paper">
       <ShortsHeader
         active="browse"
         cta={{ label: "Start voting", to: "/Vote" }}
       />
 
-      <main className="mx-auto max-w-5xl px-6 py-8">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
         <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-[28px] font-medium tracking-tight text-ink">
@@ -289,6 +290,8 @@ export default function Gallery() {
           </div>
         )}
       </main>
+
+      <ShortsFooter />
     </div>
   );
 }

@@ -30,11 +30,15 @@ function pushScreenCaptureContextEvent(tag, extra = {}) {
 }
 
 function installGlobalScreenShareDebugHooksOnce() {
-  if (globalDebugHooksInstalled || !isScreenShareDebugEnabled()) return;
+  // Ring population is unconditional: when a track dies in production the ring
+  // is persisted onto the `stream_lost` sidecar event, and that only helps if
+  // it was being filled. Only the console noise stays behind the debug flag.
+  if (globalDebugHooksInstalled) return;
   globalDebugHooksInstalled = true;
 
   const log = (tag, detail = {}) => {
     pushScreenCaptureContextEvent(tag, detail);
+    if (!isScreenShareDebugEnabled()) return;
     console.warn(`[screen-capture][ctx] ${tag}`, {
       t: new Date().toISOString(),
       visibilityState: document.visibilityState,
@@ -56,6 +60,15 @@ function installGlobalScreenShareDebugHooksOnce() {
 }
 
 /**
+ * How long after an app-initiated track.stop() a subsequent `ended` event is
+ * still attributed to us. A microtask was too short: the spec says stop() does
+ * not fire `ended`, but any engine that does fire it dispatches it as a task,
+ * by which point a microtask-scoped flag has already been cleared — and a
+ * cleared flag routes submit/navigation teardown into the "stream lost" path.
+ */
+const INTERNAL_STOP_GRACE_MS = 2000;
+
+/**
  * Hook to manage screen capture MediaStream(s).
  * Supports single or multiple screens.
  *
@@ -75,13 +88,26 @@ function installGlobalScreenShareDebugHooksOnce() {
  */
 export default function useScreenCapture() {
   const [streams, setStreams] = useState([]);
-  const [isSharing, setIsSharing] = useState(false);
   const [error, setError] = useState(null);
   const [streamLost, setStreamLost] = useState(false);
   const streamLostCallbackRef = useRef(null);
   const streamRestoredCallbackRef = useRef(null);
-  /** True while we are calling track.stop() from stopCapture or unmount cleanup. */
-  const internalStopRef = useRef(false);
+  /** Mirrors `streamLost` synchronously — render state is too late to gate on. */
+  const streamLostRef = useRef(false);
+  /**
+   * Authoritative, synchronous copy of `streams`. State lags by a render, and
+   * teardown/add paths run inside async handlers where a stale closure would
+   * either miss a live track or resurrect a dead one.
+   */
+  const streamsRef = useRef([]);
+  /** Timestamp until which track.stop() calls are attributed to the app. */
+  const internalStopUntilRef = useRef(0);
+
+  /** Single writer for both the ref and the state, so they never diverge. */
+  const commitStreams = useCallback((next) => {
+    streamsRef.current = next;
+    setStreams(next);
+  }, []);
 
   useEffect(() => {
     installGlobalScreenShareDebugHooksOnce();
@@ -89,7 +115,7 @@ export default function useScreenCapture() {
 
   const addStreamInternal = useCallback(async (screenIndex) => {
     try {
-      if (isScreenShareDebugEnabled()) installGlobalScreenShareDebugHooksOnce();
+      installGlobalScreenShareDebugHooksOnce();
 
       const mediaStream = await navigator.mediaDevices.getDisplayMedia({
         video: { cursor: "always" },
@@ -108,11 +134,11 @@ export default function useScreenCapture() {
         );
       }
 
+      pushScreenCaptureContextEvent("capture_started", {
+        label: track.label,
+        displaySurface,
+      });
       if (isScreenShareDebugEnabled()) {
-        pushScreenCaptureContextEvent("capture_started", {
-          label: track.label,
-          settings: track.getSettings ? track.getSettings() : {},
-        });
         console.warn("[screen-capture] capture started", {
           label: track.label,
           settings: track.getSettings ? track.getSettings() : {},
@@ -136,15 +162,15 @@ export default function useScreenCapture() {
           /* ignore */
         }
 
-        const stoppedByApp = internalStopRef.current;
+        const stoppedByApp = Date.now() < internalStopUntilRef.current;
+
+        pushScreenCaptureContextEvent("video_track_ended", {
+          stoppedByApp,
+          label: track.label,
+          displaySurface: settings.displaySurface,
+        });
 
         if (isScreenShareDebugEnabled()) {
-          pushScreenCaptureContextEvent("video_track_ended", {
-            stoppedByApp,
-            label: track.label,
-            displaySurface: settings.displaySurface,
-          });
-
           const summary =
             `stoppedByApp=${stoppedByApp} | visibility=${document.visibilityState} | hidden=${document.hidden} | ` +
             `document.hasFocus=${typeof document.hasFocus === "function" ? document.hasFocus() : "?"} | ` +
@@ -179,21 +205,59 @@ export default function useScreenCapture() {
           }
         }
 
-        setStreams((prev) => prev.filter((s) => s.stream !== mediaStream));
+        // A stream we no longer track was already torn down by the app
+        // (stopCapture / unmount). Late `ended` events from those must never be
+        // reported as a loss, however long after the stop they arrive.
+        const wasTracked = streamsRef.current.some(
+          (s) => s.stream === mediaStream
+        );
+        commitStreams(
+          streamsRef.current.filter((s) => s.stream !== mediaStream)
+        );
 
-        if (stoppedByApp) {
+        if (stoppedByApp || !wasTracked) {
           return;
         }
 
+        // Already in the lost state (multi-monitor: second track ending) — do
+        // not raise a second loss until sharing has actually come back.
+        if (streamLostRef.current) return;
+        streamLostRef.current = true;
         setStreamLost(true);
-        streamLostCallbackRef.current?.();
+        // Browsers give no reason code for an ended track. Hand the consumer
+        // everything there is: the track's identity and the recent page-event
+        // ring, so the loss can be persisted with its correlation attached
+        // instead of depending on someone watching the console.
+        streamLostCallbackRef.current?.({
+          label: track.label,
+          displaySurface: settings.displaySurface ?? null,
+          visibilityState: document.visibilityState,
+          documentHasFocus:
+            typeof document.hasFocus === "function" ? document.hasFocus() : null,
+          contextRing: contextEventRing.map((e) => ({
+            atIso: e.atIso,
+            tag: e.tag,
+            visibilityState: e.visibilityState,
+            hasFocus: e.hasFocus,
+          })),
+        });
       });
 
       const entry = { stream: mediaStream, screenIndex, label, displaySurface };
-      setStreams((prev) => [...prev, entry]);
-      setIsSharing(true);
+      // Fire the restore transition here, imperatively. It used to live in an
+      // effect gated on `streams.length > 0 && streamLost`, but React 18
+      // auto-batches these two updates: the render where streams is non-empty
+      // AND streamLost is still true never happens, so the effect early-returned
+      // and the restored callback (and its `stream_restored` sidecar event)
+      // never fired.
+      const wasLost = streamLostRef.current;
+      streamLostRef.current = false;
+      commitStreams([...streamsRef.current, entry]);
       setError(null);
       setStreamLost(false);
+      if (wasLost) {
+        streamRestoredCallbackRef.current?.();
+      }
 
       return mediaStream;
     } catch (err) {
@@ -204,7 +268,7 @@ export default function useScreenCapture() {
       }
       return null;
     }
-  }, []);
+  }, [commitStreams]);
 
   const startCapture = useCallback(async () => {
     const stream = await addStreamInternal(0);
@@ -212,21 +276,19 @@ export default function useScreenCapture() {
   }, [addStreamInternal]);
 
   const addStream = useCallback(async () => {
-    const nextIndex = streams.length;
+    const nextIndex = streamsRef.current.length;
     await addStreamInternal(nextIndex);
-  }, [streams.length, addStreamInternal]);
+  }, [addStreamInternal]);
 
   const stopCapture = useCallback(() => {
-    internalStopRef.current = true;
-    streams.forEach(({ stream }) => {
+    internalStopUntilRef.current = Date.now() + INTERNAL_STOP_GRACE_MS;
+    streamsRef.current.forEach(({ stream }) => {
       stream.getTracks().forEach((t) => t.stop());
     });
-    setStreams([]);
-    setIsSharing(false);
-    queueMicrotask(() => {
-      internalStopRef.current = false;
-    });
-  }, [streams]);
+    streamLostRef.current = false;
+    commitStreams([]);
+    setStreamLost(false);
+  }, [commitStreams]);
 
   const onStreamLost = useCallback((cb) => {
     streamLostCallbackRef.current = cb;
@@ -236,30 +298,24 @@ export default function useScreenCapture() {
     streamRestoredCallbackRef.current = cb;
   }, []);
 
-  // Cleanup on unmount
+  // Cleanup on unmount ONLY. This used to be keyed on `[streams]`, which meant
+  // React ran the previous cleanup — stopping every track in the previous array
+  // — on every streams change. Adding a second monitor therefore killed the
+  // first one's track, and any array churn could kill a live share.
   useEffect(() => {
     return () => {
-      internalStopRef.current = true;
-      streams.forEach(({ stream }) => {
+      internalStopUntilRef.current = Date.now() + INTERNAL_STOP_GRACE_MS;
+      streamsRef.current.forEach(({ stream }) => {
         stream.getTracks().forEach((t) => t.stop());
       });
-      queueMicrotask(() => {
-        internalStopRef.current = false;
-      });
+      streamsRef.current = [];
     };
-  }, [streams]);
+  }, []);
 
-  // Detect when stream is restored after being lost
-  useEffect(() => {
-    if (streams.length > 0 && !streamLost) {
-      return;
-    }
-    if (streams.length > 0 && streamLost) {
-      setStreamLost(false);
-      streamRestoredCallbackRef.current?.();
-    }
-  }, [streams.length, streamLost]);
-
+  // Derived, never stored: a track that ended externally leaves `streams` empty,
+  // and a stored `isSharing` flag stayed true through that — which let the setup
+  // gate believe a dead share was still valid.
+  const isSharing = streams.length > 0;
   const isSharingFullScreen = streams.some(
     (s) => s.displaySurface === "monitor"
   );

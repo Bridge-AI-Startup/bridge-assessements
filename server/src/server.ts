@@ -24,7 +24,6 @@ import { health as playHealth } from "./controllers/shorts/index.js";
 import { shortsEnabled } from "./utils/shortsEnv.js";
 import { errorHandler } from "./errors/handler.js";
 import { isDevLoopbackOrigin } from "./utils/corsOrigins.js";
-import { startIncrementalScheduler } from "./ai/transcript/incrementalScheduler.js";
 import { startAttemptReaper } from "./services/submission/finalizeExpired.js";
 import { resumeInterruptedMerges } from "./services/capture/sessionVideoMerge.js";
 import { resumeInterruptedEvaluations } from "./controllers/submission.js";
@@ -520,7 +519,6 @@ const startServer = async () => {
       console.log(`🌐 Health check: http://localhost:${PORT}/health`);
       console.log(`📡 API base: http://localhost:${PORT}/api`);
       console.log(`${"=".repeat(60)}\n`);
-      startIncrementalScheduler();
       startAttemptReaper();
       startRuntimeSetupReaper();
       void resumeInterruptedMerges().catch((err) =>

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { fetchTodayChallenge } from "@/api/challenge";
 import { listSubmissions } from "@/api/submissions";
 import ShortsHeader from "@/components/ShortsHeader";
+import ShortsFooter from "@/components/ShortsFooter";
 import Markdown from "@/components/Markdown";
 import SubmissionCard from "@/components/gallery/SubmissionCard";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
@@ -139,10 +140,10 @@ export default function Home() {
       : "Build today's challenge.";
 
   return (
-    <div className="min-h-screen bg-paper">
+    <div className="flex min-h-screen flex-col bg-paper">
       <ShortsHeader active={null} />
 
-      <main className="mx-auto max-w-6xl px-6 py-12 lg:py-16">
+      <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-12 lg:py-16">
         {state.kind === "loading" && (
           <p className="text-sm text-fog-light">
             Loading {possessive} challenge…
@@ -320,6 +321,8 @@ export default function Home() {
           </section>
         )}
       </main>
+
+      <ShortsFooter />
     </div>
   );
 }

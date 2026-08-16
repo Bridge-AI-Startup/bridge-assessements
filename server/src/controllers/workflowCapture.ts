@@ -92,6 +92,7 @@ export async function createCaptureSession(
     }
 
     let submissionId: mongoose.Types.ObjectId | undefined;
+    let nameFromSubmission: string | undefined;
     if (submissionToken) {
       const submission = await SubmissionModel.findOne({ token: submissionToken })
         .select("_id candidateName status")
@@ -101,6 +102,11 @@ export async function createCaptureSession(
         return;
       }
       submissionId = (submission as any)._id;
+      const fromSub =
+        typeof (submission as any).candidateName === "string"
+          ? String((submission as any).candidateName).trim()
+          : "";
+      if (fromSub) nameFromSubmission = fromSub;
       const status = (submission as any).status;
       if (
         status === "submitted" ||
@@ -116,11 +122,14 @@ export async function createCaptureSession(
       }
     }
 
+    const nameFromBody =
+      typeof candidateName === "string" ? candidateName.trim() : "";
+
     const captureToken = crypto.randomBytes(32).toString("hex");
     const session = await WorkflowCaptureSessionModel.create({
       submissionId,
       submissionToken: submissionToken || undefined,
-      candidateName: candidateName || undefined,
+      candidateName: nameFromSubmission || nameFromBody || undefined,
       source: source || "claude-code",
       captureToken,
       status: "active",

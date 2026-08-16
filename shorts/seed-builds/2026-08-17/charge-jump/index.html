@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>charge</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#fdf6ec;touch-action:none;
+    user-select:none;-webkit-user-select:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+let vw, vh;
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  vw = innerWidth; vh = innerHeight;
+  cv.width = vw * dpr; cv.height = vh * dpr;
+  cv.style.width = vw + "px"; cv.style.height = vh + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+resize();
+addEventListener("resize", resize);
+
+const MAXD = 430;
+let plats, idx, px, camX, camT, charging, power, jumping, ju, jx0, jd, falling, fy, score, state, t, best = 0;
+
+function groundY(){ return vh * 0.72; }
+
+function addPlat(){
+  const prev = plats[plats.length - 1];
+  const gap = 120 + Math.random() * 200;
+  const w = Math.max(46, 100 - score * 2 - Math.random() * 20);
+  plats.push({ x: prev.x + prev.w + gap, w });
+}
+function reset(){
+  plats = [{ x: 30, w: 110 }];
+  idx = 0; score = 0; t = 0;
+  charging = false; power = 0; jumping = false; falling = false;
+  for (let i = 0; i < 5; i++) addPlat();
+  px = plats[0].x + plats[0].w / 2;
+  camX = 0; camT = 0;
+  state = "play";
+}
+function press(){
+  if (state === "over"){ reset(); return; }
+  if (!jumping && !falling){ charging = true; power = 0; }
+}
+function release(){
+  if (state !== "play" || !charging) return;
+  charging = false;
+  jumping = true; ju = 0;
+  jx0 = px;
+  jd = 60 + power * MAXD;
+}
+addEventListener("pointerdown", press);
+addEventListener("pointerup", release);
+addEventListener("pointercancel", release);
+addEventListener("keydown", e => {
+  if (e.code === "Space"){ e.preventDefault(); if (!e.repeat) press(); }
+});
+addEventListener("keyup", e => { if (e.code === "Space") release(); });
+
+let last = performance.now();
+function frame(now){
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  t += dt;
+
+  if (state === "play"){
+    if (charging){
+      power += dt * 1.15;
+      if (power > 1) power -= 1;          // loops — release timing matters
+    }
+    if (jumping){
+      ju += dt * (1.35 - Math.min(0.45, jd / MAXD * 0.45));
+      if (ju >= 1){
+        ju = 1; jumping = false;
+        px = jx0 + jd;
+        const cur = plats[idx], next = plats[idx + 1];
+        if (px >= next.x && px <= next.x + next.w){
+          idx++; score++;
+          addPlat();
+        } else if (px >= cur.x && px <= cur.x + cur.w){
+          // short hop back onto the same platform — forgiven
+        } else {
+          falling = true; fy = 0;
+        }
+      } else {
+        px = jx0 + jd * ju;
+      }
+    }
+    if (falling){
+      fy += dt * 900;
+      if (fy > vh * 0.4){ state = "over"; best = Math.max(best, score); }
+    }
+    camT = plats[idx].x + plats[idx].w / 2 - vw * 0.3;
+    camX += (camT - camX) * Math.min(1, dt * 5);
+  }
+
+  // ---- draw ----
+  ctx.fillStyle = "#fdf6ec";
+  ctx.fillRect(0, 0, vw, vh);
+  // sun
+  ctx.fillStyle = "#f7d9a0";
+  ctx.beginPath(); ctx.arc(vw * 0.82, vh * 0.18, 42, 0, Math.PI * 2); ctx.fill();
+
+  const gy = groundY();
+
+  // platforms
+  for (const p of plats){
+    const sx = p.x - camX;
+    if (sx > -200 && sx < vw + 200){
+      ctx.fillStyle = "#c96f4a";
+      ctx.fillRect(sx, gy, p.w, vh - gy);
+      ctx.fillStyle = "#e2895f";
+      ctx.fillRect(sx, gy, p.w, 10);
+    }
+  }
+
+  // player
+  const jy = jumping ? Math.sin(ju * Math.PI) * Math.max(60, jd * 0.35) : 0;
+  const sqash = charging ? 1 - power * 0.25 : 1;
+  const pyy = gy - 14 * sqash + (falling ? fy : 0) - jy;
+  const sx = px - camX;
+  ctx.fillStyle = "#3f4a63";
+  ctx.beginPath();
+  ctx.ellipse(sx, pyy, 13, 13 * sqash, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.beginPath(); ctx.arc(sx + 4, pyy - 3, 3.4, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#1d2333";
+  ctx.beginPath(); ctx.arc(sx + 5, pyy - 3, 1.7, 0, Math.PI * 2); ctx.fill();
+
+  // power bar
+  if (charging){
+    ctx.fillStyle = "rgba(63,74,99,0.25)";
+    ctx.fillRect(sx - 30, pyy - 44, 60, 9);
+    ctx.fillStyle = power > 0.8 ? "#d64545" : "#5f9e6e";
+    ctx.fillRect(sx - 30, pyy - 44, 60 * power, 9);
+  }
+
+  // score
+  ctx.fillStyle = "#3f4a63";
+  ctx.font = "700 44px ui-monospace,monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(String(score), vw / 2, 58);
+
+  if (state === "play" && score === 0 && !jumping){
+    ctx.fillStyle = `rgba(63,74,99,${0.6 + 0.4 * Math.sin(t * 4)})`;
+    ctx.font = "500 15px ui-monospace,monospace";
+    ctx.fillText("hold to charge · release to jump", vw / 2, 92);
+  }
+  if (state === "over"){
+    ctx.fillStyle = "rgba(253,246,236,0.85)";
+    ctx.fillRect(0, 0, vw, vh);
+    ctx.fillStyle = "#c96f4a";
+    ctx.font = "700 30px ui-monospace,monospace";
+    ctx.fillText("into the gap!", vw / 2, vh * 0.42);
+    ctx.fillStyle = "#3f4a63";
+    ctx.font = "500 17px ui-monospace,monospace";
+    ctx.fillText(`made ${score} jumps   ·   best ${best}`, vw / 2, vh * 0.42 + 36);
+    ctx.fillStyle = `rgba(63,74,99,${0.6 + 0.4 * Math.sin(t * 4)})`;
+    ctx.font = "500 15px ui-monospace,monospace";
+    ctx.fillText("tap to jump again", vw / 2, vh * 0.42 + 72);
+  }
+  requestAnimationFrame(frame);
+}
+function boot(){
+  resize();
+  if (vw > 0 && vh > 0){ reset(); requestAnimationFrame(frame); }
+  else requestAnimationFrame(boot);
+}
+boot();
+</script>
+</body>
+</html>

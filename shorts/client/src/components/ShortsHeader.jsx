@@ -9,6 +9,7 @@ import bridgeLogo from "@/assets/bridge-logo.svg";
 const NAV = [
   { id: "browse", label: "Browse", to: "/Gallery" },
   { id: "vote", label: "Vote", to: "/Vote" },
+  { id: "about", label: "About", to: "/About" },
 ];
 
 /**
@@ -59,7 +60,7 @@ function CloseIcon() {
  * Below it there is no room for either, so both collapse into one hamburger
  * dropdown holding the same links plus the account actions.
  *
- * @param {{ active?: "browse"|"vote"|"mybuilds"|null, cta?: { label: string, to: string }|null, children?: import("react").ReactNode }} props
+ * @param {{ active?: "browse"|"vote"|"about"|"mybuilds"|null, cta?: { label: string, to: string }|null, children?: import("react").ReactNode }} props
  */
 export default function ShortsHeader({ active = null, cta = null, children = null }) {
   const { user, loading, signedIn } = useAuth();
