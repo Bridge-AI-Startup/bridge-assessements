@@ -16,6 +16,7 @@ import {
   assertFinalizedForReplay,
   assertReplayDoesNotPreemptGrading,
   isLiveSetupSandbox,
+  isVerifiedRuntimeSetup,
   markRuntimeSetupInProgress,
   REPLAY_BLOCKED_BY_GRADING_MESSAGE,
   replayWouldPreemptGrading,
@@ -26,6 +27,7 @@ import { isBusyRunPhase } from "../../src/services/runtimeSetup/config.js";
 import {
   createRunDeadline,
   parseListenPorts,
+  resolveInstallCommand,
 } from "../../src/services/runtimeSetup/run.js";
 import {
   candidateGradingEnv,
@@ -70,6 +72,74 @@ describe("runtimeConfigSchema", () => {
         declaredEgressDomains: ["not a domain"],
       })
     ).toThrow();
+  });
+});
+
+describe("install command resolution", () => {
+  const ctxWith = (hasLock: boolean) =>
+    ({
+      run: async () => ({
+        exitCode: 0,
+        stdout: hasLock ? "lock\n" : "nolock\n",
+        stderr: "",
+      }),
+    }) as never;
+
+  it("swaps npm ci for npm install when no lockfile exists", async () => {
+    const resolved = await resolveInstallCommand(ctxWith(false), "/repo", "npm ci");
+    expect(resolved.command).toBe("npm install");
+    expect(resolved.note).toContain("package-lock.json");
+  });
+
+  it("keeps flags when swapping", async () => {
+    const resolved = await resolveInstallCommand(
+      ctxWith(false),
+      "/repo",
+      "npm ci --omit=dev"
+    );
+    expect(resolved.command).toBe("npm install --omit=dev");
+  });
+
+  it("leaves npm ci alone when a lockfile exists", async () => {
+    const resolved = await resolveInstallCommand(ctxWith(true), "/repo", "npm ci");
+    expect(resolved.command).toBe("npm ci");
+    expect(resolved.note).toBeNull();
+  });
+
+  it("never rewrites a candidate's own npm run ci script", async () => {
+    const resolved = await resolveInstallCommand(
+      ctxWith(false),
+      "/repo",
+      "npm run ci"
+    );
+    expect(resolved.command).toBe("npm run ci");
+    expect(resolved.note).toBeNull();
+  });
+
+  it("leaves non-npm install commands untouched without probing", async () => {
+    const resolved = await resolveInstallCommand(
+      ctxWith(false),
+      "/repo",
+      "pip install -r requirements.txt"
+    );
+    expect(resolved.command).toBe("pip install -r requirements.txt");
+  });
+});
+
+describe("finalize verification gate", () => {
+  it("treats a successful last run as verified", () => {
+    expect(
+      isVerifiedRuntimeSetup({ runtimeSetup: { lastRunResult: { ok: true } } })
+    ).toBe(true);
+    expect(isVerifiedRuntimeSetup({ runtimeSetup: { verified: true } })).toBe(true);
+  });
+
+  it("treats a failed or absent run as unverified", () => {
+    expect(
+      isVerifiedRuntimeSetup({ runtimeSetup: { lastRunResult: { ok: false } } })
+    ).toBe(false);
+    expect(isVerifiedRuntimeSetup({ runtimeSetup: {} })).toBe(false);
+    expect(isVerifiedRuntimeSetup({})).toBe(false);
   });
 });
 

@@ -110,7 +110,12 @@ export const postResume: RequestHandler = async (req, res, next) => {
 
 export const postFinalize: RequestHandler = async (req, res, next) => {
   try {
-    const result = await finalizeSetup(String(req.params.token || ""));
+    const confirmUnverified =
+      (req.body as { confirmUnverified?: unknown } | undefined)
+        ?.confirmUnverified === true;
+    const result = await finalizeSetup(String(req.params.token || ""), {
+      confirmUnverified,
+    });
     res.status(200).json(result);
   } catch (error) {
     if (error instanceof ZodError) {

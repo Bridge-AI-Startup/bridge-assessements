@@ -57,7 +57,43 @@ function installGlobalScreenShareDebugHooksOnce() {
   window.addEventListener("focus", () => log("window_focus"), { passive: true });
   window.addEventListener("offline", () => log("offline"), { passive: true });
   window.addEventListener("online", () => log("online"), { passive: true });
+
+  // Heartbeat: a 1s interval that fires late means the page was throttled,
+  // frozen, or the machine slept — states the event listeners above can't see.
+  let lastBeat = Date.now();
+  setInterval(() => {
+    const now = Date.now();
+    const gapMs = now - lastBeat;
+    if (gapMs > 5000) log("heartbeat_gap", { gapMs });
+    lastBeat = now;
+  }, 1000);
+
+  // Power state, kept fresh so a stream loss can carry it. Battery API is
+  // Chromium-only; fail quietly elsewhere.
+  try {
+    if (navigator.getBattery) {
+      navigator.getBattery().then((battery) => {
+        const record = () => {
+          lastKnownPower = {
+            charging: battery.charging,
+            level: Math.round(battery.level * 100),
+          };
+        };
+        record();
+        battery.addEventListener("chargingchange", () => {
+          record();
+          log("power_change", { ...lastKnownPower });
+        });
+        battery.addEventListener("levelchange", record);
+      }).catch(() => {});
+    }
+  } catch {
+    /* ignore */
+  }
 }
+
+/** Latest known battery state, attached to stream-loss metadata. */
+let lastKnownPower = null;
 
 /**
  * How long after an app-initiated track.stop() a subsequent `ended` event is
@@ -145,13 +181,27 @@ export default function useScreenCapture() {
         });
       }
 
+      // Mute = frames stopped flowing while the track is still nominally live.
+      // A mute → ended sequence points at the OS suspending capture delivery
+      // before revoking it; ended with no mute points at an abrupt kill. Ring
+      // rows are unconditional (see the installer comment) — only console
+      // output stays behind the debug flag.
       track.addEventListener("mute", () => {
+        pushScreenCaptureContextEvent("video_track_muted", {
+          label: track.label,
+          readyState: track.readyState,
+        });
         if (isScreenShareDebugEnabled()) {
           console.warn("[screen-capture] video track muted", {
             label: track.label,
             readyState: track.readyState,
           });
         }
+      });
+      track.addEventListener("unmute", () => {
+        pushScreenCaptureContextEvent("video_track_unmuted", {
+          label: track.label,
+        });
       });
 
       track.addEventListener("ended", () => {
@@ -234,11 +284,14 @@ export default function useScreenCapture() {
           visibilityState: document.visibilityState,
           documentHasFocus:
             typeof document.hasFocus === "function" ? document.hasFocus() : null,
+          power: lastKnownPower,
           contextRing: contextEventRing.map((e) => ({
             atIso: e.atIso,
             tag: e.tag,
             visibilityState: e.visibilityState,
             hasFocus: e.hasFocus,
+            ...(e.gapMs != null ? { gapMs: e.gapMs } : {}),
+            ...(e.charging != null ? { charging: e.charging, level: e.level } : {}),
           })),
         });
       });

@@ -19,6 +19,7 @@ import DemoReplay from "./pages/DemoReplay";
 import TranscriptPlayground from "./pages/TranscriptPlayground";
 import HackathonDashboard from "./pages/HackathonDashboard";
 import OpsDashboard from "./pages/OpsDashboard";
+import Landing from "./pages/Landing";
 
 export const PAGES = {
   CreateAssessment: CreateAssessment,
@@ -42,6 +43,7 @@ export const PAGES = {
   TranscriptPlayground: TranscriptPlayground,
   HackathonDashboard: HackathonDashboard,
   OpsDashboard: OpsDashboard,
+  Landing: Landing,
 };
 
 export const pagesConfig = {

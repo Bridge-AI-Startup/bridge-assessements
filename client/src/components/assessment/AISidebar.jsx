@@ -1,57 +1,49 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowRight, Sparkles, Undo, RotateCcw } from "lucide-react";
+import { ArrowRight, Sparkles, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { sectionLabel } from "@/components/assessment/sections";
 
+/**
+ * Chips are shortcuts for things the assistant can actually do. Every one of
+ * these maps onto a section it is allowed to write (description, time limit,
+ * product checks, evaluation criteria) — the previous set advertised test cases
+ * and "follow-up questions", neither of which the assistant could change.
+ */
 const quickActions = [
-  "Make easier",
-  "Make harder",
-  "Shorten scope",
-  "Add frontend component",
-  "Add database component",
-  "Add test cases",
-  "Rewrite for interns",
-  "Generate follow-up questions",
+  "Make this harder",
+  "Make this easier",
+  "Shorten the scope",
+  "Tighten the time limit",
+  "Add a frontend requirement",
+  "Add a database requirement",
+  "Suggest product checks",
+  "Suggest evaluation criteria",
 ];
 
 export default function AISidebar({
   onSubmit,
   isLoading,
+  messages = [],
   contextSections = [],
   onRemoveContext,
   lastChange,
-  responseMessage,
 }) {
   const [message, setMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState([]);
+  const scrollRef = useRef(null);
 
-  // Add response message to chat history when it's received
+  // Keep the newest turn in view; a reply that lands below the fold reads as
+  // nothing having happened.
   useEffect(() => {
-    if (responseMessage) {
-      setChatHistory((prev) => {
-        // Replace the last assistant message if it exists, otherwise add new one
-        const lastMessage = prev[prev.length - 1];
-        if (lastMessage?.role === "assistant") {
-          // Replace the last assistant message with the new response
-          return [...prev.slice(0, -1), { role: "assistant", content: responseMessage }];
-        }
-        // Add new assistant message
-        return [...prev, { role: "assistant", content: responseMessage }];
-      });
-    }
-  }, [responseMessage]);
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, isLoading]);
 
   const handleSubmit = () => {
     if (!message.trim() || isLoading) return;
-    setChatHistory((prev) => [...prev, { role: "user", content: message }]);
     onSubmit(message);
     setMessage("");
-  };
-
-  const handleChipClick = (action) => {
-    setChatHistory((prev) => [...prev, { role: "user", content: action }]);
-    onSubmit(action);
   };
 
   const handleKeyDown = (e) => {
@@ -69,27 +61,37 @@ export default function AISidebar({
           <h3 className="font-semibold text-gray-900">Bridge Assistant</h3>
         </div>
         <p className="text-sm text-gray-500">
-          Tell Bridge how you'd like this assessment to change.
+          Ask a question, or tell Bridge how this assessment should change.
         </p>
       </div>
 
       {/* Chat History */}
-      <div className="px-5 py-4 border-b border-gray-100 max-h-[300px] overflow-y-auto">
-        <div className="space-y-3">
-          {chatHistory.map((msg, i) => (
-            <div
-              key={i}
-              className={`text-sm p-3 rounded-xl ${
-                msg.role === "assistant"
-                  ? "bg-gray-50 text-gray-700"
-                  : "bg-[#21201C] text-white ml-4"
-              }`}
-            >
-              {msg.content}
-            </div>
-          ))}
+      {messages.length > 0 && (
+        <div
+          ref={scrollRef}
+          className="px-5 py-4 border-b border-gray-100 max-h-[300px] overflow-y-auto"
+        >
+          <div className="space-y-3">
+            {messages.map((msg, i) => (
+              <div
+                key={i}
+                className={`text-sm p-3 rounded-xl whitespace-pre-wrap ${
+                  msg.role === "user"
+                    ? "bg-[#21201C] text-white ml-4"
+                    : msg.error
+                      ? "bg-red-50 text-red-700 border border-red-100"
+                      : "bg-gray-50 text-gray-700"
+                }`}
+              >
+                {msg.error && (
+                  <AlertCircle className="w-3.5 h-3.5 inline-block mr-1.5 -mt-0.5" />
+                )}
+                {msg.content}
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Context Sections */}
       {contextSections.length > 0 && (
@@ -101,10 +103,12 @@ export default function AISidebar({
                 key={section}
                 className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-white border border-[#21201C]/20 text-[#21201C] rounded-full"
               >
-                {section === "projectDescription" && "Project Description"}
-                {section === "testCases" && "Test Cases"}
+                {/* Fall back to the raw id: a pinned section the labels map
+                    doesn't know still has to be readable and removable. */}
+                {sectionLabel(section)}
                 <button
                   onClick={() => onRemoveContext?.(section)}
+                  aria-label={`Stop restricting edits to ${sectionLabel(section)}`}
                   className="hover:text-red-500 ml-0.5"
                 >
                   ×
@@ -127,14 +131,14 @@ export default function AISidebar({
           />
           <Button
             onClick={handleSubmit}
-            disabled={isLoading}
+            disabled={isLoading || !message.trim()}
             className="bg-[#21201C] hover:bg-[#35332D] text-[#FAF9F2] p-2.5 h-auto rounded-full shadow-sm hover:shadow-md hover:scale-105 transition-all"
           >
             {isLoading ? (
               <motion.div
                 animate={{ rotate: 360 }}
                 transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                className="w-5 h-5 border-2 border-[#21201C] border-t-transparent rounded-full"
+                className="w-5 h-5 border-2 border-[#FAF9F2] border-t-transparent rounded-full"
               />
             ) : (
               <ArrowRight className="w-5 h-5" />
@@ -147,7 +151,7 @@ export default function AISidebar({
           {quickActions.map((action, index) => (
             <button
               key={index}
-              onClick={() => handleChipClick(action)}
+              onClick={() => onSubmit(action)}
               disabled={isLoading}
               className="px-3 py-1.5 text-xs rounded-full bg-gray-50 border border-gray-200 text-gray-600 hover:border-[#21201C] hover:text-[#21201C] hover:bg-blue-50 transition-all disabled:opacity-50"
             >
@@ -168,7 +172,7 @@ export default function AISidebar({
           >
             <div className="flex items-center gap-2 text-sm text-[#21201C]">
               <Sparkles className="w-4 h-4 animate-pulse" />
-              Bridge is updating your assessment…
+              Bridge is working on your assessment…
             </div>
           </motion.div>
         )}
@@ -186,19 +190,11 @@ export default function AISidebar({
             <p className="text-xs font-medium text-gray-700 mb-2">
               Updated {lastChange.section}
             </p>
-            <ul className="text-xs text-gray-500 space-y-1 mb-3">
+            <ul className="text-xs text-gray-500 space-y-1">
               {lastChange.changes?.map((change, i) => (
                 <li key={i}>• {change}</li>
               ))}
             </ul>
-            <div className="flex gap-2">
-              <button className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1">
-                <Undo className="w-3 h-3" /> Undo
-              </button>
-              <button className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1">
-                <RotateCcw className="w-3 h-3" /> Apply again
-              </button>
-            </div>
           </motion.div>
         )}
       </AnimatePresence>

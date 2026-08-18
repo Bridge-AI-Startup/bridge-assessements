@@ -104,6 +104,20 @@ const AssessmentSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: undefined,
     },
+
+    /**
+     * Persisted per-criterion evaluability verdicts, keyed by criterion text +
+     * profile. Written once (lazily, on first grading) by
+     * `ensureCriteriaValidations` and reused for every candidate afterwards.
+     * Grading used to re-ask an LLM "is this criterion scoreable?" on every
+     * run, so the same criterion could be graded for one candidate and refused
+     * as non-evaluable for the next. Editing a criterion's text invalidates its
+     * entry naturally (lookup is by exact text).
+     */
+    evaluationCriteriaValidations: {
+      type: mongoose.Schema.Types.Mixed,
+      default: undefined,
+    },
   },
   {
     timestamps: true, // Adds createdAt and updatedAt automatically

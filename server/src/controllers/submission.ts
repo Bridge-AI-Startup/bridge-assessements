@@ -31,6 +31,7 @@ import {
   evaluateWorkflowSession,
   findCaptureSessionForSubmission,
 } from "../services/workflowCapture/evaluate.js";
+import { ensureCriteriaValidations } from "../services/evaluation/validator.js";
 import { finalizeCaptureSession } from "../services/workflowCapture/finalize.js";
 import { closeAttemptSessions } from "../services/submission/closeAttempt.js";
 import { expireAttemptAndClose } from "../services/submission/finalizeExpired.js";
@@ -279,12 +280,21 @@ async function evaluateWorkflowCaptureForSubmission(
     const submissionDoc: any = await SubmissionModel.findById(submissionId)
       .select("submittedAt")
       .lean();
+    // Evaluability is decided once per criterion and persisted on the
+    // assessment — never re-litigated per candidate. This path only grades
+    // the hook stream, so the profile is always "workflow".
+    const validations = await ensureCriteriaValidations(
+      String(assessment._id),
+      criteria,
+      "workflow"
+    );
     const result = await evaluateWorkflowSession(
       capture._id.toString(),
       criteria,
       {
         groundings: assessment.evaluationCriteriaGroundings,
         submittedAt: submissionDoc?.submittedAt ?? null,
+        validations,
       }
     );
     const sub = await SubmissionModel.findById(submissionId);

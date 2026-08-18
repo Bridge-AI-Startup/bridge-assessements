@@ -1188,10 +1188,741 @@ Install: \`npm install\` · Start: \`npm start\` · Port: \`3000\` (or \`PORT\`)
 };
 
 /* ------------------------------------------------------------------ */
+/* 4. Studio Bookings — brownfield legacy handoff                      */
+/* ------------------------------------------------------------------ */
+
+const STUDIO_README = `# Studio Bookings — Legacy Handoff
+
+You are inheriting this booking app from a contractor who has left. It works —
+members use it every day. Product has four new requirements. Ship them
+**without breaking what already works**: several review checks verify the
+existing behavior, so a rewrite that regresses it fails.
+
+Start with \`docs/HANDOFF.md\` — the contractor left notes.
+
+## How to run
+
+- Install: \`npm install\`
+- Start: \`npm start\`
+- Port: \`3000\` (or \`PORT\`)
+- Health: \`GET /health\` → 200 \`{ "ok": true }\`
+
+## What already works (keep it working)
+
+- \`GET /api/classes\` → \`{ "classes": [{ id, name, day, start,
+  durationMinutes, capacity, slot, bookedCount, spotsLeft }] }\`
+- \`POST /api/bookings\` with \`{ memberId, classId }\` → 201
+  \`{ memberId, classId, status: "booked" }\`; booking a class you are already
+  in → 409 \`{ "error": "already_booked" }\`; today a full class → 409
+  \`{ "error": "class_full" }\` (requirement 1 changes this).
+- \`DELETE /api/bookings/:memberId/:classId\` → 200; unknown → 404
+  \`{ "error": "unknown_booking" }\`.
+- Bookings persist to \`data/store.json\` and survive a restart.
+- The page at \`/\` lists classes as \`<li>\` rows. Typing a name into the
+  input with placeholder \`Your name\` and clicking that row's \`Book\` button
+  books it, and the row shows \`Booked ✓\` without a refresh. Keep this page
+  working — our automated review drives it.
+
+## New requirements
+
+### 1. Waitlists
+Booking a full class no longer returns \`class_full\`. Instead → 202
+\`{ memberId, classId, status: "waitlisted", position }\` where \`position\` is
+1-based, first-come-first-served. \`already_booked\` (409) now applies across
+booked **and** waitlisted. Each class row in \`GET /api/classes\` gains a
+\`waitlistCount\`.
+
+### 2. Time-conflict rule
+A member cannot be **booked** into two classes whose time windows overlap →
+409 \`{ "error": "time_conflict" }\`. Two classes overlap when they share the
+same \`day\` and their \`[start, start + durationMinutes)\` windows intersect —
+**back-to-back classes are allowed**. Joining a waitlist is always allowed
+regardless of conflicts; conflicts are enforced whenever someone would become
+booked (at booking time and at promotion time).
+
+### 3. Promotion on cancel
+When a **booked** member cancels, automatically promote the earliest waitlisted
+member whose promotion creates no time conflict. Skipped members keep their
+place in line.
+
+### 4. Member schedule
+\`GET /api/members/:memberId/schedule\` → 200
+\`{ memberId, booked: [{ classId, name, day, start }], waitlisted: [{ classId, name, position }] }\`
+
+Showing waitlist state on the page is welcome but not checked. The class
+catalog in \`src/classes.js\` is fixed — don't rename or re-time classes.
+`;
+
+const STUDIO_HANDOFF_MD = `# Handoff notes
+
+Last updated by the previous contractor, on their way out.
+
+- Store shape: \`data/store.json\` is \`{ "members": { "<memberId>":
+  ["<classId>", ...] } }\`. Capacity is computed by scanning every member's
+  list (\`bookedCountFor\`). Fine at our size.
+- The class catalog is hardcoded in \`src/classes.js\`. Front desk edits it by
+  hand when the schedule changes.
+- There is no notion of time conflicts anywhere in code. Front desk eyeballs
+  the schedule and catches double-bookings manually.
+- Waitlists have been on the roadmap since day one. Never built. Fair warning:
+  member→classes has no per-class ordering, so the store shape probably needs
+  rethinking for FIFO.
+- \`save()\` rewrites the whole JSON file on every change. Also fine at our
+  size.
+- \`public/app.js\` keeps a per-name "booked" set client-side after actions; it
+  does not know pre-existing bookings for a name typed fresh after a reload.
+  Nobody has complained.
+`;
+
+const STUDIO_PACKAGE_JSON = `{
+  "name": "studio-bookings",
+  "private": true,
+  "version": "2.4.1",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
+`;
+
+const STUDIO_SERVER_JS = `const path = require("path");
+const express = require("express");
+const { load } = require("./src/store");
+const classesRouter = require("./src/routes/classes");
+const bookingsRouter = require("./src/routes/bookings");
+
+const PORT = Number(process.env.PORT) || 3000;
+load();
+
+const app = express();
+app.use(express.json());
+app.use(express.static(path.join(__dirname, "public")));
+
+app.get("/health", (_req, res) => {
+  res.status(200).json({ ok: true });
+});
+
+app.use("/api/classes", classesRouter);
+app.use("/api/bookings", bookingsRouter);
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(\`studio-bookings listening on http://0.0.0.0:\${PORT}\`);
+});
+`;
+
+const STUDIO_CLASSES_JS = `// The weekly schedule. Front desk edits this file by hand when it changes.
+const CLASSES = [
+  { id: "morning-flow", name: "Morning Flow", day: "Mon", start: "09:00", durationMinutes: 60, capacity: 10 },
+  { id: "power-spin", name: "Power Spin", day: "Mon", start: "09:30", durationMinutes: 60, capacity: 10 },
+  { id: "circuit-blast", name: "Circuit Blast", day: "Mon", start: "10:00", durationMinutes: 60, capacity: 10 },
+  { id: "sunrise-yoga", name: "Sunrise Yoga", day: "Tue", start: "07:00", durationMinutes: 60, capacity: 2 },
+  { id: "deep-stretch", name: "Deep Stretch", day: "Wed", start: "11:00", durationMinutes: 60, capacity: 1 },
+  { id: "core-express", name: "Core Express", day: "Wed", start: "11:30", durationMinutes: 60, capacity: 10 },
+  { id: "pilates-basics", name: "Pilates Basics", day: "Thu", start: "18:00", durationMinutes: 60, capacity: 8 },
+  { id: "evening-boxing", name: "Evening Boxing", day: "Fri", start: "19:00", durationMinutes: 60, capacity: 8 },
+  { id: "barre-strength", name: "Barre Strength", day: "Sat", start: "10:00", durationMinutes: 60, capacity: 2 },
+];
+
+function listClasses() {
+  return CLASSES;
+}
+
+function findClass(id) {
+  for (let i = 0; i < CLASSES.length; i++) {
+    if (CLASSES[i].id === id) return CLASSES[i];
+  }
+  return null;
+}
+
+module.exports = { listClasses, findClass };
+`;
+
+const STUDIO_STORE_JS = `// Persistence. The whole store is one JSON file; save() rewrites it.
+const fs = require("fs");
+const path = require("path");
+
+const DATA_FILE = path.join(__dirname, "..", "data", "store.json");
+
+// members[memberId] = array of classIds the member is booked into.
+let state = { members: {} };
+
+function load() {
+  try {
+    state = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+  } catch (_err) {
+    state = { members: {} };
+  }
+  if (!state.members) state.members = {};
+}
+
+function save() {
+  fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+  fs.writeFileSync(DATA_FILE, JSON.stringify(state));
+}
+
+function bookingsFor(memberId) {
+  return state.members[memberId] || [];
+}
+
+function addBooking(memberId, classId) {
+  if (!state.members[memberId]) state.members[memberId] = [];
+  state.members[memberId].push(classId);
+  save();
+}
+
+function removeBooking(memberId, classId) {
+  const list = state.members[memberId] || [];
+  const idx = list.indexOf(classId);
+  if (idx !== -1) list.splice(idx, 1);
+  save();
+}
+
+function bookedCountFor(classId) {
+  let n = 0;
+  for (const ids of Object.values(state.members)) {
+    for (const id of ids) {
+      if (id === classId) n++;
+    }
+  }
+  return n;
+}
+
+module.exports = { load, save, bookingsFor, addBooking, removeBooking, bookedCountFor };
+`;
+
+const STUDIO_TIME_JS = `// Time helpers. Times are "HH:MM" strings in the studio's local timezone.
+
+function toMinutes(hhmm) {
+  const parts = String(hhmm).split(":");
+  return Number(parts[0]) * 60 + Number(parts[1]);
+}
+
+function formatSlot(cls) {
+  return cls.day + " " + cls.start + " (" + cls.durationMinutes + " min)";
+}
+
+module.exports = { toMinutes, formatSlot };
+`;
+
+const STUDIO_ROUTES_CLASSES_JS = `const express = require("express");
+const { listClasses } = require("../classes");
+const { bookedCountFor } = require("../store");
+const { formatSlot } = require("../util/time");
+
+const router = express.Router();
+
+router.get("/", (_req, res) => {
+  const classes = listClasses().map((cls) => {
+    const bookedCount = bookedCountFor(cls.id);
+    return {
+      id: cls.id,
+      name: cls.name,
+      day: cls.day,
+      start: cls.start,
+      durationMinutes: cls.durationMinutes,
+      capacity: cls.capacity,
+      slot: formatSlot(cls),
+      bookedCount,
+      spotsLeft: cls.capacity - bookedCount,
+    };
+  });
+  res.status(200).json({ classes });
+});
+
+module.exports = router;
+`;
+
+const STUDIO_ROUTES_BOOKINGS_JS = `const express = require("express");
+const { findClass } = require("../classes");
+const store = require("../store");
+
+const router = express.Router();
+
+router.post("/", (req, res) => {
+  const memberId = req.body && req.body.memberId;
+  const classId = req.body && req.body.classId;
+  if (!memberId || typeof memberId !== "string" || !memberId.trim()) {
+    return res.status(400).json({ error: "member_required" });
+  }
+  const cls = findClass(classId);
+  if (!cls) {
+    return res.status(400).json({ error: "unknown_class" });
+  }
+  if (store.bookingsFor(memberId).indexOf(cls.id) !== -1) {
+    return res.status(409).json({ error: "already_booked" });
+  }
+  const bookedCount = store.bookedCountFor(cls.id);
+  if (bookedCount >= cls.capacity) {
+    // Full is full. Waitlists have been "on the roadmap" forever — see docs/HANDOFF.md.
+    return res.status(409).json({ error: "class_full" });
+  }
+  store.addBooking(memberId, cls.id);
+  return res.status(201).json({ memberId, classId: cls.id, status: "booked" });
+});
+
+router.delete("/:memberId/:classId", (req, res) => {
+  const memberId = req.params.memberId;
+  const cls = findClass(req.params.classId);
+  if (!cls || store.bookingsFor(memberId).indexOf(cls.id) === -1) {
+    return res.status(404).json({ error: "unknown_booking" });
+  }
+  store.removeBooking(memberId, cls.id);
+  return res.status(200).json({ ok: true });
+});
+
+module.exports = router;
+`;
+
+const STUDIO_INDEX_HTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Studio Bookings</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <h1>Studio Bookings</h1>
+    <div class="controls">
+      <input id="member" type="text" placeholder="Your name" />
+    </div>
+    <div id="message"></div>
+    <ul id="classes"></ul>
+    <script src="/app.js"></script>
+  </body>
+</html>
+`;
+
+const STUDIO_APP_JS = `const state = { classes: [], booked: new Set() };
+
+async function loadClasses() {
+  const res = await fetch("/api/classes");
+  const data = await res.json();
+  state.classes = data.classes || [];
+  render();
+}
+
+function memberName() {
+  return document.getElementById("member").value.trim();
+}
+
+function setMessage(text) {
+  document.getElementById("message").textContent = text || "";
+}
+
+function render() {
+  const list = document.getElementById("classes");
+  list.innerHTML = "";
+  for (const cls of state.classes) {
+    const li = document.createElement("li");
+    const title = document.createElement("strong");
+    title.textContent = cls.name;
+    const meta = document.createElement("span");
+    meta.textContent = " " + cls.slot + " · " + cls.spotsLeft + " spots left ";
+    li.appendChild(title);
+    li.appendChild(meta);
+    if (state.booked.has(cls.id)) {
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.textContent = "Booked ✓";
+      li.appendChild(chip);
+    } else {
+      const btn = document.createElement("button");
+      btn.textContent = "Book";
+      btn.addEventListener("click", () => book(cls.id));
+      li.appendChild(btn);
+    }
+    list.appendChild(li);
+  }
+}
+
+async function book(classId) {
+  const memberId = memberName();
+  if (!memberId) {
+    setMessage("Type your name first.");
+    return;
+  }
+  const res = await fetch("/api/bookings", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ memberId, classId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) {
+    state.booked.add(classId);
+    setMessage("");
+  } else if (data.error === "class_full") {
+    setMessage("That class is full.");
+  } else {
+    setMessage("Could not book: " + (data.error || res.status));
+  }
+  await loadClasses();
+}
+
+document.getElementById("member").addEventListener("input", () => {
+  state.booked.clear();
+  render();
+});
+
+loadClasses();
+`;
+
+const STUDIO_STYLE_CSS = `body { font-family: system-ui, sans-serif; margin: 2rem; color: #21201c; background: #faf9f2; }
+h1 { letter-spacing: -0.02em; }
+.controls { margin-bottom: 0.75rem; }
+#message { min-height: 1.5rem; color: #a33; }
+ul { list-style: none; padding: 0; max-width: 40rem; }
+li { background: #fff; border-radius: 8px; padding: 0.75rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; }
+li strong { flex: 0 0 auto; }
+li span { color: #6b6a64; }
+li button { margin-left: auto; }
+.chip { margin-left: auto; color: #4a6b4a; font-weight: 600; }
+`;
+
+const STUDIO_CHECKS = [
+  "GET /health returns 200 with { ok: true }.",
+  "A member can book a class from the page and the row shows Booked without a refresh.",
+  "Booking the same class twice for the same member is rejected with already_booked.",
+  "Booking a full class waitlists the member with a 1-based FIFO position instead of rejecting them.",
+  "When a booked member cancels, the earliest eligible waitlisted member is automatically promoted to booked.",
+  "A member cannot be booked into two classes whose times overlap, but back-to-back classes are allowed.",
+  "Waitlist promotion skips members whose promotion would create a time conflict; skipped members keep their place.",
+  "A member's bookings survive a server restart.",
+  "GET /api/classes reports bookedCount, spotsLeft, and waitlistCount consistent with the actual bookings and waitlists.",
+];
+
+const STUDIO_SPECS = [
+  {
+    id: "studio-health",
+    text: STUDIO_CHECKS[0],
+    kind: "http",
+    acceptance: {
+      request: { method: "GET", path: "/health" },
+      expect: { status: [200], bodyContains: ['"ok":true'] },
+    },
+  },
+  {
+    id: "studio-book-ui",
+    text: STUDIO_CHECKS[1],
+    kind: "ui",
+    acceptance: {
+      steps: [
+        { action: "goto", path: "/" },
+        { action: "fill_placeholder", placeholder: "Your name", value: "mem-ui-{{nonce}}" },
+        { action: "click_in_row", hasText: "Pilates Basics", role: "button", name: "Book" },
+        { action: "expect_in_row", hasText: "Pilates Basics", text: "Booked" },
+      ],
+    },
+  },
+  {
+    id: "studio-already-booked",
+    text: STUDIO_CHECKS[2],
+    kind: "http_sequence",
+    acceptance: {
+      steps: [
+        {
+          label: "book",
+          request: {
+            method: "POST",
+            path: "/api/bookings",
+            json: { memberId: "m-dup-{{nonce}}", classId: "evening-boxing" },
+          },
+          expect: { status: [201] },
+        },
+        {
+          label: "book again",
+          request: {
+            method: "POST",
+            path: "/api/bookings",
+            json: { memberId: "m-dup-{{nonce}}", classId: "evening-boxing" },
+          },
+          expect: { status: [409], bodyContains: ["already_booked"] },
+        },
+      ],
+    },
+  },
+  {
+    id: "studio-waitlist",
+    text: STUDIO_CHECKS[3],
+    kind: "http_sequence",
+    acceptance: {
+      steps: [
+        {
+          label: "fill seat 1 of 2",
+          request: {
+            method: "POST",
+            path: "/api/bookings",
+            json: { memberId: "wl-a-{{nonce}}", classId: "sunrise-yoga" },
+          },
+          expect: { status: [201] },
+        },
+        {
+          label: "fill seat 2 of 2",
+          request: {
+            method: "POST",
+            path: "/api/bookings",
+            json: { memberId: "wl-b-{{nonce}}", classId: "sunrise-yoga" },
+          },
+          expect: { status: [201] },
+        },
+        {
+          label: "third member is waitlisted",
+          request: {
+            method: "POST",
+            path: "/api/bookings",
+            json: { memberId: "wl-c-{{nonce}}", classId: "sunrise-yoga" },
+          },
+          expect: {
+            status: [202],
+            json: [
+              { path: "status", equals: "waitlisted" },
+              { path: "position", equals: 1 },
+            ],
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: "studio-promotion",
+    text: STUDIO_CHECKS[4],
+    kind: "http_sequence",
+    acceptance: {
+      steps: [
+        {
+          label: "fill seat 1 of 2",
+          request: {
+            method: "POST",
+            path: "/api/bookings",
+            json: { memberId: "pr-a-{{nonce}}", classId: "barre-strength" },
+          },
+          expect: { status: [201] },
+        },
+        {
+          label: "fill seat 2 of 2",
+          request: {
+            method: "POST",
+            path: "/api/bookings",
+            json: { memberId: "pr-b-{{nonce}}", classId: "barre-strength" },
+          },
+          expect: { status: [201] },
+        },
+        {
+          label: "third member waitlisted",
+          request: {
+            method: "POST",
+            path: "/api/bookings",
+            json: { memberId: "pr-c-{{nonce}}", classId: "barre-strength" },
+          },
+          expect: { status: [202], json: [{ path: "position", equals: 1 }] },
+        },
+        {
+          label: "a booked member cancels",
+          request: {
+            method: "DELETE",
+            path: "/api/bookings/pr-a-{{nonce}}/barre-strength",
+          },
+          expect: { status: [200] },
+        },
+        {
+          label: "waitlisted member was promoted",
+          request: { method: "GET", path: "/api/members/pr-c-{{nonce}}/schedule" },
+          expect: {
+            status: [200],
+            json: [{ path: "booked.0.classId", equals: "barre-strength" }],
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: "studio-time-conflict",
+    text: STUDIO_CHECKS[5],
+    kind: "http_sequence",
+    acceptance: {
+      steps: [
+        {
+          label: "book 09:00-10:00",
+          request: {
+            method: "POST",
+            path: "/api/bookings",
+            json: { memberId: "ov-{{nonce}}", classId: "morning-flow" },
+          },
+          expect: { status: [201] },
+        },
+        {
+          label: "overlapping 09:30-10:30 refused",
+          request: {
+            method: "POST",
+            path: "/api/bookings",
+            json: { memberId: "ov-{{nonce}}", classId: "power-spin" },
+          },
+          expect: { status: [409], bodyContains: ["time_conflict"] },
+        },
+        {
+          label: "back-to-back 10:00-11:00 allowed",
+          request: {
+            method: "POST",
+            path: "/api/bookings",
+            json: { memberId: "ov-{{nonce}}", classId: "circuit-blast" },
+          },
+          expect: { status: [201] },
+        },
+      ],
+    },
+  },
+  {
+    id: "studio-promotion-skip",
+    text: STUDIO_CHECKS[6],
+    kind: "http_sequence",
+    acceptance: {
+      steps: [
+        {
+          label: "fill the single seat (Wed 11:00)",
+          request: {
+            method: "POST",
+            path: "/api/bookings",
+            json: { memberId: "sk-a-{{nonce}}", classId: "deep-stretch" },
+          },
+          expect: { status: [201] },
+        },
+        {
+          label: "second member books overlapping Wed 11:30",
+          request: {
+            method: "POST",
+            path: "/api/bookings",
+            json: { memberId: "sk-b-{{nonce}}", classId: "core-express" },
+          },
+          expect: { status: [201] },
+        },
+        {
+          label: "conflicted member may still join the waitlist",
+          request: {
+            method: "POST",
+            path: "/api/bookings",
+            json: { memberId: "sk-b-{{nonce}}", classId: "deep-stretch" },
+          },
+          expect: { status: [202], json: [{ path: "position", equals: 1 }] },
+        },
+        {
+          label: "third member joins behind them",
+          request: {
+            method: "POST",
+            path: "/api/bookings",
+            json: { memberId: "sk-c-{{nonce}}", classId: "deep-stretch" },
+          },
+          expect: { status: [202], json: [{ path: "position", equals: 2 }] },
+        },
+        {
+          label: "the booked member cancels",
+          request: {
+            method: "DELETE",
+            path: "/api/bookings/sk-a-{{nonce}}/deep-stretch",
+          },
+          expect: { status: [200] },
+        },
+        {
+          label: "promotion skipped the conflicted member",
+          request: { method: "GET", path: "/api/members/sk-c-{{nonce}}/schedule" },
+          expect: {
+            status: [200],
+            json: [{ path: "booked.0.classId", equals: "deep-stretch" }],
+          },
+        },
+        {
+          label: "skipped member keeps their place in line",
+          request: { method: "GET", path: "/api/members/sk-b-{{nonce}}/schedule" },
+          expect: {
+            status: [200],
+            json: [
+              { path: "booked.0.classId", equals: "core-express" },
+              { path: "waitlisted.0.classId", equals: "deep-stretch" },
+            ],
+          },
+        },
+      ],
+    },
+  },
+  {
+    id: "studio-persistence",
+    text: STUDIO_CHECKS[7],
+    kind: "restart_persistence",
+    acceptance: {
+      write: {
+        label: "book before restart",
+        request: {
+          method: "POST",
+          path: "/api/bookings",
+          json: { memberId: "keep-{{nonce}}", classId: "pilates-basics" },
+        },
+        expect: { status: [201] },
+      },
+      read: {
+        label: "still booked after restart",
+        request: { method: "GET", path: "/api/members/keep-{{nonce}}/schedule" },
+        expect: { status: [200], bodyContains: ["pilates-basics"] },
+      },
+    },
+  },
+  { id: "studio-class-counts", text: STUDIO_CHECKS[8], kind: "agent" },
+];
+
+const STUDIO_DEF: AssessmentDef = {
+  title: "Studio Bookings — Legacy Handoff",
+  timeLimit: 90,
+  candidateEmail: "demo.studio@example.com",
+  candidateName: "Studio Demo Candidate",
+  description: `You are inheriting a **working** class-booking app from a contractor who has left. Members use it every day. Product has four new requirements — ship them **without breaking what already works**. Several review checks verify the existing behavior, so a rewrite that regresses it fails. Start with the contractor's notes in \`docs/HANDOFF.md\`.
+
+## What already works (keep it working)
+
+Class listing with live \`bookedCount\`/\`spotsLeft\`, booking (\`POST /api/bookings\` → 201; 409 \`already_booked\`; today 409 \`class_full\` when full), cancellation (\`DELETE /api/bookings/:memberId/:classId\`), file persistence across restarts, and the page at \`/\` — class rows as \`<li>\`, a name input with placeholder \`Your name\`, a \`Book\` button per row, and a \`Booked ✓\` chip appearing without a refresh. Keep the page working; our automated review drives it.
+
+## New requirements
+
+1. **Waitlists.** Booking a full class → 202 \`{ memberId, classId, status: "waitlisted", position }\` (1-based, first-come-first-served) instead of \`class_full\`. \`already_booked\` now applies across booked **and** waitlisted. Class rows gain \`waitlistCount\`.
+2. **Time-conflict rule.** A member cannot be **booked** into two classes whose windows overlap → 409 \`{ "error": "time_conflict" }\`. Overlap = same \`day\` and intersecting \`[start, start + durationMinutes)\` — **back-to-back is allowed**. Joining a waitlist is always allowed regardless of conflicts; conflicts are enforced whenever someone would become booked (booking time and promotion time).
+3. **Promotion on cancel.** When a booked member cancels, automatically promote the earliest waitlisted member whose promotion creates no time conflict. Skipped members keep their place in line.
+4. **Member schedule.** \`GET /api/members/:memberId/schedule\` → \`{ memberId, booked: [{ classId, name, day, start }], waitlisted: [{ classId, name, position }] }\`
+
+The class catalog in \`src/classes.js\` is fixed — don't rename or re-time classes. Showing waitlist state on the page is welcome but not checked.
+
+## How to run
+
+Install: \`npm install\` · Start: \`npm start\` · Port: \`3000\` (or \`PORT\`) · Health: \`/health\``,
+  behavioralChecks: STUDIO_CHECKS,
+  behavioralCheckSpecs: STUDIO_SPECS,
+  evaluationCriteria: [
+    "Explores the inherited code and handoff notes before the first edit",
+    "Re-runs existing flows after changes to confirm nothing regressed",
+    "Exercises the tricky cases against the running app — the back-to-back boundary, promotion skipping a conflicted member",
+    "Makes targeted changes rather than wholesale rewriting the inherited codebase",
+  ],
+  starterCodeFiles: [
+    { path: "README.md", content: STUDIO_README },
+    { path: "docs/HANDOFF.md", content: STUDIO_HANDOFF_MD },
+    { path: "package.json", content: STUDIO_PACKAGE_JSON },
+    { path: "server.js", content: STUDIO_SERVER_JS },
+    { path: "src/classes.js", content: STUDIO_CLASSES_JS },
+    { path: "src/store.js", content: STUDIO_STORE_JS },
+    { path: "src/util/time.js", content: STUDIO_TIME_JS },
+    { path: "src/routes/classes.js", content: STUDIO_ROUTES_CLASSES_JS },
+    { path: "src/routes/bookings.js", content: STUDIO_ROUTES_BOOKINGS_JS },
+    { path: "public/index.html", content: STUDIO_INDEX_HTML },
+    { path: "public/app.js", content: STUDIO_APP_JS },
+    { path: "public/style.css", content: STUDIO_STYLE_CSS },
+    { path: ".gitignore", content: "node_modules/\ndata/\n" },
+    { path: "data/.gitkeep", content: "" },
+  ],
+};
+
+/* ------------------------------------------------------------------ */
 /* Seeding                                                             */
 /* ------------------------------------------------------------------ */
 
-const ASSESSMENTS: AssessmentDef[] = [LEDGER_DEF, CHECKOUT_DEF, BOARD_DEF];
+const ASSESSMENTS: AssessmentDef[] = [LEDGER_DEF, CHECKOUT_DEF, BOARD_DEF, STUDIO_DEF];
 
 function validateSpecs(def: AssessmentDef) {
   const { specs, rejected } = parseBehavioralCheckSpecs(def.behavioralCheckSpecs);

@@ -63,7 +63,10 @@ import { runSubmissionEvaluation } from "@/api/evaluation";
 import VideoTimelineWithCriteria from "@/components/proctoring/VideoTimelineWithCriteria";
 import BehavioralGradingLiveTrace from "@/components/submissions/BehavioralGradingLiveTrace";
 import EvidenceMomentChips from "@/components/submissions/EvidenceMomentChips";
-import WorkflowActivityTimeline from "@/components/submissions/WorkflowActivityTimeline";
+import WorkflowActivityTimeline, {
+  sessionSecondToVideoOffset,
+} from "@/components/submissions/WorkflowActivityTimeline";
+import { cn } from "@/lib/utils";
 import CommunicationCard from "@/components/submissions/CommunicationCard";
 import RuntimeReplayPanel, {
   shouldShowRuntimeReplay,
@@ -1567,7 +1570,7 @@ export default function SubmissionsDashboard() {
           session.transcript?.storageKey &&
           !selectedEvaluationSubmission?.enrichedTranscript
         ) {
-          const transcriptResult = await getTranscriptContent(session._id);
+          const transcriptResult = await getTranscriptContent(session._id, token);
           if (cancelled) return;
           if (transcriptResult.success && transcriptResult.data) {
             const lines = transcriptResult.data
@@ -4151,8 +4154,40 @@ export default function SubmissionsDashboard() {
                               page explicitly asks for them (an LLM call). */}
                           {episodesForReview.length > 0 ? (
                             <div className="divide-y divide-gray-100 max-h-[40vh] overflow-y-auto">
-                              {episodesForReview.map((ep) => (
-                                <div key={ep.index} className="px-4 py-3">
+                              {episodesForReview.map((ep) => {
+                                // Chapters seek the recording like rubric
+                                // evidence chips do: map the episode's
+                                // session-relative start onto the merged
+                                // video via the analysis timeline. Rows stay
+                                // plain text when there is no recording or
+                                // the analysis has not loaded.
+                                const epOffset = recordsScreen
+                                  ? sessionSecondToVideoOffset(
+                                      workflowAnalysis?.timeline,
+                                      Number(ep.startSeconds)
+                                    )
+                                  : null;
+                                const epSeekable =
+                                  epOffset != null && Number.isFinite(epOffset);
+                                return (
+                                <div
+                                  key={ep.index}
+                                  onClick={
+                                    epSeekable
+                                      ? () => handleSeekRecording(epOffset)
+                                      : undefined
+                                  }
+                                  className={cn(
+                                    "px-4 py-3",
+                                    epSeekable &&
+                                      "cursor-pointer hover:bg-gray-50"
+                                  )}
+                                  title={
+                                    epSeekable
+                                      ? "Jump the recording to this chapter"
+                                      : undefined
+                                  }
+                                >
                                   <div className="flex items-baseline gap-2">
                                     <span className="text-xs text-gray-400 tabular-nums">
                                       {ep.index}
@@ -4172,7 +4207,8 @@ export default function SubmissionsDashboard() {
                                     {ep.summary}
                                   </p>
                                 </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           ) : evaluationInProgress || workflowLoading ? (
                             <div className="px-4 py-4">
@@ -4808,6 +4844,7 @@ export default function SubmissionsDashboard() {
                   workflowAnalysis?.timeline?.length > 0 ? (
                     <WorkflowActivityTimeline
                       timeline={workflowAnalysis.timeline}
+                      episodes={episodesForReview}
                       onSeek={handleSeekRecording}
                     />
                   ) : activityTimelineOnRecording &&

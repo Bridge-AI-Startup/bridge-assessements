@@ -181,12 +181,15 @@ export async function resumeRuntime(
 }
 
 export async function finalizeRuntime(
-  token: string
+  token: string,
+  opts: { confirmUnverified?: boolean } = {}
 ): Promise<APIResult<{ setup: RuntimeSetupMeta; config: RuntimeConfig }>> {
   try {
     const response = await post(
       `/submissions/token/${token}/runtime/finalize`,
-      {}
+      // The server refuses an unverified finalize without this, so the confirm
+      // dialog is the acknowledgement rather than a client-only formality.
+      { confirmUnverified: opts.confirmUnverified === true }
     );
     return { success: true, data: await response.json() };
   } catch (error) {

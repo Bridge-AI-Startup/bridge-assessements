@@ -12,6 +12,10 @@
  *             live call hits this machine instead of Render. Free ngrok URLs
  *             change on every restart — re-run this after restarting the tunnel.
  *   --prod    point the tool back at the deployed Render URL.
+ *   --sync-settings  also PATCH the agent's LLM and turn timeout to the
+ *             code-managed values below (AGENT_LLM / AGENT_TURN_TIMEOUT_SECONDS).
+ *             Dashboard edits drift silently; this makes the settings
+ *             re-appliable from source.
  *
  * Env (config.env):
  *   ELEVENLABS_API_KEY  — ElevenLabs API key with Conversational AI access (required)
@@ -31,11 +35,44 @@ const DEFAULT_AGENT_ID = "agent_6401kd1h9k5ne9g9r90h5hwthc4v";
 const DEFAULT_TOOL_URL =
   "https://bridge-assessements-1.onrender.com/api/agent-tools/context";
 
+/**
+ * Code-managed agent settings, applied with --sync-settings.
+ *
+ * AGENT_LLM: claude-haiku-4-5 (~$0.88 per 90-min session). The companion
+ * prompt is ~3.5k tokens carrying 40+ prohibition rules, and a session
+ * accumulates 50-80k tokens of replayed context by its final third — late-
+ * session rule retention under long context is the whole job, and mini-band
+ * models regress to generic-assistant defaults exactly there. History:
+ * gemini-2.5-flash-lite narrated its waiting and misattributed Claude's edits
+ * to the candidate (2026-08-16 Studio Bookings run); gpt-5.6-luna ($0.18/
+ * session) was the first replacement but is priced in the same mini band the
+ * failure came from, so it was bumped before ever running live.
+ *
+ * AGENT_TURN_TIMEOUT_SECONDS: how long ElevenLabs waits through candidate
+ * silence before forcing the agent to take a turn. This is the agent's only
+ * heartbeat — proactive timeline questions depend on it, so it must not be
+ * disabled — but at the old 7s a quiet setup phase handed the model a forced
+ * turn eight times a minute, and it eventually filled one with "I'll check
+ * back." 25s keeps ~2 chances per minute with far less pressure.
+ */
+const AGENT_LLM = "claude-haiku-4-5";
+const AGENT_TURN_TIMEOUT_SECONDS = 25;
+/**
+ * turn_v3 = contextual end-of-utterance detection (semantic completeness, not
+ * silence thresholds). Candidates narrate in halting fragments while coding;
+ * turn_v2 fired into mid-thought pauses and treated noise fragments ("...") as
+ * finished turns, each one granting the LLM a turn to fill with filler.
+ * Allowed values are not documented — probe by PATCHing an invalid value and
+ * reading the validation error (as of 2026-08-17: 'turn_v2' or 'turn_v3').
+ */
+const AGENT_TURN_MODEL = "turn_v3";
+
 const apiKey = process.env.ELEVENLABS_API_KEY;
 const agentSecret = process.env.AGENT_SECRET;
 
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
+const syncSettings = args.includes("--sync-settings");
 const useProd = args.includes("--prod");
 // --prod is the default, but naming it explicitly makes "switch back" obvious
 // and keeps a stray --local from silently winning.
@@ -256,17 +293,53 @@ async function main() {
   const alreadyAttached = toolId !== "<new>" && currentIds.includes(toolId);
   const nextIds = alreadyAttached ? currentIds : [...currentIds, toolId];
 
-  if (alreadyAttached) {
-    console.log("✅ Tool already attached — nothing to do.");
+  // Settings drift check (only applied with --sync-settings).
+  const currentLlm = prompt.llm;
+  const currentTimeout =
+    agentRes.json?.conversation_config?.turn?.turn_timeout;
+  const currentTurnModel =
+    agentRes.json?.conversation_config?.turn?.turn_model;
+  const llmStale = syncSettings && currentLlm !== AGENT_LLM;
+  const timeoutStale =
+    syncSettings && currentTimeout !== AGENT_TURN_TIMEOUT_SECONDS;
+  const turnModelStale = syncSettings && currentTurnModel !== AGENT_TURN_MODEL;
+
+  if (alreadyAttached && !llmStale && !timeoutStale && !turnModelStale) {
+    console.log(
+      syncSettings
+        ? "✅ Tool attached and settings already in sync — nothing to do."
+        : "✅ Tool already attached — nothing to do."
+    );
     return;
   }
 
-  const agentPatch: Record<string, any> = {
-    conversation_config: { agent: { prompt: { tool_ids: nextIds } } },
-  };
+  const promptPatch: Record<string, any> = {};
+  if (!alreadyAttached) promptPatch.tool_ids = nextIds;
+  if (llmStale) promptPatch.llm = AGENT_LLM;
+  const agentPatch: Record<string, any> = { conversation_config: {} };
+  if (Object.keys(promptPatch).length > 0) {
+    agentPatch.conversation_config.agent = { prompt: promptPatch };
+  }
+  if (timeoutStale || turnModelStale) {
+    const turnPatch: Record<string, any> = {};
+    if (timeoutStale) turnPatch.turn_timeout = AGENT_TURN_TIMEOUT_SECONDS;
+    if (turnModelStale) turnPatch.turn_model = AGENT_TURN_MODEL;
+    agentPatch.conversation_config.turn = turnPatch;
+  }
+
+  if (!alreadyAttached)
+    console.log(`🤖 attaching tool → tool_ids ${JSON.stringify(nextIds)}`);
+  if (llmStale)
+    console.log(`🤖 llm: ${currentLlm} → ${AGENT_LLM}`);
+  if (timeoutStale)
+    console.log(
+      `🤖 turn_timeout: ${currentTimeout}s → ${AGENT_TURN_TIMEOUT_SECONDS}s`
+    );
+  if (turnModelStale)
+    console.log(`🤖 turn_model: ${currentTurnModel} → ${AGENT_TURN_MODEL}`);
 
   if (dryRun) {
-    console.log(`🤖 [dry-run] would attach tool → tool_ids ${JSON.stringify(nextIds)}`);
+    console.log(`🤖 [dry-run] would PATCH: ${JSON.stringify(agentPatch)}`);
     return;
   }
 
@@ -274,7 +347,7 @@ async function main() {
   if (patch.status < 200 || patch.status >= 300)
     fail("Update agent", patch.status, patch.json);
 
-  console.log("🤖 Attached tool to agent");
+  console.log("🤖 Agent updated");
   console.log("✅ Done. The agent can now call get_candidate_context during calls.");
   console.log(
     "   Verify in the dashboard: Conversational AI → your agent → Tools."

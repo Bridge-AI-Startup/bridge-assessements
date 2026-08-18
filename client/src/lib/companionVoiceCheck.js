@@ -9,28 +9,22 @@
  */
 
 import { COMPANION_AGENT_ID } from "@/config/companion";
+import {
+  advanceSpeechHold,
+  rmsFromTimeDomain,
+  speechHoldReached,
+} from "@/lib/micLevel";
+
+export {
+  METER_RMS_FULL,
+  SPEECH_HOLD_MS,
+  SPEECH_RMS_THRESHOLD,
+  advanceSpeechHold,
+  rmsFromTimeDomain,
+  speechHoldReached,
+} from "@/lib/micLevel";
 
 const TOKEN_URL = "https://api.elevenlabs.io/v1/convai/conversation/token";
-
-/** RMS above this, on a -1..1 time-domain buffer, counts as voice. */
-export const SPEECH_RMS_THRESHOLD = 0.05;
-
-/** How long the signal must stay above the threshold. */
-export const SPEECH_HOLD_MS = 280;
-
-/**
- * @param {ArrayLike<number>} bytes 0–255 time-domain samples
- * @returns {number}
- */
-export function rmsFromTimeDomain(bytes) {
-  if (!bytes?.length) return 0;
-  let sum = 0;
-  for (let i = 0; i < bytes.length; i += 1) {
-    const v = (bytes[i] - 128) / 128;
-    sum += v * v;
-  }
-  return Math.sqrt(sum / bytes.length);
-}
 
 export function stopMediaStream(stream) {
   stream?.getTracks?.().forEach((track) => {
@@ -130,14 +124,10 @@ export async function listenForMicrophoneAudio(stream, opts = {}) {
         const dt = Math.min(now - last, 100);
         last = now;
 
-        if (rms >= SPEECH_RMS_THRESHOLD) {
-          heardMs += dt;
-          if (heardMs >= SPEECH_HOLD_MS) {
-            finish({ ok: true });
-            return;
-          }
-        } else {
-          heardMs = Math.max(0, heardMs - dt);
+        heardMs = advanceSpeechHold(heardMs, rms, dt);
+        if (speechHoldReached(heardMs)) {
+          finish({ ok: true });
+          return;
         }
         raf = requestAnimationFrame(tick);
       };

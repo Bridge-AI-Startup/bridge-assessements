@@ -41,6 +41,7 @@ import { auth } from "@/firebase/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 import DocumentBlock from "@/components/assessment/DocumentBlock";
 import AISidebar from "@/components/assessment/AISidebar";
+import { sectionLabel } from "@/components/assessment/sections";
 import BehavioralCheckVerification from "@/components/assessment/BehavioralCheckVerification";
 import StarterCodeIDE from "@/components/StarterCodeIDE";
 import { BulkInviteContent } from "@/components/BulkInviteModal";
@@ -124,7 +125,8 @@ export default function AssessmentEditor() {
 
   const [highlightedSection, setHighlightedSection] = useState(null);
   const [lastChange, setLastChange] = useState(null);
-  const [responseMessage, setResponseMessage] = useState(null);
+  /** Assistant conversation: [{ role, content, error? }], oldest first. */
+  const [chatMessages, setChatMessages] = useState([]);
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareTab, setShareTab] = useState("single");
   const [candidateName, setCandidateName] = useState("");
@@ -470,125 +472,110 @@ export default function AssessmentEditor() {
   };
 
   const handleChatSubmit = async (message) => {
+    const trimmed = message.trim();
+    if (!trimmed || isLoading) return;
+
     if (!assessmentId || !currentUser || !assessmentData) {
-      alert("Cannot chat: missing assessment data or user");
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: "I can't reach this assessment yet. Reload the page and try again.",
+          error: true,
+        },
+      ]);
       return;
     }
 
+    // Everything before this turn is the context the model gets. Error entries
+    // are ours, not the model's, so they never go back over the wire.
+    const history = chatMessages
+      .filter((m) => !m.error)
+      .map(({ role, content }) => ({ role, content }));
+
+    setChatMessages((prev) => [...prev, { role: "user", content: trimmed }]);
     setIsLoading(true);
-    setResponseMessage(null); // Clear previous response message
+    setLastChange(null);
 
     try {
-      console.log("💬 [AssessmentEditor] Sending chat message:", message);
-
-      // Get token from current user
       const token = await currentUser.getIdToken();
 
-      // Prepare chat request with current assessment context
-      const chatRequest = {
-        message: message.trim(),
-        allowedSections:
-          contextSections.length > 0 ? contextSections : undefined,
-      };
-
-      const result = await chatWithAssessment(assessmentId, chatRequest, token);
+      const result = await chatWithAssessment(
+        assessmentId,
+        {
+          message: trimmed,
+          allowedSections:
+            contextSections.length > 0 ? contextSections : undefined,
+          history,
+        },
+        token
+      );
 
       if (!result.success) {
         const errorMsg =
           "error" in result ? result.error : "Failed to process chat message";
         console.error("❌ [AssessmentEditor] Chat error:", errorMsg);
-        alert(errorMsg);
-        setIsLoading(false);
+        setChatMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: errorMsg, error: true },
+        ]);
         return;
       }
 
       const {
-        updates,
-        changedSections,
-        changesSummary,
+        changedSections = [],
+        changesSummary = [],
         responseMessage: aiResponseMessage,
-        model: aiModelName,
-        provider: aiProvider,
         assessment: updatedAssessment,
       } = result.data;
 
-      console.log("✅ [AssessmentEditor] Chat successful:", {
-        changedSections,
-        changesSummary,
-        responseMessage: aiResponseMessage,
-        model: aiModelName,
-        provider: aiProvider,
-      });
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: aiResponseMessage || "Done.",
+        },
+      ]);
 
-      // Set response message to display in chat
-      if (aiResponseMessage) {
-        setResponseMessage(aiResponseMessage);
-      }
-
-      // Update database-backed fields
-      if (updates.description) {
-        setAssessment((prev) => ({
-          ...prev,
-          projectDescription: updates.description,
-        }));
-        // Save to backend
-        await handleDescriptionSave(updates.description);
-      }
-      if (updates.title) {
-        setEditedTitle(updates.title);
-        await handleTitleSave();
-      }
-      if (updates.timeLimit !== undefined) {
-        const hours = Math.floor(updates.timeLimit / 60);
-        const minutes = updates.timeLimit % 60;
-        setTimeLimit({ hours, minutes });
-        await handleTimeLimitSave(updates.timeLimit);
-      }
-
-      // Update assessmentData if backend returned updated assessment
+      // The chat route persists its own changes and returns the saved document,
+      // so this is the only write the client needs. The `[assessmentData]` effect
+      // re-hydrates every editor field from it. Re-saving here (as this used to,
+      // via handleTitleSave) read stale closure state and pushed the *old* title
+      // back over the one the server had just written.
       if (updatedAssessment) {
         setAssessmentData(updatedAssessment);
       }
 
-      // Highlight changed sections
-      if (changedSections?.length) {
-        console.log(
-          "🎯 [AssessmentEditor] Highlighting sections:",
-          changedSections
-        );
-        changedSections.forEach((section, index) => {
-          setTimeout(() => {
-            // Normalize section name to match frontend expectations
-            const normalizedSection =
-              section === "description" ? "projectDescription" : section;
-            console.log(`   Highlighting section: ${normalizedSection}`);
-            setHighlightedSection(normalizedSection);
-            setTimeout(() => {
-              setHighlightedSection(null);
-              console.log(`   Unhighlighting section: ${normalizedSection}`);
-            }, 2000);
-          }, index * 500);
-        });
-      } else {
-        console.warn(
-          "⚠️ [AssessmentEditor] No changedSections received from backend"
-        );
-      }
-
-      // Set last change summary
-      setLastChange({
-        section:
-          changedSections.length > 1
-            ? `${changedSections.length} sections`
-            : changedSections[0] || "assessment",
-        changes: changesSummary || ["Assessment updated"],
+      changedSections.forEach((section, index) => {
+        setTimeout(() => {
+          setHighlightedSection(section);
+          setTimeout(() => setHighlightedSection(null), 2000);
+        }, index * 500);
       });
+
+      if (changedSections.length > 0) {
+        setLastChange({
+          section:
+            changedSections.length > 1
+              ? `${changedSections.length} sections`
+              : sectionLabel(changedSections[0]),
+          changes: changesSummary.length ? changesSummary : ["Assessment updated"],
+        });
+      }
     } catch (error) {
       console.error("❌ [AssessmentEditor] Chat error:", error);
-      alert("Failed to process chat message. Please try again.");
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content:
+            error?.message || "Failed to process chat message. Please try again.",
+          error: true,
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
   };
 
   const handleShare = () => {
@@ -1467,12 +1454,12 @@ export default function AssessmentEditor() {
             <AISidebar
               onSubmit={handleChatSubmit}
               isLoading={isLoading}
+              messages={chatMessages}
               contextSections={contextSections}
               onRemoveContext={(section) =>
                 setContextSections((prev) => prev.filter((s) => s !== section))
               }
               lastChange={lastChange}
-              responseMessage={responseMessage}
             />
           </motion.div>
         </div>

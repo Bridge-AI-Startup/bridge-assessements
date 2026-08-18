@@ -1,41 +1,45 @@
 import express from "express";
 import { Request, Response, NextFunction } from "express";
 import * as AgentToolsController from "../controllers/agentTools.js";
+import {
+  agentSecretConfigured,
+  agentSecretMatches,
+} from "../utils/agentSecret.js";
 
 const router = express.Router();
 
 /**
- * Middleware to verify agent tool authorization
- * For MVP, accepts X-Agent-Secret header that must match AGENT_SECRET env var
+ * Middleware to verify agent tool authorization via the X-Agent-Secret header.
+ * Fail-closed: a deployment missing AGENT_SECRET refuses requests rather than
+ * exposing candidate context unauthenticated.
  */
 const verifyAgentAuth = (
   req: Request,
   res: Response,
   next: NextFunction
 ): void => {
-  const agentSecret = process.env.AGENT_SECRET;
-
-  // If no secret is configured, allow access (for development/testing)
-  // In production, this should always be set
-  if (!agentSecret) {
-    console.warn(
-      "⚠️ [agentTools] AGENT_SECRET not configured. Allowing access without auth."
+  if (!agentSecretConfigured()) {
+    console.error(
+      "[agentTools] AGENT_SECRET is not set — refusing agent tool request. Set it in config.env."
     );
-    return next();
+    res.status(503).json({ error: "agent_tools_unconfigured" });
+    return;
   }
 
   const providedSecret = req.headers["x-agent-secret"];
 
   if (!providedSecret) {
-    return res.status(401).json({
+    res.status(401).json({
       error: "Authorization required. Missing X-Agent-Secret header.",
     });
+    return;
   }
 
-  if (providedSecret !== agentSecret) {
-    return res.status(403).json({
+  if (!agentSecretMatches(providedSecret)) {
+    res.status(403).json({
       error: "Invalid authorization. X-Agent-Secret header is incorrect.",
     });
+    return;
   }
 
   next();

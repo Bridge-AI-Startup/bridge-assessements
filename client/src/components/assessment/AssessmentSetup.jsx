@@ -20,6 +20,7 @@ import {
   stopMediaStream,
   voiceCheckCopy,
 } from "@/lib/companionVoiceCheck";
+import { METER_RMS_FULL, SPEECH_RMS_THRESHOLD } from "@/lib/micLevel";
 
 export function CaptureSetupCommand({ command, copied, onCopy }) {
   return (
@@ -47,7 +48,7 @@ function StepNumber({ n }) {
 }
 
 function VoiceLevelMeter({ level }) {
-  const pct = Math.min(100, Math.round((level / 0.18) * 100));
+  const pct = Math.min(100, Math.round((level / METER_RMS_FULL) * 100));
   return (
     <div
       className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-amber-200/80"
@@ -157,7 +158,18 @@ export default function AssessmentSetup({
         const audio = await listenForMicrophoneAudio(stream, {
           signal: abort.signal,
           onLevel: (rms) => {
-            if (!abort.signal.aborted) setVoiceLevel(rms);
+            if (abort.signal.aborted) return;
+            setVoiceLevel(rms);
+            // The quiet warning is a 6s wall clock, not "6s of silence".
+            // Reset it whenever the signal that counts toward a pass arrives,
+            // otherwise the bar moves while we still claim we haven't heard them.
+            if (rms >= SPEECH_RMS_THRESHOLD) {
+              setVoiceQuiet(false);
+              window.clearTimeout(quietTimer);
+              quietTimer = window.setTimeout(() => {
+                if (!abort.signal.aborted) setVoiceQuiet(true);
+              }, 6000);
+            }
           },
         });
 

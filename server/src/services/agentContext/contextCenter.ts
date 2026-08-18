@@ -153,6 +153,8 @@ async function buildTimelineSection(submission: any): Promise<Section<any>> {
     at: Date;
     source: "workflow" | "screen" | "proctoring";
     type: string;
+    /** workflow only: candidate = their own prompt; ai_assistant = the agent's autonomous tool calls/replies. */
+    actor?: "candidate" | "ai_assistant";
     tool?: string;
     text?: string;
     /** screen_context only: what surface was on screen, and for how long. */
@@ -221,6 +223,12 @@ async function buildTimelineSection(submission: any): Promise<Section<any>> {
             at: e.at,
             source: "workflow",
             type: e.type,
+            // Who performed it. Prompts are the candidate's own words;
+            // everything else (file reads, edits, commands, replies) is their
+            // AI assistant acting autonomously. Without this label the voice
+            // agent inferred — and told a candidate "you've made edits to
+            // time.js" about files Claude touched that they had never opened.
+            actor: e.type === "user_prompt" ? "candidate" : "ai_assistant",
             tool: e.toolName || undefined,
             text,
           });
@@ -297,7 +305,9 @@ async function buildTimelineSection(submission: any): Promise<Section<any>> {
     .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
     .slice(-TIMELINE_MAX_EVENTS);
   const sidecarBudget = Math.max(0, TIMELINE_MAX_EVENTS - meaningful.length);
-  const merged = [...meaningful, ...sidecarEntries.slice(-sidecarBudget)].sort(
+  // slice(-0) === slice(0) — a zero budget must mean "no sidecar", not "all of it".
+  const sidecarKept = sidecarBudget > 0 ? sidecarEntries.slice(-sidecarBudget) : [];
+  const merged = [...meaningful, ...sidecarKept].sort(
     (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime()
   );
 

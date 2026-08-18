@@ -218,7 +218,7 @@ See `server/config.env.example` for the full list. Key variables:
 - `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_PRICE_ID` / `APP_URL` -- Stripe billing
 
 **In-session voice companion (ElevenLabs):**
-- `AGENT_SECRET` -- Authenticates ElevenLabs agent tool requests (sent as `X-Agent-Secret`; stored on ElevenLabs as the workspace secret `bridge_agent_secret` so the tool config never holds it in plaintext)
+- `AGENT_SECRET` -- Authenticates ElevenLabs agent tool requests (sent as `X-Agent-Secret`; stored on ElevenLabs as the workspace secret `bridge_agent_secret` so the tool config never holds it in plaintext). **Required — the agent routes fail closed**: when unset, `/api/agent-tools/*` and `/api/workflow-capture/agent-context` return 503 instead of allowing unauthenticated access (comparison is timing-safe; helpers in `server/src/utils/agentSecret.ts`)
 - `ELEVENLABS_API_KEY` -- Management API key used **only** by `src/scripts/registerElevenLabsContextTool.ts` to create/attach the agent's context tool. Not needed at runtime
 - `ELEVENLABS_AGENT_ID` -- Default agent for that script (falls back to a hardcoded companion agent id)
 
@@ -316,7 +316,7 @@ server/src/
 ├── services/
 │   ├── langchainAI.ts     # LangChain abstraction: createChatCompletion(), structured output, provider/model selection
 │   ├── assessmentGeneration.ts  # 3-step AI assessment generation (extract reqs → generate → quality review)
-│   ├── assessmentChat.ts  # AI chat for assessment editing
+│   ├── assessmentChat.ts  # Bridge Assistant: chat → validated assessment updates (see below)
 │   ├── email.ts           # Resend email service for candidate invitations
 │   ├── repoIndexing.ts    # GitHub repo → Pinecone indexing (download, chunk, embed, upsert)
 │   ├── repoRetrieval.ts   # Code chunk retrieval from Pinecone (search, dedup, budget)
@@ -430,7 +430,7 @@ server/src/
     ├── seedRuntimeSetupMernDemo.ts # Upsert MERN Notes Board assessment + candidate link under demo@bridgeai-demo.com; submit folder is demos/runtime-setup-mern
     ├── seedRuntimeSetupPathfinderDemo.ts # Upsert Warehouse Pathfinder (Python A*/TSP) assessment + candidate link; submit folder is demos/runtime-setup-pathfinder
     ├── seedGuestbookSmoke.ts # 10-min Guestbook smoke under saaz.m@icloud.com + demo@bridgeai-demo.com; evidenceMode both + deterministic E2B checks; completed folder is demos/guestbook-smoke
-    ├── seedDemoAssessments.ts # Three demo-grade assessments under saaz.m@icloud.com + demo@bridgeai-demo.com: Webhook Ledger (idempotency/out-of-order, 75m), Flaky Checkout (4 planted bugs to debug, 60m), Standup Board (full-stack rules + UI checks, 90m); starters inline, deterministic specs + one agent check each
+    ├── seedDemoAssessments.ts # Four demo-grade assessments under saaz.m@icloud.com + demo@bridgeai-demo.com: Webhook Ledger (idempotency/out-of-order, 75m), Flaky Checkout (4 planted bugs to debug, 60m), Standup Board (full-stack rules + UI checks, 90m; known one-shottable — greenfield + full spec), Studio Bookings (brownfield legacy handoff: waitlists + conflict rule + FIFO promotion-with-skip on an inherited working app, regression + new-feature checks, 90m); starters inline, deterministic specs + one agent check each
     ├── seedShortsChallenge.ts # Upsert Shorts daily challenge from shorts/challenges/*.json
     ├── seedShortsLaunchRound.ts # Cold-start round seed driven by shorts/seed-builds/<date>/seed.json: upsert challenge, insert seeded builds + simulated vote graph (--date=YYYY-MM-DD, dry-run unless --apply; refuses if the round already has submissions)
     ├── moveShortsLaunchRound.ts # One-off: re-dated the week-1 seeded round from 2026-08-03 onto 2026-07-27 (kept as a template for date moves)
@@ -439,7 +439,7 @@ server/src/
     ├── dropShortsSubmissionUniqueIndex.ts # One-time: drop legacy unique {anonymousId, challengeDate} on PlaySubmission
     ├── shorts-sandbox-smoke.ts # Create Shorts E2B template sandbox; print preview URL + Claude check
     ├── transcriptEngineAB.ts # A/B compare transcript engines (gemini vs frames) on one session, no DB writes; list mode + --plan-only cost preview
-    ├── registerElevenLabsContextTool.ts # Register/update the `get_candidate_context` webhook tool on the ElevenLabs companion agent and attach it (`--dry-run`, `--local` = point at the running ngrok tunnel, `--prod`, `--url=`); idempotent
+    ├── registerElevenLabsContextTool.ts # Register/update the `get_candidate_context` webhook tool on the ElevenLabs companion agent and attach it (`--dry-run`, `--local` = point at the running ngrok tunnel, `--prod`, `--url=`, `--sync-settings` = also PATCH the code-managed agent LLM `claude-haiku-4-5`, 25s turn timeout, and `turn_v3` contextual turn detection); idempotent
     ├── behavioral-grading-smoke.ts
     ├── e2b-smoke.ts
     └── test-assessment-generation.ts
@@ -460,7 +460,7 @@ server/src/
 - `GET /:id` -- Get single assessment (auth required)
 - `PATCH /:id` -- Update assessment (auth required); optional `evidenceMode` (`both` / `none`; leftover `workflow` / `screen` still accepted)
 - `DELETE /:id` -- Delete assessment + all submissions + Pinecone data (auth required)
-- `POST /:id/chat` -- Chat with AI about assessment (auth required)
+- `POST /:id/chat` -- **Bridge Assistant**: chat with AI about an assessment (auth required). Body `{ message, allowedSections?, history? }`; `history` is prior turns oldest-first (last 8 replayed). **This route is the single writer for the changes it makes** — it persists them and returns the saved `assessment`, and the editor renders that rather than re-saving. Returns **502** with a readable sentence when the model returns nothing or a cut-off reply, instead of falling through to the generic 500
 
 **Competition routes** (`/api/competitions`, public):
 - `GET /:slug` -- Competition + assessment summary for hackathon dashboard (metadata, rules, dates)
@@ -513,7 +513,7 @@ Hooks-first capture of the candidate's AI-agent conversation + code changes, as 
 
 - `GET /health` -- always on; `{ ok: true, product: "workflow-capture" }`
 - `POST /sessions` -- create a capture session; **400 `consent_required` unless `consentGranted: true`**. Returns `captureToken` exactly once
-- `POST /events` -- batch ingest from the kit (Bearer `captureToken`). Idempotent on `(sessionId, seq)` so the kit's offline queue can retry freely; oversized payloads are truncated, never rejected. A `Write` tool event carries the new file contents and updates live code state. After the session is completed, returns **202** `{ closed: true, note: "session_completed" }` so the kit can stop locally.
+- `POST /events` -- batch ingest from the kit (Bearer `captureToken`). Idempotent on `(sessionId, seq)` so the kit's offline queue can retry freely; oversized payloads are truncated, never rejected. Only kit-legal event types are accepted — `screen_context` is rejected at ingest because it is server-derived trusted evidence a candidate must not be able to forge. A `Write` tool event carries the new file contents and updates live code state. After the session is completed, returns **202** `{ closed: true, note: "session_completed" }` so the kit can stop locally.
 - `POST /snapshot` -- changed-file snapshot (Bearer `captureToken`); git when available, else a bounded project walk (unzipped starters often have no repo). Catches hand edits the agent never made
 - `POST /complete` -- close the session (Bearer `captureToken`)
 - `GET /me` -- the candidate's own captured record (Bearer `captureToken`). Transparency feature, not a debug route: the setup disclosure promises they can see exactly what was collected, and this is how that is kept. Backs `capture-kit/view.js`
@@ -568,7 +568,7 @@ Hooks-first capture of the candidate's AI-agent conversation + code changes, as 
 - `GET /token/:token/runtime/status` -- Session state + previewUrl + health + last run
 - `GET /token/:token/runtime/logs` -- Poll build/runtime logs (`?after=` seq)
 - `POST /token/:token/runtime/pause` / `.../resume` -- Idle pause / reconnect
-- `POST /token/:token/runtime/finalize` -- Persist config, mark verified, tear down sandbox
+- `POST /token/:token/runtime/finalize` -- Persist config, mark verified, tear down sandbox. **409** when the setup has never had a successful run unless the body carries `confirmUnverified: true` — the candidate's confirm dialog is the acknowledgement, not a client-only formality (see "Finalizing an unverified config" below)
 - `PATCH /:id` -- Update submission (auto-save)
 - `GET /:id` -- Get submission by ID
 - `POST /:id/submit` -- Final submission (legacy, also auto-triggers behavioral grading)
@@ -591,8 +591,8 @@ Hooks-first capture of the candidate's AI-agent conversation + code changes, as 
 - `POST /sessions/:sessionId/complete` -- Mark session as completed
 - `POST /sessions/:sessionId/video` -- Upload video chunk (multer, FormData with token)
 
-*Shared endpoints:*
-- `GET /sessions/:sessionId` -- Get session details
+*Shared endpoints (production requires candidate `?token=` or employer auth + ownership; open in dev for the test pages):*
+- `GET /sessions/:sessionId` -- Get session details (response never includes the session `token` — it is the candidate-side credential; also stripped from the employer `by-submission` payload)
 - `GET /sessions/:sessionId/transcript` -- Get JSONL transcript
 
 *Companion (in-session voice transcript; candidate token or employer auth for GET):*
@@ -651,6 +651,37 @@ never a reason to stop calling, so re-call immediately before every question. An
 form of the same rule: *if you want to know what they are doing, call the tool, do not ask
 them.* A `user_prompt` with `tool_use` entries behind it in `latest` is now named as the best
 question material there is.
+A fourth set came from the 2026-08-16 Studio Bookings run, where the agent (then
+`gemini-2.5-flash-lite` on a 7s turn timeout) narrated its own waiting five times in a row
+("Still in the setup phase. I'll check back in a moment."), replied to every bare "yep"/"all
+right", attributed Claude's autonomous file edits to the candidate ("You've made edits to
+`time.js` — what changes are you implementing?") and re-described the same activity in new
+words each time the candidate corrected it, and quizzed the candidate to recite the
+requirements. Fixes, all of which must survive any edit: timeline entries now carry an
+**`actor`** field (`candidate` = their typed prompts and speech; `ai_assistant` = every tool
+call/edit/command) and the prompt's "Who did what" section forbids attributing assistant
+actions to the candidate — the question shape for assistant activity is the candidate's
+intent/oversight, never "what are you implementing"; a correction ends that thread for good.
+The proactive bar is **surprise, not activity** — routine steps get no question; a burst of
+prompts, a reversal, or a contradiction of what they said aloud earns one specific question
+naming the surprise. Bare acknowledgments always get `skip_turn` (including acks of the
+agent's own line), and the "let me know if…" closing-invitation family is banned. Waiting
+narration is banned by name in every phrasing ("I'll check back", "still in the setup
+phase", "nothing specific to discuss yet"). Quizzing is banned — never ask them to recite
+requirements/spec/plan; an answered question's reworded variants count as answered. The agent
+LLM and turn timeout are code-managed (`claude-haiku-4-5`, 25s — up from 7s, which forced a turn
+on the model eight times a minute during quiet setup) and re-applied via
+`registerElevenLabsContextTool.ts --sync-settings`.
+The 2026-08-18 run showed the over-correction: the agent went too quiet — a candidate's first
+"just setting up on Terminal" got `skip_turn`, and "I'm testing it out in Chrome, it all looks
+pretty good" (a narrated verification moment) got nothing. The rebalance, which must survive
+beside the silence rules rather than replace them: **contentful speech always gets at least a
+brief warm acknowledgment** (silence is only for bare acks of the agent's own line and repeats
+of an already-acknowledged update); **narration is evidence the live timeline cannot see** —
+screen classification is post-hoc, so in-browser testing exists live *only* in what the
+candidate says aloud, and a narrated verification/decision moment earns an ack or one light
+question, never nothing; and the surprise bar admits **firsts** (first prompt, first app run,
+first manual test) as question-worthy even when expected.
 It carries the same honesty carve-out as the interviewer: never volunteer that the session is
 captured, but never deny it when asked directly (this is about the recording, not the tool —
 the never-mention-your-tooling rule above does not license denying that they are recorded). The overlay is
@@ -714,9 +745,9 @@ conversation id comes from `getId()`, and `onMessage` receives **raw socket even
 - `PROMPT_EXTRACT_ASSESSMENT_REQUIREMENTS` -- Extract requirements, infer stack/level from job description
 - `PROMPT_GENERATE_ASSESSMENT_COMPONENTS` -- Generate assessment title, description, timeLimit (with few-shot examples)
 - `PROMPT_GENERATE_BEHAVIORAL_CHECKS` -- Generate stack-agnostic behavioral checks from title, description, and requirements summary, plus default UI/HTTP acceptance specs (agent is the rare leftover). The prompt spells out **how a check gets verified** — a sandbox agent that installs and starts the repo, drives it in a real Playwright browser, curls it, and reads source — and therefore what it must not ask for: third-party credentials or paid services, two simultaneous users, the passage of real time, absent hardware, pre-seeded data the candidate was never told to create, aesthetic judgement, or unbounded "is fast/secure" claims. One outcome per check (no "and")
-- `PROMPT_SUGGEST_CRITERIA` / `PROMPT_VALIDATE_CRITERION` -- Evaluation criteria (the *process* rubric). Both `system` fields are **functions of a `CriterionEvidenceProfile`** (`"workflow"` default | `"screen"`), which splices in `EVIDENCE_INVENTORY` — an explicit list of what that record does and does not contain. This is not cosmetic: the hook stream knows every prompt and command verbatim but records **no reading at all** and no accept/reject event, while a screen recording is the reverse. Criteria written for the wrong record get scored on evidence that was never collected. Under `workflow` the prompts actively reject the old favourites ("reads the requirements before coding", "reviews AI-generated code before accepting") and steer to recorded equivalents ("inspects existing files before the first edit", "edits agent-written code rather than leaving it untouched"). Profile comes from the request's optional `evidence_mode`; only legacy `screen` maps to the screen profile — `workflow`/`both`/`none` all map to `workflow` (an employer writing criteria under `none` is writing them for the mode they'd turn on). Suggestions are re-validated under the same profile before being returned. Eval cases are pinned per profile in `src/scripts/runEvals.ts`
+- `PROMPT_SUGGEST_CRITERIA` / `PROMPT_VALIDATE_CRITERION` -- Evaluation criteria (the *process* rubric). Both `system` fields are **functions of a `CriterionEvidenceProfile`** (`"workflow"` default | `"screen"`), which splices in `EVIDENCE_INVENTORY` — an explicit list of what that record does and does not contain. This is not cosmetic: the hook stream knows every prompt and command verbatim but records **no reading at all** and no accept/reject event, while a screen recording is the reverse. Criteria written for the wrong record get scored on evidence that was never collected. Under `workflow` the prompts actively reject the old favourites ("reads the requirements before coding", "reviews AI-generated code before accepting") and steer to recorded equivalents ("inspects existing files before the first edit", "edits agent-written code rather than leaving it untouched"). Profile comes from the request's optional `evidence_mode`; only legacy `screen` maps to the screen profile — `workflow`/`both`/`none` all map to `workflow` (an employer writing criteria under `none` is writing them for the mode they'd turn on). Suggestions are re-validated under the same profile before being returned. Eval cases are pinned per profile in `src/scripts/runEvals.ts`. **Evaluability is decided once per criterion, not once per candidate:** grading used to call `validateCriterion` on every run, so a borderline criterion could be graded for one submission and refused (`score 0 · not evaluable`) for the next — an LLM coin flip per candidate. `ensureCriteriaValidations` (`services/evaluation/validator.ts`) now validates each criterion once (lazily, at first grading), persists the verdict on the assessment (`evaluationCriteriaValidations`), and the pipeline reuses it via `EvaluateTranscriptOptions.validations`; editing a criterion's text re-validates it (lookup is by exact text). The validator prompt also carries two boundary rules: recorded file-read/search/listing tool calls ARE what "inspects files" means (never reject over "opened" vs "actually read"), and a multi-route criterion ("exercises the UI or API") is evaluable when any named route leaves a trace — both added after the validator rejected the prompt's own recommended criterion wording in production
 - `PROMPT_ASSESSMENT_QUALITY_REVIEW` -- Review and validate generated assessment quality
-- `PROMPT_ASSESSMENT_CHAT` -- System prompt for AI assistant editing assessments
+- `PROMPT_ASSESSMENT_CHAT` -- System prompt for the **Bridge Assistant** (the AI sidebar in AssessmentEditor). Carries the live assessment plus its product checks and evaluation criteria, and describes what each section *is* so edits land in the right one. Two rules are load-bearing: a turn that only asks a question must return empty `updates` and answer in `responseMessage` (it used to be forced to invent a change), and the two list fields are **replacement** lists that may never come back empty — see the wipe guard below
 - `LEVEL_INSTRUCTIONS` -- Role-specific guidance for junior/mid/senior difficulty levels
 - `PROMPT_TRANSCRIPT_SYSTEM` -- System prompt for GPT-4o-mini vision: raw observation, character-level text accuracy, JSONL output
 
@@ -728,12 +759,12 @@ client/src/
 ├── App.jsx                # Root: QueryClientProvider, BrowserRouter, routes, Toaster, Vercel Analytics
 ├── App.css                # App-level styles
 ├── index.css              # Global styles (Tailwind directives, CSS variables)
-├── pages.config.js        # Page registry: maps page names to components, mainPage="Landing"
+├── pages.config.js        # Page registry: maps page names to components, mainPage="AppIndex"
 ├── main.jsx               # Entry point, renders App (no StrictMode)
 ├── assets/
 │   └── bridge-logo.svg    # BridgeAI logo
 ├── pages/
-│   ├── Landing.jsx        # Main landing page -- job description input, AI/manual mode toggle
+│   ├── Landing.jsx        # Marketing landing (in-code rebuild of the Framer site at bridge-jobs.com; anchor sections #how-it-works/#understand/#demo, assets in public/landing/)
 │   ├── Home.jsx           # Authenticated dashboard -- lists assessments, create/delete, account dropdown
 │   ├── GetStarted.jsx     # Registration -- email, password, company name
 │   ├── CreateAssessment.jsx    # Assessment creation -- AI generation or manual, reads localStorage pending data
@@ -763,25 +794,28 @@ client/src/
 │   └── proctoring.ts      # Proctoring API: createSession, grantConsent, uploadFrame, events, complete, video, companion
 ├── components/
 │   ├── assessment/
-│   │   ├── AISidebar.jsx               # AI chat sidebar for assessment editing (quick action chips)
+│   │   ├── AISidebar.jsx               # Bridge Assistant chat sidebar (presentational; the editor owns the conversation)
+│   │   ├── sections.js                # Section-id ↔ label contract shared with the server's CHAT_EDITABLE_SECTIONS
 │   │   ├── AssessmentSetup.jsx        # Pre-timer gate: entire-screen share + spoken mic check (permission + heard audio + ElevenLabs reachability) required to enable Start when recording/companion is on; zip/brief wait until start
 │   │   ├── BehavioralCheckVerification.jsx # Per-check "How is this verified?" editor (UI walkthrough default; agent opt-in)
 │   │   ├── CandidatePreviewModal.jsx   # Candidate assessment preview modal
 │   │   ├── DocumentBlock.jsx          # Reusable content block with edit, auto-resizing textarea
 │   │   └── PresetPills.jsx            # Quick preset job descriptions
 │   ├── BulkInviteModal.jsx            # 3-step CSV upload wizard: upload → review → success
+│   ├── landing/                       # Marketing-page demos ported verbatim from Framer code components (DemoReplayGlass hero, ProblemSolution comparison, AssessmentGenerator/DevToolsStack/WorkflowTimeline animated cards, SignalCards dark-glass panels, PrizePodium unmounted). Self-contained styles (DM Sans/JetBrains Mono), deliberately outside the app design tokens
 │   ├── submissions/
 │   │   ├── BehavioralGradingLiveTrace.jsx # Live agent-step trace while behavioral grading is pending
 │   │   ├── CommunicationCard.jsx          # Spoken-reasoning assessment on Summary: clarity, highlights, claim checks vs captured timeline (never part of the score)
 │   │   ├── EvidenceMomentChips.jsx        # Rubric evidence as clickable time+observation chips that seek the recording
 │   │   ├── RuntimeReplayPanel.jsx         # Recruiter read-only runtime config + finalized-run evidence card + Run project / Restart preview/logs (stops the replay sandbox on unmount)
-│   │   └── WorkflowActivityTimeline.jsx   # "What they did": prompting conversation + screen-context beats under the Recording player for `both` (click-to-seek); Summary only for leftover workflow-only
+│   │   └── WorkflowActivityTimeline.jsx   # "What they did": prompting conversation + screen beats + episode chapter dividers under the Recording player for `both` (click-to-seek); Summary only for leftover workflow-only. Exports sessionSecondToVideoOffset (episode start → merged-video offset via nearest timeline row)
 │   ├── proctoring/
 │   │   ├── ConsentScreen.jsx          # Consent dialog before screen recording (no Skip when recording is required)
 │   │   ├── RecordingIndicator.jsx     # Floating red recording badge
 │   │   ├── StreamStatusPanel.jsx      # Upload stats panel (frames, uploads, dedup)
 │   │   ├── ResharePrompt.jsx          # Stream-lost recovery modal (`required` hides continue-without)
-│   │   └── ProctoringCompanionNotch.jsx # In-session ElevenLabs voice companion (notch dropdown, transcript flush; speaks on every stream loss)
+│   │   ├── ProctoringCompanionNotch.jsx # In-session ElevenLabs voice companion (notch dropdown, transcript flush; speaks on every stream loss)
+│   │   └── VideoTimelineWithCriteria.jsx # Recording player: scrub bar + one evidence lane per criterion (see below)
 │   └── ui/                             # 60+ Shadcn UI components (auto-generated, rarely edited)
 ├── config/
 │   ├── api.js             # API_BASE_URL: VITE_API_URL || localhost:5050 (dev) || Render URL (prod)
@@ -799,6 +833,7 @@ client/src/
 │   ├── query-client.js    # TanStack Query client (refetchOnWindowFocus=false, retry=1)
 │   ├── captureUtils.js    # Pure capture utils: captureFrame, pixelDiff, enforceMaxSize, createVideoRecorder
 │   ├── companionVoiceCheck.js # Pre-start spoken mic check + ElevenLabs reachability probe (ad-blocker gate)
+│   ├── micLevel.js # RMS + speech-hold for that check (accumulates across gaps; the meter uses the same threshold)
 │   ├── NavigationTracker.jsx
 │   ├── VisualEditAgent.jsx
 │   ├── PageNotFound.jsx
@@ -809,7 +844,7 @@ client/src/
 
 ### Routing
 - Routes are auto-generated from `pages.config.js` -- each key in the `Pages` object becomes a route at `/<PageName>`.
-- `mainPage` is set to `"Landing"`, so the Landing page renders at `/`.
+- `mainPage` is set to `"AppIndex"` (auth check → Home or Login) — it renders at `/`. The marketing `Landing` page lives at `/Landing` until the apex domain moves off Framer.
 - Additional custom routes for `/billing/success` and `/billing/cancel` are defined in `App.jsx`.
 - `vercel.json` has a catch-all rewrite so all routes resolve to `index.html` (SPA behavior).
 - Path alias configured: `@/*` maps to `./src/*` (via `jsconfig.json`).
@@ -824,7 +859,43 @@ client/src/
 
 ### Data Flow: Assessment Lifecycle
 1. **Employer creates assessment**: Landing page → enters job description → stored in localStorage → CreateAssessment page auto-fills → AI generates assessment (extract requirements → generate components → quality review → behavioral checks) → saves to DB; manual path calls `generate-behavioral-checks` then create
-2. **Employer edits assessment**: AssessmentEditor page → AI chat sidebar for refinements → configure time limit, starter files, evidence mode
+2. **Employer edits assessment**: AssessmentEditor page → Bridge Assistant sidebar for refinements → configure time limit, starter files, evidence mode
+
+**Bridge Assistant (the AI sidebar in AssessmentEditor).** Natural-language editing of one
+assessment. `AISidebar.jsx` is presentational — `AssessmentEditor` owns `chatMessages` so the
+conversation can be replayed to the model as `history` and so an error can render as a red
+chat line instead of a `window.alert`. Five sections are editable, and their ids are a contract
+between three places that must stay in lockstep: `CHAT_EDITABLE_SECTIONS`
+([`services/assessmentChat.ts`](server/src/services/assessmentChat.ts)), the prompt's
+`changedSections` list, and
+[`client/src/components/assessment/sections.js`](client/src/components/assessment/sections.js) —
+`projectDescription`, `title`, `timeLimit`, `behavioralChecks`, `evaluationCriteria`. A name only
+one side knows is silently ignored by the other; the editor's "add to context" chips send these
+same ids as `allowedSections`, and the server **drops** updates outside that scope rather than
+trusting the model to honour the restriction, telling the user which sections it left alone.
+
+Four things were load-bearing enough to be worth not undoing:
+- **`maxTokens` is 4000, not 1000.** `assessment_chat` resolves to `gpt-5.6-luna`, a reasoning
+  model, so reasoning tokens are billed against the completion budget. At 1000 the model routinely
+  emitted nothing or a JSON object cut off mid-string; both surfaced as
+  `"Unknown Error. Try Again"`, which is what made the assistant look broken. Empty and
+  unparseable replies are now distinct `AssessmentChatError`s → **502** with a sentence that names
+  the cause.
+- **The chat route is the only writer.** It saves and returns the assessment; the editor calls
+  `setAssessmentData(...)` and lets the existing `[assessmentData]` effect re-hydrate every field.
+  The old handler additionally re-saved via `handleTitleSave()`, which read `editedTitle` and
+  `assessmentData` from a stale closure and **PATCHed the old title back over the one the server
+  had just written** — assistant title changes appeared to work and reverted on refresh.
+- **`changedSections` is derived server-side from the updates that survived**, not taken from the
+  model's own list. The two drifted, and the editor's section highlight runs off it.
+- **An empty `behavioralChecks` / `evaluationCriteria` array is ignored.** They are replacement
+  lists that drive grading, the chat has no undo, and an accidental `[]` from the model costs more
+  than refusing to clear a list by conversation. Clearing is a UI action; the prompt says so.
+
+A turn that only answers a question is a success with `updates: {}` — the prompt says not to
+invent a change, and the client no longer requires a non-empty `changedSections` to treat the
+response as valid. Covered by
+[`server/test/unit/assessmentChat.test.ts`](server/test/unit/assessmentChat.test.ts).
 3. **Employer shares link**: Generates unique token-based URL for candidate (single or bulk via CSV upload with email invitations via Resend)
 4. **Candidate accesses assessment**: Opens token URL → CandidateAssessment page → pre-timer gate (consent + entire-screen share + voice check when the companion is on; starter files and the brief stay hidden). When `evidenceMode` records the screen (`both` or leftover `screen`), sharing is mandatory: no skip/continue-without, Start is disabled until they share their entire screen (`displaySurface === "monitor"`, or any share if the browser does not report a surface), and a lost stream must be reshared (no dismiss). When `VITE_ELEVENLABS_AGENT_ID` is set, the same gate also runs a spoken mic check (`acquireCompanionMicrophone` + `listenForMicrophoneAudio`) and an ElevenLabs reachability ping so a mute switch, wrong input, or ad blocker fails before the timer starts instead of as a live "Failed to fetch". The in-session companion tells them to reshare their entire screen on every drop after the timer starts. Observation off (`none`) or leftover `workflow` does not require screen share. Start assessment begins the timer (`in-progress`), downloads the zip, and reveals the assignment
 5. **Candidate submits code**: Uploads project folder (client auto-zips) or submits GitHub link → backend stores source metadata (upload archive or pinned commit SHA) → status: submitted
@@ -832,7 +903,56 @@ client/src/
 7. **Scoring**: Combined employer/leaderboard score from available signals — Process (how-they-worked rubric via `evaluationReport`) and Behavioral (E2B check pass rate). Deprecated Trace / LLM-workflow scoring was removed.
 8. **Employer reviews**: SubmissionsDashboard → stats, filtering, dropoff analysis, and **one** candidate Review dialog. Observational evaluation starts automatically on submit (and the dashboard re-kicks recent/recoverable failures).
 
+**Recording player (`VideoTimelineWithCriteria`).** The scrub bar and the criteria
+evidence are **two separate surfaces**, and that separation is the fix for three problems
+that all came from stacking them in one 56px bar. The playhead was a hairline with no
+`z-index` while every coloured band animated to `z-index: 10/20`, so the marker telling a
+reviewer where they were sat *behind* the colours. There was no drag — the bar took a click
+and nothing else, so moving through a 90-minute recording meant clicking, watching, clicking
+again. And every criterion's moments were layered into the same 48px block, which on a long
+session compressed into a rainbow smear.
+
+Now: a dedicated **scrub bar** (pointer drag with capture, click, `role="slider"` keyboard —
+arrows ±5s, shift ±30s, Home/End, space — plus a buffered range, hover time bubble, ±10s
+buttons and a 1×/1.5×/2× speed toggle), and below it a **lane per criterion**, each with its
+name in a left gutter. Colour is now *secondary* to vertical position, so the palette no
+longer has to carry the whole signal; clicking a lane name isolates that criterion and dims
+the rest. One playhead line crosses the ruler and every lane at `z-30`, above all bands.
+Keep it that way — anything that puts evidence and the playhead back in the same stacking
+context reintroduces the original bug.
+
+Scrubbing is **live**: the frame under the cursor updates mid-drag. Writing `currentTime`
+on every pointermove queues a precise seek per move and the browser defers them, so the
+picture only caught up on release — instead a seek pump keeps exactly one seek in flight
+(latest drag target wins, drained from the element's `seeked` event), uses `fastSeek`
+where it exists (keyframe-accurate is fine for a moving preview; Chrome lacks it and gets
+the throttle alone), and lands one precise seek on release. While dragging, `timeupdate`
+is ignored and the `currentSec` sync effect stands down — both would write the lagging,
+keyframe-snapped element time back over the pointer position.
+
+Two details are load-bearing: `setPointerCapture` is wrapped in try/catch (it throws for a
+pointer id the element never saw, and an unguarded throw aborts the handler — i.e. the click
+would not seek at all), and `onClick` on the track is a deliberate second path for anything
+that delivers only a click. Seeking twice to the same second is a no-op. The pre-existing
+`pendingSeekRef` / `flushPendingSeek` machinery — which holds an evidence-chip seek until
+HAVE_METADATA — is untouched and still the reason a Summary chip can jump into a player that
+has not loaded yet.
+
 **Candidate review is a single surface.** Clicking a row (or its `Review` button) opens one dialog via `openReview(submission, tab?)` — the only entry point. It carries a persistent scoreboard (Combined / Process / Behavioral / Time spent + status badges) that does **not** move between tabs, an `Actions` menu (GitHub, download archive, re-run grading, re-run scoring, share, delete), and four tabs: **Summary** (capture-integrity warning first when dirty, then which product checks failed, then rubric verdicts + clickable evidence chips that seek the recording, session summary, workflow metrics + episodes), **Recording** (player with criteria timeline; under `both`, the prompting conversation + screen-context beats sit under the player as the click-to-seek index of the footage — there is no screen transcript; leftover `screen` assessments still show a video OCR transcript; the tab is hidden for `none` and leftover `workflow`), **Code** (behavioral grading, per-check evidence, execution log, run project), **Conversations** (opt-out notice, in-session voice companion).
+
+**"What they did" vs "How they worked" are two altitudes of the same record, connected by
+the chapters.** "What they did" (`WorkflowActivityTimeline`) is the conversation index —
+prompts (cream bubble), agent replies, screen-surface beats — with the session's persisted
+`episodes` interleaved as chapter divider rows at their start second, so the transcript reads
+as a chaptered document. "How they worked" (Summary) is the summary altitude: counted stats,
+the deterministic metrics grid, and the same episodes as a labelled list. Do not merge them —
+but keep them connected: episode rows in both places are click-to-seek into the recording via
+`sessionSecondToVideoOffset`, which maps a session-relative second onto the merged video by
+anchoring on the nearest analysis-timeline row carrying both `ts` and `videoOffsetSeconds`
+and carrying the delta (the two clocks share no origin — capture-kit start vs proctoring
+`captureStartedAt`). The workflow-only Summary instance of the conversation deliberately gets
+no chapter dividers: the episode list renders directly below it in the same card, and
+dividers would duplicate it.
 
 This replaced a maze: a right-side detail Sheet, a separate evaluation modal, a standalone Interview Details modal, a standalone Behavioral Grading Evidence modal, and two duplicate `View screen recording` shortcuts that existed only to jump past a default tab. Four ways to open evaluation and three renderings of the same behavioral evidence made the same content feel like different features. **Do not add a second path to any of this content** — deep-link a tab with `openReview(sub, "recording")` instead of building another modal. The video-load effect is still gated on `evaluationTab === "recording"`, so the recording only fetches when that tab is open.
 
@@ -855,7 +975,7 @@ Legacy subscription (nested): `subscription.tier` (free/paid), `subscription.str
 Current subscription (top-level): `stripeCustomerId` (sparse indexed), `stripeSubscriptionId` (sparse indexed), `subscriptionStatus` (active/canceled/past_due/trialing/incomplete/incomplete_expired/unpaid/null), `currentPeriodEnd`, `cancelAtPeriodEnd`, `cancellationReason`, `cancellationDate`
 
 ### Assessment
-Fields: `userId` (ref User, indexed), `title` (max 200), `description`, `timeLimit` (minutes, min 1), `starterFilesGitHubLink`, `starterCodeFiles[]` { path, content }, `evidenceMode` (`both` default for new assessments / `none` / leftover `workflow` / leftover `screen` — see below), `behavioralChecks[]` (plain-language observable product behaviors; stack-agnostic), `behavioralCheckSpecs[]` (optional Zod-validated acceptance specs with stable ids; never read raw — resolve via `resolveBehavioralCheckSpecs`), `evaluationCriteria[]` (proctoring/transcript rubric), `evaluationCriteriaGroundings` (optional)
+Fields: `userId` (ref User, indexed), `title` (max 200), `description`, `timeLimit` (minutes, min 1), `starterFilesGitHubLink`, `starterCodeFiles[]` { path, content }, `evidenceMode` (`both` default for new assessments / `none` / leftover `workflow` / leftover `screen` — see below), `behavioralChecks[]` (plain-language observable product behaviors; stack-agnostic), `behavioralCheckSpecs[]` (optional Zod-validated acceptance specs with stable ids; never read raw — resolve via `resolveBehavioralCheckSpecs`), `evaluationCriteria[]` (proctoring/transcript rubric), `evaluationCriteriaGroundings` (optional), `evaluationCriteriaValidations` (optional; persisted per-criterion evaluability verdicts keyed by criterion text + profile — see below)
 
 **`evidenceMode` — how a candidate's work is observed.** Employer choice in AssessmentEditor's timing panel is **Observe session** (`both`, default) or **None**. `both`: record the screen for human playback and low-res surface classification, and analyse the hook stream — the video is **not** transcribed (no OCR stills, no `TRANSCRIPT_ENGINE=gemini` on that movie). `none`: no screen recording and no capture-kit. `workflow` (hooks only, no screen) and `screen` (video + AI transcript) are leftover values: still honoured for existing assessments, not offered as new choices. Documents with no field still resolve to `screen`. Resolution lives in [`server/src/utils/evidenceMode.ts`](server/src/utils/evidenceMode.ts): the assessment field is returned as-is (`none` / `workflow` / `both` / leftover `screen`). There is no `WORKFLOW_CAPTURE_ENABLED` rewrite — that flag is unused, and `/api/workflow-capture` is always mounted. Never read the raw field client-side; `GET /api/submissions/token/:token` returns the *resolved* `evidenceMode`. The candidate sees the `capture-kit` setup command on the in-progress screen when observation is on (`both` or leftover `workflow`). `ensureProctoringTranscriptAndEvaluate` grades the hook stream for `workflow`/`both`, runs the video transcript for legacy `screen`, and skips observational evaluation for `none`. PNG frames are captured only for leftover `screen` (OCR); `both` still records sidecar events (tab/blur/clipboard/idle/stream_lost — the kit does not).
 
@@ -890,6 +1010,10 @@ Runtime setup: `runtimeConfig` { rootDir, runtime (`auto`/`node20`/`python312` �
 Secret env values are write-only — never returned on GET. Because a blanked secret is otherwise indistinguishable from one that was never filled in, `publicRuntimeConfig` adds `hasValue: boolean` per row and the candidate form renders a "Saved" chip beside an empty secret input.
 
 `runtimeSetup.evidence` is captured **at finalize**, the one moment the health result, resolved port, and log tail are all still in hand, and is what makes `Verified` readable in the recruiter panel without booting a sandbox.
+
+**Finalizing an unverified config.** A config finalized without a successful run is handed to recruiters as-is and fails in the replay exactly as it failed for the candidate — the recruiter sees the candidate's own error wall minutes after a sandbox boots, with no way to edit the commands (the replay panel is read-only). `finalizeSetup` therefore **refuses** (409, `UNVERIFIED_FINALIZE_MESSAGE`) unless the request carries `confirmUnverified: true`; `isVerifiedRuntimeSetup` is the single definition of verified (`runtimeSetup.verified || lastRunResult.ok`) and both the client dialog and the server gate read it, so they cannot drift. The check runs **before** the sandbox is torn down, so a refused finalize leaves the environment alive to run again. The candidate can still finalize a broken setup deliberately — the point is that it takes an acknowledgement, not that it is impossible.
+
+**`npm ci` without a lockfile.** `resolveInstallCommand` in [`run.ts`](server/src/services/runtimeSetup/run.ts) rewrites a leading `npm ci` / `npm clean-install` to `npm install` when neither `package-lock.json` nor `npm-shrinkwrap.json` exists in the run directory, and logs the substitution. Candidates type `npm ci` from muscle memory against starters that ship `package.json` only (the Standup Board starter does), and npm's `EUSAGE` wall then kills install before anything is fetched — in both candidate setup and recruiter replay, which share this path. Only leading flags may sit between `npm` and `ci`, so a candidate's own `npm run ci` script is never rewritten; a probe that fails leaves the command untouched.
 
 Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`
 

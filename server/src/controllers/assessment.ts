@@ -12,7 +12,11 @@ import {
   generateAssessmentComponents,
   generateBehavioralChecks,
 } from "../services/assessmentGeneration.js";
-import { processAssessmentChat } from "../services/assessmentChat.js";
+import {
+  AssessmentChatError,
+  processAssessmentChat,
+  type ChatTurn,
+} from "../services/assessmentChat.js";
 import { groundCriterion } from "../services/evaluation/grounder.js";
 import {
   parseBehavioralCheckSpecs,
@@ -650,19 +654,24 @@ export const generateBehavioralChecksData: RequestHandler = async (
 export type ChatRequest = {
   message: string;
   allowedSections?: string[];
-  testCases?: Array<{ name: string; type: string; points: number }>;
+  /** Prior turns of this conversation, oldest first. */
+  history?: ChatTurn[];
   uid: string; // Added by verifyAuthToken middleware
 };
 
 /**
  * Chat endpoint for interacting with assessment
  * Allows users to modify assessment through natural language
+ *
+ * This route is the single writer for the changes it makes: it persists them and
+ * returns the saved assessment. The editor renders what comes back rather than
+ * re-saving, which is what stopped a stale client copy from overwriting the
+ * title the model had just changed.
  */
 export const chatWithAssessment: RequestHandler = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { message, allowedSections, testCases, uid } =
-      req.body as ChatRequest;
+    const { message, allowedSections, history, uid } = req.body as ChatRequest;
 
     if (!message || !message.trim()) {
       return res.status(400).json({ error: "Message is required" });
@@ -672,6 +681,7 @@ export const chatWithAssessment: RequestHandler = async (req, res, next) => {
       assessmentId: id,
       message: message.substring(0, 50) + "...",
       allowedSections,
+      historyTurns: Array.isArray(history) ? history.length : 0,
     });
 
     // Get MongoDB user ID from Firebase UID
@@ -687,64 +697,112 @@ export const chatWithAssessment: RequestHandler = async (req, res, next) => {
       throw AuthError.INVALID_AUTH_TOKEN;
     }
 
-    // Build assessment context
-    const assessmentContext = {
-      title: assessment.title,
-      description: assessment.description,
-      timeLimit: assessment.timeLimit,
-      testCases: testCases || [],
-    };
+    const currentChecks: string[] = Array.isArray(
+      (assessment as any).behavioralChecks
+    )
+      ? (assessment as any).behavioralChecks.filter(
+          (c: unknown): c is string => typeof c === "string"
+        )
+      : [];
+    const currentCriteria: string[] = Array.isArray(
+      (assessment as any).evaluationCriteria
+    )
+      ? (assessment as any).evaluationCriteria.filter(
+          (c: unknown): c is string => typeof c === "string"
+        )
+      : [];
 
     // Process chat message
     const chatResponse = await processAssessmentChat({
       message: message.trim(),
-      assessmentContext,
+      assessmentContext: {
+        title: assessment.title,
+        description: assessment.description,
+        timeLimit: assessment.timeLimit,
+        behavioralChecks: currentChecks,
+        evaluationCriteria: currentCriteria,
+      },
       allowedSections: allowedSections || [],
+      history: Array.isArray(history) ? history : [],
     });
 
-    // Apply updates to assessment
-    const updates: {
-      title?: string;
-      description?: string;
-      timeLimit?: number;
-    } = {};
+    const { updates } = chatResponse;
+    let dirty = false;
 
-    if (chatResponse.updates.title) {
-      updates.title = chatResponse.updates.title;
+    if (updates.title !== undefined) {
+      assessment.title = updates.title;
+      dirty = true;
     }
-    if (chatResponse.updates.description) {
-      updates.description = chatResponse.updates.description;
+    if (updates.description !== undefined) {
+      assessment.description = updates.description;
+      dirty = true;
     }
-    if (chatResponse.updates.timeLimit !== undefined) {
-      updates.timeLimit = chatResponse.updates.timeLimit;
+    if (updates.timeLimit !== undefined) {
+      assessment.timeLimit = updates.timeLimit;
+      dirty = true;
+    }
+    if (updates.behavioralChecks !== undefined) {
+      (assessment as any).behavioralChecks = updates.behavioralChecks;
+      // Specs are keyed to check text, so rewriting the list orphans the specs
+      // whose sentence no longer exists. Prune to what survived.
+      const existingSpecs = (assessment as any).behavioralCheckSpecs;
+      if (Array.isArray(existingSpecs) && existingSpecs.length > 0) {
+        const specs = normalizeCheckSpecs(
+          existingSpecs,
+          updates.behavioralChecks
+        );
+        (assessment as any).behavioralCheckSpecs =
+          specs.length > 0 ? specs : undefined;
+        assessment.markModified("behavioralCheckSpecs");
+      }
+      dirty = true;
+    }
+    if (updates.evaluationCriteria !== undefined) {
+      (assessment as any).evaluationCriteria = updates.evaluationCriteria;
+      // Mirror updateAssessment: pre-ground so evaluation can skip per-submission
+      // grounding, and fall back silently rather than failing the chat turn.
+      if (updates.evaluationCriteria.length > 0) {
+        try {
+          (assessment as any).evaluationCriteriaGroundings = await Promise.all(
+            updates.evaluationCriteria.map((c) => groundCriterion(c))
+          );
+        } catch (groundErr) {
+          console.error(
+            "[chatWithAssessment] Failed to ground evaluation criteria:",
+            groundErr
+          );
+          (assessment as any).evaluationCriteriaGroundings = undefined;
+        }
+      } else {
+        (assessment as any).evaluationCriteriaGroundings = undefined;
+      }
+      dirty = true;
     }
 
-    // Update assessment if there are database updates
-    if (Object.keys(updates).length > 0) {
-      Object.assign(assessment, updates);
+    if (dirty) {
       await assessment.save();
-      console.log("💾 [chatWithAssessment] Assessment updated in database");
+      console.log(
+        "💾 [chatWithAssessment] Saved sections:",
+        chatResponse.changedSections
+      );
     }
 
-    // Convert updated assessment to object for response
-    const assessmentResponse = assessment.toObject();
-
-    // Return response with updates and frontend-only fields
     res.status(200).json({
-      updates: {
-        ...chatResponse.updates,
-        // Include frontend-only fields
-        testCases: chatResponse.updates.testCases,
-      },
+      updates: chatResponse.updates,
       changedSections: chatResponse.changedSections,
       changesSummary: chatResponse.changesSummary,
       responseMessage: chatResponse.responseMessage,
       model: chatResponse.model,
       provider: chatResponse.provider,
-      // Return updated assessment data
-      assessment: assessmentResponse,
+      // Authoritative post-save state — the editor renders this directly.
+      assessment: assessment.toObject(),
     });
   } catch (error) {
+    if (error instanceof AssessmentChatError) {
+      // A usable explanation, not "Unknown Error. Try Again".
+      console.error("❌ [chatWithAssessment]", error.message);
+      return res.status(502).json({ error: error.message });
+    }
     console.error("❌ [chatWithAssessment] Error:", error);
     next(error);
   }

@@ -123,11 +123,13 @@ router.get(
 
 router.get(
   "/sessions/:sessionId",
+  optionalAuthToken,
   ProctoringController.getSession
 );
 
 router.get(
   "/sessions/:sessionId/transcript",
+  optionalAuthToken,
   ProctoringController.getTranscript
 );
 
