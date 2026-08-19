@@ -42,6 +42,34 @@ const SCREEN_SHARE_RESTORED_UPDATE =
 const FLUSH_INTERVAL_MS = 10000;
 /** Mic/agent level sampling for the meter. Cheap enough at 12fps, written straight to the DOM. */
 const LEVEL_INTERVAL_MS = 80;
+/**
+ * The companion must outlive a dropped connection. ElevenLabs ends a conversation
+ * on its own `max_duration_seconds` cap and on any transport blip; without a
+ * restart the candidate silently loses the voice check-in for the rest of a
+ * multi-hour assessment (assessments here run up to 240 minutes).
+ */
+const RECONNECT_BASE_DELAY_MS = 2000;
+const RECONNECT_MAX_DELAY_MS = 30000;
+const MAX_RECONNECT_ATTEMPTS = 12;
+/**
+ * Proactive pulse. ElevenLabs only gives the agent LLM a turn when the
+ * candidate speaks or the silence turn-timeout fires — and `skip_turn`
+ * (which the prompt makes the default) mutes the agent "until the user
+ * speaks again", cancelling that timeout. Observed live 2026-08-19: a
+ * 105-second silence produced zero agent turns while the timeline filled
+ * with Claude Code activity the agent is prompted to ask about. So the
+ * client grants the turn instead: after PULSE_INTERVAL_MS with no real
+ * voice activity, send a sentinel user message. The prompt tells the agent
+ * a "[pulse]" message is an automated cadence signal — poll the timeline,
+ * ask one anchored question if warranted, else skip_turn. Pulse messages
+ * are filtered out of the stored transcript (onMessage drops them), so
+ * grading and the communication assessment never see fake candidate speech.
+ */
+const PULSE_PREFIX = "[pulse]";
+const PULSE_TEXT =
+  "[pulse] Automated cadence signal — the candidate did not say anything.";
+const PULSE_INTERVAL_MS = 120000;
+const PULSE_CHECK_MS = 15000;
 
 /**
  * Normalize an ElevenLabs socket event to { role, text, timestampMs }.
@@ -143,21 +171,30 @@ const CompanionPanel = forwardRef(function CompanionPanel(
   const speakResharePromptRef = useRef(() => {});
   /** True once a lost update was actually delivered — only then does a restore need announcing. */
   const lostUpdateDeliveredRef = useRef(false);
+  /** Auto-reconnect bookkeeping: attempt counter, pending timer, and the restart fn. */
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimerRef = useRef(null);
+  const reconnectRef = useRef(null);
+  /** Last real (non-pulse) voice activity in either direction; pulses also bump it. */
+  const lastVoiceActivityRef = useRef(Date.now());
+  /** True while a reconnect is in flight, so onConnect can send the resume update. */
+  const reconnectingRef = useRef(false);
 
   const agentId = import.meta.env?.VITE_ELEVENLABS_AGENT_ID;
 
   // @elevenlabs/react 1.x: firstMessage must live on startSession overrides
   // (`overrides.agent.firstMessage`). Putting it only on useConversation is not
   // enough — without this field the dashboard default greeting plays instead.
-  const overrides = useMemo(() => {
-    if (!config?.prompt) return null;
+  const buildOverrides = (cfg) => {
+    if (!cfg?.prompt) return null;
     return {
       agent: {
-        prompt: { prompt: config.prompt },
-        firstMessage: config.firstMessage || FALLBACK_FIRST_MESSAGE,
+        prompt: { prompt: cfg.prompt },
+        firstMessage: cfg.firstMessage || FALLBACK_FIRST_MESSAGE,
       },
     };
-  }, [config]);
+  };
+  const overrides = useMemo(() => buildOverrides(config), [config]);
 
   /** Mirrors `screenShareLive` so the queued nag can re-check it on connect. */
   const screenShareLiveRef = useRef(screenShareLive);
@@ -215,8 +252,41 @@ const CompanionPanel = forwardRef(function CompanionPanel(
     micMuted: muted,
     onConnect: () => {
       setError(null);
+      reconnectAttemptsRef.current = 0;
+      lastVoiceActivityRef.current = Date.now();
       startTimeRef.current = Date.now();
+      if (reconnectingRef.current) {
+        reconnectingRef.current = false;
+        // The new conversation has no memory of the old one — tell the agent
+        // this is a resume so it doesn't re-brief or re-ask answered questions.
+        try {
+          conversationRef.current?.sendContextualUpdate?.(
+            "Session resumed after a brief disconnect. The candidate has been working all along; the opening briefing was already given. Do not repeat it, and treat earlier topics as already covered."
+          );
+        } catch {
+          // best-effort context
+        }
+      }
       if (pendingReshareRef.current) speakResharePromptRef.current();
+    },
+    // A conversation that ends on its own (duration cap, transport drop) must be
+    // restarted — `endedRef` is the only signal that WE hung up on purpose.
+    onDisconnect: () => {
+      if (endedRef.current) return;
+      if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+        setError("Voice check-in disconnected");
+        return;
+      }
+      const attempt = (reconnectAttemptsRef.current += 1);
+      const delay = Math.min(
+        RECONNECT_MAX_DELAY_MS,
+        RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1)
+      );
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = setTimeout(() => {
+        if (endedRef.current) return;
+        void reconnectRef.current?.();
+      }, delay);
     },
     onError: (err) => {
       const msg =
@@ -231,6 +301,14 @@ const CompanionPanel = forwardRef(function CompanionPanel(
     onMessage: (event) => {
       const normalized = normalizeMessage(event);
       if (!normalized) return;
+      // Pulse sentinels are ours, not the candidate's — keep them out of the
+      // visible transcript and the stored record that grading reads.
+      if (
+        typeof normalized.text === "string" &&
+        normalized.text.startsWith(PULSE_PREFIX)
+      )
+        return;
+      lastVoiceActivityRef.current = Date.now();
       setTranscript((prev) => [...prev, normalized]);
       messageBufferRef.current.push(normalized);
     },
@@ -279,50 +357,90 @@ const CompanionPanel = forwardRef(function CompanionPanel(
   }, [sessionId, token, agentId]);
 
   // Start the conversation once the prompt is in hand. Runs exactly once.
+  /**
+   * Open the voice session. Used both for the initial start and by
+   * auto-reconnect, so it must stay safe to call more than once.
+   * `overridesArg` lets the reconnect path pass a freshly fetched prompt
+   * instead of the stale mount-time one.
+   */
+  const startConversation = useCallback(async (overridesArg) => {
+    const effectiveOverrides = overridesArg || overrides;
+    if (!effectiveOverrides || !agentId || endedRef.current) return;
+
+    try {
+      // Ask for the mic ourselves first: the SDK's own failure is opaque, and
+      // "denied" is the one error the candidate can actually act on. Tracks are
+      // released immediately — the permission grant is what we're after.
+      const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+      probe.getTracks().forEach((t) => t.stop());
+    } catch (e) {
+      startedRef.current = false;
+      setError(
+        e?.name === "NotAllowedError"
+          ? "Microphone access denied — allow the mic to talk through your work"
+          : "No microphone available"
+      );
+      return;
+    }
+
+    try {
+      const conv = conversationRef.current;
+      if (!conv?.startSession) {
+        startedRef.current = false;
+        setError("Could not start the voice check-in");
+        return;
+      }
+      conv.startSession({
+        agentId,
+        connectionType: "webrtc",
+        overrides: effectiveOverrides,
+        dynamicVariables:
+          submissionId != null && submissionId !== ""
+            ? { submissionId: String(submissionId) }
+            : undefined,
+      });
+    } catch (e) {
+      startedRef.current = false;
+      console.error("[ProctoringCompanion] startSession error:", e);
+      setError(e?.message || "Could not start the voice check-in");
+    }
+  }, [overrides, agentId, submissionId]);
+
+  /**
+   * Reconnect = resume, not a fresh interview. A new ElevenLabs conversation
+   * has no memory of the old one, and the mount-time overrides carry the full
+   * opening briefing — replaying it mid-assessment is the "repeated its whole
+   * opener" failure the prompt bans. So refetch the prompt first: the server
+   * returns a short welcome-back once `companion.status` is active. If the
+   * refetch fails, the stale overrides are still better than no companion.
+   */
+  const reconnect = useCallback(async () => {
+    let freshOverrides = null;
+    if (sessionId && token) {
+      try {
+        const result = await getCompanionPrompt(sessionId, token);
+        if (result.success && result.data?.prompt) {
+          setConfig(result.data);
+          freshOverrides = buildOverrides(result.data);
+        }
+      } catch {
+        // fall through to stale overrides
+      }
+    }
+    reconnectingRef.current = true;
+    await startConversation(freshOverrides);
+  }, [sessionId, token, startConversation]);
+
+  useEffect(() => {
+    reconnectRef.current = reconnect;
+  }, [reconnect]);
+
+  // Initial start, once the prompt is in hand. Restarts go through onDisconnect.
   useEffect(() => {
     if (!overrides || !agentId || startedRef.current) return;
     startedRef.current = true;
-
-    (async () => {
-      try {
-        // Ask for the mic ourselves first: the SDK's own failure is opaque, and
-        // "denied" is the one error the candidate can actually act on. Tracks are
-        // released immediately — the permission grant is what we're after.
-        const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
-        probe.getTracks().forEach((t) => t.stop());
-      } catch (e) {
-        startedRef.current = false;
-        setError(
-          e?.name === "NotAllowedError"
-            ? "Microphone access denied — allow the mic to talk through your work"
-            : "No microphone available"
-        );
-        return;
-      }
-
-      try {
-        const conv = conversationRef.current;
-        if (!conv?.startSession) {
-          startedRef.current = false;
-          setError("Could not start the voice check-in");
-          return;
-        }
-        conv.startSession({
-          agentId,
-          connectionType: "webrtc",
-          overrides,
-          dynamicVariables:
-            submissionId != null && submissionId !== ""
-              ? { submissionId: String(submissionId) }
-              : undefined,
-        });
-      } catch (e) {
-        startedRef.current = false;
-        console.error("[ProctoringCompanion] startSession error:", e);
-        setError(e?.message || "Could not start the voice check-in");
-      }
-    })();
-  }, [overrides, agentId, submissionId]);
+    void startConversation();
+  }, [overrides, agentId, startConversation]);
 
   // Periodic flush.
   useEffect(() => {
@@ -330,6 +448,26 @@ const CompanionPanel = forwardRef(function CompanionPanel(
     const id = setInterval(flushBuffer, FLUSH_INTERVAL_MS);
     return () => clearInterval(id);
   }, [sessionId, token, flushBuffer]);
+
+  // Proactive pulse: grant the agent a turn during long candidate silence
+  // (see PULSE_TEXT above — skip_turn otherwise mutes it indefinitely).
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (endedRef.current) return;
+      const conv = conversationRef.current;
+      if (!conv || conv.status !== "connected" || conv.isSpeaking) return;
+      if (Date.now() - lastVoiceActivityRef.current < PULSE_INTERVAL_MS) return;
+      try {
+        conv.sendUserMessage?.(PULSE_TEXT);
+        // A pulse counts as activity so the next one is a full interval away,
+        // even when the agent answers it with a silent skip_turn.
+        lastVoiceActivityRef.current = Date.now();
+      } catch (e) {
+        console.warn("[ProctoringCompanion] pulse failed:", e);
+      }
+    }, PULSE_CHECK_MS);
+    return () => clearInterval(id);
+  }, []);
 
   const connected = conversation.status === "connected";
   const speaking = connected && conversation.isSpeaking;
@@ -380,6 +518,8 @@ const CompanionPanel = forwardRef(function CompanionPanel(
   const endAndFlush = useCallback(async () => {
     if (endedRef.current) return;
     endedRef.current = true;
+    // Set before hanging up so onDisconnect reads it as a deliberate end.
+    clearTimeout(reconnectTimerRef.current);
     await flushBuffer();
     try {
       conversationRef.current?.endSession?.();

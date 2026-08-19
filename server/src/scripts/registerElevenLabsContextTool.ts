@@ -7,20 +7,25 @@
  *   npx tsx src/scripts/registerElevenLabsContextTool.ts [--dry-run]
  *     [--agent=agent_xxx] [--url=https://.../api/agent-tools/context]
  *
- *   --local   point the tool at the ngrok tunnel currently forwarding to the
- *             local backend (auto-discovered from ngrok's API on :4040), so a
- *             live call hits this machine instead of Render. Free ngrok URLs
- *             change on every restart — re-run this after restarting the tunnel.
- *   --prod    point the tool back at the deployed Render URL.
- *   --sync-settings  also PATCH the agent's LLM and turn timeout to the
- *             code-managed values below (AGENT_LLM / AGENT_TURN_TIMEOUT_SECONDS).
+ *   --local   register/update the DEV twin of the tool (pointed at the ngrok
+ *             tunnel, auto-discovered from :4040) on the DEV agent
+ *             (ELEVENLABS_DEV_AGENT_ID — created by createElevenLabsDevAgent.ts).
+ *             Never touches the production agent or its tool; point the local
+ *             client at the dev agent via VITE_ELEVENLABS_AGENT_ID.
+ *   --prod    (default) register/update the production tool (Render URL) on the
+ *             production agent.
+ *   --sync-settings  also PATCH the agent's LLM, turn timeout, turn model and
+ *             conversation duration cap to the code-managed values below
+ *             (AGENT_LLM / AGENT_TURN_TIMEOUT_SECONDS / AGENT_TURN_MODEL /
+ *             AGENT_MAX_DURATION_SECONDS).
  *             Dashboard edits drift silently; this makes the settings
  *             re-appliable from source.
  *
  * Env (config.env):
  *   ELEVENLABS_API_KEY  — ElevenLabs API key with Conversational AI access (required)
  *   AGENT_SECRET        — shared secret the backend expects in X-Agent-Secret (required)
- *   ELEVENLABS_AGENT_ID — default agent when --agent is not passed (optional)
+ *   ELEVENLABS_AGENT_ID — production agent when --agent is not passed (optional)
+ *   ELEVENLABS_DEV_AGENT_ID — dev agent used by --local (required for --local)
  *
  * Idempotent: re-running updates the existing tool in place and never
  * duplicates it; the agent's other tools are preserved (tool_ids is a
@@ -66,6 +71,21 @@ const AGENT_TURN_TIMEOUT_SECONDS = 25;
  * reading the validation error (as of 2026-08-17: 'turn_v2' or 'turn_v3').
  */
 const AGENT_TURN_MODEL = "turn_v3";
+/**
+ * AGENT_MAX_DURATION_SECONDS: hard cap ElevenLabs puts on one conversation.
+ * The default of 600s (10 min) silently ended the companion a tenth of the way
+ * into a session — assessments here run to 240 minutes (avg ~106) — and the
+ * overlay had no reconnect, so the candidate lost the voice check-in for the
+ * rest of the attempt with no error anywhere. Three live sessions ended at
+ * 523s/541s/592s against that ceiling before it was spotted.
+ *
+ * 7200s is ElevenLabs' hard maximum (it 400s above that: "has to be between 60
+ * and 7200 seconds"), and it is SHORTER than the longest assessment here, so a
+ * 4-hour attempt still hits the ceiling mid-session. The overlay's
+ * auto-reconnect in ProctoringCompanionNotch.jsx is therefore load-bearing, not
+ * a backstop — do not remove it on the assumption this cap covers the session.
+ */
+const AGENT_MAX_DURATION_SECONDS = 7200;
 
 const apiKey = process.env.ELEVENLABS_API_KEY;
 const agentSecret = process.env.AGENT_SECRET;
@@ -77,10 +97,38 @@ const useProd = args.includes("--prod");
 // --prod is the default, but naming it explicitly makes "switch back" obvious
 // and keeps a stray --local from silently winning.
 const useLocal = args.includes("--local") && !useProd;
+
+/**
+ * --local used to repoint the PRODUCTION agent's tool at the developer's ngrok
+ * tunnel — while set, a real candidate's tool calls hit the developer's laptop
+ * (and 404'd whenever the tunnel was down). Dev work now has its own agent
+ * (ELEVENLABS_DEV_AGENT_ID, created by createElevenLabsDevAgent.ts) with its
+ * own ngrok-pointed twin of the tool; --local targets only those and refuses
+ * to run without them. The production agent + tool are never touched by
+ * --local. Point the local client at the dev agent via
+ * VITE_ELEVENLABS_AGENT_ID in client/.env.local.
+ */
+const prodAgentId = process.env.ELEVENLABS_AGENT_ID || DEFAULT_AGENT_ID;
+const devAgentId = process.env.ELEVENLABS_DEV_AGENT_ID;
 const agentId =
   args.find((a) => a.startsWith("--agent="))?.slice("--agent=".length) ||
-  process.env.ELEVENLABS_AGENT_ID ||
-  DEFAULT_AGENT_ID;
+  (useLocal ? devAgentId : prodAgentId);
+
+if (useLocal && !agentId) {
+  console.error(
+    "❌ --local needs a dev agent so it never hijacks the shared production agent.\n" +
+      "   Create one:  npx tsx src/scripts/createElevenLabsDevAgent.ts\n" +
+      "   then add ELEVENLABS_DEV_AGENT_ID=<id> to config.env and re-run."
+  );
+  process.exit(1);
+}
+if (useLocal && agentId === prodAgentId) {
+  console.error(
+    "❌ --local refuses to target the production agent. Set ELEVENLABS_DEV_AGENT_ID\n" +
+      "   to a separate dev agent (createElevenLabsDevAgent.ts creates one)."
+  );
+  process.exit(1);
+}
 
 /** Ask the local ngrok agent which public URL currently forwards to the backend. */
 async function discoverNgrokUrl(): Promise<string> {
@@ -191,8 +239,15 @@ function buildToolConfig(secretId: string | null) {
     tool_config: {
       type: "webhook",
       name: TOOL_NAME,
+      // LIVE-companion schema: `episodes` and `code` are deliberately absent.
+      // Episodes only exist after capture ends (live they always return empty),
+      // and seeing the candidate's code makes hinting far too easy. They used to
+      // be prompt-prohibited but schema-allowed; a 3.5k-token rule list is
+      // exactly where late-session rule retention fails, so the schema now
+      // enforces what the prompt asks. The server endpoint still supports both
+      // topics for other consumers.
       description:
-        "Get evidence about how this candidate actually built their project: the assessment brief, the session broken into labelled episodes ('researching validation approaches'), behavioural metrics (read vs write, whether writes were tested, how much code came from the AI agent), a moment-by-moment timeline including what was on their screen, what they have said, and their code. Call this at the start of the interview with topics ['assessment','episodes','metrics'] to ground your questions, and again with a question plus topics ['code'] when they describe an implementation. Use it to ask specific questions — never read the output aloud, never mention that you have it.",
+        "See what the candidate is doing right now: a moment-by-moment timeline of the prompts they sent their AI assistant and the commands, file edits and runs that followed (newest first, with what was on their screen), plus the assessment brief, behavioural counts, and what they have said aloud. Call it with topics ['timeline'] before any proactive question, and again whenever you want to know what they are working on — never ask them to describe activity this returns. Never read the output aloud, never mention that you have it.",
       response_timeout_secs: 20,
       api_schema: {
         url: toolUrl,
@@ -215,27 +270,15 @@ function buildToolConfig(secretId: string | null) {
               type: "string",
               dynamic_variable: "submissionId",
             },
-            question: {
-              type: "string",
-              description:
-                "What you want to know about the candidate's code, phrased as a search query (e.g. 'how is user creation validated'). Only affects the code section. Omit if you are not asking about code.",
-            },
             topics: {
               type: "array",
               description:
-                "Optional: limit the response to a subset of sections, which keeps the answer fast and focused. assessment = what they were asked to build; episodes = the session as labelled stretches of work (best for grounding questions); metrics = behavioural counts like read-vs-write and whether writes were tested; timeline = moment-by-moment activity including what was on screen; conversation = what they have said; code = their actual code (pair with question). Omit for everything.",
+                "Optional: limit the response to a subset of sections, which keeps the answer fast and focused. timeline = moment-by-moment activity, newest first (what to call before any proactive question); assessment = what they were asked to build; metrics = behavioural counts like read-vs-write and whether writes were tested; conversation = what they have said aloud. Omit for everything.",
               items: {
                 type: "string",
                 description:
-                  "One of: assessment, episodes, metrics, timeline, conversation, code.",
-                enum: [
-                  "assessment",
-                  "episodes",
-                  "metrics",
-                  "timeline",
-                  "conversation",
-                  "code",
-                ],
+                  "One of: assessment, metrics, timeline, conversation.",
+                enum: ["assessment", "metrics", "timeline", "conversation"],
               },
             },
           },
@@ -257,9 +300,14 @@ async function main() {
   // 2. Create or update the standalone tool.
   const toolsRes = await xi("GET", "/v1/convai/tools");
   if (toolsRes.status !== 200) fail("List tools", toolsRes.status, toolsRes.json);
-  const existingTool = (toolsRes.json?.tools || []).find(
-    (t: any) => t?.tool_config?.name === TOOL_NAME
-  );
+  // Prod and dev each own a same-named tool, told apart by where they point:
+  // the dev twin lives on the ngrok tunnel, prod on a real deploy. Matching on
+  // name alone here would let a dev run update the production tool in place.
+  const existingTool = (toolsRes.json?.tools || []).find((t: any) => {
+    if (t?.tool_config?.name !== TOOL_NAME) return false;
+    const url: string = t?.tool_config?.api_schema?.url || "";
+    return useLocal ? url.includes("ngrok") : !url.includes("ngrok");
+  });
 
   let toolId: string;
   if (existingTool) {
@@ -299,12 +347,22 @@ async function main() {
     agentRes.json?.conversation_config?.turn?.turn_timeout;
   const currentTurnModel =
     agentRes.json?.conversation_config?.turn?.turn_model;
+  const currentMaxDuration =
+    agentRes.json?.conversation_config?.conversation?.max_duration_seconds;
   const llmStale = syncSettings && currentLlm !== AGENT_LLM;
   const timeoutStale =
     syncSettings && currentTimeout !== AGENT_TURN_TIMEOUT_SECONDS;
   const turnModelStale = syncSettings && currentTurnModel !== AGENT_TURN_MODEL;
+  const maxDurationStale =
+    syncSettings && currentMaxDuration !== AGENT_MAX_DURATION_SECONDS;
 
-  if (alreadyAttached && !llmStale && !timeoutStale && !turnModelStale) {
+  if (
+    alreadyAttached &&
+    !llmStale &&
+    !timeoutStale &&
+    !turnModelStale &&
+    !maxDurationStale
+  ) {
     console.log(
       syncSettings
         ? "✅ Tool attached and settings already in sync — nothing to do."
@@ -326,6 +384,11 @@ async function main() {
     if (turnModelStale) turnPatch.turn_model = AGENT_TURN_MODEL;
     agentPatch.conversation_config.turn = turnPatch;
   }
+  if (maxDurationStale) {
+    agentPatch.conversation_config.conversation = {
+      max_duration_seconds: AGENT_MAX_DURATION_SECONDS,
+    };
+  }
 
   if (!alreadyAttached)
     console.log(`🤖 attaching tool → tool_ids ${JSON.stringify(nextIds)}`);
@@ -337,6 +400,11 @@ async function main() {
     );
   if (turnModelStale)
     console.log(`🤖 turn_model: ${currentTurnModel} → ${AGENT_TURN_MODEL}`);
+  if (maxDurationStale)
+    console.log(
+      `🤖 max_duration_seconds: ${currentMaxDuration}s → ${AGENT_MAX_DURATION_SECONDS}s ` +
+        `(${Math.round(AGENT_MAX_DURATION_SECONDS / 60)} min)`
+    );
 
   if (dryRun) {
     console.log(`🤖 [dry-run] would PATCH: ${JSON.stringify(agentPatch)}`);

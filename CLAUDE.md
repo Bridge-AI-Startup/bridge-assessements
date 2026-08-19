@@ -223,21 +223,33 @@ See `server/config.env.example` for the full list. Key variables:
 **In-session voice companion (ElevenLabs):**
 - `AGENT_SECRET` -- Authenticates ElevenLabs agent tool requests (sent as `X-Agent-Secret`; stored on ElevenLabs as the workspace secret `bridge_agent_secret` so the tool config never holds it in plaintext). **Required — the agent routes fail closed**: when unset, `/api/agent-tools/*` and `/api/workflow-capture/agent-context` return 503 instead of allowing unauthenticated access (comparison is timing-safe; helpers in `server/src/utils/agentSecret.ts`)
 - `ELEVENLABS_API_KEY` -- Management API key used **only** by `src/scripts/registerElevenLabsContextTool.ts` to create/attach the agent's context tool. Not needed at runtime
-- `ELEVENLABS_AGENT_ID` -- Default agent for that script (falls back to a hardcoded companion agent id)
+- `ELEVENLABS_AGENT_ID` -- Production agent for that script (falls back to a hardcoded companion agent id)
+- `ELEVENLABS_DEV_AGENT_ID` -- Dev twin agent (`Interview (dev)`, `agent_5001m0dqx0jafyxrdk87x66p2fz9`), created by `src/scripts/createElevenLabsDevAgent.ts`; required by the register script's `--local` mode
 
 **Testing the agent tool against localhost.** ElevenLabs calls the tool from its own
-servers, so it cannot reach `localhost` — but you do **not** have to deploy to test. Run
-`ngrok http 5050`, then from `server/`: `npx tsx src/scripts/registerElevenLabsContextTool.ts --local`
-(auto-discovers the tunnel from ngrok's API on :4040 and repoints the tool). Switch back with
-`--prod`. This account's ngrok has a **static domain**, so the URL survives restarts and
-re-registration is rarely needed — but the tool is only as alive as the tunnel: **if ngrok is
-not running, every agent tool call 404s at the ngrok edge** and the companion degrades into
-"I can't access the timeline" apologies (this exact silent failure burned three assessment
-runs in Aug 2026). `getCompanionPrompt` now checks ngrok's :4040 API when a companion session
-starts in development and prints a loud warning if no tunnel is up. The script adds an `ngrok-skip-browser-warning` header on ngrok URLs — without it the
-free tier's HTML interstitial reaches the agent instead of JSON. Note this repoints the
-**shared** agent: while it points at your tunnel, a real candidate's call would hit your
-machine, so switch back to `--prod` when you stop testing.
+servers, so it cannot reach `localhost` — but you do **not** have to deploy to test. Local
+testing runs on a **separate dev agent** (`ELEVENLABS_DEV_AGENT_ID`) with its own
+ngrok-pointed twin of the `get_candidate_context` tool: `--local` used to repoint the shared
+production agent's tool at the developer's tunnel — while set, a real candidate's tool calls
+hit the developer's laptop, and a dead tunnel 404'd them (this silent failure burned three
+assessment runs in Aug 2026). Now: `ngrok http 5050`, then from `server/`:
+`npx tsx src/scripts/registerElevenLabsContextTool.ts --local` (targets the dev agent + dev
+tool only, and **refuses** to run against the production agent); point the local client at the
+dev agent via `VITE_ELEVENLABS_AGENT_ID` in `client/.env.local` (prod id stays on Vercel).
+`--prod` (the default) updates the production tool/agent. There is usually no need for
+`--local` at all: production runs the same code against the same Atlas cluster, so the prod
+tool URL works for local candidate tests — `--local` matters only when changing the context
+endpoint itself. This account's ngrok has a **static domain**, so the dev tool URL survives
+tunnel restarts — but the tool is only as alive as the tunnel. `getCompanionPrompt` checks
+ngrok's :4040 API when a companion session starts in development and prints a loud warning if
+no tunnel is up. The script adds an `ngrok-skip-browser-warning` header on ngrok URLs —
+without it the free tier's HTML interstitial reaches the agent instead of JSON. The tool
+schema is **live-companion-scoped**: topics enum is `assessment/metrics/timeline/conversation`
+only — `episodes` and `code` were removed from the schema (2026-08-19) so the prompt's
+prohibition is structurally enforced rather than resting on late-session rule retention; the
+server endpoint still accepts both topics for other consumers. Agent-creation gotcha:
+ElevenLabs clones the source agent's webhook tools on create even when `tool_ids` is stripped
+— `createElevenLabsDevAgent.ts` deletes the clones after creating.
 
 **Email:**
 - `RESEND_API_KEY` -- Resend email service key
@@ -443,7 +455,8 @@ server/src/
     ├── generateShortsOgCard.ts # Regenerate the static Shorts share card PNG (SVG → sharp, 1200×630); needs FONTCONFIG_PATH pointing at Inter + Geist Mono to render in-brand
     ├── shorts-sandbox-smoke.ts # Create Shorts E2B template sandbox; print preview URL + Claude check
     ├── transcriptEngineAB.ts # A/B compare transcript engines (gemini vs frames) on one session, no DB writes; list mode + --plan-only cost preview
-    ├── registerElevenLabsContextTool.ts # Register/update the `get_candidate_context` webhook tool on the ElevenLabs companion agent and attach it (`--dry-run`, `--local` = point at the running ngrok tunnel, `--prod`, `--url=`, `--sync-settings` = also PATCH the code-managed agent LLM `claude-haiku-4-5`, 25s turn timeout, and `turn_v3` contextual turn detection); idempotent
+    ├── registerElevenLabsContextTool.ts # Register/update the `get_candidate_context` webhook tool and attach it (`--dry-run`, `--local` = dev agent + ngrok-pointed dev tool only (refuses the prod agent), `--prod` = production agent + Render tool (default), `--url=`, `--sync-settings` = also PATCH the code-managed agent LLM `claude-haiku-4-5`, 25s turn timeout, `turn_v3` turn detection, and 7200s conversation cap); idempotent
+    ├── createElevenLabsDevAgent.ts # One-time: create the `Interview (dev)` twin agent for --local testing (copies prod config + override switches, strips + deletes the webhook tools ElevenLabs clones on create)
     ├── behavioral-grading-smoke.ts
     ├── e2b-smoke.ts
     └── test-assessment-generation.ts
@@ -686,6 +699,36 @@ screen classification is post-hoc, so in-browser testing exists live *only* in w
 candidate says aloud, and a narrated verification/decision moment earns an ack or one light
 question, never nothing; and the surprise bar admits **firsts** (first prompt, first app run,
 first manual test) as question-worthy even when expected.
+The 2026-08-19 runs exposed the structural reason proactivity had never once fired: ElevenLabs
+gives the LLM a turn only when the candidate speaks or the silence turn-timeout elapses, and
+`skip_turn` — which the prompt makes the default — mutes the agent "until the user speaks
+again", cancelling that timeout. Since the model ends nearly every turn with `skip_turn`, the
+agent was permanently reactive (observed: 105s of silence, a timeline full of Claude Code
+activity, zero agent turns, zero tool calls). The fix is a client-side **pulse**: the notch
+sends a sentinel user message (`[pulse] …`, `PULSE_INTERVAL_MS` = 120s of no voice activity)
+that grants the turn; the prompt's `## Pulses` section tells the agent a `[pulse]` message is
+not the candidate — poll the timeline, then one anchored question or `skip_turn`. Pulse
+sentinels are filtered out of the stored transcript in `onMessage`, so grading and the
+communication assessment never see fake candidate speech (ElevenLabs' own dashboard transcript
+still shows them). Same pass added one prompt rule: **never claim you cannot see their work**
+(if they ask what they've been doing or what their assistant did, call the tool and answer
+from it — the agent had answered "I don't have a way to show what Claude has done", which is
+false). An overheard-speech rule (skip garbled dictation cross-talk) was added and then
+deliberately reverted — real candidates are locked in during an assessment, and the rule's
+failure mode (silently ignoring a candidate the ASR merely garbled) costs more than the
+scenario it guarded. Also from this pass: the ElevenLabs conversation `max_duration_seconds` was 600 — the
+companion died at 10 minutes — now 7200, the platform maximum, code-managed in
+`registerElevenLabsContextTool.ts --sync-settings`; since 7200s is still shorter than the
+longest assessment (240 min), the notch **auto-reconnects** on any non-deliberate disconnect
+(exponential backoff 2s→30s, 12 attempts; `endedRef` marks deliberate hangups so
+submit/opt-out/unmount never trigger it). The reconnect is load-bearing, not a backstop.
+**A reconnect is a resume, not a fresh interview:** the reconnect path refetches
+`/companion/prompt` first (the server returns a short welcome-back `firstMessage` once
+`companion.status` is active, so the full opening briefing is not replayed mid-assessment),
+falls back to the stale overrides only if the refetch fails, and sends a
+`sendContextualUpdate` on the reconnected `onConnect` telling the agent the session resumed
+and earlier topics are already covered — a new ElevenLabs conversation has no memory of the
+old one, so without this the "never repeat yourself" rules reset.
 It carries the same honesty carve-out as the interviewer: never volunteer that the session is
 captured, but never deny it when asked directly (this is about the recording, not the tool —
 the never-mention-your-tooling rule above does not license denying that they are recorded). The overlay is
@@ -738,6 +781,7 @@ conversation id comes from `getId()`, and `onMessage` receives **raw socket even
 ### Rate Limiting (production only, disabled in dev)
 - General API: 100 requests / 15 minutes per IP (shared across most `/api/*` routes; proctoring and Shorts preview excluded)
 - Proctoring (`/api/proctoring/*`): 8000 requests / 15 minutes per IP (separate limiter; screen capture is high-volume)
+- Agent tools (`/api/agent-tools/*`): 2000 requests / 15 minutes per IP (separate limiter; calls come from ElevenLabs' servers, so concurrent voice sessions share egress IPs — on the general bucket a busy day 429'd the context tool, which fail-soft turns into a silently mute companion. X-Agent-Secret gated)
 - Shorts preview (`/api/shorts/preview/*`): 3000 requests / 15 minutes per IP (separate limiter; gallery iframe assets)
 - Auth endpoints (`/api/users/whoami`): 5 requests / 15 minutes per IP
 - Competition join (`POST /api/competitions/:slug/join`): 30 requests / 60 minutes per IP

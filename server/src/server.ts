@@ -206,6 +206,24 @@ const workflowCaptureLimiter = rateLimit({
   skip: (req) => process.env.NODE_ENV === "development",
 });
 
+// Agent tools are called from ElevenLabs' servers, not the candidate's browser,
+// so many concurrent voice sessions can share one egress IP. On the general
+// 100/15min bucket that meant a busy day 429'd the context tool — and the
+// fail-soft design turns a 429 into an empty tool result, i.e. a companion
+// that silently goes quiet. ~15 calls/15min per live session (2-min pulse +
+// pre-question polls) → 2000 supports ~100+ concurrent sessions per IP. The
+// route is X-Agent-Secret gated, so the higher ceiling is not an abuse surface.
+const agentToolsLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 2000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: "Too many agent tool requests from this IP, please try again later.",
+  },
+  skip: (req) => process.env.NODE_ENV === "development",
+});
+
 // Stricter rate limit for authentication endpoints - 5 requests per 15 minutes
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -387,7 +405,7 @@ console.log(
   "     - GET /api/submissions/assessments/:id/submissions (employer)",
 );
 
-app.use("/api/agent-tools", apiLimiter); // Apply general limit
+app.use("/api/agent-tools", agentToolsLimiter); // ElevenLabs-origin traffic; see limiter comment
 app.use("/api/agent-tools", agentToolsRoutes);
 console.log("  ✅ /api/agent-tools routes registered");
 console.log("     - POST /api/agent-tools/context");
