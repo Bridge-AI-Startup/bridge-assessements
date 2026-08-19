@@ -14,7 +14,7 @@ export default function SubmissionCard({ item }) {
   return (
     <Link
       to={`/Submission?id=${item.id}`}
-      className="overflow-hidden rounded-2xl border border-line bg-paper shadow-card transition-colors hover:border-fog-light"
+      className="punch-card-sm overflow-hidden transition-transform duration-150 hover:-translate-y-1"
     >
       <div className="relative p-2">
         <CardPreview

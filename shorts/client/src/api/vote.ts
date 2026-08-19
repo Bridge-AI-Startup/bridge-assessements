@@ -35,6 +35,8 @@ export type VoteNextResponse =
       right: VoteCard;
       round: RoundProgress;
       canVote: true;
+      /** False when the player hasn't submitted — their picks don't rank. */
+      weighted: boolean;
       pairsRemaining: number;
       allPairsComplete: false;
       canContinue: true;
@@ -43,6 +45,7 @@ export type VoteNextResponse =
       pairAvailable: false;
       challengeDate: string;
       reason:
+        // Retired server-side (anyone may play now); kept for compatibility.
         | "must_submit"
         | "not_enough_submissions"
         | "no_pairs_left"
@@ -50,6 +53,7 @@ export type VoteNextResponse =
       message: string;
       round: RoundProgress;
       canVote: boolean;
+      weighted: boolean;
       pairsRemaining: number;
       allPairsComplete: boolean;
       canContinue: boolean;
@@ -85,6 +89,10 @@ export type CastVoteResponse = {
   left?: VoteCard;
   right?: VoteCard;
   recap?: RoundRecap;
+  /** False when the player hasn't submitted — the vote is stored but inert. */
+  weighted: boolean;
+  /** This pick closed a five-pick round. Unweighted rounds carry no recap. */
+  roundComplete: boolean;
   pairsRemaining: number;
   allPairsComplete: boolean;
   canContinue: boolean;

@@ -4,6 +4,7 @@ import Markdown from "@/components/Markdown";
 import BuildWaitCard from "@/components/workspace/BuildWaitCard";
 import ModelEffortPicker from "@/components/workspace/ModelEffortPicker";
 import TokenGauge from "@/components/workspace/TokenGauge";
+import DraftRoulette from "@/components/workspace/DraftRoulette";
 
 function previewUrlWithTick(url, tick) {
   return `${url}${url.includes("?") ? "&" : "?"}_=${tick}`;
@@ -194,6 +195,10 @@ export default function ChatFirstBuild({
   chatBusy,
   chatError,
   onSendMessage,
+  onSpinDraft,
+  onSpinStart,
+  spinningDraft = false,
+  showDraftHero = false,
   exhausted,
   tokensUsed,
   tokenBudget,
@@ -291,6 +296,17 @@ export default function ChatFirstBuild({
           ) : null}
         </section>
 
+        {!isDesktop && showDraftHero ? (
+          <DraftRoulette
+            variant="hero"
+            chatHint="below"
+            busy={chatBusy}
+            disabled={exhausted || chatBusy}
+            onSpin={onSpinDraft}
+            onSpinStart={onSpinStart}
+          />
+        ) : null}
+
         {chatMessages.map((message, index) => {
           if (message.role === "preview") {
             const version = previewPositions.positions.get(index);
@@ -380,13 +396,13 @@ export default function ChatFirstBuild({
             placeholder={
               exhausted ? "Out of credits" : "Describe what to build…"
             }
-            disabled={chatBusy || exhausted}
+            disabled={chatBusy || exhausted || spinningDraft}
             className="min-h-10 max-h-24 flex-1 resize-none overflow-y-auto rounded-2xl border border-line bg-cream px-4 py-2.5 text-sm text-ink placeholder:text-fog-light focus:border-ink focus:outline-none disabled:opacity-50"
           />
           <button
             type="submit"
             aria-label={chatBusy ? "Claude is building" : "Send message"}
-            disabled={chatBusy || exhausted || !chatInput.trim()}
+            disabled={chatBusy || exhausted || spinningDraft || !chatInput.trim()}
             className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-ink text-white disabled:opacity-40"
           >
             <SendIcon />
@@ -454,7 +470,7 @@ export default function ChatFirstBuild({
         {isDesktop ? (
           <div className="flex min-h-0 flex-1">
             {chatColumn}
-            <aside className="flex min-h-0 min-w-0 flex-1 flex-col bg-cream">
+            <aside className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-cream">
               <div className="flex flex-shrink-0 items-center justify-between border-b border-line bg-paper px-3 py-1.5">
                 <span className="label-mono text-fog-light">Preview</span>
                 <button
@@ -467,12 +483,28 @@ export default function ChatFirstBuild({
                   <RefreshIcon />
                 </button>
               </div>
-              <iframe
-                key={previewTick}
-                title="Live build preview"
-                src={latestPreviewSrc}
-                className="min-h-0 w-full flex-1 border-0 bg-paper"
-              />
+              <div className="relative min-h-0 flex-1">
+                <iframe
+                  key={previewTick}
+                  title="Live build preview"
+                  src={latestPreviewSrc}
+                  className="absolute inset-0 h-full w-full border-0 bg-paper"
+                />
+                {showDraftHero ? (
+                  <div className="absolute inset-0 z-10 overflow-auto bg-cream px-6 py-10">
+                    <div className="mx-auto flex min-h-full max-w-md items-center">
+                      <DraftRoulette
+                        variant="hero"
+                        chatHint="left"
+                        busy={chatBusy}
+                        disabled={exhausted || chatBusy}
+                        onSpin={onSpinDraft}
+                        onSpinStart={onSpinStart}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </aside>
           </div>
         ) : (

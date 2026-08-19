@@ -541,7 +541,7 @@ export default function Admin() {
               </label>
 
               <label className="block text-sm">
-                <span className="font-medium text-fog">Prompt</span>
+                <span className="font-medium text-fog">Challenge</span>
                 <textarea
                   value={form.prompt}
                   onChange={(e) => updateField("prompt", e.target.value)}

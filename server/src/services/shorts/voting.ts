@@ -92,6 +92,8 @@ export type VoteNextResult =
       right: VoteCard;
       round: RoundProgress;
       canVote: true;
+      /** False for a voter who has not submitted: they play, nothing moves. */
+      weighted: boolean;
       pairsRemaining: number;
       allPairsComplete: false;
       canContinue: true;
@@ -100,6 +102,8 @@ export type VoteNextResult =
       pairAvailable: false;
       challengeDate: string;
       reason:
+        // Retired: anyone may play now. Kept in the union so an older client
+        // that still branches on it keeps type-checking.
         | "must_submit"
         | "not_enough_submissions"
         | "no_pairs_left"
@@ -107,6 +111,7 @@ export type VoteNextResult =
       message: string;
       round: RoundProgress;
       canVote: boolean;
+      weighted: boolean;
       pairsRemaining: number;
       allPairsComplete: boolean;
       canContinue: boolean;
@@ -142,6 +147,10 @@ export type CastVoteResult = {
   left?: VoteCard;
   right?: VoteCard;
   recap?: RoundRecap;
+  /** False when the voter had not submitted: the vote is stored and inert. */
+  weighted: boolean;
+  /** This pick closed a five-pick round. Unweighted rounds carry no recap. */
+  roundComplete: boolean;
   pairsRemaining: number;
   allPairsComplete: boolean;
   canContinue: boolean;
@@ -208,7 +217,30 @@ function toVoteCard(
   return card;
 }
 
+/**
+ * Weighted votes only. This drives the vote cap and the round index, both of
+ * which are submitter-only concepts — an unweighted play must never consume a
+ * ranking vote or advance a recap round.
+ *
+ * Deliberately NOT the same question as "which pairs has this person seen":
+ * pair exhaustion counts every vote regardless of weight (see
+ * `countRemainingPairs` / `selectPair`), or a non-submitter would be served the
+ * same matchup forever and then collide with the unique pairKey index.
+ */
 async function countVotesToday(
+  anonymousId: string,
+  challengeDate: string,
+): Promise<number> {
+  const Vote = getPlayVoteModel();
+  return Vote.countDocuments({
+    anonymousId,
+    challengeDate,
+    weighted: { $ne: false },
+  });
+}
+
+/** Every pick this person made, weighted or not. Their play counter. */
+async function countPlayedVotesToday(
   anonymousId: string,
   challengeDate: string,
 ): Promise<number> {
@@ -217,7 +249,8 @@ async function countVotesToday(
 }
 
 /**
- * Has this builder entered at least one build for the challenge? Gates voting.
+ * Has this builder entered at least one build for the challenge? Decides
+ * whether their votes move the ratings — not whether they may vote at all.
  * Deliberately not "which submission is theirs" — a builder may have several.
  */
 async function hasSubmitted(
@@ -291,8 +324,15 @@ async function loadRankedForDate(
   return docs;
 }
 
+/**
+ * `votesToday` is the counter the round meter shows — weighted votes for a
+ * submitter, plain plays for everyone else. `weightedVotesToday` is what the
+ * cap is measured against, so an unweighted player still reports a full
+ * ranking-vote budget (they get one the moment they submit).
+ */
 function buildRoundProgress(
   votesToday: number,
+  weightedVotesToday: number = votesToday,
 ): RoundProgress {
   const votesInRound = votesToday % VOTE_ROUND_SIZE;
   return {
@@ -303,7 +343,7 @@ function buildRoundProgress(
     roundIndex: Math.floor(votesToday / VOTE_ROUND_SIZE),
     remainingWeightedVotes: Math.max(
       0,
-      MAX_WEIGHTED_VOTES_PER_DAY - votesToday,
+      MAX_WEIGHTED_VOTES_PER_DAY - weightedVotesToday,
     ),
   };
 }
@@ -314,6 +354,7 @@ function unavailableVotePair(input: {
   message: string;
   round: RoundProgress;
   canVote: boolean;
+  weighted: boolean;
   pairsRemaining?: number;
   allPairsComplete?: boolean;
 }): VoteNextResult {
@@ -324,6 +365,7 @@ function unavailableVotePair(input: {
     message: input.message,
     round: input.round,
     canVote: input.canVote,
+    weighted: input.weighted,
     pairsRemaining: input.pairsRemaining ?? 0,
     allPairsComplete: input.allPairsComplete ?? false,
     canContinue: false,
@@ -396,6 +438,9 @@ async function selectPair(input: {
 
   if (candidates.length < 2) return null;
 
+  // Deliberately NOT filtered by `weighted`: an unweighted play still burns
+  // its pair (the unique {anonymousId, challengeDate, pairKey} index says so),
+  // so filtering here would re-serve the same matchup until it 409s.
   const prior = await Vote.find({
     anonymousId: input.anonymousId,
     challengeDate: input.challengeDate,
@@ -481,6 +526,7 @@ async function countRemainingPairs(input: {
 
   if (candidates.length < 2) return 0;
 
+  // Weight-blind on purpose — see the same note in `selectPair`.
   const prior = await Vote.find({
     anonymousId: input.anonymousId,
     challengeDate: input.challengeDate,
@@ -683,23 +729,18 @@ export async function getNextVotePair(input: {
   }
   const includeFiles = input.includeFiles !== false;
   const challengeDate = input.challengeDate || (await getActiveChallengeDate());
-  const votesToday = await countVotesToday(anonymousId, challengeDate);
-  const round = buildRoundProgress(votesToday);
+  // Anyone may play the matchups; only a builder's picks move the ratings.
+  const weighted = await hasSubmitted(anonymousId, challengeDate);
+  const weightedVotesToday = weighted
+    ? await countVotesToday(anonymousId, challengeDate)
+    : 0;
+  const votesToday = weighted
+    ? weightedVotesToday
+    : await countPlayedVotesToday(anonymousId, challengeDate);
+  const round = buildRoundProgress(votesToday, weightedVotesToday);
 
-  if (!(await hasSubmitted(anonymousId, challengeDate))) {
-    const weekly = getPlayChallengeCadence() === "weekly";
-    return unavailableVotePair({
-      challengeDate,
-      reason: "must_submit",
-      message: weekly
-        ? "Submit this week's build before voting."
-        : "Submit today's build before voting.",
-      round,
-      canVote: false,
-    });
-  }
-
-  if (votesToday >= MAX_WEIGHTED_VOTES_PER_DAY) {
+  // The cap is a ranking-vote budget, so it only binds weighted voters.
+  if (weighted && weightedVotesToday >= MAX_WEIGHTED_VOTES_PER_DAY) {
     const weekly = getPlayChallengeCadence() === "weekly";
     return unavailableVotePair({
       challengeDate,
@@ -709,6 +750,7 @@ export async function getNextVotePair(input: {
         : `You've completed today's ${MAX_WEIGHTED_VOTES_PER_DAY} ranking votes. Come back tomorrow.`,
       round,
       canVote: false,
+      weighted,
       pairsRemaining: await countRemainingPairs({ anonymousId, challengeDate }),
     });
   }
@@ -725,10 +767,15 @@ export async function getNextVotePair(input: {
       message: "Need at least two other builds to start voting. Check back soon.",
       round,
       canVote: true,
+      weighted,
     });
   }
 
-  await ensureRoundSnapshot({ anonymousId, challengeDate, votesToday });
+  // PlayVoteRound is a submitter feature — it exists to power the recap of how
+  // the ranking moved. Nothing moves for an unweighted player, so no row.
+  if (weighted) {
+    await ensureRoundSnapshot({ anonymousId, challengeDate, votesToday });
+  }
 
   const pairsRemaining = await countRemainingPairs({
     anonymousId,
@@ -742,6 +789,7 @@ export async function getNextVotePair(input: {
         "You're done for now — you've compared every available matchup. Check back if more people submit.",
       round,
       canVote: false,
+      weighted,
       allPairsComplete: true,
     });
   }
@@ -761,6 +809,7 @@ export async function getNextVotePair(input: {
         "You're done for now — you've compared every available matchup. Check back if more people submit.",
       round,
       canVote: false,
+      weighted,
       allPairsComplete: true,
     });
   }
@@ -778,6 +827,7 @@ export async function getNextVotePair(input: {
     right: toVoteCard(pair[1], includeFiles),
     round: displayRound,
     canVote: true,
+    weighted,
     // After this vote is served, remaining includes this pair until cast.
     pairsRemaining,
     allPairsComplete: false,
@@ -800,9 +850,12 @@ async function buildRecap(input: {
     roundIndex: input.roundIndex,
   });
 
+  // Weighted only: `roundIndex` counts weighted votes, so slicing an array
+  // that also held this voter's pre-submission plays would take the wrong five.
   const votes = await Vote.find({
     anonymousId: input.anonymousId,
     challengeDate: input.challengeDate,
+    weighted: { $ne: false },
   })
     .sort({ createdAt: 1 })
     .lean();
@@ -922,12 +975,16 @@ export async function castVote(input: {
   }
 
   const challengeDate = input.challengeDate || (await getActiveChallengeDate());
-  const votesToday = await countVotesToday(anonymousId, challengeDate);
+  // Anyone may play; only a builder's picks are weighted into the ratings.
+  const weighted = await hasSubmitted(anonymousId, challengeDate);
+  const weightedVotesToday = weighted
+    ? await countVotesToday(anonymousId, challengeDate)
+    : 0;
+  const votesToday = weighted
+    ? weightedVotesToday
+    : await countPlayedVotesToday(anonymousId, challengeDate);
 
-  if (!(await hasSubmitted(anonymousId, challengeDate))) {
-    throw createHttpError(403, "must_submit");
-  }
-  if (votesToday >= MAX_WEIGHTED_VOTES_PER_DAY) {
+  if (weighted && weightedVotesToday >= MAX_WEIGHTED_VOTES_PER_DAY) {
     throw createHttpError(429, "vote_cap_reached");
   }
 
@@ -964,6 +1021,7 @@ export async function castVote(input: {
       winnerId: winner._id,
       loserId: loser._id,
       pairKey: key,
+      weighted,
     });
   } catch (err: unknown) {
     const code =
@@ -976,54 +1034,61 @@ export async function castVote(input: {
     throw err;
   }
 
-  await ensureRoundSnapshot({ anonymousId, challengeDate, votesToday });
-
-  const updated = updateRatings1v1(
-    {
-      ratingMean: winner.ratingMean ?? 25,
-      ratingDeviation: winner.ratingDeviation ?? 25 / 3,
-    },
-    {
-      ratingMean: loser.ratingMean ?? 25,
-      ratingDeviation: loser.ratingDeviation ?? 25 / 3,
-    },
-  );
-
-  winner.ratingMean = updated.winner.ratingMean;
-  winner.ratingDeviation = updated.winner.ratingDeviation;
-  winner.rankingScore = rankingScoreFrom(
-    updated.winner.ratingMean,
-    updated.winner.ratingDeviation,
-  );
-  winner.wins = (winner.wins ?? 0) + 1;
-  winner.matches = (winner.matches ?? 0) + 1;
-
-  loser.ratingMean = updated.loser.ratingMean;
-  loser.ratingDeviation = updated.loser.ratingDeviation;
-  loser.rankingScore = rankingScoreFrom(
-    updated.loser.ratingMean,
-    updated.loser.ratingDeviation,
-  );
-  loser.losses = (loser.losses ?? 0) + 1;
-  loser.matches = (loser.matches ?? 0) + 1;
-
-  await Promise.all([winner.save(), loser.save()]);
-
-  const VoteRound = getPlayVoteRoundModel();
   const roundIndex = Math.floor(votesToday / VOTE_ROUND_SIZE);
-  await VoteRound.updateOne(
-    { anonymousId, challengeDate, roundIndex },
-    {
-      $inc: { votesInRound: 1 },
-      $addToSet: {
-        seenSubmissionIds: { $each: [winnerId, loserId] },
+
+  // Everything below the vote record itself is submitter-only. An unweighted
+  // vote is stored (so its pair is burned and can't be re-served) and is
+  // otherwise completely inert: no rating move, no round row, no recap.
+  if (weighted) {
+    await ensureRoundSnapshot({ anonymousId, challengeDate, votesToday });
+
+    const updated = updateRatings1v1(
+      {
+        ratingMean: winner.ratingMean ?? 25,
+        ratingDeviation: winner.ratingDeviation ?? 25 / 3,
       },
-    },
-  );
+      {
+        ratingMean: loser.ratingMean ?? 25,
+        ratingDeviation: loser.ratingDeviation ?? 25 / 3,
+      },
+    );
+
+    winner.ratingMean = updated.winner.ratingMean;
+    winner.ratingDeviation = updated.winner.ratingDeviation;
+    winner.rankingScore = rankingScoreFrom(
+      updated.winner.ratingMean,
+      updated.winner.ratingDeviation,
+    );
+    winner.wins = (winner.wins ?? 0) + 1;
+    winner.matches = (winner.matches ?? 0) + 1;
+
+    loser.ratingMean = updated.loser.ratingMean;
+    loser.ratingDeviation = updated.loser.ratingDeviation;
+    loser.rankingScore = rankingScoreFrom(
+      updated.loser.ratingMean,
+      updated.loser.ratingDeviation,
+    );
+    loser.losses = (loser.losses ?? 0) + 1;
+    loser.matches = (loser.matches ?? 0) + 1;
+
+    await Promise.all([winner.save(), loser.save()]);
+
+    const VoteRound = getPlayVoteRoundModel();
+    await VoteRound.updateOne(
+      { anonymousId, challengeDate, roundIndex },
+      {
+        $inc: { votesInRound: 1 },
+        $addToSet: {
+          seenSubmissionIds: { $each: [winnerId, loserId] },
+        },
+      },
+    );
+  }
 
   const newVotesToday = votesToday + 1;
   const roundComplete = newVotesToday % VOTE_ROUND_SIZE === 0;
-  let round = buildRoundProgress(newVotesToday);
+  const newWeightedVotesToday = weightedVotesToday + (weighted ? 1 : 0);
+  let round = buildRoundProgress(newVotesToday, newWeightedVotesToday);
   if (roundComplete) {
     // Present as 5/5 completed for the recap UI.
     round = {
@@ -1038,14 +1103,18 @@ export async function castVote(input: {
     challengeDate,
   });
   const allPairsComplete = pairsRemaining === 0;
-  const underCap = newVotesToday < MAX_WEIGHTED_VOTES_PER_DAY;
+  // The cap only exists for weighted voters, so an unweighted player is always
+  // "under" it.
+  const underCap =
+    !weighted || newWeightedVotesToday < MAX_WEIGHTED_VOTES_PER_DAY;
   const canContinue = underCap && !allPairsComplete;
 
   let recap: RoundRecap | undefined;
-  // Full round, last unique pair mid-round, or daily vote cap → show recap.
-  const shouldRecap =
-    roundComplete || allPairsComplete || !underCap;
-  if (shouldRecap) {
+  // Full round, last unique pair mid-round, or vote cap → break for an
+  // interstitial. Unweighted players get the same break, but no recap: the
+  // recap reports how the ranking moved, and theirs moved nothing.
+  const shouldBreak = roundComplete || allPairsComplete || !underCap;
+  if (shouldBreak) {
     if (!roundComplete && allPairsComplete) {
       // Partial final round: show how many votes landed in this round.
       const votesInPartial = (votesToday % VOTE_ROUND_SIZE) + 1;
@@ -1055,20 +1124,22 @@ export async function castVote(input: {
         roundIndex,
       };
     }
-    recap = await buildRecap({
-      anonymousId,
-      challengeDate,
-      roundIndex,
-    });
-  }
+    if (weighted) {
+      recap = await buildRecap({
+        anonymousId,
+        challengeDate,
+        roundIndex,
+      });
+    }
 
-  if (shouldRecap) {
     return {
       recorded: true,
       challengeDate,
       round,
       pairAvailable: false,
       recap,
+      weighted,
+      roundComplete,
       pairsRemaining,
       allPairsComplete,
       canContinue,
@@ -1088,6 +1159,8 @@ export async function castVote(input: {
       pairAvailable: true,
       left: next.left,
       right: next.right,
+      weighted,
+      roundComplete,
       pairsRemaining: next.pairsRemaining,
       allPairsComplete: false,
       canContinue: true,
@@ -1099,6 +1172,8 @@ export async function castVote(input: {
     challengeDate,
     round,
     pairAvailable: false,
+    weighted,
+    roundComplete,
     pairsRemaining: next.pairsRemaining,
     allPairsComplete: next.allPairsComplete,
     canContinue: next.canContinue,

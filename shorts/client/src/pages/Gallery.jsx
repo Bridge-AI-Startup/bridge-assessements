@@ -189,7 +189,7 @@ export default function Gallery() {
               </p>
             )}
             {rounds !== null && rounds.length === 0 && (
-              <div className="rounded-2xl border border-line bg-paper px-4 py-10 text-center shadow-card">
+              <div className="punch-card px-4 py-10 text-center">
                 <p className="text-[22px] font-medium tracking-tight text-ink">
                   No past rounds yet
                 </p>
@@ -199,7 +199,7 @@ export default function Gallery() {
               {(rounds || []).map((round) => (
                 <div
                   key={round.slug}
-                  className="rounded-2xl border border-line bg-paper p-5 shadow-card"
+                  className="punch-card-sm p-5 transition-transform duration-150 hover:-translate-y-1"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -244,7 +244,7 @@ export default function Gallery() {
           </div>
         )}
         {viewMode === "builds" && !loading && !error && items.length === 0 && (
-          <div className="rounded-2xl border border-line bg-paper px-4 py-10 text-center shadow-card">
+          <div className="punch-card px-4 py-10 text-center">
             <p className="text-[22px] font-medium tracking-tight text-ink">
               No submissions yet
             </p>

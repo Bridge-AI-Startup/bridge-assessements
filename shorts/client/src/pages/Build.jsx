@@ -31,6 +31,7 @@ import {
 } from "@/components/workspace/TokenGauge";
 import TokenBreakdown from "@/components/workspace/TokenBreakdown";
 import SessionWaitlist from "@/components/SessionWaitlist";
+import DraftRoulette from "@/components/workspace/DraftRoulette";
 
 const DEFAULT_LEFT_STACK = ["editor", "chat"];
 const DEFAULT_LEFT_SIZES = { editor: 55, chat: 45 };
@@ -430,6 +431,7 @@ export default function Build() {
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const [chatError, setChatError] = useState(null);
+  const [spinningDraft, setSpinningDraft] = useState(false);
   const [modelEffort, setModelEffort] = useState(null);
   const chatEndRef = useRef(null);
   const splitRef = useRef(null);
@@ -1044,6 +1046,11 @@ export default function Build() {
     void sendPrompt(chatInput);
   }
 
+  function handleSpinDraft(prompt) {
+    setSpinningDraft(true);
+    void sendPrompt(prompt).finally(() => setSpinningDraft(false));
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     if (state.kind !== "ready" || submitting) return;
@@ -1228,6 +1235,10 @@ export default function Build() {
   // ending, which the 30s status poll picks up; credits are the sole limit the
   // builder works against.
   const chatLocked = exhausted;
+  const hasUserTurns = chatMessages.some((m) => m.role === "user");
+  const hasPreview = chatMessages.some((m) => m.role === "preview");
+  const showDraftHero =
+    !exhausted && !hasPreview && (!hasUserTurns || spinningDraft);
 
   const leftColumnWidth =
     editorFullscreen || chatFullscreen
@@ -1353,7 +1364,7 @@ export default function Build() {
               placeholder={
                 exhausted ? "Out of credits" : "Ask Claude Code to build…"
               }
-              disabled={chatBusy || chatLocked}
+              disabled={chatBusy || chatLocked || spinningDraft}
               className="w-full resize-none rounded border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50"
             />
             <button
@@ -1511,6 +1522,10 @@ export default function Build() {
     chatBusy,
     chatError,
     onSendMessage: sendPrompt,
+    onSpinDraft: handleSpinDraft,
+    onSpinStart: () => setSpinningDraft(true),
+    spinningDraft,
+    showDraftHero,
     exhausted,
     tokensUsed,
     tokenBudget,
@@ -1752,12 +1767,28 @@ export default function Build() {
                 </button>
               }
             >
-              <iframe
-                title="Preview"
-                key={previewTick}
-                src={previewSrc}
-                className="h-full w-full border-0"
-              />
+              <div className="relative h-full min-h-0">
+                <iframe
+                  title="Preview"
+                  key={previewTick}
+                  src={previewSrc}
+                  className="h-full w-full border-0"
+                />
+                {showDraftHero ? (
+                  <div className="absolute inset-0 z-10 overflow-auto bg-cream px-6 py-10">
+                    <div className="mx-auto flex min-h-full max-w-md items-center">
+                      <DraftRoulette
+                        variant="hero"
+                        chatHint="chat"
+                        busy={chatBusy}
+                        disabled={exhausted || chatBusy}
+                        onSpin={handleSpinDraft}
+                        onSpinStart={() => setSpinningDraft(true)}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </PaneChrome>
           </div>
         )}

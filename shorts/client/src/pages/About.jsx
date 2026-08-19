@@ -9,7 +9,7 @@ const BRIDGE_SITE_URL = "https://www.bridge-jobs.com";
  * The "what is this and why does it exist" page.
  *
  * Shorts is a promotional product for Bridge, and the connection is the whole
- * point — but a footer sentence can only assert it. This page argues it: the
+ * point, but a footer sentence can only assert it. This page argues it: the
  * thesis (interviews stopped measuring the job), the format that tests it, and
  * the hiring platform built on the same idea. Linked from the nav and footer.
  */
@@ -17,8 +17,8 @@ const BRIDGE_SITE_URL = "https://www.bridge-jobs.com";
 const STEPS = [
   {
     n: "01",
-    title: "Get the prompt",
-    body: "One challenge per round, identical for everyone. Small enough to finish in a sitting.",
+    title: "Get the challenge",
+    body: "Identical for everyone. Small enough to finish in a sitting.",
   },
   {
     n: "02",
@@ -28,7 +28,7 @@ const STEPS = [
   {
     n: "03",
     title: "Submit it",
-    body: "Ship whatever you have. No countdown to beat — the round ends when it ends, and your build is saved the moment you send it.",
+    body: "Ship whatever you have. No countdown to beat. The round ends when it ends, and your build is saved the moment you send it.",
   },
   {
     n: "04",
@@ -48,14 +48,14 @@ export default function About() {
           <p className="label-mono">What is Bridge Shorts</p>
           <h1 className="mt-5 text-[40px] font-medium leading-[1.1] tracking-tight lg:text-[52px]">
             <span className="text-ink">
-              Everyone gets the same prompt and the same model.
+              Everyone gets the same challenge and the same model.
             </span>{" "}
             <span className="text-fog-light">The difference is you.</span>
           </h1>
           <p className="mt-6 max-w-2xl text-[17px] leading-relaxed text-fog">
-            Shorts is a build challenge. One prompt per round, a fixed credit
+            Shorts is a build challenge. One per round, a fixed credit
             budget, and an AI that will write whatever you ask it to. What
-            separates the builds isn't access to better tools — it's taste,
+            separates the builds isn't access to better tools. It's taste,
             judgment, and knowing when something is done.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
@@ -81,7 +81,7 @@ export default function About() {
               <p>
                 For twenty years, the way to prove you could build software was
                 to reproduce a data structure on a whiteboard while someone
-                watched. That was always a proxy. Now it's a broken one — the
+                watched. That was always a proxy. Now it's a broken one. The
                 model in your editor recalls the algorithm faster than you can.
               </p>
               <p>
@@ -95,7 +95,7 @@ export default function About() {
               </p>
               <p>
                 That's what a round of Shorts puts on display. Everyone starts
-                from the same blank workspace, the same prompt, the same budget.
+                from the same blank workspace, the same challenge, the same budget.
                 Nobody has a better model than anyone else. What you have at the
                 end is a build that could only have come from you.
               </p>
@@ -110,11 +110,13 @@ export default function About() {
             Build something small. Let people pick their favourite.
           </h2>
 
-          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {STEPS.map((step) => (
+          <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            {STEPS.map((step, i) => (
               <div
                 key={step.n}
-                className="rounded-2xl border border-line bg-paper px-5 py-6 shadow-card"
+                className={`punch-card-sm px-5 py-6 transition-transform duration-200 hover:rotate-0 ${
+                  i % 2 === 0 ? "-rotate-1" : "rotate-1"
+                }`}
               >
                 <span className="font-mono text-[11px] tracking-label text-fog-light">
                   {step.n}
@@ -132,7 +134,7 @@ export default function About() {
 
         {/* The Bridge connection */}
         <section className="mt-16 border-t border-line pt-12 lg:mt-24 lg:pt-16">
-          <div className="overflow-hidden rounded-2xl border border-line bg-cream shadow-card">
+          <div className="punch-card overflow-hidden bg-cream">
             <div className="grid gap-8 px-6 py-10 sm:px-10 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)] lg:gap-14 lg:py-14">
               <div>
                 <div className="flex items-center gap-2.5">
@@ -154,8 +156,8 @@ export default function About() {
                 <p>
                   Bridge is a hiring platform built on the same idea. Employers
                   generate take-home assessments with AI, send them to
-                  candidates, and see how the work actually happened — the
-                  prompts, the dead ends, the fixes — instead of guessing from a
+                  candidates, and see how the work actually happened: the
+                  prompts, the dead ends, the fixes, instead of guessing from a
                   final diff.
                 </p>
                 <p>

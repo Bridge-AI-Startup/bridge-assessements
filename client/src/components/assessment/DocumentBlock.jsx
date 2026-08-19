@@ -1,8 +1,14 @@
 import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Pencil, GripVertical, Trash2, Plus } from "lucide-react";
+import { Pencil, GripVertical, Trash2, Plus, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
 
 export default function DocumentBlock({
   title,
@@ -16,11 +22,17 @@ export default function DocumentBlock({
   isInContext,
   onEdit,
   editValue,
-  type = "default",
+  sectionId,
+  collapsed = false,
+  onCollapsedChange,
+  summary,
+  collapsible = true,
+  badge,
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState("");
   const textareaRef = useRef(null);
+  const isOpen = collapsible ? !collapsed : true;
 
   // Auto-resize textarea to fit content
   useEffect(() => {
@@ -40,6 +52,7 @@ export default function DocumentBlock({
 
   const handleStartEdit = (e) => {
     e.stopPropagation();
+    if (collapsed) onCollapsedChange?.(false);
     setEditText(editValue || "");
     setIsEditing(true);
   };
@@ -65,24 +78,53 @@ export default function DocumentBlock({
     setIsEditing(false);
   };
 
-  return (
-    <motion.div
-      onClick={onSelect}
-      className={`bg-white rounded-xl border transition-all duration-200 cursor-pointer ${
-        isActive
-          ? "border-[#21201C] shadow-sm"
-          : "border-gray-200 hover:border-gray-300"
-      } ${
-        isHighlighted
-          ? "ring-4 ring-yellow-400 ring-opacity-75 shadow-lg border-yellow-400"
-          : ""
-      }`}
-      animate={isHighlighted ? { scale: [1, 1.02, 1] } : {}}
-      transition={{ duration: 0.3 }}
+  const header = (
+    <div
+      className={cn(
+        "flex items-start justify-between px-5 py-3",
+        isOpen && "border-b border-gray-100"
+      )}
     >
-      {/* Header */}
-      <div className="flex items-start justify-between px-5 py-3 border-b border-gray-100">
-        <div className="flex items-start gap-2.5">
+      {collapsible ? (
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="flex items-start gap-2.5 min-w-0 text-left flex-1 rounded-lg -ml-1 px-1 py-0.5 hover:bg-gray-50 transition-colors"
+            aria-label={`${isOpen ? "Collapse" : "Expand"} ${title}`}
+          >
+            <ChevronDown
+              className={cn(
+                "w-4 h-4 text-gray-400 mt-2 shrink-0 transition-transform duration-200",
+                !isOpen && "-rotate-90"
+              )}
+            />
+            <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
+              <Icon className="w-4 h-4 text-gray-600" />
+            </div>
+            <div className="min-w-0 pt-0">
+              <span className="font-medium text-gray-900 flex items-center gap-2 leading-8">
+                {title}
+                {badge ? (
+                  <span className="eyebrow text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 leading-none">
+                    {badge}
+                  </span>
+                ) : null}
+              </span>
+              {subtitle && (isOpen || !summary) && (
+                <span className="block text-xs text-gray-500 leading-snug -mt-1 pb-0.5">
+                  {subtitle}
+                </span>
+              )}
+              {!isOpen && summary ? (
+                <span className="block text-xs text-gray-500 leading-snug -mt-1 pb-0.5 truncate">
+                  {summary}
+                </span>
+              ) : null}
+            </div>
+          </button>
+        </CollapsibleTrigger>
+      ) : (
+        <div className="flex items-start gap-2.5 min-w-0">
           <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
             <Icon className="w-4 h-4 text-gray-600" />
           </div>
@@ -97,24 +139,26 @@ export default function DocumentBlock({
             )}
           </div>
         </div>
-        <div className="flex items-center gap-1 shrink-0">
-          {onEdit && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={isEditing ? handleCancel : handleStartEdit}
-              className="h-8 px-2.5 text-gray-500 hover:text-gray-700"
-            >
-              <Pencil className="w-3.5 h-3.5 mr-1.5" />
-              {isEditing ? "Cancel" : "Edit"}
-            </Button>
-          )}
+      )}
+      <div className="flex items-center gap-1 shrink-0">
+        {onEdit && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={isEditing ? handleCancel : handleStartEdit}
+            className="h-8 px-2.5 text-gray-500 hover:text-gray-700"
+          >
+            <Pencil className="w-3.5 h-3.5 mr-1.5" />
+            {isEditing ? "Cancel" : "Edit"}
+          </Button>
+        )}
+        {onAddToContext && (
           <Button
             variant="ghost"
             size="sm"
             onClick={(e) => {
               e.stopPropagation();
-              onAddToContext?.();
+              onAddToContext();
             }}
             className={`h-8 px-2.5 ${
               isInContext
@@ -129,49 +173,76 @@ export default function DocumentBlock({
             />
             {isInContext ? "Editable" : "Restrict edits to this"}
           </Button>
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="px-5 py-4">
-        {isEditing ? (
-          <div className="space-y-3">
-            <Textarea
-              ref={textareaRef}
-              value={editText}
-              onChange={handleTextChange}
-              onClick={(e) => e.stopPropagation()}
-              className="min-h-[100px] text-gray-700 resize-none overflow-hidden"
-              style={{ height: "auto" }}
-            />
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={handleCancel}>
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={handleSave}
-                className="bg-[#21201C] hover:bg-[#35332D]"
-              >
-                Save
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              if (onEdit) {
-                handleStartEdit(e);
-              }
-            }}
-            className="cursor-text hover:bg-gray-50 -mx-5 -my-4 px-5 py-4 rounded transition-colors"
-          >
-            {children}
-          </div>
         )}
       </div>
-    </motion.div>
+    </div>
+  );
+
+  const body = (
+    <div className="px-5 py-4">
+      {isEditing ? (
+        <div className="space-y-3">
+          <Textarea
+            ref={textareaRef}
+            value={editText}
+            onChange={handleTextChange}
+            onClick={(e) => e.stopPropagation()}
+            className="min-h-[100px] text-gray-700 resize-none overflow-hidden"
+            style={{ height: "auto" }}
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={handleCancel}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSave}
+              className="bg-[#21201C] hover:bg-[#35332D]"
+            >
+              Save
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div
+          onClick={(e) => {
+            e.stopPropagation();
+            if (onEdit) {
+              handleStartEdit(e);
+            }
+          }}
+          className={onEdit ? "cursor-text hover:bg-gray-50 -mx-5 -my-4 px-5 py-4 rounded transition-colors" : undefined}
+        >
+          {children}
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <Collapsible
+      open={isOpen}
+      onOpenChange={(open) => onCollapsedChange?.(!open)}
+      disabled={!collapsible}
+    >
+      <motion.div
+        id={sectionId ? `section-${sectionId}` : undefined}
+        onClick={onSelect}
+        className={cn(
+          "bg-white rounded-xl border transition-all duration-200 scroll-mt-20",
+          isActive
+            ? "border-[#21201C] shadow-sm"
+            : "border-gray-200 hover:border-gray-300",
+          isHighlighted &&
+            "ring-4 ring-yellow-400 ring-opacity-75 shadow-lg border-yellow-400"
+        )}
+        animate={isHighlighted ? { scale: [1, 1.02, 1] } : {}}
+        transition={{ duration: 0.3 }}
+      >
+        {header}
+        <CollapsibleContent className="overflow-hidden">{body}</CollapsibleContent>
+      </motion.div>
+    </Collapsible>
   );
 }
 

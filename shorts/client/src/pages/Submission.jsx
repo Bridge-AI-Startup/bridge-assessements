@@ -109,7 +109,7 @@ export default function Submission() {
               />
             </div>
 
-            <div className="rounded-2xl border border-line bg-cream p-2 shadow-card">
+            <div className="punch-card bg-cream p-2">
               <div className="overflow-hidden rounded-xl border border-line bg-paper">
                 {preview?.url ? (
                   <iframe

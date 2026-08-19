@@ -25,8 +25,22 @@ body {
 }
 
 @layer components {
+  /* Primary pills carry the site's playful signature: a hard amber offset
+     shadow and a small hover lift. Secondary pills stay quiet on purpose so a
+     page's primary CTA is always the loudest thing on screen. */
   .btn-pill {
-    @apply inline-flex items-center justify-center rounded-full bg-ink px-4 py-2 font-mono text-[11px] font-medium uppercase tracking-label text-white transition-colors hover:bg-ink-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:opacity-50;
+    @apply inline-flex items-center justify-center rounded-full bg-ink px-4 py-2 font-mono text-[11px] font-medium uppercase tracking-label text-white shadow-[3px_3px_0_#F59E0B] transition-all hover:-translate-y-0.5 hover:bg-ink-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:translate-y-0 disabled:opacity-50 disabled:shadow-none;
+  }
+
+  /* Sticker/table-card surface: thick ink border + hard offset shadow. The
+     shared card language for the "fun" restyle (Home hero card, gallery
+     cards, vote panes, About steps). */
+  .punch-card {
+    @apply rounded-2xl border-2 border-ink bg-paper shadow-[5px_5px_0_#21201C];
+  }
+
+  .punch-card-sm {
+    @apply rounded-2xl border-2 border-ink bg-paper shadow-[4px_4px_0_#21201C];
   }
 
   .btn-pill-secondary {
@@ -35,6 +49,47 @@ body {
 
   .label-mono {
     @apply font-mono text-[11px] font-medium uppercase tracking-label text-fog;
+  }
+}
+
+/* Home hero — Wordle-style letter tiles flip in one at a time, and the
+   challenge card deals itself onto the table. Purely decorative; both are
+   disabled under prefers-reduced-motion. */
+@keyframes home-tile-flip {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) rotateX(90deg) rotate(var(--tile-rot, 0deg));
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(-2px) rotateX(-12deg) rotate(var(--tile-rot, 0deg));
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) rotateX(0deg) rotate(var(--tile-rot, 0deg));
+  }
+}
+
+.home-tile {
+  transform: rotate(var(--tile-rot, 0deg));
+  animation: home-tile-flip 520ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+@keyframes home-card-deal {
+  from {
+    opacity: 0;
+    transform: translateY(18px) rotate(-3deg) scale(0.97);
+  }
+}
+
+.home-card-deal {
+  animation: home-card-deal 420ms cubic-bezier(0.2, 0.8, 0.2, 1) 200ms backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-tile,
+  .home-card-deal {
+    animation: none;
   }
 }
 
@@ -129,6 +184,41 @@ body {
   animation: vote-pane-out 150ms ease-in forwards;
 }
 
+@keyframes roulette-whir {
+  0% {
+    transform: translateY(-35%);
+    opacity: 0.3;
+    filter: blur(3px);
+  }
+  50% {
+    transform: translateY(0);
+    opacity: 1;
+    filter: blur(0);
+  }
+  100% {
+    transform: translateY(35%);
+    opacity: 0.3;
+    filter: blur(3px);
+  }
+}
+
+.roulette-whir {
+  animation: roulette-whir 90ms linear infinite;
+}
+
+@keyframes roulette-land {
+  from {
+    transform: scale(1.08) rotate(-2deg);
+  }
+  to {
+    transform: scale(1) rotate(0);
+  }
+}
+
+.roulette-land {
+  animation: roulette-land 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .vote-backdrop-enter,
   .vote-pane-enter {
@@ -138,5 +228,10 @@ body {
   .vote-backdrop-exit,
   .vote-pane-exit {
     animation: vote-fade-out 1ms forwards;
+  }
+
+  .roulette-whir,
+  .roulette-land {
+    animation: none;
   }
 }
