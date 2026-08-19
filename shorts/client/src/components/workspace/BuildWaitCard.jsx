@@ -74,7 +74,7 @@ export default function BuildWaitCard({ active }) {
               onClick={drawAnother}
               className="label-mono hover:text-ink"
             >
-              Another
+              {Game ? "Next" : "Another"}
             </button>
           </div>
 

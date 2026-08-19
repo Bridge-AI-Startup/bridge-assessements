@@ -102,19 +102,26 @@ function newShadeRound(streak) {
 function ShadeGame() {
   const [streak, setStreak] = useState(0);
   const [round, setRound] = useState(() => newShadeRound(0));
-  const [missed, setMissed] = useState(false);
+  const [verdict, setVerdict] = useState(null); // { hit, picked }
+  const timerRef = useRef(null);
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
 
   function pick(index) {
-    if (index === round.odd) {
-      const next = streak + 1;
-      setStreak(next);
-      setMissed(false);
-      setRound(newShadeRound(next));
-    } else {
-      setStreak(0);
-      setMissed(true);
-      setRound(newShadeRound(0));
-    }
+    if (verdict) return;
+    const hit = index === round.odd;
+    setVerdict({ hit, picked: index });
+    timerRef.current = setTimeout(() => {
+      if (hit) {
+        const next = streak + 1;
+        setStreak(next);
+        setRound(newShadeRound(next));
+      } else {
+        setStreak(0);
+        setRound(newShadeRound(0));
+      }
+      setVerdict(null);
+    }, hit ? 280 : 420);
   }
 
   const base = `hsl(${round.hue}, 55%, ${round.light}%)`;
@@ -122,25 +129,49 @@ function ShadeGame() {
 
   return (
     <div>
-      <div className="grid grid-cols-4 gap-1.5">
-        {Array.from({ length: SHADE_GRID * SHADE_GRID }, (_, i) => (
-          <button
-            key={`${streak}-${round.odd}-${i}`}
-            type="button"
-            aria-label={`Tile ${i + 1}`}
-            onClick={() => pick(i)}
-            className="aspect-square rounded-lg transition-transform active:scale-95"
-            style={{ backgroundColor: i === round.odd ? odd : base }}
-          />
-        ))}
-      </div>
-      <p className="mt-2 text-xs text-fog-light" aria-live="polite">
-        {missed
-          ? "Missed — new round."
+      <p
+        className={`mb-1.5 text-center text-sm font-semibold ${
+          verdict
+            ? verdict.hit
+              ? "text-accent-emerald"
+              : "text-red-600"
+            : "text-fog-light"
+        }`}
+        aria-live="assertive"
+      >
+        {verdict
+          ? verdict.hit
+            ? "Got it"
+            : "Missed — that one"
           : streak > 0
-            ? `Streak: ${streak} — it gets harder.`
-            : "One tile is a different shade. Tap it."}
+            ? `Streak: ${streak}`
+            : "One tile is a different shade."}
       </p>
+      <div className="grid grid-cols-4 gap-1.5">
+        {Array.from({ length: SHADE_GRID * SHADE_GRID }, (_, i) => {
+          const isOdd = i === round.odd;
+          const isPicked = verdict?.picked === i;
+          const ring = !verdict
+            ? ""
+            : isOdd
+              ? verdict.hit
+                ? "ring-2 ring-accent-emerald ring-offset-1 ring-offset-paper"
+                : "ring-2 ring-ink ring-offset-1 ring-offset-paper"
+              : isPicked
+                ? "ring-2 ring-red-500 ring-offset-1 ring-offset-paper opacity-70"
+                : "opacity-40";
+          return (
+            <button
+              key={`${streak}-${round.odd}-${i}`}
+              type="button"
+              aria-label={`Tile ${i + 1}`}
+              onClick={() => pick(i)}
+              className={`aspect-square rounded-lg transition-transform active:scale-95 ${ring}`}
+              style={{ backgroundColor: isOdd ? odd : base }}
+            />
+          );
+        })}
+      </div>
     </div>
   );
 }
