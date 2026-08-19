@@ -144,7 +144,7 @@ AI is the primary Build UX (chat panel). Claude Code still runs **inside E2B**; 
 |-----|--------------|---------|
 | `ANTHROPIC_API_KEY` | — | Org key on Bridge only (never written into the sandbox) |
 | `SHORTS_LLM_PROXY_PUBLIC_URL` | `PLAY_LLM_PROXY_PUBLIC_URL` | Public base URL E2B can reach (e.g. Render). **Required for Claude** — sandboxes cannot call `localhost` |
-| `SHORTS_ANTHROPIC_MODEL` | `PLAY_ANTHROPIC_MODEL` | Default Claude model (e.g. `claude-sonnet-4-6`) |
+| `SHORTS_ANTHROPIC_MODEL` | `PLAY_ANTHROPIC_MODEL` | Default Claude model (unset → Opus 4.5) |
 
 On session create, Bridge provisions:
 

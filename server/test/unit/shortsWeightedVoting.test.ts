@@ -201,7 +201,7 @@ describe("Shorts weighted voting", () => {
     VoteRoundModel.findOne.mockResolvedValue(null);
   });
 
-  it("serves a matchup to someone who has not submitted, flagged unweighted", async () => {
+  it("serves a matchup to someone who has not submitted — weighted, with a round open", async () => {
     seedOthers();
 
     const result = await getNextVotePair({
@@ -211,11 +211,11 @@ describe("Shorts weighted voting", () => {
     });
 
     expect(result.pairAvailable).toBe(true);
-    expect(result.weighted).toBe(false);
+    // EVERY_VOTE_IS_WEIGHTED: spectators' picks count too.
+    expect(result.weighted).toBe(true);
     // The old "submit first" wall is gone.
     expect(result.pairAvailable === false && result.reason).toBeFalsy();
-    // PlayVoteRound is a submitter feature — no row for an unweighted player.
-    expect(VoteRoundModel.create).not.toHaveBeenCalled();
+    expect(VoteRoundModel.create).toHaveBeenCalledTimes(1);
   });
 
   it("marks a submitter's matchup weighted and opens their round", async () => {
@@ -259,7 +259,7 @@ describe("Shorts weighted voting", () => {
     expect(VoteRoundModel.updateOne).toHaveBeenCalledTimes(1);
   });
 
-  it("records an unweighted vote as inert: stored, but nothing moves", async () => {
+  it("weights a non-submitter's vote like any other: stored and ratings move", async () => {
     const [a, b] = seedOthers(4);
 
     const result = await castVote({
@@ -271,27 +271,23 @@ describe("Shorts weighted voting", () => {
     });
 
     expect(result.recorded).toBe(true);
-    expect(result.weighted).toBe(false);
+    expect(result.weighted).toBe(true);
     expect(VoteModel.create).toHaveBeenCalledWith(
-      expect.objectContaining({ weighted: false }),
+      expect.objectContaining({ weighted: true }),
     );
     expect(votes).toHaveLength(1);
-    expect(votes[0].weighted).toBe(false);
+    expect(votes[0].weighted).toBe(true);
 
-    // Ratings, win/loss counters and the round row are all untouched.
-    expect(a.ratingMean).toBe(25);
-    expect(b.ratingMean).toBe(25);
-    expect(a.wins).toBe(0);
-    expect(b.losses).toBe(0);
-    expect(a.matches).toBe(0);
-    expect(b.matches).toBe(0);
-    expect(a.save).not.toHaveBeenCalled();
-    expect(b.save).not.toHaveBeenCalled();
-    expect(VoteRoundModel.updateOne).not.toHaveBeenCalled();
-    expect(VoteRoundModel.create).not.toHaveBeenCalled();
+    expect(a.ratingMean).toBeGreaterThan(25);
+    expect(b.ratingMean).toBeLessThan(25);
+    expect(a.wins).toBe(1);
+    expect(b.losses).toBe(1);
+    expect(a.save).toHaveBeenCalledTimes(1);
+    expect(b.save).toHaveBeenCalledTimes(1);
+    expect(VoteRoundModel.updateOne).toHaveBeenCalledTimes(1);
   });
 
-  it("never hands an unweighted player a recap", async () => {
+  it("hands a non-submitter the recap when their fifth pick closes the round", async () => {
     const others = seedOthers(6);
 
     // Four picks in, then the fifth closes the round.
@@ -303,16 +299,18 @@ describe("Shorts weighted voting", () => {
         loserId: others[i + 1]._id,
         includeFiles: false,
       });
-      expect(result.recap).toBeUndefined();
-      expect(result.weighted).toBe(false);
+      expect(result.weighted).toBe(true);
       if (i === 4) {
         expect(result.roundComplete).toBe(true);
         expect(result.pairAvailable).toBe(false);
+        expect(result.recap).toBeDefined();
+      } else {
+        expect(result.recap).toBeUndefined();
       }
     }
   });
 
-  it("applies the vote cap to weighted votes only", async () => {
+  it("applies the vote cap to every voter", async () => {
     const [a, b] = seedOthers(4);
     seedOwnBuild();
     seedFillerVotes(MAX_WEIGHTED_VOTES_PER_DAY, true);
@@ -336,9 +334,10 @@ describe("Shorts weighted voting", () => {
     expect(next.pairAvailable === false && next.reason).toBe("vote_cap_reached");
   });
 
-  it("lets an unweighted player keep going past the weighted cap", async () => {
+  it("does not count historical unweighted plays against the cap", async () => {
     const [a, b] = seedOthers(4);
-    // No own build → unweighted. Well past the cap in plays.
+    // Old inert plays from before the everyone-weighted switch: they burned
+    // pairs, but they never consumed the ranking-vote budget.
     seedFillerVotes(MAX_WEIGHTED_VOTES_PER_DAY + 5, false);
 
     const result = await castVote({
@@ -349,7 +348,7 @@ describe("Shorts weighted voting", () => {
       includeFiles: false,
     });
     expect(result.recorded).toBe(true);
-    expect(result.weighted).toBe(false);
+    expect(result.weighted).toBe(true);
   });
 
   it("counts only weighted votes toward the cap and round index", async () => {

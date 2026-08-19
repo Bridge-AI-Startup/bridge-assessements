@@ -131,7 +131,7 @@ const GAMES = [
 ];
 
 /** Fraction of draws that deal a minigame instead of a text bit. */
-const GAME_PROBABILITY = 0.5;
+const GAME_PROBABILITY = 0.3;
 
 /**
  * @typedef {{ id: string, label: string, steps: { text: string, cta?: string }[] }} WaitTextBit
@@ -203,18 +203,20 @@ function weightedPick(pool) {
  * @returns {WaitBit}
  */
 export function nextWaitBit(previousId = null) {
+  const previous = WAIT_BITS.find((bit) => bit.id === previousId);
   const games = WAIT_BITS.filter(
     (bit) => bit.kind === "game" && bit.id !== previousId,
   );
   const texts = WAIT_BITS.filter(
     (bit) => bit.kind !== "game" && bit.id !== previousId,
   );
-  const pool =
-    games.length > 0 && Math.random() < GAME_PROBABILITY
-      ? games
-      : texts.length > 0
-        ? texts
-        : WAIT_BITS;
+  // Don't deal game → game: "Another" from odd-one-out was bouncing
+  // between the two weighted minigames and starving the jokes.
+  const dealGame =
+    games.length > 0 &&
+    previous?.kind !== "game" &&
+    Math.random() < GAME_PROBABILITY;
+  const pool = dealGame ? games : texts.length > 0 ? texts : WAIT_BITS;
   return weightedPick(pool);
 }
 

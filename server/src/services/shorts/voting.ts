@@ -249,9 +249,22 @@ async function countPlayedVotesToday(
 }
 
 /**
+ * Every vote currently moves the ratings — submitters and spectators alike.
+ * Early rounds need vote volume (both for the ranking and as data to collect)
+ * more than they need gate-keeping, so the submit gate on weighting is
+ * switched off. The weighted/unweighted mechanism stays fully wired:
+ * `weighted` is still stamped on every vote document, historical
+ * `weighted: false` votes stay inert everywhere they are counted, and
+ * restoring the gate is flipping this to `false` — the `hasSubmitted` check
+ * below takes over again.
+ */
+const EVERY_VOTE_IS_WEIGHTED = true;
+
+/**
  * Has this builder entered at least one build for the challenge? Decides
  * whether their votes move the ratings — not whether they may vote at all.
  * Deliberately not "which submission is theirs" — a builder may have several.
+ * Currently bypassed by `EVERY_VOTE_IS_WEIGHTED`.
  */
 async function hasSubmitted(
   anonymousId: string,
@@ -729,8 +742,9 @@ export async function getNextVotePair(input: {
   }
   const includeFiles = input.includeFiles !== false;
   const challengeDate = input.challengeDate || (await getActiveChallengeDate());
-  // Anyone may play the matchups; only a builder's picks move the ratings.
-  const weighted = await hasSubmitted(anonymousId, challengeDate);
+  // Anyone may play the matchups, and (for now) every pick moves the ratings.
+  const weighted =
+    EVERY_VOTE_IS_WEIGHTED || (await hasSubmitted(anonymousId, challengeDate));
   const weightedVotesToday = weighted
     ? await countVotesToday(anonymousId, challengeDate)
     : 0;
@@ -975,8 +989,9 @@ export async function castVote(input: {
   }
 
   const challengeDate = input.challengeDate || (await getActiveChallengeDate());
-  // Anyone may play; only a builder's picks are weighted into the ratings.
-  const weighted = await hasSubmitted(anonymousId, challengeDate);
+  // Anyone may play, and (for now) every pick is weighted into the ratings.
+  const weighted =
+    EVERY_VOTE_IS_WEIGHTED || (await hasSubmitted(anonymousId, challengeDate));
   const weightedVotesToday = weighted
     ? await countVotesToday(anonymousId, challengeDate)
     : 0;

@@ -30,9 +30,22 @@ export type PlayModelOption = {
    * resolver rewrites them to the default model outside serverless mode.
    */
   serverlessOnly?: boolean;
+  /** Shown in the Build picker as a caution under the description. */
+  warning?: string;
 };
 
+/** Product default for the Build picker and unresolved model requests. */
+export const DEFAULT_PLAY_MODEL_ID = "claude-opus-4-5-20251101";
+
 export const PLAY_MODEL_OPTIONS: PlayModelOption[] = [
+  {
+    id: "claude-opus-4-5-20251101",
+    cliId: "claude-opus-4-5-20251101",
+    label: "Opus 4.5",
+    description: "Hardest problems",
+    efforts: ["auto", "low", "medium", "high", "max"],
+    defaultEffort: "auto",
+  },
   {
     id: "claude-sonnet-4-5-20250929",
     // Pass the full dated ID to `claude -p --model`. Short aliases like
@@ -53,14 +66,6 @@ export const PLAY_MODEL_OPTIONS: PlayModelOption[] = [
     defaultEffort: null,
   },
   {
-    id: "claude-opus-4-5-20251101",
-    cliId: "claude-opus-4-5-20251101",
-    label: "Opus 4.5",
-    description: "Hardest problems",
-    efforts: ["auto", "low", "medium", "high", "max"],
-    defaultEffort: "auto",
-  },
-  {
     id: "claude-fable-5",
     cliId: "claude-fable-5",
     label: "Fable 5",
@@ -70,6 +75,7 @@ export const PLAY_MODEL_OPTIONS: PlayModelOption[] = [
     efforts: [],
     defaultEffort: null,
     serverlessOnly: true,
+    warning: "Takes longer and uses more tokens",
   },
 ];
 
@@ -92,6 +98,9 @@ const MODEL_IDS = new Set(PLAY_MODEL_OPTIONS.map((m) => m.id));
 
 /** Model used when a request asks for one this make mode cannot run. */
 const FALLBACK_MODEL_ID =
+  PLAY_MODEL_OPTIONS.find(
+    (m) => m.id === DEFAULT_PLAY_MODEL_ID && !m.serverlessOnly,
+  )?.id ??
   PLAY_MODEL_OPTIONS.find((m) => !m.serverlessOnly)?.id ??
   PLAY_MODEL_OPTIONS[0].id;
 
@@ -117,6 +126,7 @@ export function getPlayAnthropicModel(scope?: PlayModelScope): string {
     process.env.ANTHROPIC_MODEL?.trim();
   const canonical = canonicalizePlayModel(fromEnv);
   if (canonical && isRunnableIn(canonical, scope)) return canonical;
+  if (isRunnableIn(DEFAULT_PLAY_MODEL_ID, scope)) return DEFAULT_PLAY_MODEL_ID;
   return FALLBACK_MODEL_ID;
 }
 
@@ -159,7 +169,7 @@ export function resolvePlayEffort(
 
 export function listPlayModelsPublic() {
   return {
-    defaultModel: getPlayAnthropicModel(),
+    defaultModel: DEFAULT_PLAY_MODEL_ID,
     models: PLAY_MODEL_OPTIONS.map(({ cliId: _cli, ...pub }) => pub),
   };
 }

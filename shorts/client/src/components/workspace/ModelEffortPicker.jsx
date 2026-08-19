@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { get } from "@/api/requests";
 
-const STORAGE_KEY = "playClaudeModelEffort.v3";
+const STORAGE_KEY = "playClaudeModelEffort.v4";
 
 function loadStored() {
   try {
@@ -177,6 +177,15 @@ export default function ModelEffortPicker({
                     >
                       {m.description}
                     </span>
+                    {m.warning ? (
+                      <span
+                        className={`mt-0.5 text-[10px] ${
+                          active ? "text-amber-200" : "text-amber-700"
+                        }`}
+                      >
+                        {m.warning}
+                      </span>
+                    ) : null}
                   </button>
                 </li>
               );
