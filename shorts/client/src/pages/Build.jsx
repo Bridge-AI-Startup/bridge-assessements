@@ -50,6 +50,10 @@ const CONNECTION_LOST_MESSAGE =
  */
 const DROPPED_TURN_WINDOW_MS = 150_000;
 const DROPPED_TURN_POLL_MS = 4_000;
+/** Usage only changes after a turn; the post-turn fetch is the live path. */
+const USAGE_POLL_MS = 15_000;
+/** E2B file-fingerprint for the live preview; 1.5s used to 429 the API cap. */
+const REVISION_POLL_MS = 5_000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -664,7 +668,7 @@ export default function Build() {
       if (!cancelled && u) setUsage(u);
     };
     poll();
-    const id = setInterval(poll, 5000);
+    const id = setInterval(poll, USAGE_POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -698,7 +702,7 @@ export default function Build() {
     };
 
     poll();
-    const id = setInterval(poll, 1500);
+    const id = setInterval(poll, REVISION_POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -1073,14 +1077,19 @@ export default function Build() {
               code: "starter_only",
               message: result.message,
             }
-          : /session_expired|session_not_active/i.test(
-                String(result.message || ""),
-              )
+          : result.code === "submission_limit"
             ? {
-                message:
-                  "This round closed before the build went through — submissions for it are done.",
+                code: "submission_limit",
+                message: result.message,
               }
-            : { message: result.message },
+            : /session_expired|session_not_active/i.test(
+                  String(result.message || ""),
+                )
+              ? {
+                  message:
+                    "This round closed before the build went through — submissions for it are done.",
+                }
+              : { message: result.message, code: result.code },
       );
       return;
     }
@@ -1406,7 +1415,7 @@ export default function Build() {
         </h2>
         <p className="mt-1 text-sm text-fog-light">
           Confirm the name for this submission. Your workspace will be saved
-          and closed.
+          and closed. You can send up to three builds this round.
         </p>
         {signedIn ? (
           <p className="mt-2 rounded-xl bg-mist px-3 py-2 text-xs text-fog">
@@ -1445,7 +1454,8 @@ export default function Build() {
           <div
             role="alert"
             className={
-              submitError.code === "starter_only"
+              submitError.code === "starter_only" ||
+              submitError.code === "submission_limit"
                 ? "mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950"
                 : "mt-2 text-sm text-red-600"
             }
@@ -1455,6 +1465,20 @@ export default function Build() {
                 <p className="font-medium">Nothing to submit yet</p>
                 <p className="mt-0.5 text-amber-900/90">
                   {submitError.message}
+                </p>
+              </>
+            ) : submitError.code === "submission_limit" ? (
+              <>
+                <p className="font-medium">Three builds already this round</p>
+                <p className="mt-0.5 text-amber-900/90">
+                  Delete one from{" "}
+                  <Link
+                    to={signedIn ? "/MySubmissions" : "/Gallery"}
+                    className="font-medium text-ink underline"
+                  >
+                    {signedIn ? "My builds" : "the gallery"}
+                  </Link>{" "}
+                  if you want to send another.
                 </p>
               </>
             ) : (

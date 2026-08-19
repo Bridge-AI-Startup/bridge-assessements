@@ -26,6 +26,7 @@ import { filterPlayPublicFiles } from "./sandbox.js";
 type LeanSubmission = {
   _id: Types.ObjectId;
   anonymousId: string;
+  firebaseUid?: string;
   displayName: string;
   challengeSlug: string;
   challengeDate: string;
@@ -169,9 +170,15 @@ function ensureRating(doc: LeanSubmission) {
 
 function toPublicSummary(
   doc: LeanSubmission,
-  opts: { rank?: number; anonymousId?: string } = {},
+  opts: { rank?: number; anonymousId?: string; firebaseUid?: string } = {},
 ): PublicSubmissionSummary {
   const r = ensureRating(doc);
+  const isMine = Boolean(
+    (opts.anonymousId && doc.anonymousId === opts.anonymousId) ||
+      (opts.firebaseUid &&
+        doc.firebaseUid &&
+        doc.firebaseUid === opts.firebaseUid),
+  );
   return {
     id: String(doc._id),
     displayName: doc.displayName,
@@ -187,9 +194,7 @@ function toPublicSummary(
     matches: r.matches,
     provisional: isProvisional(r.matches),
     ...(opts.rank != null ? { rank: opts.rank } : {}),
-    ...(opts.anonymousId
-      ? { isMine: doc.anonymousId === opts.anonymousId }
-      : {}),
+    ...(opts.anonymousId || opts.firebaseUid ? { isMine } : {}),
   };
 }
 
@@ -280,7 +285,7 @@ async function loadRankedForDate(
   const Submission = getPlaySubmissionModel();
   const docs = (await Submission.find({ challengeDate })
     .select(
-      "anonymousId displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches",
+      "anonymousId firebaseUid displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches",
     )
     .lean()) as LeanSubmission[];
 
@@ -445,7 +450,7 @@ async function selectPair(input: {
     anonymousId: { $ne: input.anonymousId },
   })
     .select(
-      "anonymousId displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches",
+      "anonymousId firebaseUid displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches",
     )
     .lean()) as LeanSubmission[];
 
@@ -622,7 +627,7 @@ export async function listOwnerSubmissions(
     ownerClauses.length === 1 ? ownerClauses[0] : { $or: ownerClauses },
   )
     .select(
-      "anonymousId displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches",
+      "anonymousId firebaseUid displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches",
     )
     .lean()) as LeanSubmission[];
   if (own.length === 0) return [];
@@ -653,7 +658,7 @@ export async function listOwnerSubmissions(
 export async function getPublicSubmissionById(
   id: string,
   anonymousId?: string,
-  options: { includeFiles?: boolean } = {},
+  options: { includeFiles?: boolean; firebaseUid?: string } = {},
 ): Promise<PublicSubmissionDetail> {
   if (!Types.ObjectId.isValid(id)) {
     throw createHttpError(400, "invalid submission id");
@@ -662,7 +667,7 @@ export async function getPublicSubmissionById(
   const Submission = getPlaySubmissionModel();
   const selectFields = includeFiles
     ? undefined
-    : "anonymousId displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches";
+    : "anonymousId firebaseUid displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches";
   const doc = (await (includeFiles
     ? Submission.findById(id)
     : Submission.findById(id).select(selectFields!)
@@ -676,7 +681,11 @@ export async function getPublicSubmissionById(
     ranked.findIndex((d) => String(d._id) === String(doc._id)) + 1 || undefined;
 
   const detail: PublicSubmissionDetail = {
-    ...toPublicSummary(doc, { rank, anonymousId }),
+    ...toPublicSummary(doc, {
+      rank,
+      anonymousId,
+      firebaseUid: options.firebaseUid,
+    }),
   };
   if (includeFiles) {
     detail.files = filterPlayPublicFiles(doc.files || []).map((f) => ({

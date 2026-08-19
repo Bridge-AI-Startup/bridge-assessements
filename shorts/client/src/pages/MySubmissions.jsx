@@ -3,10 +3,12 @@ import { Link } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
 import { fetchMySubmissions, linkCurrentAnonymousId } from "@/api/account";
+import { deleteOwnSubmission } from "@/api/submissions";
 import { useAuth } from "@/lib/useAuth";
 import ShortsHeader from "@/components/ShortsHeader";
 import ShortsFooter from "@/components/ShortsFooter";
 import AccountModal from "@/components/AccountModal";
+import DeleteBuildModal from "@/components/DeleteBuildModal";
 import SubmissionCard from "@/components/gallery/SubmissionCard";
 
 export default function MySubmissions() {
@@ -15,6 +17,9 @@ export default function MySubmissions() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [showAccountModal, setShowAccountModal] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
 
   useEffect(() => {
     if (!signedIn) {
@@ -61,6 +66,30 @@ export default function MySubmissions() {
     }
     return [...bySlug.values()];
   }, [data]);
+
+  async function confirmDelete() {
+    if (!pendingDelete || deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteOwnSubmission(pendingDelete.id);
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              submissions: prev.submissions.filter(
+                (s) => s.id !== pendingDelete.id,
+              ),
+            }
+          : prev,
+      );
+      setPendingDelete(null);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   return (
     <div className="flex min-h-screen flex-col bg-paper">
@@ -163,7 +192,15 @@ export default function MySubmissions() {
             </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {round.items.map((item) => (
-                <SubmissionCard key={item.id} item={item} />
+                <SubmissionCard
+                  key={item.id}
+                  item={item}
+                  onDelete={(build) => {
+                    setDeleteError(null);
+                    setPendingDelete(build);
+                  }}
+                  deleting={deleting && pendingDelete?.id === item.id}
+                />
               ))}
             </div>
           </section>
@@ -174,6 +211,19 @@ export default function MySubmissions() {
 
       {showAccountModal && (
         <AccountModal onClose={() => setShowAccountModal(false)} />
+      )}
+      {pendingDelete && (
+        <DeleteBuildModal
+          displayName={pendingDelete.displayName}
+          deleting={deleting}
+          error={deleteError}
+          onConfirm={() => void confirmDelete()}
+          onClose={() => {
+            if (deleting) return;
+            setPendingDelete(null);
+            setDeleteError(null);
+          }}
+        />
       )}
     </div>
   );

@@ -16,6 +16,7 @@ import {
   publicGetSubmissionValidation,
   publicListSubmissionsValidation,
   previewSubmissionFileValidation,
+  deleteOwnSubmissionValidation,
   readSessionFileValidation,
   sessionPreviewFileValidation,
   slugParamValidation,
@@ -158,8 +159,15 @@ router.get(
 );
 router.get(
   "/submissions/:id",
+  optionalAuthToken,
   publicGetSubmissionValidation,
   PlayController.getPublicSubmission,
+);
+router.delete(
+  "/submissions/:id",
+  optionalAuthToken,
+  deleteOwnSubmissionValidation,
+  PlayController.deleteOwnSubmissionHandler,
 );
 router.get("/vote/next", voteNextValidation, PlayController.getVoteNext);
 router.post("/vote", castVoteValidation, PlayController.postVote);

@@ -1,5 +1,12 @@
-import { get } from "@/api/requests";
+import {
+  authDelete,
+  authGet,
+  get,
+  getResponseErrorMessage,
+  readJsonBody,
+} from "@/api/requests";
 import { shouldFetchSubmissionFiles } from "@/config/submissionPreview";
+import { getOrCreateAnonymousId } from "@/lib/anonymousId";
 
 export type PublicSubmissionSummary = {
   id: string;
@@ -65,7 +72,9 @@ export async function getSubmission(
   if (normalized.anonymousId) qs.set("anonymousId", normalized.anonymousId);
   qs.set("includeFiles", includeFiles ? "true" : "false");
   const suffix = qs.toString() ? `?${qs}` : "";
-  const res = await get(`/submissions/${id}${suffix}`);
+  // authGet attaches a Firebase token when signed in so `isMine` also covers
+  // builds stamped with that account (another device, cleared storage).
+  const res = await authGet(`/submissions/${id}${suffix}`);
   if (res.status === 404) {
     throw new Error("not_found");
   }
@@ -73,4 +82,25 @@ export async function getSubmission(
     throw new Error(`HTTP ${res.status}`);
   }
   return res.json();
+}
+
+export type DeleteOwnSubmissionResult = {
+  deleted: true;
+  id: string;
+  displayName: string;
+  challengeDate: string;
+  votesRemoved: number;
+};
+
+/** Remove one of the caller's builds. Guest = this browser; signed-in = account. */
+export async function deleteOwnSubmission(
+  id: string,
+): Promise<DeleteOwnSubmissionResult> {
+  const anonymousId = getOrCreateAnonymousId();
+  const res = await authDelete(`/submissions/${id}`, { anonymousId });
+  const body = await readJsonBody(res);
+  if (!res.ok) {
+    throw new Error(getResponseErrorMessage(body, res.status));
+  }
+  return body as DeleteOwnSubmissionResult;
 }

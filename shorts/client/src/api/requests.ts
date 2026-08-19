@@ -128,8 +128,11 @@ export async function authPost(path: string, body?: unknown): Promise<Response> 
   return fetchRequest("POST", path, body, true);
 }
 
-export async function authDelete(path: string): Promise<Response> {
-  return fetchRequest("DELETE", path, undefined, true);
+export async function authDelete(
+  path: string,
+  body?: unknown,
+): Promise<Response> {
+  return fetchRequest("DELETE", path, body, true);
 }
 
 export async function authPatch(

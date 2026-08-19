@@ -13,10 +13,34 @@ import {
   snapshotProjectFiles,
 } from "./sandbox.js";
 import { snapshotServerlessSubmission } from "./serverlessMake.js";
-import { linkAnonymousId } from "./account.js";
+import { getLinkedAnonymousIds, linkAnonymousId } from "./account.js";
 import { isWithinSubmitGrace } from "./sessionPersist.js";
 import { assertNotStarterOnly } from "./starterDetection.js";
 import type { Sandbox } from "e2b";
+
+/** Live builds one person may have in a single round. Delete one to submit another. */
+export const MAX_SUBMISSIONS_PER_ROUND = 3;
+export const SUBMISSION_LIMIT_CODE = "submission_limit" as const;
+
+export class SubmissionLimitError extends Error {
+  readonly code = SUBMISSION_LIMIT_CODE;
+  readonly count: number;
+  readonly max: number;
+  constructor(count: number, max = MAX_SUBMISSIONS_PER_ROUND) {
+    super(
+      `You can submit up to ${max} builds this round. Delete one to send another.`,
+    );
+    this.name = "SubmissionLimitError";
+    this.count = count;
+    this.max = max;
+  }
+}
+
+export function isSubmissionLimitError(
+  err: unknown,
+): err is SubmissionLimitError {
+  return err instanceof SubmissionLimitError;
+}
 
 export type SubmitResult = {
   submissionId: string;
@@ -96,6 +120,14 @@ export async function submitSession(input: {
     await session.save();
     throw createHttpError(400, "session_expired");
   }
+
+  // Fail before snapshotting a sandbox the builder cannot keep.
+  await assertUnderSubmissionLimit({
+    anonymousId,
+    firebaseUid,
+    challengeDate: session.challengeDate,
+  });
+
   const isServerless = session.makeMode === "serverless";
 
   let snapshot: { files: Array<{ path: string; content: string }>; totalBytes: number };
@@ -149,7 +181,8 @@ export async function submitSession(input: {
   const submittedAt = new Date();
   // Each submit is its own entry — never overwrite an earlier build. A fresh
   // document also means fresh rating defaults, so a new build cannot inherit
-  // votes an earlier one earned.
+  // votes an earlier one earned. Capped at MAX_SUBMISSIONS_PER_ROUND; delete
+  // one to free a slot.
   const doc = await Submission.create({
     anonymousId,
     // Signed in at submit time → the build belongs to the account, not just to
@@ -231,6 +264,113 @@ export type DeleteSubmissionResult = {
   /** Head-to-head votes removed along with the build. */
   votesRemoved: number;
 };
+
+/**
+ * Mongo filter matching every submission that counts as this person's, for
+ * the 3-per-round cap and for owner-delete. Guest = this browser id. Signed
+ * in = this browser + every linked browser + builds stamped with the uid.
+ */
+export async function ownerMatchFilter(opts: {
+  anonymousId?: string;
+  firebaseUid?: string | null;
+}): Promise<Record<string, unknown> | null> {
+  const anonymousId = opts.anonymousId?.trim() || "";
+  const firebaseUid = opts.firebaseUid?.trim() || "";
+  const anonymousIds = new Set<string>();
+  if (anonymousId) anonymousIds.add(anonymousId);
+  if (firebaseUid) {
+    for (const id of await getLinkedAnonymousIds(firebaseUid)) {
+      anonymousIds.add(id);
+    }
+  }
+
+  const clauses: Record<string, unknown>[] = [];
+  if (anonymousIds.size === 1) {
+    clauses.push({ anonymousId: [...anonymousIds][0] });
+  } else if (anonymousIds.size > 1) {
+    clauses.push({ anonymousId: { $in: [...anonymousIds].sort() } });
+  }
+  if (firebaseUid) clauses.push({ firebaseUid });
+  if (clauses.length === 0) return null;
+  if (clauses.length === 1) return clauses[0];
+  return { $or: clauses };
+}
+
+export async function countOwnerSubmissionsForDate(opts: {
+  anonymousId: string;
+  firebaseUid?: string | null;
+  challengeDate: string;
+}): Promise<number> {
+  const owner = await ownerMatchFilter(opts);
+  if (!owner) return 0;
+  const Submission = getPlaySubmissionModel();
+  return Submission.countDocuments({
+    challengeDate: opts.challengeDate,
+    ...owner,
+  });
+}
+
+export async function assertUnderSubmissionLimit(opts: {
+  anonymousId: string;
+  firebaseUid?: string | null;
+  challengeDate: string;
+}): Promise<void> {
+  const count = await countOwnerSubmissionsForDate(opts);
+  if (count >= MAX_SUBMISSIONS_PER_ROUND) {
+    throw new SubmissionLimitError(count);
+  }
+}
+
+function ownsSubmissionDoc(
+  doc: { anonymousId: string; firebaseUid?: string | null },
+  opts: {
+    anonymousId?: string;
+    firebaseUid?: string | null;
+    linkedIds: string[];
+  },
+): boolean {
+  const anonymousId = opts.anonymousId?.trim() || "";
+  const firebaseUid = opts.firebaseUid?.trim() || "";
+  if (anonymousId && doc.anonymousId === anonymousId) return true;
+  if (firebaseUid && doc.firebaseUid && doc.firebaseUid === firebaseUid) {
+    return true;
+  }
+  if (firebaseUid && opts.linkedIds.includes(doc.anonymousId)) return true;
+  return false;
+}
+
+/**
+ * Owner-delete: the same cleanup as admin delete, gated on presenting this
+ * browser's anonymousId and/or a signed-in account that owns the build.
+ */
+export async function deleteOwnSubmission(
+  id: string,
+  opts: { anonymousId?: string; firebaseUid?: string | null },
+): Promise<DeleteSubmissionResult> {
+  const anonymousId = opts.anonymousId?.trim() || "";
+  const firebaseUid = opts.firebaseUid?.trim() || "";
+  if (!anonymousId && !firebaseUid) {
+    throw createHttpError(401, "auth required");
+  }
+  if (!Types.ObjectId.isValid(id)) {
+    throw createHttpError(400, "invalid submission id");
+  }
+
+  const Submission = getPlaySubmissionModel();
+  const doc = await Submission.findById(id).select(
+    "anonymousId firebaseUid",
+  );
+  if (!doc) {
+    throw createHttpError(404, "submission_not_found");
+  }
+
+  const linkedIds = firebaseUid ? await getLinkedAnonymousIds(firebaseUid) : [];
+  if (!ownsSubmissionDoc(doc, { anonymousId, firebaseUid, linkedIds })) {
+    throw createHttpError(403, "submission_forbidden");
+  }
+
+  return deleteSubmission(id);
+}
 
 /**
  * Admin: remove a submission and the vote records that point at it.

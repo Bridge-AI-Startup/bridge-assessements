@@ -58,6 +58,17 @@ export async function submitSession(input: {
           code: "starter_only",
         };
       }
+      if (code === "submission_limit") {
+        return {
+          status: "error",
+          message:
+            typeof body.error === "string"
+              ? body.error
+              : "You can submit up to 3 builds this round. Delete one to send another.",
+          httpStatus: res.status,
+          code: "submission_limit",
+        };
+      }
       return {
         status: "error",
         message: getResponseErrorMessage(body, res.status, ["error", "message"]),

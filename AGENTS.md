@@ -515,9 +515,10 @@ server/src/
 - `POST /context` -- Context center for the in-session voice companion (X-Agent-Secret)
 
 ### Rate Limiting (production only, disabled in dev)
-- General API: 100 requests / 15 minutes per IP (shared across most `/api/*` routes; proctoring and Play preview excluded)
+- General API: 100 requests / 15 minutes per IP (shared across most `/api/*` routes; proctoring and all `/api/shorts` + `/api/play` excluded)
 - Proctoring (`/api/proctoring/*`): 8000 requests / 15 minutes per IP (separate limiter; screen capture is high-volume)
-- Play preview (`/api/play/preview/*`): 3000 requests / 15 minutes per IP (separate limiter; gallery iframe assets)
+- Shorts API (`/api/shorts/*`, `/api/play/*` except preview): 8000 requests / 15 minutes per IP (separate limiter; Build polls + E2B LLM proxy)
+- Play preview (`/api/play/preview/*` / `/api/shorts/preview/*`): 3000 requests / 15 minutes per IP (separate limiter; gallery iframe assets)
 - Auth endpoints (`/api/users/whoami`): 5 requests / 15 minutes per IP
 - Competition join (`POST /api/competitions/:slug/join`): 30 requests / 60 minutes per IP
 

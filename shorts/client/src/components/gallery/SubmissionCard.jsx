@@ -8,50 +8,61 @@ const TOP_RANK = {
   3: "bg-accent-blue/15 text-accent-blue",
 };
 
-export default function SubmissionCard({ item }) {
+export default function SubmissionCard({ item, onDelete, deleting = false }) {
   const rank = item.rank ?? null;
 
   return (
-    <Link
-      to={`/Submission?id=${item.id}`}
-      className="punch-card-sm overflow-hidden transition-transform duration-150 hover:-translate-y-1"
-    >
-      <div className="relative p-2">
-        <CardPreview
-          submissionId={item.id}
-          previewRevision={item.previewRevision}
-        />
-        {rank ? (
-          <span
-            className={`absolute left-4 top-4 rounded-full px-2.5 py-1 font-mono text-[13px] font-semibold tabular-nums shadow-card ${
-              TOP_RANK[rank] || "bg-paper/90 text-ink"
-            }`}
-          >
-            #{rank}
-          </span>
-        ) : null}
-      </div>
-      <div className="px-4 pb-4 pt-2">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="truncate text-[15px] font-medium text-ink">
-              {item.displayName}
-              {item.isMine ? (
-                <span className="ml-2 rounded-full bg-accent-blue/10 px-2 py-0.5 font-mono text-[10px] uppercase text-accent-blue">
-                  you
-                </span>
-              ) : null}
-            </p>
-            <p className="mt-1 font-mono text-xs text-fog-light">
-              score {item.score}
-              {item.provisional ? " · provisional" : ""}
-            </p>
-          </div>
-          <span className="shrink-0 rounded-full bg-mist px-2 py-0.5 font-mono text-[11px] text-fog">
-            {item.wins}-{item.losses}
-          </span>
+    <article className="punch-card-sm overflow-hidden transition-transform duration-150 hover:-translate-y-1">
+      <Link to={`/Submission?id=${item.id}`} className="block">
+        <div className="relative p-2">
+          <CardPreview
+            submissionId={item.id}
+            previewRevision={item.previewRevision}
+          />
+          {rank ? (
+            <span
+              className={`absolute left-4 top-4 rounded-full px-2.5 py-1 font-mono text-[13px] font-semibold tabular-nums shadow-card ${
+                TOP_RANK[rank] || "bg-paper/90 text-ink"
+              }`}
+            >
+              #{rank}
+            </span>
+          ) : null}
         </div>
-      </div>
-    </Link>
+        <div className="px-4 pb-4 pt-2">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="truncate text-[15px] font-medium text-ink">
+                {item.displayName}
+                {item.isMine ? (
+                  <span className="ml-2 rounded-full bg-accent-blue/10 px-2 py-0.5 font-mono text-[10px] uppercase text-accent-blue">
+                    you
+                  </span>
+                ) : null}
+              </p>
+              <p className="mt-1 font-mono text-xs text-fog-light">
+                score {item.score}
+                {item.provisional ? " · provisional" : ""}
+              </p>
+            </div>
+            <span className="shrink-0 rounded-full bg-mist px-2 py-0.5 font-mono text-[11px] text-fog">
+              {item.wins}-{item.losses}
+            </span>
+          </div>
+        </div>
+      </Link>
+      {onDelete ? (
+        <div className="border-t border-line px-4 py-2">
+          <button
+            type="button"
+            onClick={() => onDelete(item)}
+            disabled={deleting}
+            className="label-mono hover:text-ink disabled:opacity-50"
+          >
+            Delete
+          </button>
+        </div>
+      ) : null}
+    </article>
   );
 }

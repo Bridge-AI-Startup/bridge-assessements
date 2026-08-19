@@ -115,9 +115,10 @@ Primary namespace is `/api/shorts`; every route is also served under the legacy 
 | POST | `/api/shorts/session/:id/claude/message` | — | Phase 2 chat relay: run `claude -p` in sandbox (`{ anonymousId, prompt }`) |
 | POST | `/api/shorts/session/:id/terminal*` | — | PTY APIs still on server; **not used** by current Build UI |
 | GET | `/api/shorts/session/:id/workspace-revision` | — | Workspace fingerprint for preview refresh |
-| POST | `/api/shorts/submit` | — | Snapshot project files + kill sandbox (`{ sessionId, anonymousId, displayName }`). Rejects starter-only / near-empty snapshots with **400** `{ code: "starter_only" }` |
+| POST | `/api/shorts/submit` | optional Firebase | Snapshot project files + kill sandbox (`{ sessionId, anonymousId, displayName }`). Rejects starter-only / near-empty snapshots with **400** `{ code: "starter_only" }`. Max **3 live builds per person per round**; a fourth is **409** `{ code: "submission_limit" }` |
 | GET | `/api/shorts/submissions` | — | Public gallery list (`challengeDate`, `limit`, `anonymousId`); omit `files`; includes `previewRevision` |
-| GET | `/api/shorts/submissions/:id` | — | Public submission detail (`previewRevision`; `includeFiles` default true) |
+| GET | `/api/shorts/submissions/:id` | optional Firebase | Public submission detail (`previewRevision`; `includeFiles` default true). Signed-in `isMine` also matches `firebaseUid` |
+| DELETE | `/api/shorts/submissions/:id` | browser id and/or Firebase | Owner-delete (`{ anonymousId? }`). Same vote/recap cleanup as admin delete |
 | GET | `/api/shorts/preview/:id/:revision` | — | Serve stored `index.html` (immutable revision = `submittedAt` ms) |
 | GET | `/api/shorts/preview/:id/:revision/*` | — | Serve stored snapshot asset by exact relative path |
 | GET | `/api/shorts/vote/next` | — | Next pairwise pair (`anonymousId`, optional `challengeDate`, `preferId`, `includeFiles`); requires same-day submit |

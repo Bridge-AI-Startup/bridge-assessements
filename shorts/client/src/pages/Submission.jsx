@@ -1,19 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { getSubmission } from "@/api/submissions";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { deleteOwnSubmission, getSubmission } from "@/api/submissions";
 import { shouldFetchSubmissionFiles } from "@/config/submissionPreview";
 import { useSubmissionPreview } from "@/lib/useSubmissionPreview";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
+import { useAuth } from "@/lib/useAuth";
 import ShortsHeader from "@/components/ShortsHeader";
 import ShortsFooter from "@/components/ShortsFooter";
 import ShareBuild from "@/components/ShareBuild";
+import DeleteBuildModal from "@/components/DeleteBuildModal";
 
 export default function Submission() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const { signedIn } = useAuth();
   const id = searchParams.get("id");
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [showDelete, setShowDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
   const anonymousId = useMemo(() => getOrCreateAnonymousId(), []);
 
   useEffect(() => {
@@ -60,6 +67,20 @@ export default function Submission() {
         }
       : null;
 
+  async function confirmDelete() {
+    if (!detail || deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteOwnSubmission(detail.id);
+      navigate(signedIn ? "/MySubmissions" : "/Gallery", { replace: true });
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
     <div className="flex min-h-screen flex-col bg-paper">
       <ShortsHeader active="browse" cta={cta} />
@@ -101,12 +122,25 @@ export default function Submission() {
                   </code>
                 </p>
               </div>
-              <ShareBuild
-                submissionId={detail.id}
-                displayName={detail.displayName}
-                isMine={detail.isMine}
-                className="shrink-0"
-              />
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <ShareBuild
+                  submissionId={detail.id}
+                  displayName={detail.displayName}
+                  isMine={detail.isMine}
+                />
+                {detail.isMine ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeleteError(null);
+                      setShowDelete(true);
+                    }}
+                    className="btn-pill-secondary"
+                  >
+                    Delete
+                  </button>
+                ) : null}
+              </div>
             </div>
 
             <div className="punch-card bg-cream p-2">
@@ -134,6 +168,20 @@ export default function Submission() {
       </main>
 
       <ShortsFooter />
+
+      {showDelete && detail && (
+        <DeleteBuildModal
+          displayName={detail.displayName}
+          deleting={deleting}
+          error={deleteError}
+          onConfirm={() => void confirmDelete()}
+          onClose={() => {
+            if (deleting) return;
+            setShowDelete(false);
+            setDeleteError(null);
+          }}
+        />
+      )}
     </div>
   );
 }

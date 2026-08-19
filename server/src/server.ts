@@ -22,6 +22,10 @@ import playRoutes from "./routes/shorts.js";
 import opsRoutes from "./routes/ops.js";
 import { health as playHealth } from "./controllers/shorts/index.js";
 import { shortsEnabled } from "./utils/shortsEnv.js";
+import {
+  isShortsPreviewPath,
+  skipGeneralApiLimit,
+} from "./utils/rateLimitPaths.js";
 import { errorHandler } from "./errors/handler.js";
 import { isDevLoopbackOrigin } from "./utils/corsOrigins.js";
 import { startAttemptReaper } from "./services/submission/finalizeExpired.js";
@@ -149,20 +153,10 @@ const apiLimiter = rateLimit({
   },
   skip: (req) => {
     if (process.env.NODE_ENV === "development") return true;
-    // Proctoring uses its own limiter (many frame/video posts per minute).
-    const path = req.originalUrl?.split("?")[0] || "";
-    if (path.startsWith("/api/proctoring")) return true;
-    // Shorts preview assets use a dedicated high ceiling (gallery iframes).
-    // Accept both the current `/api/shorts` namespace and legacy `/api/play`.
-    if (
-      path === "/api/shorts/preview" ||
-      path.startsWith("/api/shorts/preview/") ||
-      path === "/api/play/preview" ||
-      path.startsWith("/api/play/preview/")
-    ) {
-      return true;
-    }
-    return false;
+    // Proctoring and Shorts have their own high-volume buckets. Build polls
+    // usage/revision on a timer; putting that on 100/15min 429s a real user
+    // in a couple of minutes with "Too many requests from this IP".
+    return skipGeneralApiLimit(req.originalUrl || "");
   },
 });
 
@@ -177,6 +171,23 @@ const proctoringLimiter = rateLimit({
     error: "Too many proctoring requests from this IP, please try again later.",
   },
   skip: (req) => process.env.NODE_ENV === "development",
+});
+
+// Shorts API (Build polls, Claude turns, LLM proxy from E2B egress IPs).
+// Same shape as proctoring: many small requests that must not share the
+// general 100/15min bucket. Gallery iframes stay on playPreviewLimiter.
+const shortsLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 8000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: "Too many Shorts requests from this IP, please try again later.",
+  },
+  skip: (req) => {
+    if (process.env.NODE_ENV === "development") return true;
+    return isShortsPreviewPath(req.originalUrl || "");
+  },
 });
 
 // Play submission previews: many assets per gallery page; dedicated bucket.
@@ -239,8 +250,9 @@ const authLimiter = rateLimit({
 console.log("✅ Rate limiting configured");
 console.log("   - General API: 100 requests per 15 minutes");
 console.log("   - Proctoring uploads: 8000 requests per 15 minutes (separate cap)");
+console.log("   - Shorts API: 8000 requests per 15 minutes (separate cap)");
 console.log(
-  "   - Play preview assets: 3000 requests per 15 minutes (separate cap)",
+  "   - Shorts preview assets: 3000 requests per 15 minutes (separate cap)",
 );
 console.log("   - Authentication: 5 requests per 15 minutes");
 console.log("   - Rate limiting disabled in development mode");
@@ -293,13 +305,7 @@ function shouldSkipVerboseRequestLog(
 ): boolean {
   const method = req.method;
   const p = req.path || "";
-  if (
-    (method === "GET" || method === "HEAD") &&
-    (p === "/api/shorts/preview" ||
-      p.startsWith("/api/shorts/preview/") ||
-      p === "/api/play/preview" ||
-      p.startsWith("/api/play/preview/"))
-  ) {
+  if ((method === "GET" || method === "HEAD") && isShortsPreviewPath(p)) {
     return true;
   }
   if (method !== "GET") return false;
@@ -425,7 +431,7 @@ const SHORTS_ENABLED = shortsEnabled();
 
 for (const prefix of SHORTS_PREFIXES) {
   app.use(`${prefix}/preview`, playPreviewLimiter);
-  app.use(prefix, apiLimiter);
+  app.use(prefix, shortsLimiter);
   app.get(`${prefix}/health`, playHealth);
 
   if (SHORTS_ENABLED) {

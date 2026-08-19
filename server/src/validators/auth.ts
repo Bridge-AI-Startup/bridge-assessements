@@ -76,6 +76,9 @@ const optionalAuthToken = async (
 
   try {
     const userInfo: DecodedIdToken = await decodeAuthToken(token);
+    if (!req.body || typeof req.body !== "object") {
+      req.body = {};
+    }
     req.body.uid = userInfo.uid;
     (req as any).user = { uid: userInfo.uid };
   } catch {

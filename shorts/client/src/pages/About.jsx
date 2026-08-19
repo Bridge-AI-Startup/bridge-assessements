@@ -28,7 +28,7 @@ const STEPS = [
   {
     n: "03",
     title: "Submit it",
-    body: "Ship whatever you have. No countdown to beat. The round ends when it ends, and your build is saved the moment you send it.",
+    body: "Ship up to three builds this round. No countdown to beat. The round ends when it ends, and a build is saved the moment you send it.",
   },
   {
     n: "04",

@@ -25,10 +25,13 @@ import {
   resumePlayBuildSession,
 } from "../../services/shorts/sessions.js";
 import {
+  deleteOwnSubmission,
   deleteSubmission,
   getSubmissionById,
   listSubmissions,
   submitSession,
+  isSubmissionLimitError,
+  SUBMISSION_LIMIT_CODE,
 } from "../../services/shorts/submissions.js";
 import {
   isStarterOnlyError,
@@ -419,6 +422,15 @@ export const submit: RequestHandler = async (req, res, next) => {
       });
       return;
     }
+    if (isSubmissionLimitError(error)) {
+      res.status(409).json({
+        code: SUBMISSION_LIMIT_CODE,
+        error: error.message,
+        count: error.count,
+        max: error.max,
+      });
+      return;
+    }
     next(error);
   }
 };
@@ -462,6 +474,30 @@ export const adminDeleteSubmission: RequestHandler = async (req, res, next) => {
   }
 };
 
+export const deleteOwnSubmissionHandler: RequestHandler = async (
+  req,
+  res,
+  next,
+) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const uid =
+      (req as { user?: { uid?: string } }).user?.uid ||
+      (req.body && typeof req.body.uid === "string" ? req.body.uid : "");
+    const result = await deleteOwnSubmission(String(req.params.id), {
+      anonymousId:
+        req.body && typeof req.body.anonymousId === "string"
+          ? req.body.anonymousId
+          : undefined,
+      firebaseUid: uid || null,
+    });
+    res.status(200).json({ deleted: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const listPublicSubmissions: RequestHandler = async (req, res, next) => {
   const errors = validationResult(req);
   try {
@@ -494,10 +530,13 @@ export const getPublicSubmission: RequestHandler = async (req, res, next) => {
       ? String(req.query.anonymousId)
       : undefined;
     const includeFiles = parseIncludeFilesFlag(req.query.includeFiles, true);
+    const firebaseUid =
+      (req as { user?: { uid?: string } }).user?.uid ||
+      (req.body && typeof req.body.uid === "string" ? req.body.uid : undefined);
     const submission = await getPublicSubmissionById(
       String(req.params.id),
       anonymousId,
-      { includeFiles },
+      { includeFiles, firebaseUid },
     );
     res.status(200).json(submission);
   } catch (error) {

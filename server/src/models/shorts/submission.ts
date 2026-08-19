@@ -98,9 +98,9 @@ const SubmissionSchema = new Schema(
   { timestamps: true },
 );
 
-// Submissions are independent entries: one builder may submit many builds for
-// the same challenge, each rated on its own. Non-unique lookup index backs the
-// "my submissions" view.
+// Submissions are independent entries: one builder may submit several builds
+// for the same challenge (capped at MAX_SUBMISSIONS_PER_ROUND), each rated on
+// its own. Non-unique lookup index backs the "my submissions" view.
 SubmissionSchema.index({ anonymousId: 1, challengeDate: 1, submittedAt: -1 });
 // Account history: builds submitted while signed in, regardless of browser id.
 SubmissionSchema.index({ firebaseUid: 1, submittedAt: -1 }, { sparse: true });

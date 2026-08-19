@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { listSubmissions } from "@/api/submissions";
+import { listSubmissions, deleteOwnSubmission } from "@/api/submissions";
 import { listPastChallenges } from "@/api/challenges";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
 import {
@@ -10,6 +10,7 @@ import {
 import ShortsHeader from "@/components/ShortsHeader";
 import ShortsFooter from "@/components/ShortsFooter";
 import SubmissionCard from "@/components/gallery/SubmissionCard";
+import DeleteBuildModal from "@/components/DeleteBuildModal";
 
 export default function Gallery() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -25,6 +26,9 @@ export default function Gallery() {
   const [viewMode, setViewMode] = useState("builds");
   const [rounds, setRounds] = useState(null);
   const [roundsError, setRoundsError] = useState(null);
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
   const anonymousId = useMemo(() => getOrCreateAnonymousId(), []);
 
   useEffect(() => {
@@ -112,6 +116,23 @@ export default function Gallery() {
   function openRound(round) {
     setViewMode("builds");
     onDateChange(round.challengeDate);
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete || deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteOwnSubmission(pendingDelete.id);
+      setItems((prev) => prev.filter((s) => s.id !== pendingDelete.id));
+      setMine((prev) => prev.filter((s) => s.id !== pendingDelete.id));
+      setTotal((n) => Math.max(0, n - 1));
+      setPendingDelete(null);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   const possessive = periodPossessive(period?.cadence || "weekly");
@@ -270,7 +291,15 @@ export default function Gallery() {
             </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {mine.map((item) => (
-                <SubmissionCard key={item.id} item={item} />
+                <SubmissionCard
+                  key={item.id}
+                  item={item}
+                  onDelete={(build) => {
+                    setDeleteError(null);
+                    setPendingDelete(build);
+                  }}
+                  deleting={deleting && pendingDelete?.id === item.id}
+                />
               ))}
             </div>
           </section>
@@ -292,6 +321,20 @@ export default function Gallery() {
       </main>
 
       <ShortsFooter />
+
+      {pendingDelete && (
+        <DeleteBuildModal
+          displayName={pendingDelete.displayName}
+          deleting={deleting}
+          error={deleteError}
+          onConfirm={() => void confirmDelete()}
+          onClose={() => {
+            if (deleting) return;
+            setPendingDelete(null);
+            setDeleteError(null);
+          }}
+        />
+      )}
     </div>
   );
 }

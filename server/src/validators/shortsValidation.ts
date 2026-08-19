@@ -241,6 +241,15 @@ export const publicGetSubmissionValidation = [
     .toBoolean(),
 ];
 
+export const deleteOwnSubmissionValidation = [
+  ...submissionIdParamValidation,
+  body("anonymousId")
+    .optional()
+    .trim()
+    .isLength({ min: 8, max: 128 })
+    .withMessage("anonymousId must be 8–128 characters"),
+];
+
 export const previewSubmissionFileValidation = [
   param("id")
     .trim()
