@@ -155,7 +155,7 @@ vi.mock("../../src/models/shorts/vote.js", () => ({
 const { castVote, getNextVotePair } = await import(
   "../../src/services/shorts/voting.js"
 );
-const { MAX_WEIGHTED_VOTES_PER_DAY, pairKeyFor } = await import(
+const { pairKeyFor } = await import(
   "../../src/services/shorts/bayesianRating.js"
 );
 
@@ -310,35 +310,21 @@ describe("Shorts weighted voting", () => {
     }
   });
 
-  it("applies the vote cap to every voter", async () => {
+  it("keeps serving matchups after many picks as long as unique pairs remain", async () => {
     const [a, b] = seedOthers(4);
     seedOwnBuild();
-    seedFillerVotes(MAX_WEIGHTED_VOTES_PER_DAY, true);
-
-    await expect(
-      castVote({
-        anonymousId: VOTER,
-        challengeDate: DATE,
-        winnerId: a._id,
-        loserId: b._id,
-        includeFiles: false,
-      }),
-    ).rejects.toMatchObject({ status: 429 });
+    // The old ranking-vote budget was 25. Filler votes consume that count
+    // without burning real pairKeys — this is the regression: a budget stop
+    // would 429 here even though unseen combinations still exist.
+    seedFillerVotes(25, true);
 
     const next = await getNextVotePair({
       anonymousId: VOTER,
       challengeDate: DATE,
       includeFiles: false,
     });
-    expect(next.pairAvailable).toBe(false);
-    expect(next.pairAvailable === false && next.reason).toBe("vote_cap_reached");
-  });
-
-  it("does not count historical unweighted plays against the cap", async () => {
-    const [a, b] = seedOthers(4);
-    // Old inert plays from before the everyone-weighted switch: they burned
-    // pairs, but they never consumed the ranking-vote budget.
-    seedFillerVotes(MAX_WEIGHTED_VOTES_PER_DAY + 5, false);
+    expect(next.pairAvailable).toBe(true);
+    expect(next.pairsRemaining).toBeGreaterThan(0);
 
     const result = await castVote({
       anonymousId: VOTER,
@@ -351,7 +337,24 @@ describe("Shorts weighted voting", () => {
     expect(result.weighted).toBe(true);
   });
 
-  it("counts only weighted votes toward the cap and round index", async () => {
+  it("does not treat historical unweighted plays as pair exhaustion", async () => {
+    const [a, b] = seedOthers(4);
+    // Old inert plays from before the everyone-weighted switch: they burned
+    // dummy pairKeys, not the live matchups.
+    seedFillerVotes(30, false);
+
+    const result = await castVote({
+      anonymousId: VOTER,
+      challengeDate: DATE,
+      winnerId: a._id,
+      loserId: b._id,
+      includeFiles: false,
+    });
+    expect(result.recorded).toBe(true);
+    expect(result.weighted).toBe(true);
+  });
+
+  it("counts only weighted votes toward the round index", async () => {
     seedOthers();
     seedOwnBuild();
     seedFillerVotes(3, false);
@@ -412,6 +415,46 @@ describe("Shorts weighted voting", () => {
     for (const f of pairKeyLookups) {
       expect(f).not.toHaveProperty("weighted");
     }
+  });
+
+  it("reopens matchups when a new build creates unseen pairs", async () => {
+    const others = seedOthers(3);
+    const pairs = [
+      [others[0], others[1]],
+      [others[0], others[2]],
+      [others[1], others[2]],
+    ];
+    for (const [x, y] of pairs) {
+      votes.push({
+        anonymousId: VOTER,
+        challengeDate: DATE,
+        winnerId: x._id,
+        loserId: y._id,
+        pairKey: pairKeyFor(x._id, y._id),
+        weighted: true,
+        createdAt: new Date(),
+      });
+    }
+
+    const exhausted = await getNextVotePair({
+      anonymousId: VOTER,
+      challengeDate: DATE,
+      includeFiles: false,
+    });
+    expect(exhausted.pairAvailable).toBe(false);
+    expect(exhausted.pairAvailable === false && exhausted.reason).toBe(
+      "no_pairs_left",
+    );
+
+    seedOthers(1);
+
+    const reopened = await getNextVotePair({
+      anonymousId: VOTER,
+      challengeDate: DATE,
+      includeFiles: false,
+    });
+    expect(reopened.pairAvailable).toBe(true);
+    expect(reopened.pairsRemaining).toBeGreaterThan(0);
   });
 
   it("keeps self-exclusion working without a submitter check", async () => {

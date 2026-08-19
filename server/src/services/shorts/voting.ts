@@ -7,7 +7,6 @@ import {
 } from "../../models/shorts/vote.js";
 import {
   isProvisional,
-  MAX_WEIGHTED_VOTES_PER_DAY,
   pairInformationValue,
   pairKeyFor,
   publicScoreFrom,
@@ -15,10 +14,6 @@ import {
   updateRatings1v1,
   VOTE_ROUND_SIZE,
 } from "./bayesianRating.js";
-import {
-  getCurrentPeriodKey,
-  getPlayChallengeCadence,
-} from "./challengePeriod.js";
 import { getActiveChallengeDate } from "./challenges.js";
 import { getPlayPreviewRevision } from "./preview.js";
 import { filterPlayPublicFiles } from "./sandbox.js";
@@ -108,6 +103,9 @@ export type VoteNextResult =
         | "must_submit"
         | "not_enough_submissions"
         | "no_pairs_left"
+        // Retired: there is no vote-count budget. Voting stops when every
+        // unique pair is seen (`no_pairs_left`) and resumes when a new build
+        // creates unseen combinations. Kept so an older client still type-checks.
         | "vote_cap_reached";
       message: string;
       round: RoundProgress;
@@ -223,9 +221,8 @@ function toVoteCard(
 }
 
 /**
- * Weighted votes only. This drives the vote cap and the round index, both of
- * which are submitter-only concepts — an unweighted play must never consume a
- * ranking vote or advance a recap round.
+ * Weighted votes only. This drives the recap round index — an unweighted play
+ * must never advance a ranking recap.
  *
  * Deliberately NOT the same question as "which pairs has this person seen":
  * pair exhaustion counts every vote regardless of weight (see
@@ -344,25 +341,23 @@ async function loadRankedForDate(
 
 /**
  * `votesToday` is the counter the round meter shows — weighted votes for a
- * submitter, plain plays for everyone else. `weightedVotesToday` is what the
- * cap is measured against, so an unweighted player still reports a full
- * ranking-vote budget (they get one the moment they submit).
+ * submitter, plain plays for everyone else. There is no vote-count budget:
+ * `maxVotes` / `remainingWeightedVotes` describe unique unseen matchups
+ * (`pairsRemaining`), so a new submission that creates combinations raises
+ * the ceiling instead of waiting for the next period.
  */
 function buildRoundProgress(
   votesToday: number,
-  weightedVotesToday: number = votesToday,
+  pairsRemaining: number = 0,
 ): RoundProgress {
   const votesInRound = votesToday % VOTE_ROUND_SIZE;
   return {
     votesInRound,
     roundSize: VOTE_ROUND_SIZE,
     votesToday,
-    maxVotes: MAX_WEIGHTED_VOTES_PER_DAY,
+    maxVotes: votesToday + pairsRemaining,
     roundIndex: Math.floor(votesToday / VOTE_ROUND_SIZE),
-    remainingWeightedVotes: Math.max(
-      0,
-      MAX_WEIGHTED_VOTES_PER_DAY - weightedVotesToday,
-    ),
+    remainingWeightedVotes: pairsRemaining,
   };
 }
 
@@ -397,7 +392,6 @@ async function ensureRoundSnapshot(input: {
 }): Promise<void> {
   // Snapshot only at the start of a round (before any votes in that round).
   if (input.votesToday % VOTE_ROUND_SIZE !== 0) return;
-  if (input.votesToday >= MAX_WEIGHTED_VOTES_PER_DAY) return;
 
   const roundIndex = Math.floor(input.votesToday / VOTE_ROUND_SIZE);
   const VoteRound = getPlayVoteRoundModel();
@@ -760,23 +754,6 @@ export async function getNextVotePair(input: {
   const votesToday = weighted
     ? weightedVotesToday
     : await countPlayedVotesToday(anonymousId, challengeDate);
-  const round = buildRoundProgress(votesToday, weightedVotesToday);
-
-  // The cap is a ranking-vote budget, so it only binds weighted voters.
-  if (weighted && weightedVotesToday >= MAX_WEIGHTED_VOTES_PER_DAY) {
-    const weekly = getPlayChallengeCadence() === "weekly";
-    return unavailableVotePair({
-      challengeDate,
-      reason: "vote_cap_reached",
-      message: weekly
-        ? `You've completed this week's ${MAX_WEIGHTED_VOTES_PER_DAY} ranking votes. Come back next week.`
-        : `You've completed today's ${MAX_WEIGHTED_VOTES_PER_DAY} ranking votes. Come back tomorrow.`,
-      round,
-      canVote: false,
-      weighted,
-      pairsRemaining: await countRemainingPairs({ anonymousId, challengeDate }),
-    });
-  }
 
   const Submission = getPlaySubmissionModel();
   const others = await Submission.countDocuments({
@@ -788,7 +765,7 @@ export async function getNextVotePair(input: {
       challengeDate,
       reason: "not_enough_submissions",
       message: "Need at least two other builds to start voting. Check back soon.",
-      round,
+      round: buildRoundProgress(votesToday, 0),
       canVote: true,
       weighted,
     });
@@ -804,6 +781,7 @@ export async function getNextVotePair(input: {
     anonymousId,
     challengeDate,
   });
+  const round = buildRoundProgress(votesToday, pairsRemaining);
   if (pairsRemaining === 0) {
     return unavailableVotePair({
       challengeDate,
@@ -1008,10 +986,6 @@ export async function castVote(input: {
     ? weightedVotesToday
     : await countPlayedVotesToday(anonymousId, challengeDate);
 
-  if (weighted && weightedVotesToday >= MAX_WEIGHTED_VOTES_PER_DAY) {
-    throw createHttpError(429, "vote_cap_reached");
-  }
-
   const Submission = getPlaySubmissionModel();
   const Vote = getPlayVoteModel();
 
@@ -1111,8 +1085,12 @@ export async function castVote(input: {
 
   const newVotesToday = votesToday + 1;
   const roundComplete = newVotesToday % VOTE_ROUND_SIZE === 0;
-  const newWeightedVotesToday = weightedVotesToday + (weighted ? 1 : 0);
-  let round = buildRoundProgress(newVotesToday, newWeightedVotesToday);
+  const pairsRemaining = await countRemainingPairs({
+    anonymousId,
+    challengeDate,
+  });
+  const allPairsComplete = pairsRemaining === 0;
+  let round = buildRoundProgress(newVotesToday, pairsRemaining);
   if (roundComplete) {
     // Present as 5/5 completed for the recap UI.
     round = {
@@ -1121,23 +1099,13 @@ export async function castVote(input: {
       roundIndex: Math.floor((newVotesToday - 1) / VOTE_ROUND_SIZE),
     };
   }
-
-  const pairsRemaining = await countRemainingPairs({
-    anonymousId,
-    challengeDate,
-  });
-  const allPairsComplete = pairsRemaining === 0;
-  // The cap only exists for weighted voters, so an unweighted player is always
-  // "under" it.
-  const underCap =
-    !weighted || newWeightedVotesToday < MAX_WEIGHTED_VOTES_PER_DAY;
-  const canContinue = underCap && !allPairsComplete;
+  const canContinue = !allPairsComplete;
 
   let recap: RoundRecap | undefined;
-  // Full round, last unique pair mid-round, or vote cap → break for an
-  // interstitial. Unweighted players get the same break, but no recap: the
-  // recap reports how the ranking moved, and theirs moved nothing.
-  const shouldBreak = roundComplete || allPairsComplete || !underCap;
+  // Full round or last unique pair mid-round → break for an interstitial.
+  // Unweighted players get the same break, but no recap: the recap reports
+  // how the ranking moved, and theirs moved nothing.
+  const shouldBreak = roundComplete || allPairsComplete;
   if (shouldBreak) {
     if (!roundComplete && allPairsComplete) {
       // Partial final round: show how many votes landed in this round.

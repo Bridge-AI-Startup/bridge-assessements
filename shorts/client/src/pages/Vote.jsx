@@ -167,33 +167,25 @@ function PreviewPane({ card, side, label, onPick, disabled }) {
   );
 }
 
-function RoundMeter({ round, periodLabel, weighted = true }) {
+function RoundMeter({ round }) {
   if (!round) return null;
   const progressPct = Math.min(
     100,
     (round.votesInRound / round.roundSize) * 100,
   );
-  // The ranking-vote budget only binds submitters, so an unweighted player is
-  // shown their round progress without a total that claims a limit on them.
+  // No vote-count budget — people play until every unique pair is seen.
+  // A new build that creates combinations reopens matchups. The meter is
+  // only the current five-pick round.
   return (
     <div
       className="w-full sm:w-auto sm:min-w-[180px]"
-      title={
-        weighted
-          ? `${round.votesInRound} of ${round.roundSize} picks done in this round · ${round.votesToday} of ${round.maxVotes} total votes used ${periodLabel}`
-          : `${round.votesInRound} of ${round.roundSize} picks done in this round`
-      }
+      title={`${round.votesInRound} of ${round.roundSize} picks done in this round`}
     >
       <div className="flex items-center justify-between gap-3">
         <span className="font-mono text-xs text-ink">
           Pick {Math.min(round.votesInRound + 1, round.roundSize)} of{" "}
           {round.roundSize}
         </span>
-        {weighted && (
-          <span className="font-mono text-[11px] text-fog-light">
-            {round.votesToday}/{round.maxVotes} {periodLabel}
-          </span>
-        )}
       </div>
       <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-mist">
         <div
@@ -242,8 +234,6 @@ export default function Vote() {
   }, [urlDate]);
 
   const cadence = period?.cadence || "weekly";
-  const periodLabel =
-    cadence === "weekly" ? "this week" : "today";
   const noun = periodNoun(cadence);
 
   const loadNext = useCallback(async () => {
@@ -348,11 +338,7 @@ export default function Vote() {
   return (
     <div className="flex min-h-screen flex-col bg-paper">
       <ShortsHeader active="vote">
-        <RoundMeter
-          round={round}
-          periodLabel={periodLabel}
-          weighted={weighted}
-        />
+        <RoundMeter round={round} />
       </ShortsHeader>
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-6 py-6">
@@ -371,13 +357,10 @@ export default function Vote() {
         {state.kind === "empty" && (
           <div className="punch-card mx-auto max-w-md px-5 py-8 text-center">
             <h1 className="text-[22px] font-medium tracking-tight text-ink">
-              {state.data.reason === "vote_cap_reached"
-                ? cadence === "weekly"
-                  ? "Weekly vote limit reached"
-                  : "Daily vote limit reached"
-                : state.data.reason === "no_pairs_left"
-                  ? "All matchups done"
-                  : "No matchups"}
+              {state.data.reason === "no_pairs_left" ||
+              state.data.reason === "vote_cap_reached"
+                ? "All matchups done"
+                : "No matchups"}
             </h1>
             <p className="mt-2 text-sm text-fog">{state.data.message}</p>
             <div className="mt-6 flex flex-wrap justify-center gap-3">
@@ -515,14 +498,10 @@ export default function Vote() {
                 >
                   Play another round
                 </button>
-              ) : state.data.allPairsComplete ? (
-                <p className="text-sm text-fog-light">
-                  You&apos;ve compared every unique matchup for this {noun}.
-                </p>
               ) : (
                 <p className="text-sm text-fog-light">
-                  You&apos;ve used all {state.data.round.maxVotes} ranking votes
-                  for this {noun}.
+                  You&apos;ve compared every unique matchup for this {noun}.
+                  Check back if more people submit.
                 </p>
               )}
               <Link to="/Gallery" className="btn-pill-secondary">

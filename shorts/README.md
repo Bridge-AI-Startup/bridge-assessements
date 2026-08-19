@@ -133,7 +133,7 @@ Primary namespace is `/api/shorts`; every route is also served under the legacy 
 - **Preview mode toggle:** one hard-coded line in `shorts/client/src/config/submissionPreview.js` — `SUBMISSION_PREVIEW_MODE = "api"` (shipped) or `"blob"` (legacy client blob URLs; rollback = flip that line + redeploy Shorts client only). Shared hook: `shorts/client/src/lib/useSubmissionPreview.js`. Keep `previewBlob.js` intact for blob mode.
 - **Rate limit:** Shorts preview routes use a dedicated **3000 req / 15 min / IP** bucket (not the general 100/15 Shorts API limit).
 - **Known limitations:** API-mode localStorage is on the API origin (shared across submissions; blank on first switch from blob); relative asset paths only (root-absolute `/main.js` hits the API host root); text-only snapshots (no binary images/fonts/wasm).
-- **Vote** (`/Vote`): pairwise A/B (must have submitted that day). Visible **`n / 5` round counter**; fifth vote shows ranking-impact recap. Up to **25 weighted votes/day** (5 rounds). Swiss-style matchmaking (similar skill + exposure).
+- **Vote** (`/Vote`): pairwise A/B, open to everyone. Visible **`n / 5` round counter**; fifth vote shows ranking-impact recap. Continues until every unique opponent pair is seen; a new build that creates combinations reopens matchups. Swiss-style matchmaking (similar skill + exposure).
 - **Ranking**: TrueSkill-style Bayesian 1v1 (`ratingMean` μ, `ratingDeviation` σ); sort by `μ − 3σ`; public `score ≈ 1000 + 40·(μ−3σ)`; provisional until 5 matches.
 - No self-votes; one vote per unordered pair per voter per day.
 

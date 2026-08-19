@@ -13,4 +13,3 @@ export const INITIAL_RANKING_SCORE = rankingScoreFrom(
 
 export const PROVISIONAL_MATCH_THRESHOLD = 5;
 export const VOTE_ROUND_SIZE = 5;
-export const MAX_WEIGHTED_VOTES_PER_DAY = 25;

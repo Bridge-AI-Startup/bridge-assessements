@@ -433,7 +433,7 @@ server/src/
 - `GET /admin/submissions` -- List submissions (admin; query `challengeDate`, `limit`; omits `files`)
 - `GET /admin/submissions/:id` -- Full submission including `files` (admin)
 - `GET /vote/next` -- Next pairwise pair (`anonymousId`, optional `challengeDate`, `preferId`, `includeFiles` default true); requires same-day submit; returns round counter (`n/5`) + `previewRevision`
-- `POST /vote` -- Cast pairwise vote (Bayesian rating update); optional body `includeFiles` (default true); every 5th vote returns round ranking recap; max 25 votes/day
+- `POST /vote` -- Cast pairwise vote (Bayesian rating update); optional body `includeFiles` (default true); every 5th vote returns round ranking recap; continues until unique pairs run out
 - `GET /leaderboard` -- Rankings by conservative Bayesian score `μ−3σ` (`challengeDate`, `limit`, `anonymousId`)
 
 **Submission routes** (`/api/submissions`):

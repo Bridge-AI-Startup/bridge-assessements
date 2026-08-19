@@ -49,6 +49,7 @@ export type VoteNextResponse =
         | "must_submit"
         | "not_enough_submissions"
         | "no_pairs_left"
+        // Retired: voting stops on unique pairs, not a count budget.
         | "vote_cap_reached";
       message: string;
       round: RoundProgress;
