@@ -387,7 +387,8 @@ export default function RuntimeSetup() {
 
   const onFinalize = async () => {
     const lastRunFailed = setup?.lastRunResult?.ok === false;
-    const message = setup?.verified
+    const verified = Boolean(setup?.verified || setup?.lastRunResult?.ok);
+    const message = verified
       ? "Finalize this setup? Recruiters will replay this config against your submitted code. You will not be able to change it."
       : [
           lastRunFailed
@@ -401,7 +402,7 @@ export default function RuntimeSetup() {
     }
     setFinalizing(true);
     setError(null);
-    const result = await finalizeRuntime(token);
+    const result = await finalizeRuntime(token, { confirmUnverified: !verified });
     setFinalizing(false);
     if (!result.success) {
       setError(result.error);

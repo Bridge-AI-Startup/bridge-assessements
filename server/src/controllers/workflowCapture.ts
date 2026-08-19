@@ -40,6 +40,10 @@ import { computeAndStoreEpisodes } from "../services/workflowCapture/episodes.js
 import { finalizeCaptureSession } from "../services/workflowCapture/finalize.js";
 import { fileUpdatesFromCaptureEvents } from "../services/workflowCapture/fileState.js";
 import { getUserIdFromFirebaseUid } from "../utils/auth.js";
+import {
+  agentSecretConfigured,
+  agentSecretMatches,
+} from "../utils/agentSecret.js";
 
 /** Per-event text cap. Long tool results get truncated, never dropped. */
 const MAX_TEXT_CHARS = 20_000;
@@ -47,6 +51,22 @@ const MAX_TEXT_CHARS = 20_000;
 const MAX_FILE_CHARS = 100_000;
 /** Max events accepted in one ingest batch. */
 const MAX_BATCH = 200;
+
+/**
+ * Event types the capture kit is allowed to POST. `screen_context` is
+ * deliberately absent: those events are server-derived from the proctoring
+ * recording and are treated as trusted evidence by the judge — a candidate
+ * holding their own captureToken must not be able to forge them.
+ */
+const KIT_EVENT_TYPES = new Set<WorkflowEventType>([
+  "session_start",
+  "user_prompt",
+  "tool_use",
+  "tool_result",
+  "assistant_message",
+  "session_end",
+  "notification",
+]);
 
 const DISCLOSURE_VERSION = "2026-08-12";
 
@@ -92,6 +112,7 @@ export async function createCaptureSession(
     }
 
     let submissionId: mongoose.Types.ObjectId | undefined;
+    let nameFromSubmission: string | undefined;
     if (submissionToken) {
       const submission = await SubmissionModel.findOne({ token: submissionToken })
         .select("_id candidateName status")
@@ -101,6 +122,11 @@ export async function createCaptureSession(
         return;
       }
       submissionId = (submission as any)._id;
+      const fromSub =
+        typeof (submission as any).candidateName === "string"
+          ? String((submission as any).candidateName).trim()
+          : "";
+      if (fromSub) nameFromSubmission = fromSub;
       const status = (submission as any).status;
       if (
         status === "submitted" ||
@@ -116,11 +142,14 @@ export async function createCaptureSession(
       }
     }
 
+    const nameFromBody =
+      typeof candidateName === "string" ? candidateName.trim() : "";
+
     const captureToken = crypto.randomBytes(32).toString("hex");
     const session = await WorkflowCaptureSessionModel.create({
       submissionId,
       submissionToken: submissionToken || undefined,
-      candidateName: candidateName || undefined,
+      candidateName: nameFromSubmission || nameFromBody || undefined,
       source: source || "claude-code",
       captureToken,
       status: "active",
@@ -183,7 +212,7 @@ export async function ingestEvents(
 
     for (const raw of batch) {
       const type = String(raw?.type || "") as WorkflowEventType;
-      if (!type) continue;
+      if (!KIT_EVENT_TYPES.has(type)) continue;
 
       const { text, truncated } = truncate(raw?.text, MAX_TEXT_CHARS);
       const at = raw?.at ? new Date(raw.at) : new Date();
@@ -1007,13 +1036,16 @@ export async function getAgentContext(
   next: NextFunction
 ): Promise<void> {
   try {
-    const expected = process.env.AGENT_SECRET;
-    if (expected) {
-      const provided = req.headers["x-agent-secret"];
-      if (provided !== expected) {
-        res.status(401).json({ error: "invalid_agent_secret" });
-        return;
-      }
+    if (!agentSecretConfigured()) {
+      console.error(
+        "[workflow-capture] AGENT_SECRET is not set — refusing /agent-context. Set it in config.env."
+      );
+      res.status(503).json({ error: "agent_tools_unconfigured" });
+      return;
+    }
+    if (!agentSecretMatches(req.headers["x-agent-secret"])) {
+      res.status(401).json({ error: "invalid_agent_secret" });
+      return;
     }
 
     const { submissionToken, sessionId } = req.query as Record<string, string>;

@@ -64,7 +64,7 @@ async function main() {
     timeLimit: 75,
     numInterviewQuestions: 2,
     isSmartInterviewerEnabled: false,
-    evidenceMode: "screen",
+    evidenceMode: "both",
     behavioralChecks: [
       "python3 solve.py maps/small.txt prints a path and exits 0.",
       "The HTTP UI can solve the small map and animate a path that returns to the dock.",

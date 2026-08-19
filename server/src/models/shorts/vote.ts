@@ -30,6 +30,18 @@ const VoteSchema = new Schema(
       required: true,
       trim: true,
     },
+    /**
+     * Did this vote move the ratings? True iff the voter had submitted a build
+     * for this challenge date. Anyone may play the matchups; only builders
+     * count. `default: true` because every vote written before this field
+     * existed came from a submitter — query with `{ $ne: false }` so a missing
+     * field reads as weighted and no migration is needed.
+     */
+    weighted: {
+      type: Boolean,
+      required: true,
+      default: true,
+    },
   },
   { timestamps: true },
 );

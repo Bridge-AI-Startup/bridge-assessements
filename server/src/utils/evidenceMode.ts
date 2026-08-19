@@ -5,26 +5,28 @@
  *   "both"     record the screen for human playback, analyse the hook stream
  *   "none"     no screen recording, no workflow capture
  *
- * Leftover values (still honoured, no longer offered):
+ * Leftover value (still honoured, no longer offered):
  *   "workflow" hooks-first capture with no screen share
- *   "screen"   screen recording + AI transcript
  *
- * The per-assessment `evidenceMode` is returned as-is. Missing/invalid values
- * resolve to "screen" so old documents keep the video + OCR path they were
- * created under. New assessments default to "both" on the Assessment schema.
+ * The removed mode: "screen" (screen recording transcribed by vision OCR) was
+ * the original method and is gone. It was also the fallback for documents with
+ * no `evidenceMode` field, which meant the deprecated path was the *default*
+ * and quietly covered most assessments. Anything unrecognised — a missing
+ * field, or a document still holding the string "screen" — now resolves to
+ * "both", so legacy assessments move onto the current method on read with no
+ * migration required for correctness.
  */
 
-export type EvidenceMode = "none" | "workflow" | "both" | "screen";
+export type EvidenceMode = "none" | "workflow" | "both";
 
 export const EVIDENCE_MODES: readonly EvidenceMode[] = [
   "none",
   "workflow",
   "both",
-  "screen",
 ];
 
-/** Fallback when an assessment document has no evidenceMode field (legacy). */
-export const DEFAULT_EVIDENCE_MODE: EvidenceMode = "screen";
+/** Fallback when an assessment has no (or an unrecognised) evidenceMode. */
+export const DEFAULT_EVIDENCE_MODE: EvidenceMode = "both";
 
 export function isEvidenceMode(value: unknown): value is EvidenceMode {
   return (
@@ -47,7 +49,7 @@ export function resolveEvidenceMode(
 
 /** Should the candidate be asked to share their screen? */
 export function shouldCaptureScreen(mode: EvidenceMode): boolean {
-  return mode === "screen" || mode === "both";
+  return mode === "both";
 }
 
 /** Should the candidate be given the capture-kit setup command? */
@@ -55,18 +57,7 @@ export function shouldCaptureWorkflow(mode: EvidenceMode): boolean {
   return mode === "workflow" || mode === "both";
 }
 
-/**
- * Where the analysis comes from. In "both" mode the video exists for human
- * playback, but the hook stream is what gets analysed — so we skip the
- * expensive frame/Gemini transcript entirely. "none" has nothing to transcribe.
- * Candidate PNG screenshots are gated on this too: they only exist to feed OCR,
- * so CandidateAssessment does not capture/upload frames unless mode is "screen".
- */
-export function shouldGenerateVideoTranscript(mode: EvidenceMode): boolean {
-  return mode === "screen";
-}
-
-/** Grade the capture-kit timeline instead of (or without) a video transcript. */
+/** Grade the capture-kit timeline. The only observational grading path there is. */
 export function shouldEvaluateWorkflow(mode: EvidenceMode): boolean {
   return mode === "workflow" || mode === "both";
 }

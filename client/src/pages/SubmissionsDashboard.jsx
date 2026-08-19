@@ -63,7 +63,10 @@ import { runSubmissionEvaluation } from "@/api/evaluation";
 import VideoTimelineWithCriteria from "@/components/proctoring/VideoTimelineWithCriteria";
 import BehavioralGradingLiveTrace from "@/components/submissions/BehavioralGradingLiveTrace";
 import EvidenceMomentChips from "@/components/submissions/EvidenceMomentChips";
-import WorkflowActivityTimeline from "@/components/submissions/WorkflowActivityTimeline";
+import WorkflowActivityTimeline, {
+  sessionSecondToVideoOffset,
+} from "@/components/submissions/WorkflowActivityTimeline";
+import { cn } from "@/lib/utils";
 import CommunicationCard from "@/components/submissions/CommunicationCard";
 import RuntimeReplayPanel, {
   shouldShowRuntimeReplay,
@@ -1245,7 +1248,7 @@ export default function SubmissionsDashboard() {
   const evidenceModeForReview =
     selectedEvaluationSubmission?.evidenceMode ||
     assessment?.evidenceMode ||
-    "screen";
+    "both";
   const recordsScreen =
     evidenceModeForReview !== "workflow" && evidenceModeForReview !== "none";
   const activityTimelineOnRecording = evidenceModeForReview === "both";
@@ -1557,15 +1560,17 @@ export default function SubmissionsDashboard() {
           return;
         }
         setRecordingSession(session);
-        // Video OCR only exists for leftover `screen` assessments. `both`
-        // never transcribes — the hook stream is the text index of the footage.
+        // Keyed on the transcript existing, not on the assessment's mode.
+        // Nothing generates these any more — the video-OCR "screen" mode is
+        // gone — but submissions graded under it still have one, and gating on
+        // the current mode would have hidden every one of those the moment the
+        // mode was removed.
         if (
-          evidenceModeForReview === "screen" &&
           session.transcript?.status === "completed" &&
           session.transcript?.storageKey &&
           !selectedEvaluationSubmission?.enrichedTranscript
         ) {
-          const transcriptResult = await getTranscriptContent(session._id);
+          const transcriptResult = await getTranscriptContent(session._id, token);
           if (cancelled) return;
           if (transcriptResult.success && transcriptResult.data) {
             const lines = transcriptResult.data
@@ -2285,7 +2290,7 @@ export default function SubmissionsDashboard() {
     if (tab) {
       reviewTabOverrideRef.current = true;
       const mode =
-        submission?.evidenceMode || assessment?.evidenceMode || "screen";
+        submission?.evidenceMode || assessment?.evidenceMode || "both";
       const canShowRecording = mode !== "workflow" && mode !== "none";
       setEvaluationTab(
         tab === "recording" && !canShowRecording ? "summary" : tab
@@ -4149,8 +4154,40 @@ export default function SubmissionsDashboard() {
                               page explicitly asks for them (an LLM call). */}
                           {episodesForReview.length > 0 ? (
                             <div className="divide-y divide-gray-100 max-h-[40vh] overflow-y-auto">
-                              {episodesForReview.map((ep) => (
-                                <div key={ep.index} className="px-4 py-3">
+                              {episodesForReview.map((ep) => {
+                                // Chapters seek the recording like rubric
+                                // evidence chips do: map the episode's
+                                // session-relative start onto the merged
+                                // video via the analysis timeline. Rows stay
+                                // plain text when there is no recording or
+                                // the analysis has not loaded.
+                                const epOffset = recordsScreen
+                                  ? sessionSecondToVideoOffset(
+                                      workflowAnalysis?.timeline,
+                                      Number(ep.startSeconds)
+                                    )
+                                  : null;
+                                const epSeekable =
+                                  epOffset != null && Number.isFinite(epOffset);
+                                return (
+                                <div
+                                  key={ep.index}
+                                  onClick={
+                                    epSeekable
+                                      ? () => handleSeekRecording(epOffset)
+                                      : undefined
+                                  }
+                                  className={cn(
+                                    "px-4 py-3",
+                                    epSeekable &&
+                                      "cursor-pointer hover:bg-gray-50"
+                                  )}
+                                  title={
+                                    epSeekable
+                                      ? "Jump the recording to this chapter"
+                                      : undefined
+                                  }
+                                >
                                   <div className="flex items-baseline gap-2">
                                     <span className="text-xs text-gray-400 tabular-nums">
                                       {ep.index}
@@ -4170,7 +4207,8 @@ export default function SubmissionsDashboard() {
                                     {ep.summary}
                                   </p>
                                 </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           ) : evaluationInProgress || workflowLoading ? (
                             <div className="px-4 py-4">
@@ -4806,6 +4844,7 @@ export default function SubmissionsDashboard() {
                   workflowAnalysis?.timeline?.length > 0 ? (
                     <WorkflowActivityTimeline
                       timeline={workflowAnalysis.timeline}
+                      episodes={episodesForReview}
                       onSeek={handleSeekRecording}
                     />
                   ) : activityTimelineOnRecording &&
@@ -4818,10 +4857,13 @@ export default function SubmissionsDashboard() {
                     />
                   ) : null}
 
-                  {/* Leftover `screen` assessments still have a video OCR
-                      transcript. Current modes never generate one. */}
-                  {evidenceModeForReview === "screen" &&
-                    selectedEvaluationSubmission && (
+                  {/* Historical only: submissions graded under the removed
+                      video-OCR mode. Shown when the transcript actually exists
+                      rather than by mode, so removing the mode did not make
+                      past transcripts unviewable. */}
+                  {selectedEvaluationSubmission &&
+                    (selectedEvaluationSubmission.enrichedTranscript ||
+                      recordingTranscript?.length > 0) && (
                     <div className="space-y-3">
                       <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
                         <FileText className="w-4 h-4 text-[#21201C]" />

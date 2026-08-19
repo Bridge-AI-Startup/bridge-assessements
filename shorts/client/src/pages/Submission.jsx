@@ -5,6 +5,7 @@ import { shouldFetchSubmissionFiles } from "@/config/submissionPreview";
 import { useSubmissionPreview } from "@/lib/useSubmissionPreview";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
 import ShortsHeader from "@/components/ShortsHeader";
+import ShortsFooter from "@/components/ShortsFooter";
 import ShareBuild from "@/components/ShareBuild";
 
 export default function Submission() {
@@ -60,10 +61,10 @@ export default function Submission() {
       : null;
 
   return (
-    <div className="min-h-screen bg-paper">
+    <div className="flex min-h-screen flex-col bg-paper">
       <ShortsHeader active="browse" cta={cta} />
 
-      <main className="mx-auto max-w-5xl px-6 py-8">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
         <Link to="/Gallery" className="label-mono hover:text-ink">
           ← Browse
         </Link>
@@ -108,7 +109,7 @@ export default function Submission() {
               />
             </div>
 
-            <div className="rounded-2xl border border-line bg-cream p-2 shadow-card">
+            <div className="punch-card bg-cream p-2">
               <div className="overflow-hidden rounded-xl border border-line bg-paper">
                 {preview?.url ? (
                   <iframe
@@ -131,6 +132,8 @@ export default function Submission() {
           </>
         )}
       </main>
+
+      <ShortsFooter />
     </div>
   );
 }

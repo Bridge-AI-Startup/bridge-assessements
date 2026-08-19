@@ -13,6 +13,14 @@ import type {
 export type EvaluateTranscriptOptions = {
   /** Pre-grounded criteria from assessment (same order as criteria). When present, ground step is skipped. */
   groundings?: GroundedCriterion[];
+  /**
+   * Persisted evaluability verdicts (same order as criteria), from
+   * `ensureCriteriaValidations`. When present, the per-run LLM validation is
+   * skipped — evaluability is decided once per criterion, not once per
+   * candidate, so the same criterion cannot grade for one submission and
+   * refuse for the next.
+   */
+  validations?: Array<{ valid: boolean; reason?: string | null }>;
 };
 
 /**
@@ -30,10 +38,19 @@ export async function evaluateTranscript(
     Array.isArray(groundings) &&
     groundings.length === criteria.length;
 
+  const validations = options?.validations;
+  const useValidations =
+    Array.isArray(validations) && validations.length === criteria.length;
+
   const [criteriaResults, session_summary] = await Promise.all([
     Promise.all(
       criteria.map((criterion, i) =>
-        evaluateOneCriterion(transcript, criterion, usePreGrounded ? groundings![i] : undefined)
+        evaluateOneCriterion(
+          transcript,
+          criterion,
+          usePreGrounded ? groundings![i] : undefined,
+          useValidations ? validations![i] : undefined
+        )
       )
     ),
     generateSessionSummary(transcript),
@@ -48,9 +65,12 @@ export async function evaluateTranscript(
 async function evaluateOneCriterion(
   transcript: TranscriptEvent[],
   criterion: string,
-  preGrounded?: GroundedCriterion
+  preGrounded?: GroundedCriterion,
+  preValidation?: { valid: boolean; reason?: string | null }
 ): Promise<CriterionResult> {
-  const validation = await validateCriterion(criterion);
+  // Prefer the persisted assessment-level verdict; the per-run LLM check is
+  // only a fallback for callers with no assessment (direct-transcript runs).
+  const validation = preValidation ?? (await validateCriterion(criterion));
   if (!validation.valid) {
     return {
       criterion,

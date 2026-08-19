@@ -24,7 +24,19 @@ const FALLBACK_FIRST_MESSAGE =
 
 /** Injected on every stream loss so the agent speaks — not a candidate transcript line. */
 const SCREEN_SHARE_LOST_UPDATE =
-  "The candidate's screen share just stopped (or needs to be resumed after a refresh). Speak now — do not skip this turn. Tell them they must reshare their entire screen: the full display, not a window or a browser tab. They cannot continue the assessment without sharing. Keep it to one or two sentences.";
+  "The candidate's screen share just stopped (or needs to be resumed after a refresh). Speak now — do not skip this turn. Tell them they must reshare their entire screen: the full display, not a window or a browser tab. They cannot continue the assessment without sharing. Keep it to one or two sentences. If a later update says sharing was restored, that supersedes this one.";
+
+/**
+ * Injected when sharing comes back, so the agent's world model unlatches. A
+ * contextual update does not force a turn, so the loss update above is often
+ * spoken seconds AFTER the candidate has already reshared (observed live:
+ * restore at 15:35:13, nag spoken 15:35:19, then four more turns of "I can't
+ * see your screen" against a healthy share). Without this positive signal the
+ * agent has no way to learn the loss is over — the candidate saying "it should
+ * be shared" is not evidence it can trust.
+ */
+const SCREEN_SHARE_RESTORED_UPDATE =
+  "The candidate's screen share has been RESTORED — they are sharing their entire screen again. This supersedes any earlier screen-share-lost update. Stop asking them to reshare. If your very last message asked them to reshare, briefly acknowledge they're all set in a few words; otherwise say nothing about screen sharing. Never claim you cannot see their screen.";
 
 /** How often buffered transcript lines are POSTed to the server. */
 const FLUSH_INTERVAL_MS = 10000;
@@ -102,7 +114,15 @@ function LevelMeter({ barsRef, active }) {
 }
 
 const CompanionPanel = forwardRef(function CompanionPanel(
-  { sessionId, token, submissionId, className, reshareRequestId = 0 },
+  {
+    sessionId,
+    token,
+    submissionId,
+    className,
+    reshareRequestId = 0,
+    shareRestoredRequestId = 0,
+    screenShareLive = false,
+  },
   ref
 ) {
   const [config, setConfig] = useState(null);
@@ -121,6 +141,8 @@ const CompanionPanel = forwardRef(function CompanionPanel(
   const barsRef = useRef([]);
   const pendingReshareRef = useRef(false);
   const speakResharePromptRef = useRef(() => {});
+  /** True once a lost update was actually delivered — only then does a restore need announcing. */
+  const lostUpdateDeliveredRef = useRef(false);
 
   const agentId = import.meta.env?.VITE_ELEVENLABS_AGENT_ID;
 
@@ -137,7 +159,18 @@ const CompanionPanel = forwardRef(function CompanionPanel(
     };
   }, [config]);
 
+  /** Mirrors `screenShareLive` so the queued nag can re-check it on connect. */
+  const screenShareLiveRef = useRef(screenShareLive);
+  screenShareLiveRef.current = screenShareLive;
+
   const speakResharePrompt = useCallback(() => {
+    // Never nag about a share that is already back. The nag is queued when the
+    // conversation is not connected yet, and by the time it connects the
+    // candidate has often already reshared.
+    if (screenShareLiveRef.current) {
+      pendingReshareRef.current = false;
+      return;
+    }
     const conv = conversationRef.current;
     if (!conv || conv.status !== "connected") {
       pendingReshareRef.current = true;
@@ -146,8 +179,31 @@ const CompanionPanel = forwardRef(function CompanionPanel(
     pendingReshareRef.current = false;
     try {
       conv.sendContextualUpdate?.(SCREEN_SHARE_LOST_UPDATE);
+      lostUpdateDeliveredRef.current = true;
     } catch (err) {
       console.warn("[ProctoringCompanion] reshare contextual update failed:", err);
+    }
+  }, []);
+
+  /**
+   * Tell the agent sharing is back. Only needed when a lost update was actually
+   * delivered — a loss that resolved before the agent ever heard about it needs
+   * no correction, and injecting restore noise on every resume would invite the
+   * agent to comment on plumbing it was never told about.
+   */
+  const announceShareRestored = useCallback(() => {
+    pendingReshareRef.current = false;
+    if (!lostUpdateDeliveredRef.current) return;
+    const conv = conversationRef.current;
+    if (!conv || conv.status !== "connected") return;
+    try {
+      conv.sendContextualUpdate?.(SCREEN_SHARE_RESTORED_UPDATE);
+      lostUpdateDeliveredRef.current = false;
+    } catch (err) {
+      console.warn(
+        "[ProctoringCompanion] restore contextual update failed:",
+        err
+      );
     }
   }, []);
 
@@ -342,7 +398,22 @@ const CompanionPanel = forwardRef(function CompanionPanel(
   useEffect(() => {
     if (!reshareRequestId) return;
     speakResharePrompt();
-  }, [reshareRequestId, speakResharePrompt]);
+    // Deliberately keyed on the tick alone: re-running when `screenShareLive`
+    // flips back to true would re-fire the nag after a successful reshare.
+    // (`speakResharePrompt` is a stable useCallback with no deps.)
+  }, [reshareRequestId]);
+
+  // Sharing came back before the queued nag went out — drop it.
+  useEffect(() => {
+    if (screenShareLive) pendingReshareRef.current = false;
+  }, [screenShareLive]);
+
+  useEffect(() => {
+    if (!shareRestoredRequestId) return;
+    announceShareRestored();
+    // Keyed on the tick alone, like the reshare effect above.
+    // (`announceShareRestored` is a stable useCallback with no deps.)
+  }, [shareRestoredRequestId]);
 
   useImperativeHandle(
     ref,
@@ -559,9 +630,10 @@ const CompanionPanel = forwardRef(function CompanionPanel(
  * fetches the server-side prompt, opens a WebRTC conversation, and buffers the
  * transcript to `/companion/messages` every 10s. Pass `reshareRequestId` (a
  * monotonically increasing tick) so every stream loss / resume-after-refresh
- * injects a spoken "reshare your entire screen" contextual update. The parent
- * should call `ref.current.endAndFlush()` before completing the proctoring
- * session; `notifyScreenShareLost()` is also on the ref.
+ * injects a spoken "reshare your entire screen" contextual update, and
+ * `screenShareLive` so a nag is dropped rather than spoken once sharing is back.
+ * The parent should call `ref.current.endAndFlush()` before completing the
+ * proctoring session; `notifyScreenShareLost()` is also on the ref.
  *
  * Renders nothing when `VITE_ELEVENLABS_AGENT_ID` is unset.
  */

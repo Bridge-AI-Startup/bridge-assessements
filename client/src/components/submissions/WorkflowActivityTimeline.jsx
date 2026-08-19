@@ -76,6 +76,31 @@ const formatOffset = (sec) => {
     : `${m}:${String(r).padStart(2, "0")}`;
 };
 
+/**
+ * Map a session-relative second (an episode start, a timeline ts) onto the
+ * merged recording's offset. `ts` and `videoOffsetSeconds` share no origin —
+ * capture-kit start vs proctoring captureStartedAt — but differ by a constant
+ * except across stream gaps, so anchor on the nearest row that carries both
+ * and carry the delta. Null when nothing on the timeline maps (no recording).
+ */
+export function sessionSecondToVideoOffset(timeline, sec) {
+  if (!Number.isFinite(sec)) return null;
+  let best = null;
+  let bestDist = Infinity;
+  for (const row of timeline || []) {
+    const ts = Number(row?.ts);
+    const off = row?.videoOffsetSeconds;
+    if (!Number.isFinite(ts) || off == null || !Number.isFinite(off)) continue;
+    const dist = Math.abs(ts - sec);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = { ts, off };
+    }
+  }
+  if (!best) return null;
+  return Math.max(0, best.off + (sec - best.ts));
+}
+
 function unwrapQuoted(text) {
   return String(text || "")
     .trim()
@@ -219,7 +244,11 @@ function MessageBody({ text, expanded, onToggle, muted = false }) {
 
 export default function WorkflowActivityTimeline({
   timeline = [],
+  /** Persisted session episodes; rendered as chapter dividers inside the conversation. */
+  episodes = [],
   onSeek = null,
+  /** Capture/scoring still running — render a waiting card instead of nothing. */
+  pending = false,
   className,
 }) {
   const [expandedKeys, setExpandedKeys] = useState(() => new Set());
@@ -230,6 +259,32 @@ export default function WorkflowActivityTimeline({
   );
 
   const beats = useMemo(() => buildConversation(timeline), [timeline]);
+
+  // Chapters (episodes) slot in at their start second, ahead of the beat they
+  // introduce, so the conversation reads as a chaptered document rather than
+  // an undifferentiated scroll.
+  const items = useMemo(() => {
+    const rows = beats.map((b) => ({ ...b, chapter: false }));
+    for (const ep of episodes || []) {
+      const start = Number(ep?.startSeconds);
+      if (!Number.isFinite(start)) continue;
+      rows.push({
+        kind: "chapter",
+        chapter: true,
+        ts: start,
+        offset: sessionSecondToVideoOffset(timeline, start),
+        index: ep.index,
+        label: ep.label,
+        episodeKind: ep.kind,
+        summary: ep.summary,
+      });
+    }
+    rows.sort(
+      (a, b) =>
+        a.ts - b.ts || (a.chapter === b.chapter ? 0 : a.chapter ? -1 : 1)
+    );
+    return rows;
+  }, [beats, episodes, timeline]);
 
   const counts = useMemo(() => {
     let prompts = 0;
@@ -243,7 +298,22 @@ export default function WorkflowActivityTimeline({
     return { prompts, replies, screens };
   }, [beats]);
 
-  if (!hasAnyTimeline) return null;
+  if (!hasAnyTimeline) {
+    if (!pending) return null;
+    return (
+      <div className={cn("rounded-xl border border-gray-200 bg-white", className)}>
+        <div className="px-4 py-3">
+          <h4 className="text-sm font-medium tracking-[-0.012em] text-[#21201C]">
+            What they did
+          </h4>
+          <p className="text-xs text-gray-500 mt-1">
+            Capture still processing — the conversation appears here once it
+            lands.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const toggleExpanded = (key) =>
     setExpandedKeys((prev) => {
@@ -266,6 +336,11 @@ export default function WorkflowActivityTimeline({
     subtitleParts.push(
       `${counts.screens} screen moment${counts.screens === 1 ? "" : "s"}`
     );
+  const chapterCount = items.filter((it) => it.chapter).length;
+  if (chapterCount)
+    subtitleParts.push(
+      `${chapterCount} chapter${chapterCount === 1 ? "" : "s"}`
+    );
 
   return (
     <div className={cn("rounded-xl border border-gray-200 bg-white", className)}>
@@ -287,7 +362,7 @@ export default function WorkflowActivityTimeline({
 
       {beats.length > 0 ? (
         <div className="max-h-[46vh] overflow-y-auto">
-          {beats.map((beat, i) => {
+          {items.map((beat, i) => {
             const key = `${beat.kind}-${beat.ts}-${i}`;
             const offset = beat.offset;
             const seekable =
@@ -296,6 +371,41 @@ export default function WorkflowActivityTimeline({
               offset != null && Number.isFinite(offset) ? offset : beat.ts
             );
             const seekLabel = `Jump the recording to ${clock}`;
+
+            if (beat.kind === "chapter") {
+              return (
+                <div
+                  key={key}
+                  onClick={seekable ? () => onSeek(offset) : undefined}
+                  title={beat.summary || undefined}
+                  className={cn(
+                    "flex items-baseline gap-3 px-4 py-2 bg-[#FAF9F2] border-y border-gray-100",
+                    seekable && "cursor-pointer hover:bg-[#F3F1E6]"
+                  )}
+                >
+                  <Clock
+                    clock={clock}
+                    seekable={seekable}
+                    offset={offset}
+                    onSeek={onSeek}
+                    label={seekLabel}
+                  />
+                  <p className="min-w-0 flex-1 truncate text-[11px] font-medium text-[#21201C]">
+                    {beat.index != null ? (
+                      <span className="mr-1.5 tabular-nums text-gray-400">
+                        {beat.index}
+                      </span>
+                    ) : null}
+                    {beat.label}
+                    {beat.episodeKind ? (
+                      <span className="ml-2 text-[9px] uppercase tracking-[0.03em] text-gray-400">
+                        {beat.episodeKind}
+                      </span>
+                    ) : null}
+                  </p>
+                </div>
+              );
+            }
 
             if (beat.kind === "screen") {
               return (

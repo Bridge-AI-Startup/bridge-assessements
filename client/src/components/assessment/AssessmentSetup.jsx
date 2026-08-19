@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   AlertCircle,
@@ -14,9 +14,13 @@ import { Button } from "@/components/ui/button";
 import bridgeLogo from "@/assets/bridge-logo.svg";
 import { STARTER_ZIP_FILENAME } from "@/lib/downloadStarterCode";
 import {
-  probeCompanionVoice,
+  acquireCompanionMicrophone,
+  listenForMicrophoneAudio,
+  probeElevenLabsReachability,
+  stopMediaStream,
   voiceCheckCopy,
 } from "@/lib/companionVoiceCheck";
+import { METER_RMS_FULL, SPEECH_RMS_THRESHOLD } from "@/lib/micLevel";
 
 export function CaptureSetupCommand({ command, copied, onCopy }) {
   return (
@@ -43,14 +47,30 @@ function StepNumber({ n }) {
   );
 }
 
+function VoiceLevelMeter({ level }) {
+  const pct = Math.min(100, Math.round((level / METER_RMS_FULL) * 100));
+  return (
+    <div
+      className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-amber-200/80"
+      aria-hidden="true"
+    >
+      <div
+        className="h-full rounded-full bg-[#21201C] transition-[width] duration-75"
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  );
+}
+
 /**
  * Pre-timer gate. Screen share and the voice-companion probe happen here;
  * starter files and the brief wait until they start so nobody can read ahead
  * off the clock. When screen recording is required, Start stays disabled
  * until they share their entire screen (`displaySurface === "monitor"`, or
  * any share if the browser does not report a surface). When the voice
- * companion is on, Start also waits for a mic + ElevenLabs reachability
- * check (ad blockers otherwise fail after the timer starts).
+ * companion is on, Start also waits for a spoken mic check (permission +
+ * we actually hear them) and an ElevenLabs reachability ping (ad blockers
+ * otherwise fail after the timer starts).
  */
 export default function AssessmentSetup({
   title,
@@ -76,29 +96,128 @@ export default function AssessmentSetup({
   );
   const [voiceReason, setVoiceReason] = useState(null);
   const [voiceAttempt, setVoiceAttempt] = useState(0);
+  const [voiceLevel, setVoiceLevel] = useState(0);
+  const [voiceQuiet, setVoiceQuiet] = useState(false);
+  const resumeListenRef = useRef(null);
 
   useEffect(() => {
     if (!usesVoiceCheck) {
       setVoiceStatus("skipped");
       setVoiceReason(null);
+      setVoiceLevel(0);
+      setVoiceQuiet(false);
       return undefined;
     }
-    let cancelled = false;
+
+    const abort = new AbortController();
+    let stream = null;
+    let quietTimer = 0;
     setVoiceStatus("checking");
     setVoiceReason(null);
+    setVoiceLevel(0);
+    setVoiceQuiet(false);
+
+    const fail = (reason) => {
+      if (abort.signal.aborted) return;
+      abort.abort();
+      stopMediaStream(stream);
+      stream = null;
+      setVoiceStatus("failed");
+      setVoiceReason(reason);
+      setVoiceLevel(0);
+    };
+
     (async () => {
-      const result = await probeCompanionVoice();
-      if (cancelled) return;
-      if (result.ok) {
+      const mic = await acquireCompanionMicrophone();
+      if (abort.signal.aborted) {
+        if (mic.ok) stopMediaStream(mic.stream);
+        return;
+      }
+      if (!mic.ok) {
+        fail(mic.reason);
+        return;
+      }
+      stream = mic.stream;
+
+      const elPromise = probeElevenLabsReachability();
+      elPromise.then((el) => {
+        if (!el.ok) fail(el.reason);
+      });
+
+      let listenInFlight = false;
+      const listen = async () => {
+        if (abort.signal.aborted || !stream || listenInFlight) return;
+        listenInFlight = true;
+        setVoiceStatus("listening");
+        setVoiceQuiet(false);
+        window.clearTimeout(quietTimer);
+        quietTimer = window.setTimeout(() => {
+          if (!abort.signal.aborted) setVoiceQuiet(true);
+        }, 6000);
+
+        const audio = await listenForMicrophoneAudio(stream, {
+          signal: abort.signal,
+          onLevel: (rms) => {
+            if (abort.signal.aborted) return;
+            setVoiceLevel(rms);
+            // The quiet warning is a 6s wall clock, not "6s of silence".
+            // Reset it whenever the signal that counts toward a pass arrives,
+            // otherwise the bar moves while we still claim we haven't heard them.
+            if (rms >= SPEECH_RMS_THRESHOLD) {
+              setVoiceQuiet(false);
+              window.clearTimeout(quietTimer);
+              quietTimer = window.setTimeout(() => {
+                if (!abort.signal.aborted) setVoiceQuiet(true);
+              }, 6000);
+            }
+          },
+        });
+
+        window.clearTimeout(quietTimer);
+        if (abort.signal.aborted) return;
+
+        if (audio.reason === "needs_gesture") {
+          setVoiceStatus("needs_gesture");
+          setVoiceLevel(0);
+          return;
+        }
+        if (!audio.ok) {
+          if (audio.reason !== "cancelled") fail(audio.reason);
+          return;
+        }
+
+        const el = await elPromise;
+        if (abort.signal.aborted) return;
+        if (!el.ok) {
+          fail(el.reason);
+          return;
+        }
+
+        stopMediaStream(stream);
+        stream = null;
         setVoiceStatus("ready");
         setVoiceReason(null);
-      } else {
-        setVoiceStatus("failed");
-        setVoiceReason(result.reason);
-      }
+        setVoiceLevel(0);
+        setVoiceQuiet(false);
+      };
+
+      const listenGuarded = async () => {
+        try {
+          await listen();
+        } finally {
+          listenInFlight = false;
+        }
+      };
+
+      resumeListenRef.current = listenGuarded;
+      await listenGuarded();
     })();
+
     return () => {
-      cancelled = true;
+      resumeListenRef.current = null;
+      abort.abort();
+      window.clearTimeout(quietTimer);
+      stopMediaStream(stream);
     };
   }, [usesVoiceCheck, voiceAttempt]);
 
@@ -253,8 +372,8 @@ export default function AssessmentSetup({
                         Voice check-in is ready
                       </h2>
                       <p className="mt-1 text-sm text-green-900/80">
-                        Microphone is on and the check-in can connect. It
-                        starts after you begin the assessment.
+                        We heard you. The check-in starts after you begin the
+                        assessment.
                       </p>
                     </>
                   ) : voiceStatus === "checking" ? (
@@ -263,9 +382,52 @@ export default function AssessmentSetup({
                         Checking the voice check-in
                       </h2>
                       <p className="mt-1 text-sm text-amber-950">
-                        Allow the microphone if asked. This confirms the
-                        check-in can reach you before the timer starts.
+                        Allow the microphone if asked. Then say something so we
+                        know it works.
                       </p>
+                    </>
+                  ) : voiceStatus === "listening" ? (
+                    <>
+                      <h2 className="text-sm font-semibold text-amber-950">
+                        Say something
+                      </h2>
+                      <p className="mt-1 text-sm text-amber-950">
+                        Speak for a second so we know the microphone works.
+                        &ldquo;Check, check&rdquo; is fine.
+                      </p>
+                      <VoiceLevelMeter level={voiceLevel} />
+                      {voiceQuiet && (
+                        <>
+                          <p className="mt-2 text-xs text-amber-950/80">
+                            We haven&apos;t heard you yet. Unmute the mic or
+                            speak a bit closer.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setVoiceAttempt((n) => n + 1)}
+                            className="mt-2 text-xs font-medium text-amber-950 underline underline-offset-2"
+                          >
+                            Try a different microphone
+                          </button>
+                        </>
+                      )}
+                    </>
+                  ) : voiceStatus === "needs_gesture" ? (
+                    <>
+                      <h2 className="text-sm font-semibold text-amber-950">
+                        Check the microphone
+                      </h2>
+                      <p className="mt-1 text-sm text-amber-950">
+                        Click below, then say something so we know it works.
+                      </p>
+                      <Button
+                        type="button"
+                        onClick={() => resumeListenRef.current?.()}
+                        className="mt-3 h-9 px-3 text-xs"
+                      >
+                        <Mic className="w-3.5 h-3.5 mr-1.5" />
+                        Check microphone
+                      </Button>
                     </>
                   ) : (
                     <>
@@ -380,10 +542,10 @@ export default function AssessmentSetup({
           {(needsReshare || needsVoice) && (
             <p className="text-xs text-gray-500 mb-3 text-center">
               {needsReshare && needsVoice
-                ? "Share your entire screen and connect the voice check-in to start"
+                ? "Share your entire screen and say something into the microphone to start"
                 : needsReshare
                   ? "Share your entire screen to start"
-                  : "Connect the voice check-in to start"}
+                  : "Say something into the microphone to start"}
             </p>
           )}
 

@@ -48,6 +48,15 @@ export function getShortsPublicApiUrl(): string {
   return shortsEnv("SHORTS_PUBLIC_API_URL", "PLAY_PUBLIC_API_URL");
 }
 
+/**
+ * Absolute URL of the social share card image (og:image). Empty unless set —
+ * see sharePage.ts, which falls back to the static card shipped with the Shorts
+ * client. Exists so the card can be repointed (CDN, new artwork) without a deploy.
+ */
+export function getShortsOgImageUrl(): string {
+  return shortsEnv("SHORTS_OG_IMAGE_URL", "PLAY_OG_IMAGE_URL");
+}
+
 export function getShortsMaxConcurrentSessions(): string {
   return shortsEnv(
     "SHORTS_MAX_CONCURRENT_SESSIONS",

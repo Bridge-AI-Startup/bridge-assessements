@@ -56,14 +56,18 @@ const AssessmentSchema = new mongoose.Schema(
      * Offered in the editor: "both" (default) or "none".
      *   "both"     — record the screen for playback, analyse the hook stream
      *   "none"     — no screen recording, no workflow capture
-     * Leftover (still honoured): "workflow" (hooks only) and "screen" (video + OCR)
+     * Leftover (still honoured): "workflow" (hooks only)
      *
-     * New assessments default to "both". Documents with no field still resolve
-     * to "screen" at read time (legacy video + OCR path).
+     * New assessments default to "both". Documents with no field — or holding
+     * the removed "screen" value — resolve to "both" at read time via
+     * `resolveEvidenceMode`, so nothing has to be migrated for correctness.
+     * The enum no longer accepts "screen"; run
+     * `scripts/migrateEvidenceModeOffScreen.ts` so stored values match, or an
+     * unmigrated document fails validation the next time it is saved.
      */
     evidenceMode: {
       type: String,
-      enum: ["none", "workflow", "both", "screen"],
+      enum: ["none", "workflow", "both"],
       default: "both",
     },
 
@@ -97,6 +101,20 @@ const AssessmentSchema = new mongoose.Schema(
 
     // Pre-grounded criteria (from grounder), keyed by criterion text for evaluation pipeline
     evaluationCriteriaGroundings: {
+      type: mongoose.Schema.Types.Mixed,
+      default: undefined,
+    },
+
+    /**
+     * Persisted per-criterion evaluability verdicts, keyed by criterion text +
+     * profile. Written once (lazily, on first grading) by
+     * `ensureCriteriaValidations` and reused for every candidate afterwards.
+     * Grading used to re-ask an LLM "is this criterion scoreable?" on every
+     * run, so the same criterion could be graded for one candidate and refused
+     * as non-evaluable for the next. Editing a criterion's text invalidates its
+     * entry naturally (lookup is by exact text).
+     */
+    evaluationCriteriaValidations: {
       type: mongoose.Schema.Types.Mixed,
       default: undefined,
     },

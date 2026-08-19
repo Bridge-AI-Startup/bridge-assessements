@@ -350,11 +350,13 @@ export async function generateTranscript(
  * Get the JSONL transcript content for a session.
  */
 export async function getTranscriptContent(
-  sessionId: string
+  sessionId: string,
+  authToken?: string
 ): Promise<APIResult<string>> {
   try {
     const response = await get(
-      `/proctoring/sessions/${sessionId}/transcript`
+      `/proctoring/sessions/${sessionId}/transcript`,
+      authToken ? { Authorization: `Bearer ${authToken}` } : undefined
     );
     const text = await response.text();
     return { success: true, data: text };

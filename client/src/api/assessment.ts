@@ -579,10 +579,16 @@ export async function generateBehavioralChecksForAssessment(
   }
 }
 
+export type ChatTurn = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 export type ChatRequest = {
   message: string;
   allowedSections?: string[];
-  testCases?: Array<{ name: string; type: string; points: number }>;
+  /** Prior turns of this conversation, oldest first, so follow-ups resolve. */
+  history?: ChatTurn[];
 };
 
 export type ChatResponse = {
@@ -590,13 +596,15 @@ export type ChatResponse = {
     description?: string;
     title?: string;
     timeLimit?: number;
-    testCases?: Array<{ name: string; type: string; points: number }>;
+    behavioralChecks?: string[];
+    evaluationCriteria?: string[];
   };
   changedSections: string[];
   changesSummary: string[];
   responseMessage: string;
   model?: string;
   provider?: string;
+  /** Authoritative post-save assessment. The chat route persists its own changes. */
   assessment?: Assessment;
 };
 
@@ -632,7 +640,10 @@ export async function chatWithAssessment(
 
     const result = await response.json();
 
-    if (result && result.updates && result.changedSections) {
+    // A turn that only answers a question legitimately changes nothing, so an
+    // empty `changedSections` is a success. Requiring it non-empty (as this used
+    // to) turned every answer into "Failed to process chat message".
+    if (result && result.updates && Array.isArray(result.changedSections)) {
       console.log("✅ [chatWithAssessment] Chat successful:", {
         changedSections: result.changedSections,
         responseMessage: result.responseMessage,
@@ -643,7 +654,10 @@ export async function chatWithAssessment(
     console.error("❌ [chatWithAssessment] Invalid response format:", result);
     return {
       success: false,
-      error: result.error || "Failed to process chat message",
+      error:
+        result?.error ||
+        result?.message ||
+        "The assistant didn't return a usable response. Try again.",
     };
   } catch (error) {
     return handleAPIError(error);

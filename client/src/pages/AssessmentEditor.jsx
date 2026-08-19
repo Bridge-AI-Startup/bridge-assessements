@@ -16,6 +16,7 @@ import {
   Trash2,
   FileCode,
   PlayCircle,
+  Scale,
 } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -41,6 +42,7 @@ import { auth } from "@/firebase/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 import DocumentBlock from "@/components/assessment/DocumentBlock";
 import AISidebar from "@/components/assessment/AISidebar";
+import { sectionLabel } from "@/components/assessment/sections";
 import BehavioralCheckVerification from "@/components/assessment/BehavioralCheckVerification";
 import StarterCodeIDE from "@/components/StarterCodeIDE";
 import { BulkInviteContent } from "@/components/BulkInviteModal";
@@ -109,6 +111,67 @@ function serializeCheckSpecs(checks, specs) {
   return out;
 }
 
+const EDITOR_SECTIONS = [
+  { id: "projectDescription", label: "Description" },
+  { id: "timeLimit", label: "Time" },
+  { id: "starterFiles", label: "Starter" },
+  { id: "scoring", label: "Scoring" },
+  { id: "behavioralChecks", label: "Checks" },
+  { id: "evaluationCriteria", label: "Criteria" },
+];
+
+const COLLAPSE_STORAGE_PREFIX = "bridge.assessmentEditor.collapsed.";
+
+function readCollapsedState(assessmentId) {
+  if (!assessmentId) return {};
+  try {
+    const raw = window.localStorage.getItem(
+      COLLAPSE_STORAGE_PREFIX + assessmentId
+    );
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeCollapsedState(assessmentId, state) {
+  if (!assessmentId) return;
+  try {
+    window.localStorage.setItem(
+      COLLAPSE_STORAGE_PREFIX + assessmentId,
+      JSON.stringify(state)
+    );
+  } catch {
+    // Private mode / quota — collapse still works for this session.
+  }
+}
+
+function previewPlain(text, max = 88) {
+  const plain = String(text || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[#*_`>[\]]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!plain) return "Empty";
+  return plain.length > max ? `${plain.slice(0, max)}…` : plain;
+}
+
+function formatDuration(hours, minutes) {
+  const parts = [];
+  if (hours) parts.push(`${hours}h`);
+  if (minutes) parts.push(`${minutes}m`);
+  return parts.join(" ") || "Not set";
+}
+
+function listsEqual(a, b) {
+  if (a.length !== b.length) return false;
+  return a.every((value, i) => value === b[i]);
+}
+
 export default function AssessmentEditor() {
   const [searchParams] = useSearchParams();
   const assessmentId = searchParams.get("id");
@@ -124,7 +187,8 @@ export default function AssessmentEditor() {
 
   const [highlightedSection, setHighlightedSection] = useState(null);
   const [lastChange, setLastChange] = useState(null);
-  const [responseMessage, setResponseMessage] = useState(null);
+  /** Assistant conversation: [{ role, content, error? }], oldest first. */
+  const [chatMessages, setChatMessages] = useState([]);
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareTab, setShareTab] = useState("single");
   const [candidateName, setCandidateName] = useState("");
@@ -137,7 +201,7 @@ export default function AssessmentEditor() {
   const [emailSent, setEmailSent] = useState(false);
   const [contextSections, setContextSections] = useState([]);
   const [timeLimit, setTimeLimit] = useState({ hours: 4, minutes: 0 });
-  // "both" (default) | "none" | leftover "workflow" / "screen"
+  // "both" (default) | "none" | leftover "workflow"
   const [evidenceMode, setEvidenceMode] = useState("both");
   const [startDeadline, setStartDeadline] = useState(7);
   const [timeLimitSaveTimeout, setTimeLimitSaveTimeout] = useState(null);
@@ -152,6 +216,7 @@ export default function AssessmentEditor() {
   const [criteriaValidation, setCriteriaValidation] = useState({});
   const [starterCodeFiles, setStarterCodeFiles] = useState([]);
   const starterCodeSaveTimer = useRef(null);
+  const [collapsedSections, setCollapsedSections] = useState({});
 
   // Wait for auth state to be ready
   useEffect(() => {
@@ -224,6 +289,44 @@ export default function AssessmentEditor() {
     fetchAssessment();
   }, [assessmentId, authReady, currentUser]);
 
+  useEffect(() => {
+    setCollapsedSections(readCollapsedState(assessmentId));
+  }, [assessmentId]);
+
+  const setSectionCollapsed = (id, collapsed) => {
+    setCollapsedSections((prev) => {
+      if (!!prev[id] === collapsed) return prev;
+      const next = { ...prev, [id]: collapsed };
+      writeCollapsedState(assessmentId, next);
+      return next;
+    });
+  };
+
+  const setAllSectionsCollapsed = (collapsed) => {
+    const next = Object.fromEntries(
+      EDITOR_SECTIONS.map((section) => [section.id, collapsed])
+    );
+    setCollapsedSections(next);
+    writeCollapsedState(assessmentId, next);
+  };
+
+  const jumpToSection = (id) => {
+    setSectionCollapsed(id, false);
+    window.setTimeout(() => {
+      document.getElementById(`section-${id}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 80);
+  };
+
+  useEffect(() => {
+    if (!highlightedSection) return;
+    const el = document.getElementById(`section-${highlightedSection}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlightedSection]);
+
   const handleAddToContext = (section) => {
     setContextSections((prev) =>
       prev.includes(section)
@@ -257,7 +360,15 @@ export default function AssessmentEditor() {
         const minutes = totalMinutes % 60;
         setTimeLimit({ hours, minutes });
       }
-      setEvidenceMode(assessmentData.evidenceMode ?? "screen");
+      // Legacy documents may hold no field, or the removed "screen"; both
+      // resolve to "both" server-side, so mirror that rather than showing the
+      // editor a mode that no longer exists.
+      setEvidenceMode(
+        assessmentData.evidenceMode === "workflow" ||
+          assessmentData.evidenceMode === "none"
+          ? assessmentData.evidenceMode
+          : "both"
+      );
       if (assessmentData.behavioralChecks?.length) {
         const checks = assessmentData.behavioralChecks.filter(
           (c) => typeof c === "string"
@@ -462,125 +573,116 @@ export default function AssessmentEditor() {
   };
 
   const handleChatSubmit = async (message) => {
+    const trimmed = message.trim();
+    if (!trimmed || isLoading) return;
+
     if (!assessmentId || !currentUser || !assessmentData) {
-      alert("Cannot chat: missing assessment data or user");
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: "I can't reach this assessment yet. Reload the page and try again.",
+          error: true,
+        },
+      ]);
       return;
     }
 
+    // Everything before this turn is the context the model gets. Error entries
+    // are ours, not the model's, so they never go back over the wire.
+    const history = chatMessages
+      .filter((m) => !m.error)
+      .map(({ role, content }) => ({ role, content }));
+
+    setChatMessages((prev) => [...prev, { role: "user", content: trimmed }]);
     setIsLoading(true);
-    setResponseMessage(null); // Clear previous response message
+    setLastChange(null);
 
     try {
-      console.log("💬 [AssessmentEditor] Sending chat message:", message);
-
-      // Get token from current user
       const token = await currentUser.getIdToken();
 
-      // Prepare chat request with current assessment context
-      const chatRequest = {
-        message: message.trim(),
-        allowedSections:
-          contextSections.length > 0 ? contextSections : undefined,
-      };
-
-      const result = await chatWithAssessment(assessmentId, chatRequest, token);
+      const result = await chatWithAssessment(
+        assessmentId,
+        {
+          message: trimmed,
+          allowedSections:
+            contextSections.length > 0 ? contextSections : undefined,
+          history,
+        },
+        token
+      );
 
       if (!result.success) {
         const errorMsg =
           "error" in result ? result.error : "Failed to process chat message";
         console.error("❌ [AssessmentEditor] Chat error:", errorMsg);
-        alert(errorMsg);
-        setIsLoading(false);
+        setChatMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: errorMsg, error: true },
+        ]);
         return;
       }
 
       const {
-        updates,
-        changedSections,
-        changesSummary,
+        changedSections = [],
+        changesSummary = [],
         responseMessage: aiResponseMessage,
-        model: aiModelName,
-        provider: aiProvider,
         assessment: updatedAssessment,
       } = result.data;
 
-      console.log("✅ [AssessmentEditor] Chat successful:", {
-        changedSections,
-        changesSummary,
-        responseMessage: aiResponseMessage,
-        model: aiModelName,
-        provider: aiProvider,
-      });
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: aiResponseMessage || "Done.",
+        },
+      ]);
 
-      // Set response message to display in chat
-      if (aiResponseMessage) {
-        setResponseMessage(aiResponseMessage);
-      }
-
-      // Update database-backed fields
-      if (updates.description) {
-        setAssessment((prev) => ({
-          ...prev,
-          projectDescription: updates.description,
-        }));
-        // Save to backend
-        await handleDescriptionSave(updates.description);
-      }
-      if (updates.title) {
-        setEditedTitle(updates.title);
-        await handleTitleSave();
-      }
-      if (updates.timeLimit !== undefined) {
-        const hours = Math.floor(updates.timeLimit / 60);
-        const minutes = updates.timeLimit % 60;
-        setTimeLimit({ hours, minutes });
-        await handleTimeLimitSave(updates.timeLimit);
-      }
-
-      // Update assessmentData if backend returned updated assessment
+      // The chat route persists its own changes and returns the saved document,
+      // so this is the only write the client needs. The `[assessmentData]` effect
+      // re-hydrates every editor field from it. Re-saving here (as this used to,
+      // via handleTitleSave) read stale closure state and pushed the *old* title
+      // back over the one the server had just written.
       if (updatedAssessment) {
         setAssessmentData(updatedAssessment);
       }
 
-      // Highlight changed sections
-      if (changedSections?.length) {
-        console.log(
-          "🎯 [AssessmentEditor] Highlighting sections:",
-          changedSections
-        );
-        changedSections.forEach((section, index) => {
-          setTimeout(() => {
-            // Normalize section name to match frontend expectations
-            const normalizedSection =
-              section === "description" ? "projectDescription" : section;
-            console.log(`   Highlighting section: ${normalizedSection}`);
-            setHighlightedSection(normalizedSection);
-            setTimeout(() => {
-              setHighlightedSection(null);
-              console.log(`   Unhighlighting section: ${normalizedSection}`);
-            }, 2000);
-          }, index * 500);
-        });
-      } else {
-        console.warn(
-          "⚠️ [AssessmentEditor] No changedSections received from backend"
-        );
-      }
-
-      // Set last change summary
-      setLastChange({
-        section:
-          changedSections.length > 1
-            ? `${changedSections.length} sections`
-            : changedSections[0] || "assessment",
-        changes: changesSummary || ["Assessment updated"],
+      changedSections.forEach((section, index) => {
+        setTimeout(() => {
+          setCollapsedSections((prev) => {
+            if (!prev[section]) return prev;
+            const next = { ...prev, [section]: false };
+            writeCollapsedState(assessmentId, next);
+            return next;
+          });
+          setHighlightedSection(section);
+          setTimeout(() => setHighlightedSection(null), 2000);
+        }, index * 500);
       });
+
+      if (changedSections.length > 0) {
+        setLastChange({
+          section:
+            changedSections.length > 1
+              ? `${changedSections.length} sections`
+              : sectionLabel(changedSections[0]),
+          changes: changesSummary.length ? changesSummary : ["Assessment updated"],
+        });
+      }
     } catch (error) {
       console.error("❌ [AssessmentEditor] Chat error:", error);
-      alert("Failed to process chat message. Please try again.");
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content:
+            error?.message || "Failed to process chat message. Please try again.",
+          error: true,
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
   };
 
   const handleShare = () => {
@@ -696,6 +798,60 @@ export default function AssessmentEditor() {
       : evidenceMode === "both"
         ? "the candidate's AI prompts, replies, and code changes (the screen recording is kept for playback)"
         : "the candidate's screen recording";
+  const observeLabel =
+    evidenceMode === "none"
+      ? "No observation"
+      : evidenceMode === "workflow"
+        ? "Workflow capture"
+        : "Observing session";
+  const durationLabel = formatDuration(timeLimit.hours, timeLimit.minutes);
+  const filledChecks = behavioralChecks.filter(
+    (c) => typeof c === "string" && c.trim()
+  );
+  const filledCriteria = evaluationCriteria.filter(
+    (c) => typeof c === "string" && c.trim()
+  );
+  const savedChecks = (
+    Array.isArray(assessmentData.behavioralChecks)
+      ? assessmentData.behavioralChecks
+      : []
+  ).filter((c) => typeof c === "string");
+  const savedCriteria = (
+    Array.isArray(assessmentData.evaluationCriteria)
+      ? assessmentData.evaluationCriteria
+      : []
+  ).filter((c) => typeof c === "string");
+  const behavioralChecksDirty =
+    !listsEqual(
+      behavioralChecks.map((c) => (typeof c === "string" ? c.trim() : "")),
+      savedChecks.map((c) => (typeof c === "string" ? c.trim() : ""))
+    ) ||
+    JSON.stringify(checkSpecs) !==
+      JSON.stringify(alignSpecsToChecks(savedChecks, assessmentData.behavioralCheckSpecs));
+  const evaluationCriteriaDirty = !listsEqual(
+    evaluationCriteria.map((c) => (typeof c === "string" ? c.trim() : "")),
+    savedCriteria.map((c) => (typeof c === "string" ? c.trim() : ""))
+  );
+  const githubHost = (() => {
+    try {
+      return starterFilesGitHubLink
+        ? new URL(starterFilesGitHubLink).hostname.replace(/^www\./, "")
+        : "";
+    } catch {
+      return "";
+    }
+  })();
+  const starterSummary = [
+    githubHost || (starterFilesGitHubLink ? "GitHub link set" : null),
+    starterCodeFiles.length
+      ? `${starterCodeFiles.length} file${starterCodeFiles.length === 1 ? "" : "s"}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ") || "No starter files";
+  const allCollapsed = EDITOR_SECTIONS.every(
+    (section) => collapsedSections[section.id]
+  );
 
   return (
     <div className="min-h-screen bg-[#FAF9F2]">
@@ -704,9 +860,9 @@ export default function AssessmentEditor() {
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="flex items-start justify-between mb-8"
+          className="flex items-start justify-between gap-6 mb-8"
         >
-          <div>
+          <div className="min-w-0">
             <Link
               to={createPageUrl("Home")}
               className="text-sm text-gray-500 hover:text-[#21201C] mb-1 block"
@@ -747,29 +903,60 @@ export default function AssessmentEditor() {
               </div>
             ) : (
               <h1
-                className="text-2xl font-medium tracking-[-0.012em] text-[#21201C] cursor-pointer hover:underline"
+                className="group text-2xl font-medium tracking-[-0.012em] text-[#21201C] cursor-text inline-flex items-center gap-2"
                 onClick={() => setIsEditingTitle(true)}
                 title="Click to edit title"
               >
                 {assessmentData?.title || "Assessment Editor"}
+                <Pencil className="w-3.5 h-3.5 text-gray-300 group-hover:text-gray-500 transition-colors shrink-0" />
               </h1>
             )}
-            <p className="text-gray-500 text-sm">
-              Use Bridge AI to shape your technical assessment — tweak scope,
-              difficulty, and structure in one place.
+            <p className="text-gray-500 text-sm mt-1">
+              {durationLabel}
+              <span className="text-gray-300 mx-1.5">·</span>
+              {observeLabel}
+              <span className="text-gray-300 mx-1.5">·</span>
+              {filledChecks.length} product{" "}
+              {filledChecks.length === 1 ? "check" : "checks"}
+              <span className="text-gray-300 mx-1.5">·</span>
+              {filledCriteria.length}{" "}
+              {filledCriteria.length === 1 ? "criterion" : "criteria"}
             </p>
           </div>
-          <div className="flex items-center gap-2 text-xs text-gray-400 bg-white px-3 py-2 rounded-lg border border-gray-200">
-            <Clock className="w-3.5 h-3.5" />
-            <span>
-              {isSaving
-                ? "Saving..."
-                : assessmentData?.updatedAt
-                ? `Last updated ${new Date(
-                    assessmentData.updatedAt
-                  ).toLocaleString()}`
-                : "Draft saved"}
-            </span>
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="hidden sm:flex items-center gap-2 text-xs text-gray-400 bg-white px-3 py-2 rounded-lg border border-gray-200">
+              <Clock className="w-3.5 h-3.5" />
+              <span>
+                {isSaving
+                  ? "Saving..."
+                  : assessmentData?.updatedAt
+                  ? `Saved ${new Date(
+                      assessmentData.updatedAt
+                    ).toLocaleString()}`
+                  : "Draft saved"}
+              </span>
+            </div>
+            <Link
+              to={
+                createPageUrl("SubmissionsDashboard") +
+                `?assessmentId=${assessmentId}`
+              }
+            >
+              <Button
+                variant="outline"
+                className="px-5 h-10 rounded-full text-sm"
+              >
+                <BarChart3 className="w-4 h-4 mr-2" />
+                Submissions
+              </Button>
+            </Link>
+            <Button
+              onClick={handleShare}
+              className="px-5 h-10 rounded-full text-sm bg-[#21201C] hover:bg-[#35332D] text-[#FAF9F2]"
+            >
+              <Share2 className="w-4 h-4 mr-2" />
+              Share
+            </Button>
           </div>
         </motion.div>
 
@@ -780,12 +967,63 @@ export default function AssessmentEditor() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: 0.1 }}
-            className="flex-1 space-y-4"
+            className="flex-1 space-y-4 min-w-0"
           >
+            <div className="sticky top-0 z-10 -mx-1 px-1 py-2 bg-[#FAF9F2]/90 backdrop-blur-sm">
+              <div className="flex items-center justify-between gap-3">
+                <nav
+                  aria-label="Assessment sections"
+                  className="flex flex-wrap gap-1 min-w-0"
+                >
+                  {EDITOR_SECTIONS.map((section) => {
+                    const isCollapsed = !!collapsedSections[section.id];
+                    const dirty =
+                      (section.id === "behavioralChecks" &&
+                        behavioralChecksDirty) ||
+                      (section.id === "evaluationCriteria" &&
+                        evaluationCriteriaDirty);
+                    return (
+                      <button
+                        key={section.id}
+                        type="button"
+                        onClick={() => jumpToSection(section.id)}
+                        className={`eyebrow text-[11px] px-2.5 py-1 rounded-full border transition-colors ${
+                          isCollapsed
+                            ? "border-transparent text-gray-400 hover:text-[#21201C] hover:bg-white"
+                            : "border-gray-200 bg-white text-[#21201C]"
+                        }`}
+                      >
+                        {section.label}
+                        {dirty ? (
+                          <span
+                            className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 ml-1.5 align-middle"
+                            aria-label="Unsaved changes"
+                          />
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </nav>
+                <button
+                  type="button"
+                  onClick={() => setAllSectionsCollapsed(!allCollapsed)}
+                  className="eyebrow text-[11px] text-gray-500 hover:text-[#21201C] shrink-0 px-1"
+                >
+                  {allCollapsed ? "Expand all" : "Collapse all"}
+                </button>
+              </div>
+            </div>
+
             {/* Project Description */}
             <DocumentBlock
               title="Project Description"
               icon={FileText}
+              sectionId="projectDescription"
+              collapsed={!!collapsedSections.projectDescription}
+              onCollapsedChange={(next) =>
+                setSectionCollapsed("projectDescription", next)
+              }
+              summary={previewPlain(assessment.projectDescription)}
               isActive={false}
               isHighlighted={highlightedSection === "projectDescription"}
               onSelect={() => {}}
@@ -855,6 +1093,12 @@ export default function AssessmentEditor() {
             <DocumentBlock
               title="Time & Deadlines"
               icon={Timer}
+              sectionId="timeLimit"
+              collapsed={!!collapsedSections.timeLimit}
+              onCollapsedChange={(next) =>
+                setSectionCollapsed("timeLimit", next)
+              }
+              summary={`${durationLabel} · ${observeLabel}`}
               isActive={false}
               isHighlighted={highlightedSection === "timeLimit"}
               onSelect={() => {}}
@@ -921,15 +1165,6 @@ export default function AssessmentEditor() {
                   </p>
                   <div className="space-y-2">
                     {[
-                      ...(evidenceMode === "screen"
-                        ? [
-                            {
-                              value: "screen",
-                              label: "Screen recording",
-                              hint: "Records the screen and transcribes it with AI. Previous default — pick another option to change it.",
-                            },
-                          ]
-                        : []),
                       ...(evidenceMode === "workflow"
                         ? [
                             {
@@ -1013,6 +1248,12 @@ export default function AssessmentEditor() {
             <DocumentBlock
               title="Starter Files"
               icon={LinkIcon}
+              sectionId="starterFiles"
+              collapsed={!!collapsedSections.starterFiles}
+              onCollapsedChange={(next) =>
+                setSectionCollapsed("starterFiles", next)
+              }
+              summary={starterSummary}
               isActive={false}
               isHighlighted={highlightedSection === "starterFiles"}
               onSelect={() => {}}
@@ -1121,13 +1362,17 @@ export default function AssessmentEditor() {
               </div>
             </DocumentBlock>
 
-            {/* Scoring overview — the two lists below are easy to confuse, so
-                contrast them before either one is shown. */}
-            <div className="bg-white rounded-xl border border-gray-200 px-5 py-4">
-              <span className="eyebrow text-gray-500">Scoring</span>
-              <p className="text-sm text-gray-700 mt-1.5 mb-3">
-                Each submission is scored on two separate things.
-              </p>
+            <DocumentBlock
+              title="How scoring works"
+              subtitle="Two independent scores on every submission"
+              icon={Scale}
+              sectionId="scoring"
+              collapsed={!!collapsedSections.scoring}
+              onCollapsedChange={(next) =>
+                setSectionCollapsed("scoring", next)
+              }
+              summary="Product checks + how they worked"
+            >
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="flex gap-2.5">
                   <PlayCircle className="w-4 h-4 text-gray-600 mt-0.5 shrink-0" />
@@ -1154,13 +1399,24 @@ export default function AssessmentEditor() {
                   </span>
                 </div>
               </div>
-            </div>
+            </DocumentBlock>
 
             {/* Behavioral checks (shared product bar for all candidates) */}
             <DocumentBlock
               title="Behavioral checks"
               subtitle="What the finished product must do"
               icon={PlayCircle}
+              sectionId="behavioralChecks"
+              collapsed={!!collapsedSections.behavioralChecks}
+              onCollapsedChange={(next) =>
+                setSectionCollapsed("behavioralChecks", next)
+              }
+              summary={
+                filledChecks.length
+                  ? `${filledChecks.length} check${filledChecks.length === 1 ? "" : "s"}`
+                  : "None yet"
+              }
+              badge={behavioralChecksDirty ? "Unsaved" : undefined}
               isActive={false}
               isHighlighted={highlightedSection === "behavioralChecks"}
               onSelect={() => {}}
@@ -1299,10 +1555,12 @@ export default function AssessmentEditor() {
                       setBehavioralChecks(checks);
                       setCheckSpecs(alignSpecsToChecks(checks, specs));
                     }}
-                    disabled={isSaving}
+                    disabled={isSaving || !behavioralChecksDirty}
                     className="text-sm bg-[#21201C] hover:bg-[#35332D]"
                   >
-                    Save behavioral checks
+                    {behavioralChecksDirty
+                      ? "Save behavioral checks"
+                      : "Saved"}
                   </Button>
                 </div>
               </div>
@@ -1313,6 +1571,19 @@ export default function AssessmentEditor() {
               title="Evaluation criteria"
               subtitle="How the candidate worked to get there"
               icon={ListChecks}
+              sectionId="evaluationCriteria"
+              collapsed={!!collapsedSections.evaluationCriteria}
+              onCollapsedChange={(next) =>
+                setSectionCollapsed("evaluationCriteria", next)
+              }
+              summary={
+                observationIsOff
+                  ? "Not scored — observation is off"
+                  : filledCriteria.length
+                    ? `${filledCriteria.length} ${filledCriteria.length === 1 ? "criterion" : "criteria"}`
+                    : "None yet"
+              }
+              badge={evaluationCriteriaDirty ? "Unsaved" : undefined}
               isActive={false}
               isHighlighted={highlightedSection === "evaluationCriteria"}
               onSelect={() => {}}
@@ -1421,10 +1692,10 @@ export default function AssessmentEditor() {
                       });
                       setCriteriaValidation(nextValidation);
                     }}
-                    disabled={isSaving}
+                    disabled={isSaving || !evaluationCriteriaDirty}
                     className="text-sm bg-[#21201C] hover:bg-[#35332D]"
                   >
-                    Save criteria
+                    {evaluationCriteriaDirty ? "Save criteria" : "Saved"}
                   </Button>
                 </div>
               </div>
@@ -1468,12 +1739,12 @@ export default function AssessmentEditor() {
             <AISidebar
               onSubmit={handleChatSubmit}
               isLoading={isLoading}
+              messages={chatMessages}
               contextSections={contextSections}
               onRemoveContext={(section) =>
                 setContextSections((prev) => prev.filter((s) => s !== section))
               }
               lastChange={lastChange}
-              responseMessage={responseMessage}
             />
           </motion.div>
         </div>

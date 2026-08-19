@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>hover</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#0a1418;touch-action:none;
+    user-select:none;-webkit-user-select:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+let vw, vh;
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  vw = innerWidth; vh = innerHeight;
+  cv.width = vw * dpr; cv.height = vh * dpr;
+  cv.style.width = vw + "px"; cv.style.height = vh + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+resize();
+addEventListener("resize", resize);
+
+let py, vy, thrust, dist, speed, state, t, parts, best = 0;
+
+function caveCenter(d){
+  return vh * 0.5 + Math.sin(d * 0.004) * vh * 0.16 + Math.sin(d * 0.0013 + 2) * vh * 0.11;
+}
+function caveGap(d){
+  return Math.max(vh * 0.30, vh * 0.56 - d * 0.012);
+}
+
+function reset(){
+  py = vh * 0.5; vy = 0; thrust = false;
+  dist = 0; speed = 220; t = 0; parts = [];
+  state = "play";
+}
+function press(){
+  if (state === "over"){ reset(); return; }
+  thrust = true;
+}
+function release(){ thrust = false; }
+addEventListener("pointerdown", press);
+addEventListener("pointerup", release);
+addEventListener("pointercancel", release);
+addEventListener("keydown", e => {
+  if (e.code === "Space"){ e.preventDefault(); if (!e.repeat) press(); }
+});
+addEventListener("keyup", e => { if (e.code === "Space") release(); });
+
+const PXP = () => vw * 0.3;
+const PR = 11;
+
+let last = performance.now();
+function frame(now){
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  t += dt;
+
+  if (state === "play"){
+    speed = Math.min(460, speed + dt * 8);
+    dist += speed * dt;
+    vy += (thrust ? -1500 : 1150) * dt;
+    vy = Math.max(-420, Math.min(460, vy));
+    py += vy * dt;
+
+    if (thrust){
+      parts.push({ x: PXP() - 6, y: py + 8, vx: -60 - Math.random() * 60, vy: 60 + Math.random() * 80, a: 0.8, r: 2 + Math.random() * 3 });
+    }
+    const c = caveCenter(dist + PXP()), gp = caveGap(dist + PXP());
+    if (py - PR < c - gp / 2 || py + PR > c + gp / 2){
+      state = "over"; best = Math.max(best, Math.floor(dist / 10));
+    }
+  }
+
+  // ---- draw ----
+  const g = ctx.createLinearGradient(0, 0, 0, vh);
+  g.addColorStop(0, "#0a1a20");
+  g.addColorStop(1, "#0c2430");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, vw, vh);
+
+  // cave walls
+  const step = 10;
+  ctx.fillStyle = "#15303c";
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  for (let x = 0; x <= vw + step; x += step){
+    const d = dist + x;
+    ctx.lineTo(x, caveCenter(d) - caveGap(d) / 2);
+  }
+  ctx.lineTo(vw, 0);
+  ctx.closePath(); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(0, vh);
+  for (let x = 0; x <= vw + step; x += step){
+    const d = dist + x;
+    ctx.lineTo(x, caveCenter(d) + caveGap(d) / 2);
+  }
+  ctx.lineTo(vw, vh);
+  ctx.closePath(); ctx.fill();
+
+  // wall edge glow
+  ctx.strokeStyle = "rgba(120,220,230,0.35)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let x = 0; x <= vw + step; x += step){
+    const d = dist + x, y = caveCenter(d) - caveGap(d) / 2;
+    x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.beginPath();
+  for (let x = 0; x <= vw + step; x += step){
+    const d = dist + x, y = caveCenter(d) + caveGap(d) / 2;
+    x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // particles
+  for (const p of parts){
+    p.x += p.vx * dt; p.y += p.vy * dt; p.a -= dt * 1.6;
+    if (p.a > 0){
+      ctx.fillStyle = `rgba(255,170,80,${p.a})`;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  parts = parts.filter(p => p.a > 0);
+
+  // player orb
+  ctx.shadowColor = "#ffb35c"; ctx.shadowBlur = 18;
+  ctx.fillStyle = "#ffb35c";
+  ctx.beginPath(); ctx.arc(PXP(), py, PR, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.beginPath(); ctx.arc(PXP() - 3, py - 3, 3.5, 0, Math.PI * 2); ctx.fill();
+
+  // score
+  ctx.fillStyle = "rgba(235,250,250,0.95)";
+  ctx.font = "700 40px ui-monospace,monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(`${Math.floor(dist / 10)}m`, vw / 2, 52);
+
+  if (state === "play" && dist < 600){
+    ctx.fillStyle = `rgba(235,250,250,${0.6 + 0.4 * Math.sin(t * 4)})`;
+    ctx.font = "500 15px ui-monospace,monospace";
+    ctx.fillText("hold to rise · release to fall", vw / 2, 86);
+  }
+  if (state === "over"){
+    ctx.fillStyle = "rgba(6,14,18,0.75)";
+    ctx.fillRect(0, 0, vw, vh);
+    ctx.fillStyle = "#ffb35c";
+    ctx.font = "700 30px ui-monospace,monospace";
+    ctx.fillText("clipped the wall", vw / 2, vh * 0.42);
+    ctx.fillStyle = "rgba(235,250,250,0.9)";
+    ctx.font = "500 17px ui-monospace,monospace";
+    ctx.fillText(`flew ${Math.floor(dist / 10)}m   ·   best ${best}m`, vw / 2, vh * 0.42 + 36);
+    ctx.fillStyle = `rgba(235,250,250,${0.6 + 0.4 * Math.sin(t * 4)})`;
+    ctx.font = "500 15px ui-monospace,monospace";
+    ctx.fillText("tap to fly again", vw / 2, vh * 0.42 + 72);
+  }
+  requestAnimationFrame(frame);
+}
+function boot(){
+  resize();
+  if (vw > 0 && vh > 0){ reset(); requestAnimationFrame(frame); }
+  else requestAnimationFrame(boot);
+}
+boot();
+</script>
+</body>
+</html>

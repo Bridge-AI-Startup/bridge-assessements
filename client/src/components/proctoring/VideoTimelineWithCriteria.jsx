@@ -1,15 +1,27 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Play, Pause, Maximize2, Tag, Loader2 } from "lucide-react";
+import {
+  Play,
+  Pause,
+  Maximize2,
+  Tag,
+  Loader2,
+  RotateCcw,
+  RotateCw,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import BoundingBoxOverlay from "./BoundingBoxOverlay";
 
 /** Single highlight: a point (startSec only) or a range (startSec + endSec) with label and optional category/description */
 export const HIGHLIGHT_CATEGORY_COLORS = {
   "Uses AI effectively": { bg: "bg-amber-500", border: "border-amber-500", dot: "bg-amber-400" },
-  "Reads requirements": { bg: "bg-blue-500", border: "border-blue-500", dot: "bg-blue-400" },
+  // blue / violet used to live here; this project's Tailwind remaps the cool
+  // ramps onto one warm neutral, so those two lanes came out indistinguishable
+  // grey. Every hue below survives the remap.
+  "Reads requirements": { bg: "bg-orange-500", border: "border-orange-500", dot: "bg-orange-400" },
   "Tests and debugs": { bg: "bg-emerald-500", border: "border-emerald-500", dot: "bg-emerald-400" },
-  "Code structure": { bg: "bg-violet-500", border: "border-violet-500", dot: "bg-violet-400" },
+  "Code structure": { bg: "bg-pink-500", border: "border-pink-500", dot: "bg-pink-400" },
   integrity: { bg: "bg-rose-500", border: "border-rose-500", dot: "bg-rose-400" },
   default: { bg: "bg-gray-500", border: "border-gray-500", dot: "bg-gray-400" },
 };
@@ -27,6 +39,11 @@ export const HIGHLIGHT_CATEGORY_COLORS = {
  * Note these are Tailwind literals on purpose. This project's config remaps the
  * cool ramps (blue/indigo/violet/cyan/teal) onto one warm neutral, so those
  * would land back at indistinguishable grey; the hues below survive the remap.
+ *
+ * Colour is now *secondary* information: each criterion owns its own lane, so a
+ * reviewer reads rows, not hues. That is what keeps a long recording legible —
+ * eight saturated blocks stacked in one 56px bar read as noise, and the
+ * playhead had nowhere to sit that wasn't behind them.
  */
 const HIGHLIGHT_PALETTE = [
   { bg: "bg-amber-500", border: "border-amber-500", dot: "bg-amber-400" },
@@ -38,6 +55,12 @@ const HIGHLIGHT_PALETTE = [
   { bg: "bg-yellow-500", border: "border-yellow-500", dot: "bg-yellow-400" },
   { bg: "bg-green-500", border: "border-green-500", dot: "bg-green-400" },
 ];
+
+/** Width of the lane-label gutter. The scrub track and every lane share it so one playhead line crosses all of them. */
+const GUTTER_PX = 116;
+
+/** Playback speeds offered — a 90-minute recording is unwatchable at 1x. */
+const PLAYBACK_RATES = [1, 1.5, 2];
 
 /** Short label for a criterion sentence — legends and chips need a few words, not a paragraph. */
 export function shortCategoryLabel(category, maxWords = 5) {
@@ -52,9 +75,27 @@ function videoHasMetadata(video) {
   return Boolean(video && video.readyState >= 1);
 }
 
+/** Tick spacing that yields roughly 4–10 labelled marks for any recording length. */
+function rulerStepSec(duration) {
+  const steps = [5, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
+  for (const s of steps) {
+    if (duration / s <= 10) return s;
+  }
+  return steps[steps.length - 1];
+}
+
 /**
- * Video (or placeholder) with a timeline bar below it. Timeline shows highlights
- * that map to criteria or events; clicking a highlight seeks and shows detail.
+ * Video (or placeholder) with a scrub bar and a criteria track below it.
+ *
+ * Two separate surfaces on purpose:
+ *  - the **scrub bar** is the video control (drag, click, keyboard, ±10s);
+ *  - the **lanes** are evidence, one row per criterion.
+ *
+ * They used to be the same 56px block, which meant the playhead was a hairline
+ * rendered *behind* the coloured bands (they animate to z-index 10/20; it had
+ * none), and on a long recording the bands compressed into an unreadable
+ * rainbow with no way to drag through it.
+ *
  * Duration and current time come only from the HTML5 video element (loadedmetadata / timeupdate).
  *
  * @param {Array<{ startSec: number, endSec?: number, label: string, category?: string, description?: string, score?: number }>} highlights
@@ -86,26 +127,65 @@ export default function VideoTimelineWithCriteria({
   const [currentSec, setCurrentSec] = useState(0);
   const [selectedHighlight, setSelectedHighlight] = useState(null);
   const [videoDurationSec, setVideoDurationSec] = useState(null);
+  const [bufferedSec, setBufferedSec] = useState(0);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [hoverPct, setHoverPct] = useState(null);
+  // Clicking a lane label isolates that criterion; everything else dims so a
+  // busy recording can be read one criterion at a time.
+  const [focusedCategory, setFocusedCategory] = useState(null);
   const videoRef = useRef(null);
-  const timelineRef = useRef(null);
+  const scrubRef = useRef(null);
+  const resumeAfterScrubRef = useRef(false);
+  // Live scrub preview: one seek in flight at a time, latest target wins.
+  // Writing currentTime on every pointermove queues a precise seek per move;
+  // while one is in flight the browser defers the rest, so the frame only
+  // caught up when the drag stopped. The pump keeps the picture moving.
+  const isScrubbingRef = useRef(false);
+  const scrubTargetRef = useRef(null);
+  const scrubSeekBusyRef = useRef(false);
 
   // Distinct categories in first-appearance order → stable colour per criterion.
-  const categoryOrder = [
-    ...new Set(highlights.map((h) => h.category).filter(Boolean)),
-  ];
-  const colorsFor = (category) => {
-    if (!category) return HIGHLIGHT_CATEGORY_COLORS.default;
-    if (HIGHLIGHT_CATEGORY_COLORS[category]) {
-      return HIGHLIGHT_CATEGORY_COLORS[category];
+  const categoryOrder = useMemo(
+    () => [...new Set(highlights.map((h) => h.category).filter(Boolean))],
+    [highlights]
+  );
+  const colorsFor = useCallback(
+    (category) => {
+      if (!category) return HIGHLIGHT_CATEGORY_COLORS.default;
+      if (HIGHLIGHT_CATEGORY_COLORS[category]) {
+        return HIGHLIGHT_CATEGORY_COLORS[category];
+      }
+      const idx = categoryOrder.indexOf(category);
+      if (idx < 0) return HIGHLIGHT_CATEGORY_COLORS.default;
+      return HIGHLIGHT_PALETTE[idx % HIGHLIGHT_PALETTE.length];
+    },
+    [categoryOrder]
+  );
+
+  // One lane per criterion, plus a trailing lane for uncategorised moments.
+  const lanes = useMemo(() => {
+    const indexed = highlights.map((h, i) => ({ ...h, i }));
+    const rows = categoryOrder.map((cat) => ({
+      key: cat,
+      category: cat,
+      items: indexed.filter((h) => h.category === cat),
+    }));
+    const loose = indexed.filter((h) => !h.category);
+    if (loose.length > 0) {
+      rows.push({ key: "__uncategorised__", category: null, items: loose });
     }
-    const idx = categoryOrder.indexOf(category);
-    if (idx < 0) return HIGHLIGHT_CATEGORY_COLORS.default;
-    return HIGHLIGHT_PALETTE[idx % HIGHLIGHT_PALETTE.length];
-  };
+    return rows;
+  }, [highlights, categoryOrder]);
+
+  // Lanes shrink as criteria multiply so the track never outgrows the panel.
+  const laneHeight = lanes.length > 8 ? 9 : lanes.length > 5 ? 12 : 16;
 
   // Reset duration when video source changes
   useEffect(() => {
     if (!videoUrl) setVideoDurationSec(null);
+    scrubTargetRef.current = null;
+    scrubSeekBusyRef.current = false;
   }, [videoUrl]);
 
   const hasVideoDuration =
@@ -114,6 +194,11 @@ export default function VideoTimelineWithCriteria({
   const effectiveDuration = hasVideoDuration
     ? videoDurationSec
     : (videoUrl && hasHint ? durationHintSec : placeholderDurationSec);
+
+  const pctOf = (sec) =>
+    effectiveDuration > 0
+      ? Math.max(0, Math.min(100, (sec / effectiveDuration) * 100))
+      : 0;
 
   // Placeholder mode only: animate playhead with interval (no real video)
   useEffect(() => {
@@ -185,6 +270,9 @@ export default function VideoTimelineWithCriteria({
       flushPendingSeek(video);
       return;
     }
+    // Mid-drag the pump owns the element; a precise seek here per state
+    // update would serialize behind it and stall the live preview.
+    if (isScrubbingRef.current) return;
     if (Math.abs(video.currentTime - currentSec) > 0.25) {
       video.currentTime = currentSec;
     }
@@ -201,17 +289,25 @@ export default function VideoTimelineWithCriteria({
     }
   }, [isPlaying, videoUrl]);
 
-  const seekTo = (sec) => {
-    const max = effectiveDuration;
-    const clamped = Math.max(0, Math.min(sec, max));
-    setCurrentSec(clamped);
+  useEffect(() => {
     const video = videoRef.current;
-    if (videoHasMetadata(video)) {
-      video.currentTime = clamped;
-    } else {
-      pendingSeekRef.current = clamped;
-    }
-  };
+    if (video) video.playbackRate = playbackRate;
+  }, [playbackRate, videoUrl]);
+
+  const seekTo = useCallback(
+    (sec) => {
+      const max = effectiveDuration;
+      const clamped = Math.max(0, Math.min(sec, max));
+      setCurrentSec(clamped);
+      const video = videoRef.current;
+      if (videoHasMetadata(video)) {
+        video.currentTime = clamped;
+      } else {
+        pendingSeekRef.current = clamped;
+      }
+    },
+    [effectiveDuration]
+  );
 
   const selectHighlightAt = (sec) => {
     const list = highlightsRef.current || [];
@@ -247,13 +343,169 @@ export default function VideoTimelineWithCriteria({
   }, [seekToSec, seekNonce, videoUrl]);
 
   const formatTime = (sec) => {
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
+    if (!Number.isFinite(sec)) return "0:00";
+    const total = Math.max(0, Math.floor(sec));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) {
+      return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+    }
     return `${m}:${s.toString().padStart(2, "0")}`;
   };
 
+  /* ------------------------------------------------------------------ */
+  /* Scrubbing                                                           */
+  /* ------------------------------------------------------------------ */
+
+  const secFromClientX = useCallback(
+    (clientX) => {
+      const rect = scrubRef.current?.getBoundingClientRect();
+      if (!rect || rect.width === 0) return null;
+      const pct = (clientX - rect.left) / rect.width;
+      return Math.max(0, Math.min(1, pct)) * effectiveDuration;
+    },
+    [effectiveDuration]
+  );
+
+  const pumpScrubSeek = (video = videoRef.current) => {
+    if (!videoHasMetadata(video) || scrubSeekBusyRef.current) return;
+    const target = scrubTargetRef.current;
+    if (target == null) return;
+    scrubTargetRef.current = null;
+    scrubSeekBusyRef.current = true;
+    // fastSeek lands on the nearest keyframe — inexact but quick, which is
+    // what a moving picture under the cursor needs. endScrub restores
+    // exactness with one precise seek.
+    if (typeof video.fastSeek === "function") {
+      try {
+        video.fastSeek(target);
+      } catch {
+        video.currentTime = target;
+      }
+    } else {
+      video.currentTime = target;
+    }
+  };
+
+  // The video's onSeeked drains the pump: when a drag outran the last seek,
+  // the freshest target goes out the moment the previous one lands.
+  const handleVideoSeeked = (e) => {
+    scrubSeekBusyRef.current = false;
+    if (isScrubbingRef.current) pumpScrubSeek(e.target);
+  };
+
+  const previewSeek = (sec) => {
+    const clamped = Math.max(0, Math.min(sec, effectiveDuration));
+    setCurrentSec(clamped);
+    const video = videoRef.current;
+    if (!videoHasMetadata(video)) {
+      pendingSeekRef.current = clamped;
+      return;
+    }
+    scrubTargetRef.current = clamped;
+    pumpScrubSeek(video);
+  };
+
+  const handleScrubPointerDown = (e) => {
+    // Left button / touch / pen only.
+    if (e.button != null && e.button !== 0) return;
+    const sec = secFromClientX(e.clientX);
+    if (sec == null) return;
+    e.preventDefault();
+    // Pointer capture keeps the drag alive when the cursor leaves the track.
+    // It throws for a pointer id the element never saw (synthetic events, some
+    // pen/touch edge cases), and an unguarded throw here would abort the whole
+    // handler — i.e. the click would not seek at all.
+    try {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    } catch {
+      /* drag still works while the pointer stays over the track */
+    }
+    // Pause while dragging so playback does not fight the drag, then restore.
+    resumeAfterScrubRef.current = isPlaying;
+    if (isPlaying) setIsPlaying(false);
+    setIsScrubbing(true);
+    isScrubbingRef.current = true;
+    previewSeek(sec);
+  };
+
+  const handleScrubPointerMove = (e) => {
+    const sec = secFromClientX(e.clientX);
+    if (sec == null) return;
+    setHoverPct(pctOf(sec));
+    if (!isScrubbing) return;
+    e.preventDefault();
+    previewSeek(sec);
+  };
+
+  const endScrub = (e) => {
+    if (!isScrubbing) return;
+    try {
+      e?.currentTarget?.releasePointerCapture?.(e.pointerId);
+    } catch {
+      /* nothing captured */
+    }
+    setIsScrubbing(false);
+    isScrubbingRef.current = false;
+    scrubTargetRef.current = null;
+    scrubSeekBusyRef.current = false;
+    // fastSeek previews are keyframe-approximate; land exactly where the
+    // pointer let go. clientX is absent when a keyboard blur ends the drag —
+    // fall back to where the preview already is.
+    const sec = e?.clientX != null ? secFromClientX(e.clientX) : null;
+    seekTo(sec != null ? sec : currentSec);
+    if (resumeAfterScrubRef.current) {
+      resumeAfterScrubRef.current = false;
+      setIsPlaying(true);
+    }
+  };
+
+  // Pointer events drive the drag; this is the fallback for anything that
+  // delivers only a click (assistive tech, automation, a browser without
+  // PointerEvent). Seeking to the same second twice is a no-op, so it is safe
+  // to let both paths run.
+  const handleScrubClick = (e) => {
+    const sec = secFromClientX(e.clientX);
+    if (sec == null) return;
+    seekTo(sec);
+  };
+
+  const nudge = (delta) => seekTo(currentSec + delta);
+
+  const handleScrubKeyDown = (e) => {
+    const step = e.shiftKey ? 30 : 5;
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      nudge(step);
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      nudge(-step);
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      seekTo(0);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      seekTo(effectiveDuration);
+    } else if (e.key === " " || e.key === "Enter") {
+      e.preventDefault();
+      setIsPlaying((p) => !p);
+    }
+  };
+
+  const ticks = useMemo(() => {
+    if (!(effectiveDuration > 0)) return [];
+    const step = rulerStepSec(effectiveDuration);
+    const out = [];
+    for (let t = 0; t <= effectiveDuration + 0.001; t += step) out.push(t);
+    return out;
+  }, [effectiveDuration]);
+
+  const playheadPct = pctOf(currentSec);
+  const bufferedPct = pctOf(bufferedSec);
+
   return (
-    <div className={cn("rounded-xl border border-gray-200 bg-gray-50 overflow-hidden", className)}>
+    <div className={cn("rounded-xl border border-gray-200 bg-white overflow-hidden", className)}>
       {/* Video or placeholder */}
       <div className="relative aspect-video bg-gray-900">
         {videoUrl ? (
@@ -262,9 +514,11 @@ export default function VideoTimelineWithCriteria({
             src={videoUrl}
             preload={seekToSec != null ? "auto" : "metadata"}
             className="w-full h-full object-contain"
+            onClick={() => setIsPlaying((p) => !p)}
             onLoadedMetadata={(e) => {
               const d = e.target.duration;
               if (Number.isFinite(d) && d > 0) setVideoDurationSec(d);
+              e.target.playbackRate = playbackRate;
               flushPendingSeek(e.target);
             }}
             onLoadedData={(e) => {
@@ -280,7 +534,25 @@ export default function VideoTimelineWithCriteria({
             onCanPlay={(e) => {
               flushPendingSeek(e.target);
             }}
-            onTimeUpdate={(e) => setCurrentSec(e.target.currentTime)}
+            onProgress={(e) => {
+              const b = e.target.buffered;
+              if (b && b.length > 0) {
+                try {
+                  setBufferedSec(b.end(b.length - 1));
+                } catch {
+                  /* buffered ranges can throw on some codecs mid-load */
+                }
+              }
+            }}
+            onSeeked={handleVideoSeeked}
+            onTimeUpdate={(e) => {
+              // While dragging, state is the pointer position, not the (lagging,
+              // keyframe-snapped) element time — writing the element time back
+              // would make the knob jump away from the cursor.
+              if (!isScrubbingRef.current) setCurrentSec(e.target.currentTime);
+            }}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
             onEnded={() => setIsPlaying(false)}
             onError={() => {
               if (typeof onPlaybackError === "function") onPlaybackError();
@@ -301,8 +573,60 @@ export default function VideoTimelineWithCriteria({
         )}
       </div>
 
+      {/* Scrub bar — the video control, on its own row and never behind evidence. */}
+      <div className="px-3 pt-3">
+        <div
+          ref={scrubRef}
+          role="slider"
+          tabIndex={0}
+          aria-label="Seek recording"
+          aria-valuemin={0}
+          aria-valuemax={Math.round(effectiveDuration)}
+          aria-valuenow={Math.round(currentSec)}
+          aria-valuetext={`${formatTime(currentSec)} of ${formatTime(effectiveDuration)}`}
+          onPointerDown={handleScrubPointerDown}
+          onClick={handleScrubClick}
+          onPointerMove={handleScrubPointerMove}
+          onPointerUp={endScrub}
+          onPointerCancel={endScrub}
+          onPointerLeave={() => setHoverPct(null)}
+          onKeyDown={handleScrubKeyDown}
+          className="group relative py-2 cursor-pointer touch-none select-none outline-none"
+        >
+          <div className="relative h-1.5 rounded-full bg-gray-200">
+            {/* Buffered */}
+            <div
+              className="absolute inset-y-0 left-0 rounded-full bg-gray-300"
+              style={{ width: `${bufferedPct}%` }}
+            />
+            {/* Played */}
+            <div
+              className="absolute inset-y-0 left-0 rounded-full bg-[#21201C]"
+              style={{ width: `${playheadPct}%` }}
+            />
+            {/* Knob */}
+            <div
+              className={cn(
+                "absolute top-1/2 -translate-y-1/2 -translate-x-1/2 rounded-full bg-[#21201C] ring-2 ring-white shadow transition-transform",
+                isScrubbing ? "w-4 h-4" : "w-3.5 h-3.5 group-hover:scale-110"
+              )}
+              style={{ left: `${playheadPct}%` }}
+            />
+          </div>
+          {/* Hover time bubble */}
+          {hoverPct != null && !isScrubbing ? (
+            <span
+              className="pointer-events-none absolute -top-4 -translate-x-1/2 rounded bg-[#21201C] px-1.5 py-0.5 text-[10px] font-mono text-white tabular-nums"
+              style={{ left: `${hoverPct}%` }}
+            >
+              {formatTime((hoverPct / 100) * effectiveDuration)}
+            </span>
+          ) : null}
+        </div>
+      </div>
+
       {/* Playback controls */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-white border-t border-gray-200">
+      <div className="flex items-center gap-1 px-3 pb-2">
         <button
           type="button"
           onClick={() => setIsPlaying((p) => !p)}
@@ -311,10 +635,44 @@ export default function VideoTimelineWithCriteria({
         >
           {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
         </button>
-        <span className="text-xs font-mono text-gray-500 tabular-nums">
+        <button
+          type="button"
+          onClick={() => nudge(-10)}
+          className="p-2 rounded-lg hover:bg-gray-100 text-gray-500"
+          aria-label="Back 10 seconds"
+          title="Back 10s"
+        >
+          <RotateCcw className="w-4 h-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => nudge(10)}
+          className="p-2 rounded-lg hover:bg-gray-100 text-gray-500"
+          aria-label="Forward 10 seconds"
+          title="Forward 10s"
+        >
+          <RotateCw className="w-4 h-4" />
+        </button>
+        <span className="ml-1 text-xs font-mono text-gray-500 tabular-nums">
           {formatTime(currentSec)} / {formatTime(effectiveDuration)}
         </span>
         <div className="flex-1" />
+        {videoUrl ? (
+          <button
+            type="button"
+            onClick={() =>
+              setPlaybackRate((r) => {
+                const idx = PLAYBACK_RATES.indexOf(r);
+                return PLAYBACK_RATES[(idx + 1) % PLAYBACK_RATES.length];
+              })
+            }
+            className="px-2 py-1 rounded-lg hover:bg-gray-100 text-gray-500 text-xs font-mono tabular-nums"
+            aria-label="Playback speed"
+            title="Playback speed"
+          >
+            {playbackRate}×
+          </button>
+        ) : null}
         {videoUrl ? (
           <button
             type="button"
@@ -335,102 +693,157 @@ export default function VideoTimelineWithCriteria({
         ) : null}
       </div>
 
-      {/* Timeline with highlights */}
-      <div className="px-3 pb-3">
-        <div
-          ref={timelineRef}
-          className="relative h-14 rounded-lg bg-gray-800 cursor-pointer group"
-          onClick={(e) => {
-            const rect = timelineRef.current?.getBoundingClientRect();
-            if (!rect) return;
-            const x = e.clientX - rect.left;
-            const pct = x / rect.width;
-            seekTo(pct * effectiveDuration);
-          }}
-        >
-          {highlightsPending && highlights.length === 0 ? (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <span className="inline-flex items-center gap-2 rounded-full bg-black/55 px-3 py-1 text-[11px] text-white/90">
-                <Loader2 className="w-3 h-3 animate-spin" aria-hidden />
-                Scoring still running — moments will appear here
-              </span>
-            </div>
-          ) : null}
-          {/* Highlight segments and points */}
-          {highlights.map((h, i) => {
-            const startPct = effectiveDuration > 0 ? (h.startSec / effectiveDuration) * 100 : 0;
-            const endSec = h.endSec ?? h.startSec;
-            const endPct = effectiveDuration > 0 ? (endSec / effectiveDuration) * 100 : 0;
-            const isRange = (h.endSec != null && h.endSec > h.startSec);
-            const colors = colorsFor(h.category);
-            const isSelected = selectedHighlight === i;
-
-            return (
-              <motion.button
-                key={i}
-                type="button"
-                initial={false}
-                animate={{
-                  scale: isSelected ? 1.05 : 1,
-                  zIndex: isSelected ? 20 : 10,
-                }}
-                className={cn(
-                  "absolute top-1 bottom-1 rounded overflow-hidden border-2 transition-all hover:ring-2 hover:ring-white/50",
-                  colors.border,
-                  isRange ? "min-w-[4px]" : "w-2 -ml-1 rounded-full"
-                )}
-                style={{
-                  left: `${startPct}%`,
-                  width: isRange ? `${Math.max(2, endPct - startPct)}%` : undefined,
-                }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  seekTo(h.startSec);
-                  setSelectedHighlight(selectedHighlight === i ? null : i);
-                }}
-                title={h.category ? `${h.category} — ${h.label}` : h.label}
-              >
-                <span className={cn("block h-full min-w-full", colors.bg, isRange ? "opacity-80" : "opacity-100")} />
-              </motion.button>
-            );
-          })}
-
-          {/* Playhead on timeline */}
-          <div
-            className="absolute top-0 bottom-0 w-0.5 bg-red-500 pointer-events-none"
-            style={{ left: `${effectiveDuration > 0 ? (currentSec / effectiveDuration) * 100 : 0}%` }}
-          />
-        </div>
-
-        {/* Legend: one entry per criterion actually on the timeline */}
-        {categoryOrder.length > 0 && (
-          <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-[10px] text-gray-500">
-            {categoryOrder.map((cat) => {
-              const c = colorsFor(cat);
-              const count = highlights.filter((h) => h.category === cat).length;
+      {/* Criteria track: one lane per criterion, ruler above, playhead over everything. */}
+      <div className="border-t border-gray-100 px-3 py-3">
+        <div className="relative" style={{ paddingLeft: GUTTER_PX }}>
+          {/* Time ruler */}
+          <div className="relative h-4 mb-1">
+            {ticks.map((t, i) => {
+              // Edge labels are anchored inward; a centred first/last tick is
+              // half-clipped by the panel.
+              const isFirst = i === 0;
+              const isLast = i === ticks.length - 1;
               return (
                 <span
-                  key={cat}
-                  className="flex items-center gap-1"
-                  title={cat}
+                  key={t}
+                  className={cn(
+                    "absolute top-0 text-[9px] font-mono text-gray-400 tabular-nums",
+                    isFirst ? "" : isLast ? "-translate-x-full" : "-translate-x-1/2"
+                  )}
+                  style={{ left: `${pctOf(t)}%` }}
                 >
-                  <span className={cn("w-2 h-2 rounded-full shrink-0", c.dot)} />
-                  {shortCategoryLabel(cat)}
-                  <span className="text-gray-400">({count})</span>
+                  {formatTime(t)}
                 </span>
               );
             })}
           </div>
-        )}
-        {highlightsPending && highlights.length === 0 ? (
-          <p className="mt-1.5 text-[10px] text-gray-400">
-            Criteria highlights land on this bar once scoring finishes.
-          </p>
-        ) : highlights.length > 0 ? (
-          <p className="mt-1.5 text-[10px] text-gray-400">
-            Click a coloured band to jump the video to that moment.
-          </p>
-        ) : null}
+
+          {highlights.length === 0 ? (
+            <div className="flex h-10 items-center justify-center rounded-md bg-gray-50 text-[11px] text-gray-500">
+              {highlightsPending ? (
+                <span className="inline-flex items-center gap-2">
+                  <Loader2 className="w-3 h-3 animate-spin" aria-hidden />
+                  Scoring still running — moments will appear here
+                </span>
+              ) : (
+                "No scored moments on this recording"
+              )}
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {lanes.map((lane) => {
+                const c = colorsFor(lane.category);
+                const dimmed =
+                  focusedCategory != null && focusedCategory !== lane.key;
+                return (
+                  <div key={lane.key} className="relative">
+                    {/* Lane label, parked in the gutter */}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFocusedCategory((f) =>
+                          f === lane.key ? null : lane.key
+                        )
+                      }
+                      title={lane.category ?? "Other moments"}
+                      className={cn(
+                        "absolute top-1/2 -translate-y-1/2 flex items-center gap-1.5 text-left text-[10px] leading-tight transition-opacity",
+                        dimmed
+                          ? "opacity-40 text-gray-400"
+                          : "text-gray-600 hover:text-gray-900"
+                      )}
+                      style={{ left: -GUTTER_PX, width: GUTTER_PX - 8 }}
+                    >
+                      <span className={cn("w-2 h-2 rounded-full shrink-0", c.dot)} />
+                      <span className="truncate">
+                        {shortCategoryLabel(lane.category, 3)}
+                      </span>
+                      <span className="text-gray-400 shrink-0">
+                        {lane.items.length}
+                      </span>
+                    </button>
+
+                    {/* Lane track */}
+                    <div
+                      className={cn(
+                        "relative rounded bg-gray-100 transition-opacity",
+                        dimmed && "opacity-25"
+                      )}
+                      style={{ height: laneHeight }}
+                    >
+                      {lane.items.map((h) => {
+                        const startPct = pctOf(h.startSec);
+                        const isRange = h.endSec != null && h.endSec > h.startSec;
+                        const endPct = pctOf(isRange ? h.endSec : h.startSec);
+                        const isSelected = selectedHighlight === h.i;
+                        return (
+                          <button
+                            key={h.i}
+                            type="button"
+                            className={cn(
+                              "absolute inset-y-0 rounded-sm transition-all hover:opacity-100 hover:ring-2 hover:ring-[#21201C]/30",
+                              c.bg,
+                              isSelected
+                                ? "opacity-100 ring-2 ring-[#21201C]/60 z-[15]"
+                                : "opacity-65",
+                              isRange ? "min-w-[3px]" : "w-[5px] -ml-[2px]"
+                            )}
+                            style={{
+                              left: `${startPct}%`,
+                              width: isRange
+                                ? `${Math.max(0.4, endPct - startPct)}%`
+                                : undefined,
+                            }}
+                            onClick={() => {
+                              seekTo(h.startSec);
+                              setSelectedHighlight(
+                                selectedHighlight === h.i ? null : h.i
+                              );
+                            }}
+                            title={`${formatTime(h.startSec)} — ${
+                              h.category ? `${h.category}: ` : ""
+                            }${h.label}`}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Playhead: one line across the ruler and every lane, above all bands. */}
+          <div
+            className="pointer-events-none absolute inset-y-0 z-30"
+            style={{ left: GUTTER_PX, right: 0 }}
+          >
+            <div
+              className="absolute top-3 bottom-0 w-px -translate-x-1/2 bg-[#21201C] shadow-[0_0_0_1px_rgba(255,255,255,0.9)]"
+              style={{ left: `${playheadPct}%` }}
+            >
+              <span className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 rotate-45 bg-[#21201C]" />
+            </div>
+          </div>
+        </div>
+
+        <p className="mt-2 text-[10px] text-gray-400">
+          {highlightsPending && highlights.length === 0
+            ? "Criteria moments land on these lanes once scoring finishes."
+            : highlights.length > 0
+              ? "Drag the bar above to scrub. Click a mark to jump to it, or a criterion name to isolate its lane."
+              : "Drag the bar above to scrub."}
+          {focusedCategory != null ? (
+            <button
+              type="button"
+              onClick={() => setFocusedCategory(null)}
+              className="ml-2 inline-flex items-center gap-1 text-gray-600 hover:text-gray-900"
+            >
+              <X className="w-3 h-3" aria-hidden />
+              Show all lanes
+            </button>
+          ) : null}
+        </p>
       </div>
 
       {/* Selected highlight detail panel */}
@@ -456,6 +869,14 @@ export default function VideoTimelineWithCriteria({
                 Score: <strong>{highlights[selectedHighlight].score}/10</strong>
               </span>
             )}
+            <button
+              type="button"
+              onClick={() => setSelectedHighlight(null)}
+              className="ml-auto p-1 rounded hover:bg-gray-100 text-gray-400"
+              aria-label="Close moment detail"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
           <p className="text-sm font-medium text-gray-900">{highlights[selectedHighlight].label}</p>
           {highlights[selectedHighlight].description && (

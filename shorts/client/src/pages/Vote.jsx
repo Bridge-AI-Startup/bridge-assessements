@@ -72,10 +72,10 @@ function PreviewPane({ card, side, label, onPick, disabled }) {
       <div
         className={
           expanded
-            ? `fixed inset-x-0 bottom-0 top-14 z-[60] flex flex-col overflow-hidden rounded-t-2xl border border-line bg-paper shadow-card sm:inset-x-8 sm:inset-y-6 sm:rounded-2xl lg:inset-x-16 ${
+            ? `fixed inset-x-0 bottom-0 top-14 z-[60] flex flex-col overflow-hidden rounded-t-2xl border-2 border-ink bg-paper shadow-card sm:inset-x-8 sm:inset-y-6 sm:rounded-2xl lg:inset-x-16 ${
                 closing ? "vote-pane-exit" : "vote-pane-enter"
               }`
-            : "flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-2xl border border-line bg-paper shadow-card"
+            : "punch-card-sm flex min-h-0 w-full flex-1 flex-col overflow-hidden"
         }
       >
       <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-2.5">
@@ -167,25 +167,33 @@ function PreviewPane({ card, side, label, onPick, disabled }) {
   );
 }
 
-function RoundMeter({ round, periodLabel }) {
+function RoundMeter({ round, periodLabel, weighted = true }) {
   if (!round) return null;
   const progressPct = Math.min(
     100,
     (round.votesInRound / round.roundSize) * 100,
   );
+  // The ranking-vote budget only binds submitters, so an unweighted player is
+  // shown their round progress without a total that claims a limit on them.
   return (
     <div
       className="w-full sm:w-auto sm:min-w-[180px]"
-      title={`${round.votesInRound} of ${round.roundSize} picks done in this round · ${round.votesToday} of ${round.maxVotes} total votes used ${periodLabel}`}
+      title={
+        weighted
+          ? `${round.votesInRound} of ${round.roundSize} picks done in this round · ${round.votesToday} of ${round.maxVotes} total votes used ${periodLabel}`
+          : `${round.votesInRound} of ${round.roundSize} picks done in this round`
+      }
     >
       <div className="flex items-center justify-between gap-3">
         <span className="font-mono text-xs text-ink">
           Pick {Math.min(round.votesInRound + 1, round.roundSize)} of{" "}
           {round.roundSize}
         </span>
-        <span className="font-mono text-[11px] text-fog-light">
-          {round.votesToday}/{round.maxVotes} {periodLabel}
-        </span>
+        {weighted && (
+          <span className="font-mono text-[11px] text-fog-light">
+            {round.votesToday}/{round.maxVotes} {periodLabel}
+          </span>
+        )}
       </div>
       <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-mist">
         <div
@@ -283,6 +291,10 @@ export default function Vote() {
       });
       if (result.recap) {
         setState({ kind: "recap", data: result });
+      } else if (result.weighted === false && !result.pairAvailable) {
+        // Unweighted break: never the recap, which describes ranking movement
+        // that this player's picks did not cause.
+        setState({ kind: "played", data: result });
       } else if (result.pairAvailable && result.left && result.right) {
         setState({
           kind: "pair",
@@ -293,6 +305,7 @@ export default function Vote() {
             right: result.right,
             round: result.round,
             canVote: true,
+            weighted: result.weighted,
             pairsRemaining: result.pairsRemaining,
             allPairsComplete: false,
             canContinue: true,
@@ -310,6 +323,7 @@ export default function Vote() {
               : "No more pairs right now.",
             round: result.round,
             canVote: false,
+            weighted: result.weighted,
             pairsRemaining: result.pairsRemaining,
             allPairsComplete: result.allPairsComplete,
             canContinue: result.canContinue,
@@ -323,15 +337,22 @@ export default function Vote() {
     }
   }
 
-  const round =
-    state.kind === "pair" || state.kind === "recap" || state.kind === "empty"
-      ? state.data.round
-      : null;
+  const hasRound =
+    state.kind === "pair" ||
+    state.kind === "recap" ||
+    state.kind === "empty" ||
+    state.kind === "played";
+  const round = hasRound ? state.data.round : null;
+  const weighted = hasRound ? state.data.weighted !== false : true;
 
   return (
     <div className="flex min-h-screen flex-col bg-paper">
       <ShortsHeader active="vote">
-        <RoundMeter round={round} periodLabel={periodLabel} />
+        <RoundMeter
+          round={round}
+          periodLabel={periodLabel}
+          weighted={weighted}
+        />
       </ShortsHeader>
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-6 py-6">
@@ -348,21 +369,19 @@ export default function Vote() {
         )}
 
         {state.kind === "empty" && (
-          <div className="mx-auto max-w-md rounded-2xl border border-line bg-paper px-5 py-8 text-center shadow-card">
+          <div className="punch-card mx-auto max-w-md px-5 py-8 text-center">
             <h1 className="text-[22px] font-medium tracking-tight text-ink">
-              {state.data.reason === "must_submit"
-                ? "Submit first"
-                : state.data.reason === "vote_cap_reached"
-                  ? cadence === "weekly"
-                    ? "Weekly vote limit reached"
-                    : "Daily vote limit reached"
-                  : state.data.reason === "no_pairs_left"
-                    ? "All matchups done"
-                    : "No matchups"}
+              {state.data.reason === "vote_cap_reached"
+                ? cadence === "weekly"
+                  ? "Weekly vote limit reached"
+                  : "Daily vote limit reached"
+                : state.data.reason === "no_pairs_left"
+                  ? "All matchups done"
+                  : "No matchups"}
             </h1>
             <p className="mt-2 text-sm text-fog">{state.data.message}</p>
             <div className="mt-6 flex flex-wrap justify-center gap-3">
-              {state.data.reason === "must_submit" && (
+              {!weighted && (
                 <Link to="/Build" className="btn-pill">
                   Start building
                 </Link>
@@ -374,8 +393,38 @@ export default function Vote() {
           </div>
         )}
 
+        {state.kind === "played" && (
+          <div className="punch-card mx-auto max-w-md px-5 py-8 text-center">
+            <div className="label-mono text-fog-light">
+              {state.data.round.votesInRound} / {state.data.round.roundSize}{" "}
+              picks
+            </div>
+            <h1 className="mt-2 text-[22px] font-medium tracking-tight text-ink">
+              None of them counted
+            </h1>
+            <p className="mt-2 text-sm text-fog">
+              Build one and your picks start moving the ranking.
+            </p>
+            <div className="mt-6 flex flex-wrap justify-center gap-3">
+              <Link to="/Build" className="btn-pill">
+                Start building
+              </Link>
+              {state.data.canContinue && (
+                <button
+                  type="button"
+                  onClick={loadNext}
+                  disabled={busy}
+                  className="btn-pill-secondary"
+                >
+                  Keep playing
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {state.kind === "recap" && state.data.recap && (
-          <div className="mx-auto w-full max-w-2xl rounded-2xl border border-line bg-paper p-6 shadow-card">
+          <div className="punch-card mx-auto w-full max-w-2xl p-6">
             <div className="label-mono text-accent-emerald">
               {state.data.allPairsComplete
                 ? "All matchups complete"
@@ -488,6 +537,17 @@ export default function Vote() {
             <p className="text-center text-sm text-ink">
               Try both, then pick the one you&apos;d rather keep open.
             </p>
+
+            {!weighted && (
+              <div className="mx-auto flex flex-wrap items-center justify-center gap-x-3 gap-y-2 rounded-2xl border border-line px-4 py-2">
+                <p className="text-sm text-fog">
+                  Your picks aren&apos;t counting toward the ranking yet.
+                </p>
+                <Link to="/Build" className="btn-pill-secondary">
+                  Build one
+                </Link>
+              </div>
+            )}
 
             <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-2">
               <PreviewPane

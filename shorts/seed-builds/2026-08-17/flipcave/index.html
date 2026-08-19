@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>flip cave</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#05060f;touch-action:none;
+    user-select:none;-webkit-user-select:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+let vw, vh;
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  vw = innerWidth; vh = innerHeight;
+  cv.width = vw * dpr; cv.height = vh * dpr;
+  cv.style.width = vw + "px"; cv.style.height = vh + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+resize();
+addEventListener("resize", resize);
+
+const PS = 20;                       // player size
+let py, vy, gdir, grounded, obs, dist, speed, score, state, shake, t, trail, spawnAt, best = 0;
+
+function floorY(){ return vh - 64; }
+function ceilY(){ return 64; }
+
+function reset(){
+  gdir = 1; py = floorY() - PS / 2; vy = 0; grounded = true;
+  obs = []; dist = 0; speed = 240; score = 0; shake = 0; t = 0; trail = [];
+  spawnAt = 500;
+  state = "play";
+}
+function flip(){
+  if (state === "over"){ reset(); return; }
+  if (!grounded) return;
+  gdir *= -1;
+  grounded = false;
+  vy = gdir * 140;
+}
+addEventListener("pointerdown", flip);
+addEventListener("keydown", e => {
+  if (e.code === "Space" && !e.repeat){ e.preventDefault(); flip(); }
+});
+
+const PX = () => vw * 0.26;
+
+let last = performance.now();
+function frame(now){
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  t += dt;
+  if (shake > 0) shake = Math.max(0, shake - dt * 26);
+
+  if (state === "play"){
+    speed = Math.min(560, speed + dt * 9);
+    dist += speed * dt;
+
+    // physics
+    vy += gdir * 2600 * dt;
+    py += vy * dt;
+    if (gdir === 1 && py >= floorY() - PS/2){ py = floorY() - PS/2; vy = 0; grounded = true; }
+    if (gdir === -1 && py <= ceilY() + PS/2){ py = ceilY() + PS/2; vy = 0; grounded = true; }
+
+    trail.push({ x: PX(), y: py, a: 0.5 });
+    if (trail.length > 24) trail.shift();
+
+    // spawn obstacles
+    if (dist > spawnAt){
+      const side = Math.random() < 0.5 ? 1 : -1;
+      const h = 34 + Math.random() * 52;
+      obs.push({ x: vw + 60, side, h, w: 26, passed: false });
+      spawnAt = dist + 240 + Math.random() * 260 - Math.min(120, dist * 0.004);
+    }
+    // move + collide
+    const px = PX();
+    for (const o of obs){
+      o.x -= speed * dt;
+      const oy = o.side === 1 ? floorY() - o.h : ceilY();
+      if (!o.passed && o.x + o.w < px - PS/2){ o.passed = true; score++; }
+      if (px + PS/2 - 3 > o.x && px - PS/2 + 3 < o.x + o.w &&
+          py + PS/2 - 3 > oy && py - PS/2 + 3 < oy + o.h){
+        state = "over"; shake = 10; best = Math.max(best, score);
+      }
+    }
+    obs = obs.filter(o => o.x > -80);
+  }
+
+  // ---- draw ----
+  ctx.fillStyle = "#05060f";
+  ctx.fillRect(0, 0, vw, vh);
+  const ox = shake > 0 ? (Math.random() - 0.5) * shake : 0;
+  const oy2 = shake > 0 ? (Math.random() - 0.5) * shake : 0;
+  ctx.save();
+  ctx.translate(ox, oy2);
+
+  // scrolling grid
+  ctx.strokeStyle = "rgba(90,110,255,0.08)";
+  ctx.lineWidth = 1;
+  const gs = 56, off = (dist * 0.6) % gs;
+  for (let x = -off; x < vw; x += gs){
+    ctx.beginPath(); ctx.moveTo(x, ceilY()); ctx.lineTo(x, floorY()); ctx.stroke();
+  }
+
+  // floor + ceiling
+  ctx.shadowColor = "#38f0ff"; ctx.shadowBlur = 14;
+  ctx.strokeStyle = "#38f0ff"; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(0, floorY()); ctx.lineTo(vw, floorY()); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, ceilY()); ctx.lineTo(vw, ceilY()); ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // obstacles
+  for (const o of obs){
+    const oy = o.side === 1 ? floorY() - o.h : ceilY();
+    ctx.shadowColor = "#ff3df0"; ctx.shadowBlur = 16;
+    ctx.fillStyle = "#ff3df0";
+    ctx.fillRect(o.x, oy, o.w, o.h);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "rgba(255,255,255,0.25)";
+    ctx.fillRect(o.x, oy, o.w, 3);
+  }
+
+  // trail
+  for (const p of trail){
+    p.a -= dt * 1.1;
+    if (p.a > 0){
+      ctx.fillStyle = `rgba(56,240,255,${p.a * 0.35})`;
+      ctx.fillRect(p.x - PS/2, p.y - PS/2, PS, PS);
+    }
+  }
+  // player
+  ctx.shadowColor = "#38f0ff"; ctx.shadowBlur = 20;
+  ctx.fillStyle = "#38f0ff";
+  ctx.fillRect(PX() - PS/2, py - PS/2, PS, PS);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "#05060f";
+  const ey = gdir === 1 ? py - 3 : py + 1;
+  ctx.fillRect(PX() - 5, ey, 3, 3);
+  ctx.fillRect(PX() + 2, ey, 3, 3);
+
+  ctx.restore();
+
+  // score
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.font = "700 44px ui-monospace,monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(String(score), vw / 2, 46);
+
+  if (state === "play" && dist < 500){
+    ctx.fillStyle = `rgba(255,255,255,${0.6 + 0.4 * Math.sin(t * 4)})`;
+    ctx.font = "500 15px ui-monospace,monospace";
+    ctx.fillText("tap to flip gravity", vw / 2, vh / 2);
+  }
+  if (state === "over"){
+    ctx.fillStyle = "rgba(5,6,15,0.75)";
+    ctx.fillRect(0, 0, vw, vh);
+    ctx.fillStyle = "#ff3df0";
+    ctx.font = "700 30px ui-monospace,monospace";
+    ctx.fillText("crashed", vw / 2, vh * 0.42);
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.font = "500 17px ui-monospace,monospace";
+    ctx.fillText(`cleared ${score}   ·   best ${best}`, vw / 2, vh * 0.42 + 36);
+    ctx.fillStyle = `rgba(56,240,255,${0.6 + 0.4 * Math.sin(t * 4)})`;
+    ctx.font = "500 15px ui-monospace,monospace";
+    ctx.fillText("tap to run it back", vw / 2, vh * 0.42 + 72);
+  }
+  requestAnimationFrame(frame);
+}
+function boot(){
+  resize();
+  if (vw > 0 && vh > 0){ reset(); requestAnimationFrame(frame); }
+  else requestAnimationFrame(boot);
+}
+boot();
+</script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+{
+  "note": "Seeded cold-start data. These anonymousIds are synthetic, not real users.",
+  "challengeDate": "2026-08-17",
+  "challengeSlug": "one-button-game-2026-08-17",
+  "submissions": [
+    {
+      "_id": "6a81d2c85e28e3e8cdd84319",
+      "anonymousId": "b7c8d9e0-f1a2-4b3c-8d4e-5f6a7b8c9d01",
+      "displayName": "stacktile",
+      "dir": "stacktile"
+    },
+    {
+      "_id": "6a81d2c85e28e3e8cdd8431b",
+      "anonymousId": "b7c8d9e0-f1a2-4b3c-8d4e-5f6a7b8c9d02",
+      "displayName": "flip cave",
+      "dir": "flipcave"
+    },
+    {
+      "_id": "6a81d2c85e28e3e8cdd8431f",
+      "anonymousId": "b7c8d9e0-f1a2-4b3c-8d4e-5f6a7b8c9d04",
+      "displayName": "hover",
+      "dir": "hover"
+    },
+    {
+      "_id": "6a81d2c85e28e3e8cdd8431d",
+      "anonymousId": "b7c8d9e0-f1a2-4b3c-8d4e-5f6a7b8c9d03",
+      "displayName": "luna hop",
+      "dir": "luna-hop"
+    },
+    {
+      "_id": "6a81d2c85e28e3e8cdd84321",
+      "anonymousId": "b7c8d9e0-f1a2-4b3c-8d4e-5f6a7b8c9d05",
+      "displayName": "pulse ring",
+      "dir": "pulse-ring"
+    },
+    {
+      "_id": "6a81d2c85e28e3e8cdd84323",
+      "anonymousId": "b7c8d9e0-f1a2-4b3c-8d4e-5f6a7b8c9d06",
+      "displayName": "charge",
+      "dir": "charge-jump"
+    },
+    {
+      "_id": "6a81d2c85e28e3e8cdd84325",
+      "anonymousId": "b7c8d9e0-f1a2-4b3c-8d4e-5f6a7b8c9d07",
+      "displayName": "snap tap",
+      "dir": "snap-tap"
+    }
+  ],
+  "voteCount": 35
+}

@@ -5,6 +5,7 @@ import { auth } from "@/firebase/firebase";
 import { fetchMySubmissions, linkCurrentAnonymousId } from "@/api/account";
 import { useAuth } from "@/lib/useAuth";
 import ShortsHeader from "@/components/ShortsHeader";
+import ShortsFooter from "@/components/ShortsFooter";
 import AccountModal from "@/components/AccountModal";
 import SubmissionCard from "@/components/gallery/SubmissionCard";
 
@@ -62,10 +63,10 @@ export default function MySubmissions() {
   }, [data]);
 
   return (
-    <div className="min-h-screen bg-paper">
+    <div className="flex min-h-screen flex-col bg-paper">
       <ShortsHeader active="mybuilds" cta={{ label: "Build", to: "/Build" }} />
 
-      <main className="mx-auto max-w-5xl px-6 py-8">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
         <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-[28px] font-medium tracking-tight text-ink">
@@ -99,7 +100,7 @@ export default function MySubmissions() {
         )}
 
         {!authLoading && !signedIn && (
-          <div className="rounded-2xl border border-line bg-paper px-4 py-10 text-center shadow-card">
+          <div className="punch-card px-4 py-10 text-center">
             <p className="text-[22px] font-medium tracking-tight text-ink">
               Sign in to see your builds
             </p>
@@ -129,7 +130,7 @@ export default function MySubmissions() {
         )}
 
         {signedIn && !loading && !error && rounds.length === 0 && (
-          <div className="rounded-2xl border border-line bg-paper px-4 py-10 text-center shadow-card">
+          <div className="punch-card px-4 py-10 text-center">
             <p className="text-[22px] font-medium tracking-tight text-ink">
               No builds yet
             </p>
@@ -168,6 +169,8 @@ export default function MySubmissions() {
           </section>
         ))}
       </main>
+
+      <ShortsFooter />
 
       {showAccountModal && (
         <AccountModal onClose={() => setShowAccountModal(false)} />

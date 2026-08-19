@@ -103,6 +103,37 @@ async function runLogged(
   };
 }
 
+/**
+ * `npm ci` refuses to install without a lockfile, and candidates type it from
+ * muscle memory against starters that ship `package.json` only — the run dies
+ * on a wall of `EUSAGE` before anything is installed, and the recruiter replay
+ * reproduces that wall verbatim. Substitute `npm install` when the lockfile the
+ * command requires is genuinely absent, and say so in the log.
+ */
+export async function resolveInstallCommand(
+  ctx: RuntimeSandboxContext,
+  cwd: string,
+  command: string
+): Promise<{ command: string; note: string | null }> {
+  const trimmed = command.trim();
+  // Only leading flags may sit between `npm` and `ci`, so `npm run ci` (a
+  // candidate's own script) is left alone.
+  const npmCi = /^(npm(?:\s+-{1,2}\S+)*\s+)(?:ci|clean-install)(\s|$)/;
+  if (!npmCi.test(trimmed)) return { command, note: null };
+  const lock = await ctx.run(
+    bashLc(
+      `test -f package-lock.json -o -f npm-shrinkwrap.json && echo lock || echo nolock`
+    ),
+    { cwd, timeoutMs: 10_000 }
+  );
+  if (!(lock.stdout || "").includes("nolock")) return { command, note: null };
+  const rewritten = trimmed.replace(npmCi, "$1install$2");
+  return {
+    command: rewritten,
+    note: `No package-lock.json or npm-shrinkwrap.json in this directory — \`${trimmed}\` cannot run. Using \`${rewritten}\` instead.`,
+  };
+}
+
 export async function stopPreviousApp(ctx: RuntimeSandboxContext): Promise<void> {
   await ctx.run(
     bashLc(
@@ -385,8 +416,16 @@ export async function executeRuntimeConfig(input: {
 
   if (config.installCommand.trim()) {
     await onPhase("installing");
-    appendLiveLog(sessionId, "system", `$ ${config.installCommand}`);
-    const install = await runLogged(ctx, sessionId, config.installCommand, {
+    const resolvedInstall = await resolveInstallCommand(
+      ctx,
+      cwd,
+      config.installCommand
+    );
+    if (resolvedInstall.note) {
+      appendLiveLog(sessionId, "system", resolvedInstall.note);
+    }
+    appendLiveLog(sessionId, "system", `$ ${resolvedInstall.command}`);
+    const install = await runLogged(ctx, sessionId, resolvedInstall.command, {
       cwd,
       timeoutMs: stepTimeout(getRuntimeSetupInstallTimeoutMs()),
     });

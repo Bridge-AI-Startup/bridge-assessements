@@ -922,7 +922,26 @@ export async function resumeSession(token: string) {
   return createOrResumeSession(token);
 }
 
-export async function finalizeSetup(token: string) {
+export const UNVERIFIED_FINALIZE_MESSAGE =
+  "This setup has never had a successful run, so recruiters may not be able to start your project. Run it once more, or confirm that you want to finalize it unverified.";
+
+/**
+ * A config finalized without a successful run is handed to recruiters as-is and
+ * fails in the replay exactly as it failed here, so finalizing one takes an
+ * explicit acknowledgement rather than only a client-side confirm dialog.
+ */
+export function isVerifiedRuntimeSetup(submission: {
+  runtimeSetup?: { verified?: boolean; lastRunResult?: { ok?: boolean } | null } | null;
+}): boolean {
+  return Boolean(
+    submission.runtimeSetup?.verified || submission.runtimeSetup?.lastRunResult?.ok
+  );
+}
+
+export async function finalizeSetup(
+  token: string,
+  opts: { confirmUnverified?: boolean } = {}
+) {
   assertRuntimeSetupEnabled();
   const submission = await loadSubmissionByToken(token);
   assertSubmittedWithCode(submission as never);
@@ -938,6 +957,13 @@ export async function finalizeSetup(token: string) {
     const lockedConfig = runtimeConfigSchema.parse(fresh.runtimeConfig || {});
     if (!lockedConfig.startCommand.trim()) {
       throw createHttpError(400, "Save a start command before finalizing");
+    }
+
+    // Checked before the sandbox is torn down, so a refused finalize leaves the
+    // candidate's environment intact to run again.
+    const verified = isVerifiedRuntimeSetup(fresh as never);
+    if (!verified && !opts.confirmUnverified) {
+      throw createHttpError(409, UNVERIFIED_FINALIZE_MESSAGE);
     }
 
     inFlightRuns.delete(fresh._id.toString());
@@ -969,9 +995,6 @@ export async function finalizeSetup(token: string) {
       }
     }
 
-    const verified = Boolean(
-      fresh.runtimeSetup?.verified || fresh.runtimeSetup?.lastRunResult?.ok
-    );
     applyRuntimeSetupPatch(fresh, {
       status: "finalized",
       verified,

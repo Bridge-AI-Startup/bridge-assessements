@@ -66,9 +66,18 @@ export const getContextCenter: RequestHandler = async (req, res, next) => {
       ] as const
     )
       .map((k) => {
-        const section = bundle[k] as { available?: boolean } | undefined;
+        const section = bundle[k] as
+          | { available?: boolean; phase?: string; events?: unknown[] }
+          | undefined;
         if (!section) return `${k}:-`;
-        return `${k}:${section.available ? "✓" : "✗"}`;
+        if (!section.available) return `${k}:✗`;
+        // An available-but-empty timeline is the normal first minute of a
+        // session, and it is also the exact state that used to make the voice
+        // agent apologise out loud. A bare ✓ would hide it from this log.
+        if (k === "timeline" && section.events?.length === 0) {
+          return `${k}:✓(empty/${section.phase ?? "?"})`;
+        }
+        return `${k}:✓`;
       })
       .join(" ");
     console.log(

@@ -180,7 +180,12 @@ export async function findCaptureSessionForSubmission(submissionId: string) {
 export async function evaluateWorkflowSession(
   captureSessionId: string,
   criteria: string[],
-  options?: { groundings?: unknown; submittedAt?: Date | string | null }
+  options?: {
+    groundings?: unknown;
+    submittedAt?: Date | string | null;
+    /** Persisted evaluability verdicts (same order as criteria); skips per-run validation. */
+    validations?: Array<{ valid: boolean; reason?: string | null }>;
+  }
 ): Promise<WorkflowEvaluationResult> {
   const session: any = await WorkflowCaptureSessionModel.findById(captureSessionId).lean();
   if (!session) throw new Error("Capture session not found.");
@@ -228,6 +233,7 @@ export async function evaluateWorkflowSession(
 
   const report: any = await evaluateTranscript(timeline, criteria, {
     groundings: options?.groundings as any,
+    validations: options?.validations,
   });
 
   // Communication is judged from the same merged timeline, but reported beside

@@ -21,6 +21,10 @@ import { readCompanionMessages } from "../companion/transcript.js";
  * - Every section is independently fail-soft. A missing source yields
  *   `available: false` with a `reason`, never a thrown error — a tool failure
  *   mid-call would stall the voice conversation.
+ * - `available: false` means "this source is missing", and a voice model reads
+ *   it as breakage. So an empty-but-healthy read of a LIVE session's timeline is
+ *   reported as `available: true` with an empty `events` list, a `phase`, and a
+ *   `guidance` line instead. Genuine failures still return `available: false`.
  * - Everything is budgeted. This feeds a realtime voice model; it needs a
  *   usable prompt, not a dump.
  */
@@ -61,6 +65,29 @@ const LIVE_FILE_CONTENT_MAX = 1600;
 type Section<T> =
   | ({ available: true } & T)
   | { available: false; reason: string };
+
+/**
+ * Statuses where the record is still being written. For these, "nothing yet" is
+ * a normal reading, not a missing source.
+ */
+const LIVE_SUBMISSION_STATUSES = new Set(["pending", "in-progress"]);
+
+function isLiveSubmission(submission: any): boolean {
+  return LIVE_SUBMISSION_STATUSES.has(String(submission?.status));
+}
+
+/**
+ * Plain-language instructions returned alongside the timeline. The consumer is a
+ * realtime voice model that will otherwise invent an explanation for an empty
+ * result and say it out loud to the candidate; telling it what to do with the
+ * emptiness is cheaper than hoping it infers silence.
+ */
+const EMPTY_TIMELINE_GUIDANCE =
+  "Nothing has been recorded yet. This is expected early in a session, while the candidate is still setting up — it is not an error and there is nothing wrong. You simply have no question this turn: stay quiet and call again in a couple of minutes. Never mention this to the candidate.";
+const SETUP_TIMELINE_GUIDANCE =
+  "Only setup or window-focus activity so far — no work on the task has been recorded yet. There is nothing worth asking about: stay quiet and call again in a couple of minutes. Never mention this to the candidate.";
+const WORKING_TIMELINE_GUIDANCE =
+  "Real work is being recorded. If something in `latest` is new since you last spoke, ask one short question about that specific thing; otherwise stay quiet.";
 
 async function buildAssessmentSection(submission: any): Promise<Section<any>> {
   const assessment = submission.assessmentId as {
@@ -126,6 +153,8 @@ async function buildTimelineSection(submission: any): Promise<Section<any>> {
     at: Date;
     source: "workflow" | "screen" | "proctoring";
     type: string;
+    /** workflow only: candidate = their own prompt; ai_assistant = the agent's autonomous tool calls/replies. */
+    actor?: "candidate" | "ai_assistant";
     tool?: string;
     text?: string;
     /** screen_context only: what surface was on screen, and for how long. */
@@ -137,6 +166,7 @@ async function buildTimelineSection(submission: any): Promise<Section<any>> {
 
   // AI-workflow capture events (the candidate's Claude Code activity).
   let captureStatus: string | null = null;
+  let workflowQueryFailed = false;
   try {
     const captureSession = await WorkflowCaptureSessionModel.findOne({
       $or: [
@@ -193,6 +223,12 @@ async function buildTimelineSection(submission: any): Promise<Section<any>> {
             at: e.at,
             source: "workflow",
             type: e.type,
+            // Who performed it. Prompts are the candidate's own words;
+            // everything else (file reads, edits, commands, replies) is their
+            // AI assistant acting autonomously. Without this label the voice
+            // agent inferred — and told a candidate "you've made edits to
+            // time.js" about files Claude touched that they had never opened.
+            actor: e.type === "user_prompt" ? "candidate" : "ai_assistant",
             tool: e.toolName || undefined,
             text,
           });
@@ -201,6 +237,7 @@ async function buildTimelineSection(submission: any): Promise<Section<any>> {
     }
   } catch {
     // capture models unavailable — proceed with proctoring events only
+    workflowQueryFailed = true;
   }
 
   // Proctoring sidecar events (tab switches, focus changes, paste).
@@ -210,6 +247,7 @@ async function buildTimelineSection(submission: any): Promise<Section<any>> {
   // session they outnumber prompts several times over; merged naively they eat
   // the entry cap and the agent ends up seeing window churn and no prompts.
   const sidecarEntries: TimelineEntry[] = [];
+  let sidecarQueryFailed = false;
   try {
     const proctoringSession = await ProctoringSessionModel.findOne({
       submissionId: submission._id,
@@ -233,9 +271,32 @@ async function buildTimelineSection(submission: any): Promise<Section<any>> {
     }
   } catch {
     // ignore
+    sidecarQueryFailed = true;
   }
 
   if (entries.length === 0 && sidecarEntries.length === 0) {
+    // Both sources blew up: this is a genuine failure and must stay
+    // distinguishable from "the session just hasn't produced anything yet".
+    if (workflowQueryFailed && sidecarQueryFailed) {
+      return { available: false, reason: "timeline_unavailable" };
+    }
+    // A live session with nothing recorded yet is the NORMAL first minute of
+    // every assessment, not a broken tool. Reporting it as `available: false`
+    // reads as breakage to a realtime voice model, which then apologises to the
+    // candidate for "not being able to access the timeline". Answer it as a
+    // successful read of an empty record, with a phase and an instruction.
+    if (isLiveSubmission(submission)) {
+      return {
+        available: true,
+        status: "session_just_started",
+        phase: "setup",
+        captureStatus,
+        latest: [],
+        events: [],
+        counts: { prompts: 0, toolCalls: 0, windowSwitches: 0 },
+        guidance: EMPTY_TIMELINE_GUIDANCE,
+      };
+    }
     return { available: false, reason: "no_timeline_recorded_yet" };
   }
 
@@ -244,7 +305,9 @@ async function buildTimelineSection(submission: any): Promise<Section<any>> {
     .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
     .slice(-TIMELINE_MAX_EVENTS);
   const sidecarBudget = Math.max(0, TIMELINE_MAX_EVENTS - meaningful.length);
-  const merged = [...meaningful, ...sidecarEntries.slice(-sidecarBudget)].sort(
+  // slice(-0) === slice(0) — a zero budget must mean "no sidecar", not "all of it".
+  const sidecarKept = sidecarBudget > 0 ? sidecarEntries.slice(-sidecarBudget) : [];
+  const merged = [...meaningful, ...sidecarKept].sort(
     (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime()
   );
 
@@ -256,8 +319,16 @@ async function buildTimelineSection(submission: any): Promise<Section<any>> {
     secondsAgo: Math.max(0, Math.round((now - new Date(e.at).getTime()) / 1000)),
   }));
 
+  // Only window churn so far means the same thing as an empty timeline for the
+  // agent: nothing to ask about. Say so in the same vocabulary.
+  const phase: "setup" | "working" = meaningful.length > 0 ? "working" : "setup";
+
   return {
     available: true,
+    status: phase === "working" ? "activity_recorded" : "setup_activity_only",
+    phase,
+    guidance:
+      phase === "working" ? WORKING_TIMELINE_GUIDANCE : SETUP_TIMELINE_GUIDANCE,
     captureStatus,
     /** Most recent meaningful activity — what a proactive question should be about. */
     latest: withAge

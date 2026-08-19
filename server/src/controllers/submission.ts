@@ -20,18 +20,8 @@ import { searchCodeChunks } from "../services/repoRetrieval.js";
 import RepoIndexModel from "../models/repoIndex.js";
 import { deleteNamespace } from "../utils/pinecone.js";
 import ProctoringSessionModel from "../models/proctoringSession.js";
-import { getProctoringTranscriptForSubmission } from "../services/evaluation/proctoringTranscriptAdapter.js";
-import { evaluateTranscript } from "../services/evaluation/orchestrator.js";
-import { generateTranscript, finalizeTranscriptFromIncremental } from "../ai/transcript/generator.js";
-import {
-  refineTranscriptFromJsonl,
-  storeRefinedTranscript,
-  markRefinementFailed,
-} from "../services/evaluation/transcriptRefinement.js";
-import { getFrameStorage } from "../services/capture/storage.js";
 import {
   resolveEvidenceMode,
-  shouldGenerateVideoTranscript,
   shouldCaptureWorkflow,
   shouldEvaluateWorkflow,
 } from "../utils/evidenceMode.js";
@@ -41,6 +31,7 @@ import {
   evaluateWorkflowSession,
   findCaptureSessionForSubmission,
 } from "../services/workflowCapture/evaluate.js";
+import { ensureCriteriaValidations } from "../services/evaluation/validator.js";
 import { finalizeCaptureSession } from "../services/workflowCapture/finalize.js";
 import { closeAttemptSessions } from "../services/submission/closeAttempt.js";
 import { expireAttemptAndClose } from "../services/submission/finalizeExpired.js";
@@ -69,8 +60,6 @@ import {
   publicRuntimeConfig,
 } from "../services/runtimeSetup/index.js";
 
-const TRANSCRIPT_POLL_INTERVAL_MS = 15000;
-const TRANSCRIPT_POLL_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
 const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b]);
 const SUBMISSION_SOURCE_MODE = (
   process.env.SUBMISSION_SOURCE_MODE || "both"
@@ -186,8 +175,11 @@ function triggerBehavioralGradingInBackground(
 }
 
 /**
- * Background: ensure proctoring session has a transcript (generate if needed), then load it,
- * set on submission, and run screen-recording evaluation. Does not block submit response.
+ * Background: grade the observational record for a submission. Does not block
+ * the submit response.
+ *
+ * There is one such record now — the capture-kit hook stream. The video-OCR
+ * path this function was originally named for is gone with the "screen" mode.
  */
 export async function ensureProctoringTranscriptAndEvaluate(
   submissionId: string
@@ -207,11 +199,10 @@ export async function ensureProctoringTranscriptAndEvaluate(
   }
 
   // In "workflow"/"both" the analysable record is the capture-kit hook stream.
-  // Screen recording in "both" is for human playback + Gemini screen
-  // classification (screenContext), never video OCR / generateTranscript.
-  // Missing capture-kit: fail clearly. Do not fall through to a transcript job.
-  // "none" has no observational evidence; clear a pending status rather than
-  // failing as if the candidate skipped capture.
+  // Screen recording in "both" exists for human playback + Gemini screen
+  // classification (screenContext); it is never transcribed.
+  // Missing capture-kit: fail clearly, so a candidate who skipped setup is
+  // visible rather than silently ungraded.
   const evidenceMode = resolveEvidenceMode(assessment);
   if (shouldEvaluateWorkflow(evidenceMode)) {
     console.log(
@@ -229,142 +220,19 @@ export async function ensureProctoringTranscriptAndEvaluate(
     );
     return;
   }
-  if (!shouldGenerateVideoTranscript(evidenceMode)) {
-    console.log(
-      `[ensureProctoringTranscriptAndEvaluate] evidenceMode=${evidenceMode} for submission ${submissionId}; skipping observational evaluation.`
-    );
-    await SubmissionModel.findByIdAndUpdate(submissionId, {
-      $unset: { evaluationStatus: 1, evaluationError: 1 },
-    });
-    return;
-  }
-
-  const session = await ProctoringSessionModel.findOne({
-    submissionId: submissionId as any,
+  // Only "none" reaches here: there is no observational record to grade, which
+  // is a deliberate configuration rather than a failure, so clear any pending
+  // status instead of marking the candidate as having skipped capture.
+  //
+  // Everything that used to follow was the video-OCR path for the removed
+  // "screen" mode — poll/generate a vision transcript, refine it, grade the
+  // refined events. It is gone with the mode.
+  console.log(
+    `[ensureProctoringTranscriptAndEvaluate] evidenceMode=${evidenceMode} for submission ${submissionId}; no observational record to grade.`
+  );
+  await SubmissionModel.findByIdAndUpdate(submissionId, {
+    $unset: { evaluationStatus: 1, evaluationError: 1 },
   });
-  if (!session) {
-    console.warn(
-      `[ensureProctoringTranscriptAndEvaluate] No proctoring session for submission ${submissionId}; transcript will not be attached. Was proctoring started (consent granted) for this attempt?`
-    );
-    await setEvaluationFailed(
-      submissionId,
-      "No screen recording for this submission. The candidate must complete the assessment with proctoring enabled."
-    );
-    return;
-  }
-
-  const status = session.transcript?.status ?? "not_started";
-
-  if (status === "generating") {
-    const deadline = Date.now() + TRANSCRIPT_POLL_MAX_WAIT_MS;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, TRANSCRIPT_POLL_INTERVAL_MS));
-      const updated = await ProctoringSessionModel.findById(session._id);
-      if (!updated) return;
-      const s = updated.transcript?.status ?? "not_started";
-      if (s === "completed") break;
-      if (s === "failed") {
-        await setEvaluationFailed(
-          submissionId,
-          "Screen recording transcript generation failed."
-        );
-        return;
-      }
-    }
-  }
-
-  if (status === "not_started" || status === "failed") {
-    const hasIncrementalData =
-      session.transcript?.storageKey && session.transcript?.lastIncrementalAt;
-    try {
-      if (hasIncrementalData) {
-        console.log(
-          `[ensureProctoringTranscriptAndEvaluate] Finalizing from incremental for submission ${submissionId}`
-        );
-        await finalizeTranscriptFromIncremental(session._id.toString());
-      } else {
-        await generateTranscript(session._id.toString());
-      }
-    } catch (err) {
-      console.error(
-        `[ensureProctoringTranscriptAndEvaluate] Transcript generation failed for submission ${submissionId}:`,
-        err
-      );
-      await setEvaluationFailed(
-        submissionId,
-        "Screen recording transcript could not be generated."
-      );
-      return;
-    }
-  }
-
-  const transcript = await getProctoringTranscriptForSubmission(submissionId);
-  if (!transcript || transcript.length === 0) {
-    await setEvaluationFailed(
-      submissionId,
-      "No transcript available from the screen recording."
-    );
-    return;
-  }
-
-  const updatedSub = await SubmissionModel.findById(submissionId);
-  if (!updatedSub) return;
-  (updatedSub as any).screenRecordingTranscript = transcript;
-  await updatedSub.save();
-
-  let eventsForEval = transcript;
-  const rawJsonl = await loadRawJsonlForSubmission(submissionId);
-  if (rawJsonl && process.env.SKIP_REFINEMENT !== "1") {
-    try {
-      await ProctoringSessionModel.findByIdAndUpdate(session._id, {
-        "transcript.refinedStatus": "generating",
-      });
-      const refined = await refineTranscriptFromJsonl(rawJsonl);
-      await storeRefinedTranscript(session._id.toString(), refined);
-      if (refined.evaluation_events.length > 0) {
-        eventsForEval = refined.evaluation_events;
-      }
-      const subForRefined = await SubmissionModel.findById(submissionId);
-      if (subForRefined) {
-        (subForRefined as any).enrichedTranscript = refined.enriched;
-        (subForRefined as any).refinedTranscript = refined;
-        await subForRefined.save();
-      }
-    } catch (err) {
-      console.warn(
-        `[ensureProctoringTranscriptAndEvaluate] Transcript refinement failed for ${submissionId}:`,
-        err
-      );
-      await markRefinementFailed(
-        session._id.toString(),
-        err instanceof Error ? err.message : "Refinement failed"
-      );
-    }
-  }
-
-  try {
-    const report = await evaluateTranscript(eventsForEval, criteria, {
-      groundings: assessment.evaluationCriteriaGroundings,
-    });
-    const subAfter = await SubmissionModel.findById(submissionId);
-    if (!subAfter) return;
-    (subAfter as any).evaluationReport = report;
-    (subAfter as any).evaluationStatus = "completed";
-    (subAfter as any).evaluationError = null;
-    await subAfter.save();
-  } catch (err) {
-    console.error(
-      `[ensureProctoringTranscriptAndEvaluate] Evaluation failed for submission ${submissionId}:`,
-      err
-    );
-    const subAfter = await SubmissionModel.findById(submissionId);
-    if (subAfter) {
-      (subAfter as any).evaluationStatus = "failed";
-      (subAfter as any).evaluationError =
-        err instanceof Error ? err.message : "Evaluation failed.";
-      await subAfter.save();
-    }
-  }
 }
 
 /**
@@ -412,12 +280,21 @@ async function evaluateWorkflowCaptureForSubmission(
     const submissionDoc: any = await SubmissionModel.findById(submissionId)
       .select("submittedAt")
       .lean();
+    // Evaluability is decided once per criterion and persisted on the
+    // assessment — never re-litigated per candidate. This path only grades
+    // the hook stream, so the profile is always "workflow".
+    const validations = await ensureCriteriaValidations(
+      String(assessment._id),
+      criteria,
+      "workflow"
+    );
     const result = await evaluateWorkflowSession(
       capture._id.toString(),
       criteria,
       {
         groundings: assessment.evaluationCriteriaGroundings,
         submittedAt: submissionDoc?.submittedAt ?? null,
+        validations,
       }
     );
     const sub = await SubmissionModel.findById(submissionId);
@@ -467,17 +344,6 @@ export async function resumeInterruptedEvaluations(): Promise<void> {
     ensureProctoringTranscriptAndEvaluate(id).catch((err) => {
       console.error(`[eval] resumeInterruptedEvaluations failed for ${id}:`, err);
     });
-  }
-}
-
-async function loadRawJsonlForSubmission(submissionId: string): Promise<string | null> {
-  try {
-    const session = await ProctoringSessionModel.findOne({ submissionId: submissionId as any });
-    if (!session?.transcript?.storageKey) return null;
-    const storage = getFrameStorage();
-    return await storage.getTranscript(session.transcript.storageKey);
-  } catch {
-    return null;
   }
 }
 

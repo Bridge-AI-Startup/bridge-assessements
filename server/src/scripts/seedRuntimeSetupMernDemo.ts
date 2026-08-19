@@ -65,7 +65,7 @@ async function main() {
     timeLimit: 60,
     numInterviewQuestions: 2,
     isSmartInterviewerEnabled: false,
-    evidenceMode: "screen",
+    evidenceMode: "both",
     behavioralChecks: [
       "A visitor can add a note and see it in the list without refreshing.",
       "Checking a note off marks it done and that state survives a page reload.",

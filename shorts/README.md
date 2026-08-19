@@ -223,4 +223,4 @@ Assessments Vercel project (`client/`) is unchanged.
 - Flip `SHORTS_CHALLENGE_CADENCE=daily` when ready to go Wordle-daily again
 - Optional end-of-day Top 8 finals bracket
 - Share cards / streaks
-- **Head-to-head:** live 1v1 build duel (same prompt, timed, spectators / rematch) — backlog, not scheduled
+- **Head-to-head:** live 1v1 build duel (same challenge, timed, spectators / rematch) — backlog, not scheduled

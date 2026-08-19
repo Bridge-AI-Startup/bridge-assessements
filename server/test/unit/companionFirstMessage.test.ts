@@ -51,19 +51,6 @@ describe("companionSetupSentences", () => {
     expect(text).not.toMatch(/make sure you shared/i);
   });
 
-  it("only mentions unzip and keep-sharing for legacy screen mode", () => {
-    const text = companionSetupSentences({
-      evidenceMode: "screen",
-      hasStarterZip: true,
-      hasStarterRepo: false,
-    }).join(" ");
-
-    expect(text).toMatch(/unzip/i);
-    expect(text).toMatch(/Keep sharing your entire screen/i);
-    expect(text).not.toMatch(/Node command/i);
-    expect(text).not.toMatch(/make sure you shared/i);
-  });
-
   it("only mentions the Node command and starter files for workflow-only", () => {
     const text = companionSetupSentences({
       evidenceMode: "workflow",
