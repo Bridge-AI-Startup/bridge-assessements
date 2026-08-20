@@ -733,6 +733,25 @@ falls back to the stale overrides only if the refetch fails, and sends a
 `sendContextualUpdate` on the reconnected `onConnect` telling the agent the session resumed
 and earlier topics are already covered — a new ElevenLabs conversation has no memory of the
 old one, so without this the "never repeat yourself" rules reset.
+**2026-08-19 (later): the prompt was rewritten purpose-first at Saaz's direction.** The
+rule-accretion approach above had inverted: 24 rules ended in silence vs 5 permitting a
+question, and a live run showed the agent acknowledging everything and asking nothing — a
+candidate's delegation-strategy disclosure got "Got it", a stated verification plan got
+"Sounds good", and "I think I'm done" got literal silence. `COMPANION_PROMPT_BASE` is now
+~5.6k chars (from ~17k) built around purpose over prohibitions: what the interview is *for*
+(four reviewer questions — how they decomposed, what they delegated, how they judged AI
+output, what they verified before calling it done), the named **moments worth a question**
+(approach/delegation explained; testing narrated; reaction to AI output; **completion —
+"they say they're done → always ask"**; timeline firsts and surprises), and interview-mode
+stance: asking about intentions is allowed ("how are you planning to check that?"),
+steering never is ("have you considered…" stays forbidden). The prior waves' failure modes
+(nagging, waiting-narration, misattribution, quizzing, opener repeats, tool-mention)
+survive as single hard lines or condensed sections — the chronicle above is now the
+**regression catalog to test new runs against**, not literal prompt text to preserve. If
+the simplified prompt under-delivers on `claude-haiku-4-5`, the intended lever is upgrading
+`AGENT_LLM` in `registerElevenLabsContextTool.ts` (then `--sync-settings`), not re-adding
+rules. The full before/after with the marked-up old prompt lives in the "Companion Prompt
+Atlas" artifact (2026-08-19).
 It carries the same honesty carve-out as the interviewer: never volunteer that the session is
 captured, but never deny it when asked directly (this is about the recording, not the tool —
 the never-mention-your-tooling rule above does not license denying that they are recorded). The overlay is
