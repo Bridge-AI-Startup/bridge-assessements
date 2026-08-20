@@ -13,6 +13,7 @@ import {
   listSubmissionsValidation,
   pauseResumeSessionValidation,
   postClaudeMessageValidation,
+  getClaudeTurnValidation,
   publicGetSubmissionValidation,
   publicListSubmissionsValidation,
   previewSubmissionFileValidation,
@@ -138,6 +139,11 @@ router.post(
   "/session/:id/claude/message",
   postClaudeMessageValidation,
   PlayController.postClaudeMessage,
+);
+router.get(
+  "/session/:id/turn/:turnId",
+  getClaudeTurnValidation,
+  PlayController.getClaudeTurn,
 );
 // Anthropic-compatible Messages API for Claude Code in the sandbox
 router.post(

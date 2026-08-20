@@ -130,6 +130,27 @@ const BuildSessionSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    /**
+     * Durable in-flight turn. Replaces the in-process Set so a second
+     * instance cannot start a colliding build, and so a refresh can poll
+     * a turn that is still running after the original POST returned.
+     */
+    currentTurn: {
+      _id: false,
+      id: { type: String, trim: true },
+      status: {
+        type: String,
+        enum: ["running", "completed", "failed"],
+      },
+      prompt: { type: String },
+      startedAt: { type: Date },
+      finishedAt: { type: Date },
+      error: { type: String },
+      output: { type: String },
+      workspaceChanged: { type: Boolean, default: null },
+      model: { type: String },
+      effort: { type: String },
+    },
   },
   { timestamps: true },
 );

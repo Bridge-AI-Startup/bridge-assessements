@@ -22,12 +22,9 @@ import {
 import type { SnapshotFile } from "./sessionPersist.js";
 import { appendSessionChatMessages } from "./sessionPersist.js";
 import {
-  beginPlayClaudeRun,
-  endPlayClaudeRun,
   getAnthropicApiKeyOrThrow,
   getPlayLlmProxyPublicBase,
   incrementSessionUsage,
-  isPlayClaudeRunInFlight,
   parseUsageFromAnthropicBody,
 } from "./llmProxy.js";
 import {
@@ -36,6 +33,12 @@ import {
   type PlayEffortLevel,
 } from "./models.js";
 import { SHORTS_VOICE, toPlainChatText } from "./voice.js";
+import {
+  applyHtmlPatches,
+  parseHtmlPatches,
+  PatchApplyError,
+  stripHtmlPatchBlocks,
+} from "./htmlPatches.js";
 
 const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
 /**
@@ -50,7 +53,20 @@ const SERVERLESS_MAX_TOKENS = 16384;
 const SERVERLESS_MAX_FILE_BYTES = 500 * 1024; // 500 KB per file
 const SERVERLESS_MAX_TOTAL_BYTES = 1.5 * 1024 * 1024; // 1.5 MB total
 const SERVERLESS_MAX_REPLY_CHARS = 4000; // chat text stored/returned per turn
-const GENERATE_TIMEOUT_MS = 120_000;
+/**
+ * A complete self-contained app can be 8k-16k output tokens. Two minutes was
+ * shorter than a normal full-file generation on the slower models, producing a
+ * guaranteed 502 even while Anthropic was still making progress.
+ */
+export const GENERATE_TIMEOUT_MS = 300_000;
+
+export function isGenerationTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.name === "TimeoutError" ||
+    /aborted due to timeout|timed? out/i.test(error.message)
+  );
+}
 
 export const SERVERLESS_SYSTEM_PROMPT = [
   "You are the build partner for a phone-first daily challenge where people make small, fun, self-contained web creations.",
@@ -60,14 +76,23 @@ export const SERVERLESS_SYSTEM_PROMPT = [
   "Every turn is one of two shapes. The voice above applies to all of it — the line before a build, the answer to a question, everything.",
   "",
   "1. BUILD — when the user wants the app created, changed, fixed, styled, or extended.",
-  "   Open with ONE short friendly line about what you're making them (under about 12 words), then the document.",
-  "   If they also asked something, answer it first in at most two short plain-text sentences instead, then the document.",
-  "   Return exactly ONE complete HTML document, starting with `<!DOCTYPE html>` and ending with `</html>`.",
+  "   Open with ONE short friendly line about what you're making them (under about 12 words), then the build payload.",
+  "   If they also asked something, answer it first in at most two short plain-text sentences instead, then the payload.",
+  "   First build, or a rewrite of most of the file: return exactly ONE complete HTML document, starting with `<!DOCTYPE html>` and ending with `</html>`.",
+  "   Follow-up change to an existing file: prefer exact search/replace patches instead of rewriting the whole document:",
+  "   *** SEARCH",
+  "   <exact substring from the current file, including whitespace>",
+  "   *** REPLACE",
+  "   <the new substring>",
+  "   *** END",
+  "   - SEARCH must match the current file exactly and appear exactly once.",
+  "   - Several small patches beat one giant rewrite. You may emit more than one block.",
+  "   - If a patch cannot be unique, or you are replacing most of the file, return the full HTML document instead.",
   "   - Inline ALL CSS in a <style> tag and ALL JavaScript in a <script> tag. Do NOT reference separate .css/.js files.",
   "   - You MAY load libraries from a CDN via <script src> / <link href>, and you MAY call public, keyless, CORS-enabled APIs (e.g. open-meteo). Never require an API key.",
   "   - No build step, no bundlers, no frameworks that need compilation. Vanilla JS or CDN builds only.",
   "   - Make it work on a phone: responsive, touch-friendly, no horizontal scroll.",
-  "   - No markdown fences around the document, and nothing at all after `</html>`.",
+  "   - No markdown fences around the document, and nothing at all after `</html>` or the last *** END.",
   "   - Do not narrate or explain the code — the user sees the running preview, not the source.",
   "",
   "2. TALK — when the user is brainstorming, asking a question, asking for ideas or an explanation, or otherwise not asking for a code change.",
@@ -185,6 +210,7 @@ function stripCodeFences(raw: string): string {
  */
 type MakeResponse =
   | { kind: "html"; html: string; note: string }
+  | { kind: "patches"; patches: ReturnType<typeof parseHtmlPatches>; note: string; fallbackHtml: string | null }
   | { kind: "text"; text: string };
 
 const HTML_DOC_RE = /<!doctype\s+html[\s\S]*?<\/html\s*>/i;
@@ -195,11 +221,31 @@ export function classifyMakeResponse(raw: string): MakeResponse {
   const text = stripCodeFences(raw).trim();
   if (!text) return { kind: "text", text: "" };
 
+  const patches = parseHtmlPatches(text);
   const match = HTML_DOC_RE.exec(text) || HTML_TAG_DOC_RE.exec(text);
-  if (match && match[0].length >= MIN_HTML_DOC_CHARS) {
-    const html = match[0].trim();
+  const html =
+    match && match[0].length >= MIN_HTML_DOC_CHARS ? match[0].trim() : null;
+
+  if (patches.length > 0) {
+    let remainder = stripHtmlPatchBlocks(text);
+    if (html) {
+      remainder = remainder
+        .replace(html, "")
+        .replace(/```[a-zA-Z]*/g, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+    }
+    return {
+      kind: "patches",
+      patches,
+      note: remainder,
+      fallbackHtml: html,
+    };
+  }
+
+  if (html) {
     const note = (
-      text.slice(0, match.index) + text.slice(match.index + match[0].length)
+      text.slice(0, match!.index) + text.slice(match!.index + match![0].length)
     )
       .replace(/```[a-zA-Z]*/g, "")
       .replace(/\n{3,}/g, "\n\n")
@@ -226,7 +272,7 @@ function buildUserMessage(input: {
   // tokens and can anchor the model to boilerplate.
   if (input.currentHtml && !isIndexHtmlStarterLike(input.currentHtml)) {
     parts.push(
-      "Here is the current index.html. If this turn is a BUILD, modify it to satisfy the request and return the full updated file:",
+      "Here is the current index.html. If this turn is a BUILD, patch it with *** SEARCH / *** REPLACE / *** END blocks. Return a full HTML document only if you are rewriting most of the file:",
       "",
       input.currentHtml,
       "",
@@ -355,11 +401,6 @@ export async function runServerlessMakeTurn(input: {
     throw createHttpError(429, "token_budget_exceeded");
   }
 
-  // Serialize turns for a session so overlapping requests can't clobber the snapshot.
-  if (isPlayClaudeRunInFlight(input.sessionId)) {
-    throw createHttpError(409, "A build is already running for this session");
-  }
-
   const apiKey = getAnthropicApiKeyOrThrow();
   const model = resolvePlayModel(input.model, { serverless: true });
   // The Messages API does take effort (`output_config.effort`), but this path
@@ -373,10 +414,11 @@ export async function runServerlessMakeTurn(input: {
   const challengePrompt =
     (challengeDoc as { prompt?: string } | null)?.prompt || "";
   const currentHtml = readIndexHtml(doc.workspaceSnapshot as SnapshotFile[]);
+  const canPatch =
+    Boolean(currentHtml) && !isIndexHtmlStarterLike(currentHtml || "");
 
-  beginPlayClaudeRun(input.sessionId);
-  try {
-    const wantsRefusalFallback = REFUSAL_FALLBACK_MODELS.has(model);
+  const turnStartedAt = Date.now();
+  const wantsRefusalFallback = REFUSAL_FALLBACK_MODELS.has(model);
     const requestBody = {
       model,
       ...(wantsRefusalFallback ? { fallbacks: "default" as const } : {}),
@@ -397,6 +439,19 @@ export async function runServerlessMakeTurn(input: {
         },
       ],
     };
+    // This body includes the current full HTML and can be hundreds of KB. Build
+    // it once rather than serializing the same document again for telemetry.
+    const requestJson = JSON.stringify(requestBody);
+    console.info(
+      `[shorts serverless] turn_start ${JSON.stringify({
+        sessionId: input.sessionId,
+        model,
+        timeoutMs: GENERATE_TIMEOUT_MS,
+        requestChars: requestJson.length,
+        currentHtmlChars: currentHtml?.length || 0,
+        promptChars: prompt.length,
+      })}`,
+    );
 
     let upstream: Awaited<ReturnType<typeof fetch>>;
     try {
@@ -410,13 +465,32 @@ export async function runServerlessMakeTurn(input: {
             ? { "anthropic-beta": REFUSAL_FALLBACK_BETA }
             : {}),
         },
-        body: JSON.stringify(requestBody),
+        body: requestJson,
         signal: AbortSignal.timeout(GENERATE_TIMEOUT_MS),
       });
     } catch (err) {
+      const timedOut = isGenerationTimeoutError(err);
       const message =
         err instanceof Error ? err.message : "generation request failed";
-      throw createHttpError(502, `Generation request failed: ${message}`);
+      console.warn(
+        `[shorts serverless] turn_failed ${JSON.stringify({
+          sessionId: input.sessionId,
+          model,
+          elapsedMs: Date.now() - turnStartedAt,
+          reason: timedOut ? "timeout" : "network",
+          message,
+        })}`,
+      );
+      if (timedOut) {
+        const guidance = REFUSAL_FALLBACK_MODELS.has(model)
+          ? "Fable can be slow on full builds—switch to Sonnet 4.5 or try a smaller change."
+          : "Your current build is safe. Try a smaller change and send it again.";
+        throw createHttpError(
+          504,
+          `That build took too long, so I stopped it. ${guidance}`,
+        );
+      }
+      throw createHttpError(502, "I couldn't reach the model. Try that again.");
     }
 
     const text = await upstream.text();
@@ -435,9 +509,19 @@ export async function runServerlessMakeTurn(input: {
     }
 
     // Meter what was consumed BEFORE any post-checks (tokens were spent regardless).
-    await incrementSessionUsage(
-      input.sessionId,
-      parseUsageFromAnthropicBody(parsed),
+    const turnUsage = parseUsageFromAnthropicBody(parsed);
+    await incrementSessionUsage(input.sessionId, turnUsage);
+    console.info(
+      `[shorts serverless] turn_complete ${JSON.stringify({
+        sessionId: input.sessionId,
+        model,
+        elapsedMs: Date.now() - turnStartedAt,
+        status: upstream.status,
+        inputTokens: turnUsage.input,
+        outputTokens: turnUsage.output,
+        stopReason:
+          (parsed as { stop_reason?: string } | null)?.stop_reason || null,
+      })}`,
     );
 
     const stopReason = (parsed as { stop_reason?: string } | null)?.stop_reason;
@@ -479,7 +563,41 @@ export async function runServerlessMakeTurn(input: {
       return { output, exitCode: 0, model, effort, workspaceChanged: false };
     }
 
-    const html = response.html;
+    let html: string | null = null;
+    if (response.kind === "patches") {
+      if (canPatch && currentHtml) {
+        try {
+          html = applyHtmlPatches(currentHtml, response.patches);
+        } catch (err) {
+          if (err instanceof PatchApplyError && response.fallbackHtml) {
+            html = response.fallbackHtml;
+          } else if (err instanceof PatchApplyError) {
+            throw createHttpError(
+              502,
+              "That change didn't line up with the current file. Try asking for a smaller edit.",
+            );
+          } else {
+            throw err;
+          }
+        }
+      } else if (response.fallbackHtml) {
+        html = response.fallbackHtml;
+      } else {
+        throw createHttpError(
+          502,
+          "I need a full file for the first build. Ask me to make it again?",
+        );
+      }
+    } else {
+      html = response.html;
+    }
+
+    if (!html) {
+      throw createHttpError(
+        502,
+        "That came back blank on my end. Try saying it a different way?",
+      );
+    }
     if (Buffer.byteLength(html, "utf8") > SERVERLESS_MAX_FILE_BYTES) {
       throw createHttpError(
         413,
@@ -511,9 +629,6 @@ export async function runServerlessMakeTurn(input: {
     ]);
 
     return { output, exitCode: 0, model, effort, workspaceChanged: true };
-  } finally {
-    endPlayClaudeRun(input.sessionId);
-  }
 }
 
 /**

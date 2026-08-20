@@ -35,6 +35,11 @@ import {
   type SnapshotFile,
 } from "./sessionPersist.js";
 import { createKeyedAsyncLock } from "./keyedAsyncLock.js";
+import {
+  reapStaleTurn,
+  serializeCurrentTurn,
+  type SessionTurn,
+} from "./turns.js";
 
 /**
  * Serverless previews are served by this backend, so their URL is only valid
@@ -81,6 +86,7 @@ export type SessionResponse = {
   chatMessages?: SessionChatMessage[];
   sandboxPaused?: boolean;
   error?: string;
+  currentTurn?: SessionTurn | null;
 };
 
 function getMaxConcurrentSessions(): number {
@@ -157,6 +163,18 @@ function toSessionResponse(
       text: string;
       createdAt?: Date;
     }>;
+    currentTurn?: {
+      id?: string;
+      status?: "running" | "completed" | "failed";
+      prompt?: string;
+      startedAt?: Date;
+      finishedAt?: Date;
+      error?: string;
+      output?: string;
+      workspaceChanged?: boolean | null;
+      model?: string;
+      effort?: string | null;
+    } | null;
   },
   challenge: PublicChallenge | SessionChallengeSummary,
 ): SessionResponse {
@@ -182,6 +200,8 @@ function toSessionResponse(
   if (doc.expiresAt) result.expiresAt = doc.expiresAt.toISOString();
   if (doc.startedAt) result.startedAt = doc.startedAt.toISOString();
   if (doc.error) result.error = doc.error;
+  const currentTurn = serializeCurrentTurn(doc.currentTurn);
+  if (currentTurn) result.currentTurn = currentTurn;
   return result;
 }
 
@@ -615,21 +635,24 @@ export async function getSession(
     throw createHttpError(403, "session_forbidden");
   }
 
+  await reapStaleTurn(sessionId);
+  const live = (await BuildSession.findById(sessionId)) || doc;
+
   if (
-    doc.status === "active" &&
-    doc.expiresAt &&
-    doc.expiresAt.getTime() <= Date.now()
+    live.status === "active" &&
+    live.expiresAt &&
+    live.expiresAt.getTime() <= Date.now()
   ) {
-    doc.status = "expired";
-    await doc.save();
+    live.status = "expired";
+    await live.save();
   }
 
-  const bySlug = await getChallengeBySlug(doc.challengeSlug);
+  const bySlug = await getChallengeBySlug(live.challengeSlug);
   if (bySlug) {
-    return toSessionResponse(doc, toChallengeSummary(bySlug));
+    return toSessionResponse(live, toChallengeSummary(bySlug));
   }
 
-  return toSessionResponse(doc, fallbackChallengeSummary(doc));
+  return toSessionResponse(live, fallbackChallengeSummary(live));
 }
 
 /**
@@ -717,11 +740,11 @@ export async function pausePlayBuildSession(
     return { paused: true, sandboxPaused: true };
   }
 
-  // Pausing mid-`claude -p` kills the E2B command stream → "2: [unknown] terminated".
-  const { isPlayClaudeRunInFlight } = await import("./llmProxy.js");
-  if (isPlayClaudeRunInFlight(sessionId)) {
+  await reapStaleTurn(sessionId);
+  const live = await getPlayBuildSessionModel().findById(sessionId);
+  if (live?.currentTurn?.status === "running") {
     console.warn(
-      `[play/sessions] skip pause while Claude is running session=${sessionId}`,
+      `[play/sessions] skip pause while a turn is running session=${sessionId}`,
     );
     return { paused: false, sandboxPaused: false };
   }

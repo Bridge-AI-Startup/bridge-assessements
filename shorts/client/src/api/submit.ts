@@ -64,7 +64,7 @@ export async function submitSession(input: {
           message:
             typeof body.error === "string"
               ? body.error
-              : "You can submit up to 3 builds this round. Delete one to send another.",
+              : "You ran out of builds for the week.",
           httpStatus: res.status,
           code: "submission_limit",
         };

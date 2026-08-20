@@ -214,6 +214,7 @@ export default function ChatFirstBuild({
   chatEndRef,
   submitModal,
   creditsModal,
+  creditsKickoff,
   onShowCreditsHelp,
 }) {
   const isDesktop = variant === "desktop";
@@ -547,6 +548,7 @@ export default function ChatFirstBuild({
       ) : null}
       {submitModal}
       {creditsModal}
+      {creditsKickoff}
     </>
   );
 }

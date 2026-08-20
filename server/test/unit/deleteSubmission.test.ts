@@ -40,6 +40,10 @@ const { getLinkedAnonymousIds } = vi.hoisted(() => ({
   getLinkedAnonymousIds: vi.fn(async () => [] as string[]),
 }));
 
+const { isUnlimitedSubmitter } = vi.hoisted(() => ({
+  isUnlimitedSubmitter: vi.fn(async () => false),
+}));
+
 vi.mock("../../src/models/shorts/submission.js", () => ({
   getPlaySubmissionModel: () => SubmissionModel,
 }));
@@ -50,6 +54,10 @@ vi.mock("../../src/models/shorts/vote.js", () => ({
 vi.mock("../../src/services/shorts/account.js", () => ({
   linkAnonymousId: vi.fn(async () => ({ linked: true, linkedIds: 1 })),
   getLinkedAnonymousIds,
+}));
+vi.mock("../../src/services/shorts/unlimitedSubmit.js", () => ({
+  isUnlimitedSubmitter,
+  SUBMISSION_LIMIT_MESSAGE: "You ran out of builds for the week.",
 }));
 
 const {
@@ -171,6 +179,8 @@ describe("submission limit", () => {
     SubmissionModel.countDocuments.mockClear();
     getLinkedAnonymousIds.mockClear();
     getLinkedAnonymousIds.mockResolvedValue([]);
+    isUnlimitedSubmitter.mockReset();
+    isUnlimitedSubmitter.mockResolvedValue(false);
   });
 
   it("counts this browser's builds for a guest", async () => {
@@ -223,7 +233,23 @@ describe("submission limit", () => {
       code: SUBMISSION_LIMIT_CODE,
       count: MAX_SUBMISSIONS_PER_ROUND,
       max: MAX_SUBMISSIONS_PER_ROUND,
+      message: "You ran out of builds for the week.",
     });
+  });
+
+  it("skips the cap for an unlimited submitter", async () => {
+    isUnlimitedSubmitter.mockResolvedValue(true);
+    SubmissionModel.countDocuments.mockResolvedValue(
+      MAX_SUBMISSIONS_PER_ROUND,
+    );
+    await expect(
+      assertUnderSubmissionLimit({
+        anonymousId: "anon-owner-aaaaaaaa",
+        firebaseUid: "uid-smahadkar",
+        challengeDate: "2026-08-03",
+      }),
+    ).resolves.toBeUndefined();
+    expect(SubmissionModel.countDocuments).not.toHaveBeenCalled();
   });
 
   it("allows a submit when the person is under the cap", async () => {

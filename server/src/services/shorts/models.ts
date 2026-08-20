@@ -34,8 +34,15 @@ export type PlayModelOption = {
   warning?: string;
 };
 
-/** Product default for the Build picker and unresolved model requests. */
-export const DEFAULT_PLAY_MODEL_ID = "claude-opus-4-5-20251101";
+/**
+ * Product default for the Build picker and unresolved model requests.
+ *
+ * Shorts rebuilds a complete HTML document on each serverless build turn.
+ * Sonnet is the better default for that latency-sensitive consumer loop; Opus
+ * and Fable remain explicit choices for builders who want to trade time for
+ * capability.
+ */
+export const DEFAULT_PLAY_MODEL_ID = "claude-sonnet-4-5-20250929";
 
 export const PLAY_MODEL_OPTIONS: PlayModelOption[] = [
   {
@@ -75,7 +82,7 @@ export const PLAY_MODEL_OPTIONS: PlayModelOption[] = [
     efforts: [],
     defaultEffort: null,
     serverlessOnly: true,
-    warning: "Takes longer and uses more tokens",
+    warning: "Experimental · often takes several minutes and uses more credits",
   },
 ];
 

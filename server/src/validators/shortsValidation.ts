@@ -138,6 +138,20 @@ export const postClaudeMessageValidation = [
   body("effort").optional().trim().isLength({ min: 1, max: 32 }),
 ];
 
+export const getClaudeTurnValidation = [
+  param("id").trim().notEmpty().isMongoId().withMessage("invalid session id"),
+  param("turnId")
+    .trim()
+    .notEmpty()
+    .isUUID()
+    .withMessage("invalid turn id"),
+  query("anonymousId")
+    .trim()
+    .notEmpty()
+    .isLength({ min: 8, max: 128 })
+    .withMessage("anonymousId is required"),
+];
+
 export const listSessionFilesValidation = [
   param("id").trim().notEmpty().isMongoId().withMessage("invalid session id"),
   query("anonymousId")

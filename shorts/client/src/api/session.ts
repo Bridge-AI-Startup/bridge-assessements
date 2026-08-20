@@ -39,6 +39,16 @@ export type PlaySession = {
   chatMessages?: SessionChatMessage[];
   sandboxPaused?: boolean;
   error?: string;
+  currentTurn?: {
+    id: string;
+    status: "running" | "completed" | "failed";
+    prompt: string;
+    startedAt: string;
+    finishedAt?: string;
+    error?: string;
+    output?: string;
+    workspaceChanged?: boolean | null;
+  } | null;
 };
 
 export type SessionQueueInfo = {

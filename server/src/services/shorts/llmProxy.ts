@@ -82,21 +82,6 @@ export function buildSessionLlmBaseUrl(sessionId: string): string {
 
 let proxyHealthCache: { baseUrl: string; checkedAt: number } | null = null;
 
-/** In-flight `claude -p` runs — pause must not kill these (E2B "terminated"). */
-const claudeRunsInFlight = new Set<string>();
-
-export function isPlayClaudeRunInFlight(sessionId: string): boolean {
-  return claudeRunsInFlight.has(sessionId);
-}
-
-export function beginPlayClaudeRun(sessionId: string): void {
-  claudeRunsInFlight.add(sessionId);
-}
-
-export function endPlayClaudeRun(sessionId: string): void {
-  claudeRunsInFlight.delete(sessionId);
-}
-
 function formatClaudeRunFailure(err: unknown): string {
   const message =
     err instanceof Error ? err.message : "claude command failed in sandbox";
@@ -443,13 +428,7 @@ export async function runClaudePrintPrompt(input: {
 
   await assertPlayLlmProxyReachable();
 
-  if (isPlayClaudeRunInFlight(input.sessionId)) {
-    throw createHttpError(409, "Claude is already running for this session");
-  }
-
-  beginPlayClaudeRun(input.sessionId);
-  try {
-    let sandbox: Sandbox;
+  let sandbox: Sandbox;
     try {
       sandbox = await connectPlaySandbox(doc.e2bSandboxId, {
         timeoutMs: 60 * 60 * 1000,
@@ -538,7 +517,4 @@ export async function runClaudePrintPrompt(input: {
       model,
       effort,
     };
-  } finally {
-    endPlayClaudeRun(input.sessionId);
-  }
 }

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ensureSession, getSession, getWorkspaceRevision, clearStoredSessionId, pauseSession, pauseSessionBeacon, resumeSession } from "@/api/session";
-import { fetchSessionUsage, sendClaudeMessage } from "@/api/claude";
+import { fetchSessionUsage, sendClaudeMessage, waitForClaudeTurn } from "@/api/claude";
 import { submitSession } from "@/api/submit";
 import { useAuth } from "@/lib/useAuth";
 import AccountModal from "@/components/AccountModal";
@@ -25,6 +25,7 @@ import ShareBuild from "@/components/ShareBuild";
 import ChatFirstBuild from "@/components/workspace/ChatFirstBuild";
 import BuildWaitCard from "@/components/workspace/BuildWaitCard";
 import OutOfCreditsModal from "@/components/workspace/OutOfCreditsModal";
+import CreditsKickoffModal from "@/components/workspace/CreditsKickoffModal";
 import {
   compactTokens,
   useTokenDelta,
@@ -46,9 +47,9 @@ const CONNECTION_LOST_MESSAGE =
 /**
  * How long to keep polling for a turn whose response was lost in transit.
  * The server keeps working after the client drops (a build turn can run
- * ~60-100s), so the window has to comfortably outlast a full turn.
+ * up to five minutes), so the window has to comfortably outlast a full turn.
  */
-const DROPPED_TURN_WINDOW_MS = 150_000;
+const DROPPED_TURN_WINDOW_MS = 330_000;
 const DROPPED_TURN_POLL_MS = 4_000;
 /** Usage only changes after a turn; the post-turn fetch is the live path. */
 const USAGE_POLL_MS = 15_000;
@@ -73,6 +74,16 @@ function isOutOfCreditsError(result) {
 /** The server refused the turn because the challenge round has closed. */
 function isRoundOverError(result) {
   return /session_expired/i.test(String(result.message || ""));
+}
+
+/** A completed HTTP response saying the server stopped a long generation. */
+function isGenerationTimeoutError(result) {
+  return (
+    result.httpStatus === 504 ||
+    /build took too long|aborted due to timeout/i.test(
+      String(result.message || ""),
+    )
+  );
 }
 
 function LayoutModeToggle({ mode, onChange }) {
@@ -409,6 +420,7 @@ export default function Build() {
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   /** null, or { lastPrompt, note, checking } while the credits pop-up is up. */
   const [creditsModal, setCreditsModal] = useState(null);
+  const [showCreditsIntro, setShowCreditsIntro] = useState(false);
   const [displayName, setDisplayName] = useState(() => getDisplayName());
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
@@ -445,6 +457,75 @@ export default function Build() {
   const verticalDragRef = useRef(null);
   const minimizedRef = useRef(minimized);
   minimizedRef.current = minimized;
+
+  function applySuccessfulTurn(result, workspaceChanged) {
+    setChatMessages((prev) => {
+      const next = [
+        ...prev,
+        {
+          role: "assistant",
+          text: result.output || "(No output)",
+        },
+      ];
+      return workspaceChanged
+        ? [...next, { role: "preview", tick: Date.now() }]
+        : next;
+    });
+    if (result.usage) {
+      setUsage(result.usage);
+      if (result.usage.exhausted) {
+        openCreditsModal();
+      }
+    }
+    if (workspaceChanged) {
+      setPreviewTick((t) => t + 1);
+      setEditorRefreshKey((k) => k + 1);
+    }
+    setChatError(null);
+    chatBusyRef.current = false;
+    setChatBusy(false);
+  }
+
+  async function resumeRunningTurn(session) {
+    const turnId = session.currentTurn?.id;
+    if (!turnId) {
+      chatBusyRef.current = false;
+      setChatBusy(false);
+      return;
+    }
+    const result = await waitForClaudeTurn(session.sessionId, turnId);
+    if (result.status === "ok") {
+      applySuccessfulTurn(
+        result.result,
+        result.result.workspaceChanged !== false,
+      );
+      return;
+    }
+    chatBusyRef.current = false;
+    setChatBusy(false);
+    const outOfCredits = isOutOfCreditsError(result);
+    const roundOver = isRoundOverError(result);
+    const generationTimeout = isGenerationTimeoutError(result);
+    const message = outOfCredits
+      ? OUT_OF_CREDITS_MESSAGE
+      : roundOver
+        ? ROUND_OVER_MESSAGE
+        : result.message;
+    setChatError(message);
+    setChatMessages((prev) => [
+      ...prev,
+      { role: "assistant", error: true, text: `(${message})` },
+    ]);
+    if (generationTimeout) {
+      setChatInput(session.currentTurn?.prompt || "");
+    }
+    if (outOfCredits) {
+      setUsage((prev) =>
+        prev ? { ...prev, remaining: 0, exhausted: true } : prev,
+      );
+      openCreditsModal(session.currentTurn?.prompt || null);
+    }
+  }
 
   const loadSession = async () => {
     recoveringRef.current = false;
@@ -512,6 +593,29 @@ export default function Build() {
       outputTokens: session.outputTokensUsed ?? 0,
       llmCalls: 0,
     });
+    const introKey = `shortsCreditsIntro.v1.${session.sessionId}`;
+    const isFreshBuild =
+      (session.tokensUsed ?? 0) === 0 &&
+      restoredMessages.length === 0 &&
+      session.currentTurn?.status !== "running";
+    let introSeen = false;
+    try {
+      introSeen = Boolean(sessionStorage.getItem(introKey));
+    } catch {
+      introSeen = false;
+    }
+    setShowCreditsIntro(isFreshBuild && !introSeen);
+    if (session.currentTurn?.status === "running") {
+      const prompt = session.currentTurn.prompt;
+      setChatMessages((prev) => {
+        const lastUser = [...prev].reverse().find((m) => m.role === "user");
+        if (lastUser?.text === prompt) return prev;
+        return [...prev, { role: "user", text: prompt }];
+      });
+      chatBusyRef.current = true;
+      setChatBusy(true);
+      void resumeRunningTurn(session);
+    }
   };
 
   useEffect(() => {
@@ -884,6 +988,7 @@ export default function Build() {
       const outOfCredits = isOutOfCreditsError(result);
       const roundOver = isRoundOverError(result);
       const networkDrop = result.httpStatus === undefined;
+      const generationTimeout = isGenerationTimeoutError(result);
       const message = outOfCredits
         ? OUT_OF_CREDITS_MESSAGE
         : roundOver
@@ -896,8 +1001,9 @@ export default function Build() {
         ...prev,
         { role: "assistant", error: true, text: `(${message})` },
       ]);
-      if (networkDrop) {
-        // Put the message back so retrying is one tap, not a re-type.
+      if (networkDrop || generationTimeout) {
+        // Keep the builder's work in the box. A long prompt is especially
+        // painful to reconstruct after the server times out.
         setChatInput(prompt);
       }
       if (outOfCredits) {
@@ -917,44 +1023,83 @@ export default function Build() {
       : revisionBefore.status !== "ok" ||
         revisionAfter.status !== "ok" ||
         revisionBefore.revision !== revisionAfter.revision;
-    setChatMessages((prev) => {
-      const next = [
-        ...prev,
-        {
-          role: "assistant",
-          text: result.result.output || "(No output)",
-        },
-      ];
-      return workspaceChanged
-        ? [...next, { role: "preview", tick: Date.now() }]
-        : next;
-    });
-    if (result.result.usage) {
-      setUsage(result.result.usage);
-      // Last turn drained the budget — tell the builder before they type again.
-      if (result.result.usage.exhausted) {
-        openCreditsModal();
-      }
-    }
-    if (workspaceChanged) {
-      setPreviewTick((t) => t + 1);
-      setEditorRefreshKey((k) => k + 1);
-    }
-    chatBusyRef.current = false;
-    setChatBusy(false);
+    applySuccessfulTurn(result.result, workspaceChanged);
   }
 
   /**
    * The claude/message POST died at the network layer, but the server keeps
-   * processing the turn and appends the user/assistant pair to the session's
-   * `chatMessages` when it finishes. Poll the session until that pair shows
-   * up, then render it exactly like a normal response (reply bubble, preview
-   * refresh, token meter). Returns true when the turn was recovered.
-   *
-   * The wait card stays up the whole time (chatBusy is still true), so a
-   * successful recovery is invisible to the builder.
+   * processing the turn. Prefer the durable `currentTurn` (poll until it
+   * finishes); fall back to the persisted chat pair for rolling deploys.
+   * Returns true when the turn was recovered. The wait card stays up the
+   * whole time, so a successful recovery is invisible to the builder.
    */
   async function recoverDroppedTurn(prompt, revisionBefore) {
+    if (state.kind !== "ready") return false;
+    const live = await getSession(state.session.sessionId);
+    if (live.status === "ok") {
+      const turn = live.session.currentTurn;
+      if (turn?.status === "running" && turn.prompt === prompt && turn.id) {
+        const waited = await waitForClaudeTurn(
+          state.session.sessionId,
+          turn.id,
+        );
+        if (waited.status !== "ok") {
+          const outOfCredits = isOutOfCreditsError(waited);
+          const roundOver = isRoundOverError(waited);
+          const generationTimeout = isGenerationTimeoutError(waited);
+          const message = outOfCredits
+            ? OUT_OF_CREDITS_MESSAGE
+            : roundOver
+              ? ROUND_OVER_MESSAGE
+              : waited.message;
+          setChatError(message);
+          setChatMessages((prev) => [
+            ...prev,
+            { role: "assistant", error: true, text: `(${message})` },
+          ]);
+          if (generationTimeout) setChatInput(prompt);
+          if (outOfCredits) {
+            setUsage((prev) =>
+              prev ? { ...prev, remaining: 0, exhausted: true } : prev,
+            );
+            openCreditsModal(prompt);
+          }
+          return true;
+        }
+        const serverless = state.session.makeMode === "serverless";
+        const revisionAfter = serverless
+          ? null
+          : await getWorkspaceRevision(state.session.sessionId);
+        const workspaceChanged = serverless
+          ? waited.result.workspaceChanged !== false
+          : revisionBefore.status !== "ok" ||
+            revisionAfter.status !== "ok" ||
+            revisionBefore.revision !== revisionAfter.revision;
+        applySuccessfulTurn(waited.result, workspaceChanged);
+        return true;
+      }
+      if (turn?.status === "completed" && turn.prompt === prompt) {
+        applySuccessfulTurn(
+          {
+            output: turn.output || "(No output)",
+            exitCode: 0,
+            workspaceChanged:
+              typeof turn.workspaceChanged === "boolean"
+                ? turn.workspaceChanged
+                : null,
+            usage: null,
+          },
+          turn.workspaceChanged !== false,
+        );
+        const freshUsage = await fetchSessionUsage(state.session.sessionId);
+        if (freshUsage) {
+          setUsage(freshUsage);
+          if (freshUsage.exhausted) openCreditsModal();
+        }
+        return true;
+      }
+    }
+
     const sentAt = Date.now();
     const deadline = sentAt + DROPPED_TURN_WINDOW_MS;
     // The pair is matched by prompt text, so guard against re-sends of an
@@ -1013,6 +1158,20 @@ export default function Build() {
 
   function openCreditsModal(lastPrompt = null) {
     setCreditsModal({ lastPrompt, note: null, checking: false });
+  }
+
+  function dismissCreditsIntro() {
+    if (state.kind === "ready") {
+      try {
+        sessionStorage.setItem(
+          `shortsCreditsIntro.v1.${state.session.sessionId}`,
+          "1",
+        );
+      } catch {
+        /* private mode */
+      }
+    }
+    setShowCreditsIntro(false);
   }
 
   /**
@@ -1468,19 +1627,9 @@ export default function Build() {
                 </p>
               </>
             ) : submitError.code === "submission_limit" ? (
-              <>
-                <p className="font-medium">Three builds already this round</p>
-                <p className="mt-0.5 text-amber-900/90">
-                  Delete one from{" "}
-                  <Link
-                    to={signedIn ? "/MySubmissions" : "/Gallery"}
-                    className="font-medium text-ink underline"
-                  >
-                    {signedIn ? "My builds" : "the gallery"}
-                  </Link>{" "}
-                  if you want to send another.
-                </p>
-              </>
+              <p className="font-medium">
+                You ran out of builds for the week.
+              </p>
             ) : (
               <p>{submitError.message}</p>
             )}
@@ -1533,6 +1682,14 @@ export default function Build() {
     />
   ) : null;
 
+  const creditsKickoffNode =
+    showCreditsIntro && state.kind === "ready" ? (
+      <CreditsKickoffModal
+        tokenBudget={tokenBudget}
+        onClose={dismissCreditsIntro}
+      />
+    ) : null;
+
   const layoutToggle = (
     <LayoutModeToggle mode={layoutMode} onChange={setBuildLayout} />
   );
@@ -1565,6 +1722,7 @@ export default function Build() {
     chatEndRef,
     submitModal,
     creditsModal: creditsModalNode,
+    creditsKickoff: creditsKickoffNode,
     onShowCreditsHelp: () => openCreditsModal(),
   };
 
@@ -1824,6 +1982,7 @@ export default function Build() {
 
       {submitModal}
       {creditsModalNode}
+      {creditsKickoffNode}
     </div>
   );
 }

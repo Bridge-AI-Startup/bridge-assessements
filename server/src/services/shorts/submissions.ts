@@ -16,20 +16,23 @@ import { snapshotServerlessSubmission } from "./serverlessMake.js";
 import { getLinkedAnonymousIds, linkAnonymousId } from "./account.js";
 import { isWithinSubmitGrace } from "./sessionPersist.js";
 import { assertNotStarterOnly } from "./starterDetection.js";
+import {
+  isUnlimitedSubmitter,
+  SUBMISSION_LIMIT_MESSAGE,
+} from "./unlimitedSubmit.js";
 import type { Sandbox } from "e2b";
 
-/** Live builds one person may have in a single round. Delete one to submit another. */
+/** Live builds one person may have in a single round. */
 export const MAX_SUBMISSIONS_PER_ROUND = 3;
 export const SUBMISSION_LIMIT_CODE = "submission_limit" as const;
+export { SUBMISSION_LIMIT_MESSAGE };
 
 export class SubmissionLimitError extends Error {
   readonly code = SUBMISSION_LIMIT_CODE;
   readonly count: number;
   readonly max: number;
   constructor(count: number, max = MAX_SUBMISSIONS_PER_ROUND) {
-    super(
-      `You can submit up to ${max} builds this round. Delete one to send another.`,
-    );
+    super(SUBMISSION_LIMIT_MESSAGE);
     this.name = "SubmissionLimitError";
     this.count = count;
     this.max = max;
@@ -181,8 +184,7 @@ export async function submitSession(input: {
   const submittedAt = new Date();
   // Each submit is its own entry — never overwrite an earlier build. A fresh
   // document also means fresh rating defaults, so a new build cannot inherit
-  // votes an earlier one earned. Capped at MAX_SUBMISSIONS_PER_ROUND; delete
-  // one to free a slot.
+  // votes an earlier one earned. Capped at MAX_SUBMISSIONS_PER_ROUND.
   const doc = await Submission.create({
     anonymousId,
     // Signed in at submit time → the build belongs to the account, not just to
@@ -269,6 +271,7 @@ export type DeleteSubmissionResult = {
  * Mongo filter matching every submission that counts as this person's, for
  * the 3-per-round cap and for owner-delete. Guest = this browser id. Signed
  * in = this browser + every linked browser + builds stamped with the uid.
+ * The cap is skipped for allowlisted accounts (`unlimitedSubmit.ts`).
  */
 export async function ownerMatchFilter(opts: {
   anonymousId?: string;
@@ -315,6 +318,7 @@ export async function assertUnderSubmissionLimit(opts: {
   firebaseUid?: string | null;
   challengeDate: string;
 }): Promise<void> {
+  if (await isUnlimitedSubmitter(opts.firebaseUid)) return;
   const count = await countOwnerSubmissionsForDate(opts);
   if (count >= MAX_SUBMISSIONS_PER_ROUND) {
     throw new SubmissionLimitError(count);

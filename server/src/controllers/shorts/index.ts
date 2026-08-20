@@ -51,12 +51,11 @@ import {
 import {
   getSessionUsage as getPlaySessionUsage,
   handlePlayMessagesProxy,
-  runClaudePrintPrompt,
 } from "../../services/shorts/llmProxy.js";
 import {
-  getSessionMakeMode,
-  runServerlessMakeTurn,
-} from "../../services/shorts/serverlessMake.js";
+  getSessionTurn,
+  startSessionTurn,
+} from "../../services/shorts/turns.js";
 import {
   listSessionProjectFiles,
   readSessionProjectFile,
@@ -360,7 +359,7 @@ export const postClaudeMessage: RequestHandler = async (req, res, next) => {
       res.status(400).json({ error: "prompt is required" });
       return;
     }
-    const turnInput = {
+    const started = await startSessionTurn({
       sessionId: String(req.params.id),
       anonymousId: String(req.body.anonymousId),
       prompt,
@@ -368,34 +367,23 @@ export const postClaudeMessage: RequestHandler = async (req, res, next) => {
         typeof req.body.model === "string" ? req.body.model : undefined,
       effort:
         typeof req.body.effort === "string" ? req.body.effort : undefined,
-    };
-    // Per-session make mode picks the path: serverless (direct Anthropic call)
-    // vs E2B (claude -p in the sandbox). E2B path is unchanged.
-    const makeMode = await getSessionMakeMode(turnInput.sessionId);
-    const result =
-      makeMode === "serverless"
-        ? await runServerlessMakeTurn(turnInput)
-        : await runClaudePrintPrompt(turnInput);
-    let usage = null;
-    try {
-      usage = await getPlaySessionUsage(
-        String(req.params.id),
-        String(req.body.anonymousId),
-      );
-    } catch {
-      // ignore
-    }
-    res.status(200).json({
-      output: result.output,
-      exitCode: result.exitCode,
-      model: result.model,
-      effort: result.effort,
-      // Serverless turns report whether the reply rebuilt the app or was just
-      // chat; the E2B path leaves this null and the client diffs the workspace.
-      workspaceChanged:
-        "workspaceChanged" in result ? result.workspaceChanged : null,
-      usage,
     });
+    res.status(202).json(started);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getClaudeTurn: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const turn = await getSessionTurn(
+      String(req.params.id),
+      String(req.params.turnId),
+      String(req.query.anonymousId),
+    );
+    res.status(200).json(turn);
   } catch (error) {
     next(error);
   }

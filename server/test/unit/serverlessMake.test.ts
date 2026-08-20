@@ -7,7 +7,12 @@ vi.hoisted(() => {
   process.env.ATLAS_URI ||= "mongodb://127.0.0.1:27017/serverless-make-test";
 });
 
-import { classifyMakeResponse } from "../../src/services/shorts/serverlessMake.js";
+import {
+  GENERATE_TIMEOUT_MS,
+  classifyMakeResponse,
+  isGenerationTimeoutError,
+} from "../../src/services/shorts/serverlessMake.js";
+import { listPlayModelsPublic } from "../../src/services/shorts/models.js";
 
 const DOC = `<!DOCTYPE html>
 <html>
@@ -68,5 +73,54 @@ describe("classifyMakeResponse", () => {
     );
 
     expect(result.kind).toBe("text");
+  });
+
+  it("classifies follow-up search/replace blocks as patches", () => {
+    const raw = `Colour's in.\n\n*** SEARCH\n<h1 id="clock">00:00</h1>\n*** REPLACE\n<h1 id="clock" style="color:tomato">00:00</h1>\n*** END`;
+    const result = classifyMakeResponse(raw);
+
+    expect(result.kind).toBe("patches");
+    if (result.kind !== "patches") return;
+    expect(result.patches).toEqual([
+      {
+        search: `<h1 id="clock">00:00</h1>`,
+        replace: `<h1 id="clock" style="color:tomato">00:00</h1>`,
+      },
+    ]);
+    expect(result.note).toContain("Colour");
+    expect(result.fallbackHtml).toBeNull();
+  });
+
+  it("keeps a full document beside patches as a fallback rewrite", () => {
+    const raw = `*** SEARCH\n<h1 id="clock">00:00</h1>\n*** REPLACE\n<h1 id="clock">hi</h1>\n*** END\n\n${DOC}`;
+    const result = classifyMakeResponse(raw);
+
+    expect(result.kind).toBe("patches");
+    if (result.kind !== "patches") return;
+    expect(result.fallbackHtml).toBe(DOC);
+  });
+});
+
+describe("serverless generation latency policy", () => {
+  it("allows enough time for a complete full-file generation", () => {
+    expect(GENERATE_TIMEOUT_MS).toBe(300_000);
+  });
+
+  it("recognizes Node fetch timeout errors without treating other aborts as timeouts", () => {
+    const timeout = new Error("The operation was aborted due to timeout");
+    timeout.name = "TimeoutError";
+    expect(isGenerationTimeoutError(timeout)).toBe(true);
+    expect(isGenerationTimeoutError(new Error("socket disconnected"))).toBe(
+      false,
+    );
+  });
+
+  it("defaults the consumer build loop to Sonnet while keeping Fable opt-in", () => {
+    const publicModels = listPlayModelsPublic();
+    expect(publicModels.defaultModel).toBe("claude-sonnet-4-5-20250929");
+    expect(
+      publicModels.models.find((model) => model.id === "claude-fable-5")
+        ?.serverlessOnly,
+    ).toBe(true);
   });
 });
