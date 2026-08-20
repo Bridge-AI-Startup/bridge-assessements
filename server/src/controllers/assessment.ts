@@ -64,6 +64,8 @@ export type UpdateRequest = {
   behavioralChecks?: string[];
   behavioralCheckSpecs?: unknown;
   evaluationCriteria?: string[];
+  /** AI credits (tokens) Bridge provides each candidate; 0/null = off. */
+  candidateLlmCredits?: number | null;
   uid: string; // Added by verifyAuthToken middleware
 };
 
@@ -293,6 +295,7 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
       behavioralChecks,
       behavioralCheckSpecs,
       evaluationCriteria,
+      candidateLlmCredits,
       uid,
     } = req.body as UpdateRequest;
     const { id } = req.params;
@@ -338,6 +341,11 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
         });
       }
       (assessment as any).evidenceMode = evidenceMode;
+    }
+    if (candidateLlmCredits !== undefined) {
+      // Validator guarantees an int in [0, 200M] (or null). Stored as-is;
+      // the proxy treats 0/null as off and reads the value live per call.
+      (assessment as any).candidateLlmCredits = candidateLlmCredits;
     }
     if (behavioralChecks !== undefined) {
       const checks = Array.isArray(behavioralChecks)

@@ -7,18 +7,32 @@ not the desktop.
 
 Status: **prototype.** Claude Code only. `/api/workflow-capture` is always mounted.
 
-## Why hooks and not a proxy
+## Hooks AND a proxy — who does what
 
-A proxy (`ANTHROPIC_BASE_URL` pointed at us) yields unforgeable server-side
-truth, but it puts us in the critical path of someone else's machine and means
-handling their API keys. Hooks invert both: nothing about their setup changes
-except one config file inside the assessment repo, they keep their own
-subscription and model choice, and a capture outage never blocks their work.
+Hooks are the semantic record: typed events (prompts, tool calls, file
+contents) that grading, episodes, and the interviewer's live context all read.
+They are also removable — a candidate *can* delete `.claude/settings.json` —
+which is acceptable for the record itself (in a consented, identified hiring
+context a stripped record is visible to the reviewer) but leaves the record
+unverifiable on its own.
 
-The tradeoff is that hooks are removable — a candidate *can* delete
-`.claude/settings.json`. That is acceptable here: in a consented, identified
-hiring context, a stripped or truncated record is itself visible to the
-reviewer. We optimise for a cooperative candidate, not an adversarial one.
+Since 2026-08, assessments can additionally fund **AI credits**
+(`candidateLlmCredits` on the assessment). Setup then writes
+`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` into the same
+`.claude/settings.json`, pointing Claude Code at Bridge's LLM proxy
+(`/api/workflow-capture/llm`): the candidate needs no Anthropic account, usage
+is metered against the budget, and every call leaves a server-side receipt
+(`LlmProxyCall`) the hook stream can be cross-checked against. Division of
+labor, on purpose:
+
+- **Proxy** — tamper-proof receipt + metering. Never parsed into timeline
+  events (wire traffic re-sends the whole conversation each call; parsing it
+  is the fragile part).
+- **Hooks** — the readable record everything downstream consumes, unchanged.
+- **Screen + voice** — everything outside the tools, unchanged.
+
+With credits off, behavior is exactly the pre-proxy kit: hooks only, the
+candidate's own subscription, and a capture outage never blocks their work.
 
 ## Live tester (fastest way to see it work)
 

@@ -12,6 +12,11 @@ import multer from "multer";
 import os from "os";
 
 import * as WorkflowCaptureController from "../controllers/workflowCapture.js";
+import {
+  handleCandidateMessagesProxy,
+  handleCandidateCountTokensProxy,
+  handleCandidateLlmUsage,
+} from "../services/candidateLlmProxy.js";
 import { verifyAuthToken } from "../validators/auth.js";
 import { renderTesterPage } from "../services/workflowCapture/testerPage.js";
 
@@ -28,6 +33,22 @@ router.post("/snapshot", WorkflowCaptureController.ingestSnapshot);
 router.post("/complete", WorkflowCaptureController.completeCaptureSession);
 // Transparency: the candidate can read back their own captured record.
 router.get("/me", WorkflowCaptureController.getOwnCaptureRecord);
+
+// --- Candidate LLM proxy (Bearer llm proxy token; Bridge-provided AI credits) ---
+// The capture kit writes ANTHROPIC_BASE_URL=<api>/api/workflow-capture/llm into
+// .claude/settings.json; Claude Code appends /v1/messages. Calls run on the org
+// Anthropic key, metered against the assessment's candidateLlmCredits, and each
+// writes an LlmProxyCall receipt (the tamper-proof record the hook stream is
+// cross-checked against).
+router.post("/llm/v1/messages", (req, res, next) => {
+  handleCandidateMessagesProxy(req, res).catch(next);
+});
+router.post("/llm/v1/messages/count_tokens", (req, res, next) => {
+  handleCandidateCountTokensProxy(req, res).catch(next);
+});
+router.get("/llm/usage", (req, res, next) => {
+  handleCandidateLlmUsage(req, res).catch(next);
+});
 
 // --- Screen recording attached to the capture session (Bearer capture token) ---
 // Chunks go to disk, never the heap: a 50MB timeslice per in-flight request is

@@ -109,6 +109,21 @@ const makeOptionalStarterCodeFilesValidator = () =>
     .isArray()
     .withMessage("starterCodeFiles must be an array");
 
+/**
+ * AI credits (tokens) Bridge provides each candidate. 0 or null turns the
+ * candidate LLM proxy off. Ceiling is a sanity bound, not a product limit —
+ * 200M tokens is far past any single assessment.
+ */
+const makeOptionalCandidateLlmCreditsValidator = () =>
+  body("candidateLlmCredits")
+    .optional({ nullable: true })
+    .isInt({ min: 0, max: 200_000_000 })
+    .withMessage(
+      "candidateLlmCredits must be an integer between 0 and 200000000 (tokens)"
+    )
+    .bail()
+    .toInt();
+
 const makeOptionalEvidenceModeValidator = () =>
   body("evidenceMode")
     .optional()
@@ -161,6 +176,7 @@ export const updateAssessmentValidation = [
   makeOptionalEvaluationCriteriaValidator(),
   makeOptionalStarterCodeFilesValidator(),
   makeOptionalEvidenceModeValidator(),
+  makeOptionalCandidateLlmCreditsValidator(),
 ];
 
 const makeOptionalStackValidator = () =>
