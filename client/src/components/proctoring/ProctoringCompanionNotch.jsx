@@ -68,7 +68,7 @@ const MAX_RECONNECT_ATTEMPTS = 12;
 const PULSE_PREFIX = "[pulse]";
 const PULSE_TEXT =
   "[pulse] Automated cadence signal — the candidate did not say anything.";
-const PULSE_INTERVAL_MS = 120000;
+const PULSE_INTERVAL_MS = 90000;
 const PULSE_CHECK_MS = 15000;
 
 /**

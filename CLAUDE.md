@@ -722,7 +722,7 @@ gives the LLM a turn only when the candidate speaks or the silence turn-timeout 
 again", cancelling that timeout. Since the model ends nearly every turn with `skip_turn`, the
 agent was permanently reactive (observed: 105s of silence, a timeline full of Claude Code
 activity, zero agent turns, zero tool calls). The fix is a client-side **pulse**: the notch
-sends a sentinel user message (`[pulse] …`, `PULSE_INTERVAL_MS` = 120s of no voice activity)
+sends a sentinel user message (`[pulse] …`, `PULSE_INTERVAL_MS` = 90s of no voice activity — was 120s, which a single "okay" reset, so the agent missed the first-prompt window)
 that grants the turn; the prompt's `## Pulses` section tells the agent a `[pulse]` message is
 not the candidate — poll the timeline, then one anchored question or `skip_turn`. Pulse
 sentinels are filtered out of the stored transcript in `onMessage`, so grading and the
@@ -765,6 +765,16 @@ the simplified prompt under-delivers on `claude-haiku-4-5`, the intended lever i
 `AGENT_LLM` in `registerElevenLabsContextTool.ts` (then `--sync-settings`), not re-adding
 rules. The full before/after with the marked-up old prompt lives in the "Companion Prompt
 Atlas" artifact (2026-08-19).
+**v3 (2026-08-20), after the first v2 run:** the v2 cut went one sentence too far — it dropped
+v1's timeline-blindness paragraph, and the agent used absence-of-evidence in a record that
+structurally cannot contain browser activity to cross-examine a candidate who said they had
+tested in Chrome (eight escalating completion questions, "I don't see any record of you
+actually interacting with it in the browser"). The prompt is now ~3.8k chars and two facts in
+it are **load-bearing — never cut in a future simplification**: (1) the timeline shows ONLY
+AI-assistant activity — no browser, no manual testing, no reading; absence is never evidence,
+their word is the record; (2) **at most one follow-up per topic** — a vague or wrong answer
+may be noted once, neutrally, then the agent moves on; it is an elicitor, not a gatekeeper,
+and the reviewer's post-hoc claim-check (communication assessment) does the verifying.
 It carries the same honesty carve-out as the interviewer: never volunteer that the session is
 captured, but never deny it when asked directly (this is about the recording, not the tool —
 the never-mention-your-tooling rule above does not license denying that they are recorded). The overlay is

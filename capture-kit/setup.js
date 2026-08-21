@@ -320,6 +320,11 @@ async function main() {
      🎁 AI credits included: Claude Code is preconfigured to run on
         Bridge's API (budget: ${llmProxy.creditBudget.toLocaleString()} tokens).
         No Anthropic account or subscription needed — just run: claude
+
+        Already signed in to Claude? You may see a notice that your
+        account login isn't being used — that's expected. In this
+        folder Claude Code runs on Bridge's credits; your own login
+        is untouched everywhere else. Verify anytime with /status.
 `
     : "";
 
