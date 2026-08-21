@@ -343,14 +343,10 @@ function ownsSubmissionDoc(
   return false;
 }
 
-/**
- * Owner-delete: the same cleanup as admin delete, gated on presenting this
- * browser's anonymousId and/or a signed-in account that owns the build.
- */
-export async function deleteOwnSubmission(
+async function loadOwnedSubmissionDoc(
   id: string,
   opts: { anonymousId?: string; firebaseUid?: string | null },
-): Promise<DeleteSubmissionResult> {
+) {
   const anonymousId = opts.anonymousId?.trim() || "";
   const firebaseUid = opts.firebaseUid?.trim() || "";
   if (!anonymousId && !firebaseUid) {
@@ -362,7 +358,7 @@ export async function deleteOwnSubmission(
 
   const Submission = getPlaySubmissionModel();
   const doc = await Submission.findById(id).select(
-    "anonymousId firebaseUid",
+    "anonymousId firebaseUid displayName challengeDate",
   );
   if (!doc) {
     throw createHttpError(404, "submission_not_found");
@@ -373,7 +369,53 @@ export async function deleteOwnSubmission(
     throw createHttpError(403, "submission_forbidden");
   }
 
+  return doc;
+}
+
+/**
+ * Owner-delete: the same cleanup as admin delete, gated on presenting this
+ * browser's anonymousId and/or a signed-in account that owns the build.
+ */
+export async function deleteOwnSubmission(
+  id: string,
+  opts: { anonymousId?: string; firebaseUid?: string | null },
+): Promise<DeleteSubmissionResult> {
+  await loadOwnedSubmissionDoc(id, opts);
   return deleteSubmission(id);
+}
+
+export type RenameSubmissionResult = {
+  id: string;
+  displayName: string;
+  challengeDate: string;
+};
+
+/**
+ * Owner-rename: same ownership gate as owner-delete; displayName validated
+ * the same way as submit (trim, 1–40 chars).
+ */
+export async function renameOwnSubmission(
+  id: string,
+  opts: {
+    anonymousId?: string;
+    firebaseUid?: string | null;
+    displayName: string;
+  },
+): Promise<RenameSubmissionResult> {
+  const displayName = opts.displayName.trim();
+  if (!displayName || displayName.length > 40) {
+    throw createHttpError(400, "displayName must be 1–40 characters");
+  }
+
+  const doc = await loadOwnedSubmissionDoc(id, opts);
+  doc.displayName = displayName;
+  await doc.save();
+
+  return {
+    id: String(doc._id),
+    displayName: doc.displayName,
+    challengeDate: doc.challengeDate,
+  };
 }
 
 /**

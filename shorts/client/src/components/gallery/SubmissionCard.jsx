@@ -8,8 +8,15 @@ const TOP_RANK = {
   3: "bg-accent-blue/15 text-accent-blue",
 };
 
-export default function SubmissionCard({ item, onDelete, deleting = false }) {
+export default function SubmissionCard({
+  item,
+  onDelete,
+  onRename,
+  deleting = false,
+  renaming = false,
+}) {
   const rank = item.rank ?? null;
+  const busy = deleting || renaming;
 
   return (
     <article className="punch-card-sm overflow-hidden transition-transform duration-150 hover:-translate-y-1">
@@ -51,16 +58,28 @@ export default function SubmissionCard({ item, onDelete, deleting = false }) {
           </div>
         </div>
       </Link>
-      {onDelete ? (
-        <div className="border-t border-line px-4 py-2">
-          <button
-            type="button"
-            onClick={() => onDelete(item)}
-            disabled={deleting}
-            className="label-mono hover:text-ink disabled:opacity-50"
-          >
-            Delete
-          </button>
+      {onDelete || onRename ? (
+        <div className="flex items-center gap-3 border-t border-line px-4 py-2">
+          {onRename ? (
+            <button
+              type="button"
+              onClick={() => onRename(item)}
+              disabled={busy}
+              className="label-mono hover:text-ink disabled:opacity-50"
+            >
+              Rename
+            </button>
+          ) : null}
+          {onDelete ? (
+            <button
+              type="button"
+              onClick={() => onDelete(item)}
+              disabled={busy}
+              className="label-mono hover:text-ink disabled:opacity-50"
+            >
+              Delete
+            </button>
+          ) : null}
         </div>
       ) : null}
     </article>

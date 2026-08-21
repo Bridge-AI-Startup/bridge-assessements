@@ -721,6 +721,32 @@ async function loadOwnedActiveSession(sessionId: string, anonymousId: string) {
 }
 
 /**
+ * Abandon an in-progress build: kill the E2B sandbox (if any) and mark the
+ * session expired so it frees a concurrent seat. Serverless sessions only need
+ * the status flip. Idempotent when already expired/failed.
+ */
+export async function cancelPlayBuildSession(
+  sessionId: string,
+  anonymousId: string,
+): Promise<{ cancelled: boolean }> {
+  const BuildSession = getPlayBuildSessionModel();
+  const doc = await BuildSession.findById(sessionId);
+  if (!doc) throw createHttpError(404, "session_not_found");
+  if (doc.anonymousId !== anonymousId.trim()) {
+    throw createHttpError(403, "session_forbidden");
+  }
+  if (doc.status === "submitted") {
+    throw createHttpError(400, "session_already_submitted");
+  }
+  if (doc.status === "expired" || doc.status === "failed") {
+    return { cancelled: true };
+  }
+  // Unlike pause, cancel always tears down — even mid-turn — so the seat frees.
+  await expireSession(doc, "Cancelled by user");
+  return { cancelled: true };
+}
+
+/**
  * Pause the E2B sandbox while the user leaves Build. Session stays active in Mongo
  * until the challenge round ends; resume reconnects the same box.
  * Paused sessions do not count toward PLAY_MAX_CONCURRENT_SESSIONS.

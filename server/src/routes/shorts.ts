@@ -18,6 +18,7 @@ import {
   publicListSubmissionsValidation,
   previewSubmissionFileValidation,
   deleteOwnSubmissionValidation,
+  renameOwnSubmissionValidation,
   readSessionFileValidation,
   sessionPreviewFileValidation,
   slugParamValidation,
@@ -81,6 +82,11 @@ router.post(
   "/session/:id/pause",
   pauseResumeSessionValidation,
   PlayController.pauseSession,
+);
+router.post(
+  "/session/:id/cancel",
+  pauseResumeSessionValidation,
+  PlayController.cancelSession,
 );
 router.post(
   "/session/:id/resume",
@@ -174,6 +180,12 @@ router.delete(
   optionalAuthToken,
   deleteOwnSubmissionValidation,
   PlayController.deleteOwnSubmissionHandler,
+);
+router.patch(
+  "/submissions/:id",
+  optionalAuthToken,
+  renameOwnSubmissionValidation,
+  PlayController.renameOwnSubmissionHandler,
 );
 router.get("/vote/next", voteNextValidation, PlayController.getVoteNext);
 router.post("/vote", castVoteValidation, PlayController.postVote);

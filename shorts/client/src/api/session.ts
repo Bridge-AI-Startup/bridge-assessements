@@ -217,6 +217,35 @@ export async function pauseSession(
   }
 }
 
+/**
+ * Abandon the build: kill sandbox / free the seat. Client should leave Shorts
+ * after success (Bridge website).
+ */
+export async function cancelSession(
+  sessionId: string,
+): Promise<{ status: "ok" | "error"; message?: string }> {
+  const anonymousId = getOrCreateAnonymousId();
+  try {
+    const res = await post(`/session/${encodeURIComponent(sessionId)}/cancel`, {
+      anonymousId,
+    });
+    if (!res.ok) {
+      const body = await readJsonBody(res);
+      return {
+        status: "error",
+        message: getResponseErrorMessage(body, res.status),
+      };
+    }
+    clearStoredSessionId();
+    return { status: "ok" };
+  } catch (error) {
+    return {
+      status: "error",
+      message: getRequestErrorMessage(error),
+    };
+  }
+}
+
 /** Fire-and-forget pause for pagehide (may use keepalive). */
 export function pauseSessionBeacon(sessionId: string): void {
   const anonymousId = getOrCreateAnonymousId();

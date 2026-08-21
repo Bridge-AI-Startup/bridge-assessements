@@ -47,8 +47,8 @@ function Reel({ value, spinning, accent, label }) {
 
 /**
  * Empty-preview start panel: typing in chat is the main path; the three-reel
- * spin is an optional gag underneath. `chatHint` points at the one composer
- * so we never add a second text box.
+ * spin is an optional gag underneath. After a spin lands, the builder sees the
+ * result and chooses Build that / Spin again — never auto-starts a turn.
  *
  * @param {{
  *   variant?: "hero" | "again",
@@ -74,7 +74,9 @@ export default function DraftRoulette({
     REEL_BANKS[2][0],
   ]);
   const [whirling, setWhirling] = useState([false, false, false]);
-  const [phase, setPhase] = useState("idle"); // idle | spinning | building
+  // idle → spinning → revealed → building (only after "Build that")
+  const [phase, setPhase] = useState("idle");
+  const [landed, setLanded] = useState(null);
   const valuesRef = useRef(values);
   const timersRef = useRef([]);
   const intervalsRef = useRef([]);
@@ -97,8 +99,11 @@ export default function DraftRoulette({
   }, [phase]);
 
   useEffect(() => {
-    if (busy && phase === "spinning") setPhase("building");
-    if (!busy && phase === "building") setPhase("idle");
+    if (busy && phase === "building") return;
+    if (!busy && phase === "building") {
+      setPhase("idle");
+      setLanded(null);
+    }
   }, [busy, phase]);
 
   useEffect(
@@ -116,22 +121,26 @@ export default function DraftRoulette({
     intervalsRef.current = [];
   }
 
+  function landResult(result) {
+    setValues([result.vibe, result.material, result.twist]);
+    setWhirling([false, false, false]);
+    setLanded(result);
+    setPhase("revealed");
+  }
+
   function spin() {
-    if (disabled || busy || phase !== "idle") return;
+    if (disabled || busy || (phase !== "idle" && phase !== "revealed")) return;
     const current = valuesRef.current;
-    const landed = pickSpin(current);
+    const nextLanded = pickSpin(current);
 
     if (prefersReducedMotion()) {
-      setValues([landed.vibe, landed.material, landed.twist]);
-      setPhase("building");
-      onSpinStart?.();
-      onSpin(buildSpinPrompt(landed));
+      landResult(nextLanded);
       return;
     }
 
     setPhase("spinning");
+    setLanded(null);
     setWhirling([true, true, true]);
-    onSpinStart?.();
     clearTimers();
 
     const whirIds = REEL_BANKS.map((bank, i) =>
@@ -154,7 +163,11 @@ export default function DraftRoulette({
           return next;
         });
         const final =
-          i === 0 ? landed.vibe : i === 1 ? landed.material : landed.twist;
+          i === 0
+            ? nextLanded.vibe
+            : i === 1
+              ? nextLanded.material
+              : nextLanded.twist;
         setValues((prev) => {
           const next = [...prev];
           next[i] = final;
@@ -166,16 +179,22 @@ export default function DraftRoulette({
 
     const doneId = setTimeout(() => {
       whirIds.forEach(clearInterval);
-      setWhirling([false, false, false]);
-      setValues([landed.vibe, landed.material, landed.twist]);
-      setPhase("building");
-      onSpin(buildSpinPrompt(landed));
+      landResult(nextLanded);
     }, STOP_AT[2] + 120);
     timersRef.current.push(doneId);
   }
 
-  const locked = disabled || busy || phase !== "idle";
+  function buildLanded() {
+    if (!landed || disabled || busy || phase !== "revealed") return;
+    setPhase("building");
+    onSpinStart?.();
+    onSpin(buildSpinPrompt(landed));
+  }
+
+  const canSpin =
+    !disabled && !busy && (phase === "idle" || phase === "revealed");
   const inMotion = phase === "spinning" || phase === "building";
+  const showResult = phase === "revealed" || phase === "building";
 
   return (
     <section
@@ -186,7 +205,7 @@ export default function DraftRoulette({
       }
       aria-label="Start this build"
     >
-      {!compact && !inMotion ? (
+      {!compact && phase === "idle" ? (
         <>
           <p className="label-mono">First prompt</p>
           <h2 className="mt-2 text-[22px] font-medium leading-tight tracking-tight text-ink sm:text-[26px]">
@@ -198,16 +217,26 @@ export default function DraftRoulette({
         </>
       ) : null}
 
-      {inMotion ? (
+      {phase === "spinning" ? (
         <p className="label-mono text-center" aria-live="polite">
-          {phase === "spinning" ? "Spinning…" : "Building it…"}
+          Spinning…
+        </p>
+      ) : phase === "revealed" ? (
+        <p className="label-mono text-center" aria-live="polite">
+          You got
+        </p>
+      ) : phase === "building" ? (
+        <p className="label-mono text-center" aria-live="polite">
+          Building it…
         </p>
       ) : compact ? (
         <p className="label-mono">Or spin a random draft</p>
       ) : null}
 
       <div
-        className={`grid grid-cols-3 gap-2 ${compact || inMotion ? "mt-3" : "mt-5"}`}
+        className={`grid grid-cols-3 gap-2 ${
+          compact || phase !== "idle" ? "mt-3" : "mt-5"
+        }`}
         aria-live="polite"
       >
         <Reel
@@ -231,26 +260,57 @@ export default function DraftRoulette({
       </div>
 
       <div className={`flex flex-col items-center ${compact ? "mt-3" : "mt-5"}`}>
-        <button
-          type="button"
-          onClick={spin}
-          disabled={locked}
-          className={`btn-pill ${compact ? "px-5 py-2.5" : "px-8 py-3 text-[12px] shadow-[4px_4px_0_#F59E0B]"}`}
-        >
-          {phase === "spinning"
-            ? "Spinning…"
-            : phase === "building"
-              ? "Building it…"
-              : "Spin a random draft"}
-        </button>
-        {!inMotion ? (
-          <p className="mt-2 text-center text-xs text-fog-light">
-            Optional — uses credits.
-          </p>
+        {phase === "revealed" ? (
+          <>
+            <p className="mb-3 text-center text-sm font-medium text-ink">
+              {values[0]} · {values[1]} · {values[2]}
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={spin}
+                disabled={!canSpin}
+                className="btn-pill-secondary px-5 py-2.5"
+              >
+                Spin again
+              </button>
+              <button
+                type="button"
+                onClick={buildLanded}
+                disabled={disabled || busy}
+                className={`btn-pill ${compact ? "px-5 py-2.5" : "px-8 py-3 text-[12px] shadow-[4px_4px_0_#F59E0B]"}`}
+              >
+                Build that
+              </button>
+            </div>
+            <p className="mt-2 text-center text-xs text-fog-light">
+              Building uses credits.
+            </p>
+          </>
         ) : (
-          <p className="mt-2 text-center text-xs text-fog-light">
-            {values[0]} · {values[1]} · {values[2]}
-          </p>
+          <>
+            <button
+              type="button"
+              onClick={spin}
+              disabled={!canSpin}
+              className={`btn-pill ${compact ? "px-5 py-2.5" : "px-8 py-3 text-[12px] shadow-[4px_4px_0_#F59E0B]"}`}
+            >
+              {phase === "spinning"
+                ? "Spinning…"
+                : phase === "building"
+                  ? "Building it…"
+                  : "Spin a random draft"}
+            </button>
+            {!inMotion ? (
+              <p className="mt-2 text-center text-xs text-fog-light">
+                Optional — uses credits when you build.
+              </p>
+            ) : showResult ? (
+              <p className="mt-2 text-center text-xs text-fog-light">
+                {values[0]} · {values[1]} · {values[2]}
+              </p>
+            ) : null}
+          </>
         )}
       </div>
     </section>

@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { deleteOwnSubmission, getSubmission } from "@/api/submissions";
+import {
+  deleteOwnSubmission,
+  getSubmission,
+  renameOwnSubmission,
+} from "@/api/submissions";
 import { shouldFetchSubmissionFiles } from "@/config/submissionPreview";
 import { useSubmissionPreview } from "@/lib/useSubmissionPreview";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
@@ -9,6 +13,7 @@ import ShortsHeader from "@/components/ShortsHeader";
 import ShortsFooter from "@/components/ShortsFooter";
 import ShareBuild from "@/components/ShareBuild";
 import DeleteBuildModal from "@/components/DeleteBuildModal";
+import RenameBuildModal from "@/components/RenameBuildModal";
 
 export default function Submission() {
   const [searchParams] = useSearchParams();
@@ -21,6 +26,9 @@ export default function Submission() {
   const [showDelete, setShowDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState(null);
+  const [showRename, setShowRename] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameError, setRenameError] = useState(null);
   const anonymousId = useMemo(() => getOrCreateAnonymousId(), []);
 
   useEffect(() => {
@@ -81,6 +89,23 @@ export default function Submission() {
     }
   }
 
+  async function confirmRename(nextName) {
+    if (!detail || renaming) return;
+    setRenaming(true);
+    setRenameError(null);
+    try {
+      const result = await renameOwnSubmission(detail.id, nextName);
+      setDetail((prev) =>
+        prev ? { ...prev, displayName: result.displayName } : prev,
+      );
+      setShowRename(false);
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : "Rename failed");
+    } finally {
+      setRenaming(false);
+    }
+  }
+
   return (
     <div className="flex min-h-screen flex-col bg-paper">
       <ShortsHeader active="browse" cta={cta} />
@@ -129,16 +154,28 @@ export default function Submission() {
                   isMine={detail.isMine}
                 />
                 {detail.isMine ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDeleteError(null);
-                      setShowDelete(true);
-                    }}
-                    className="btn-pill-secondary"
-                  >
-                    Delete
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRenameError(null);
+                        setShowRename(true);
+                      }}
+                      className="btn-pill-secondary"
+                    >
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteError(null);
+                        setShowDelete(true);
+                      }}
+                      className="btn-pill-secondary"
+                    >
+                      Delete
+                    </button>
+                  </>
                 ) : null}
               </div>
             </div>
@@ -179,6 +216,19 @@ export default function Submission() {
             if (deleting) return;
             setShowDelete(false);
             setDeleteError(null);
+          }}
+        />
+      )}
+      {showRename && detail && (
+        <RenameBuildModal
+          displayName={detail.displayName}
+          renaming={renaming}
+          error={renameError}
+          onConfirm={(next) => void confirmRename(next)}
+          onClose={() => {
+            if (renaming) return;
+            setShowRename(false);
+            setRenameError(null);
           }}
         />
       )}

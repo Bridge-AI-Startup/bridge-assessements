@@ -17,6 +17,7 @@ import {
 import { getChallengePeriodInfo } from "../../services/shorts/challengePeriod.js";
 import { renderSubmissionSharePage } from "../../services/shorts/sharePage.js";
 import {
+  cancelPlayBuildSession,
   createOrResumeSession,
   getSession as getPlaySession,
   getSessionWorkspaceRevision,
@@ -29,6 +30,7 @@ import {
   deleteSubmission,
   getSubmissionById,
   listSubmissions,
+  renameOwnSubmission,
   submitSession,
   isSubmissionLimitError,
   SUBMISSION_LIMIT_CODE,
@@ -217,6 +219,20 @@ export const pauseSession: RequestHandler = async (req, res, next) => {
   try {
     validationErrorParser(errors);
     const result = await pausePlayBuildSession(
+      String(req.params.id),
+      String(req.body.anonymousId),
+    );
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const cancelSession: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const result = await cancelPlayBuildSession(
       String(req.params.id),
       String(req.body.anonymousId),
     );
@@ -481,6 +497,31 @@ export const deleteOwnSubmissionHandler: RequestHandler = async (
       firebaseUid: uid || null,
     });
     res.status(200).json({ deleted: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const renameOwnSubmissionHandler: RequestHandler = async (
+  req,
+  res,
+  next,
+) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const uid =
+      (req as { user?: { uid?: string } }).user?.uid ||
+      (req.body && typeof req.body.uid === "string" ? req.body.uid : "");
+    const result = await renameOwnSubmission(String(req.params.id), {
+      anonymousId:
+        req.body && typeof req.body.anonymousId === "string"
+          ? req.body.anonymousId
+          : undefined,
+      firebaseUid: uid || null,
+      displayName: String(req.body.displayName),
+    });
+    res.status(200).json({ renamed: true, ...result });
   } catch (error) {
     next(error);
   }

@@ -182,7 +182,7 @@ function useVisualViewportHeight(enabled) {
 
 /**
  * Chat-first Build surface (mobile stream, or desktop chat + live preview).
- * @param {{ variant?: "mobile" | "desktop", headerActions?: import("react").ReactNode }} props
+ * @param {{ variant?: "mobile" | "desktop", headerActions?: import("react").ReactNode, leaveControl?: import("react").ReactNode, cancelModal?: import("react").ReactNode }} props
  */
 export default function ChatFirstBuild({
   variant = "mobile",
@@ -211,10 +211,12 @@ export default function ChatFirstBuild({
   setModelEffort,
   serverless = false,
   onSubmitClick,
+  leaveControl = null,
   chatEndRef,
   submitModal,
   creditsModal,
   creditsKickoff,
+  cancelModal = null,
   onShowCreditsHelp,
 }) {
   const isDesktop = variant === "desktop";
@@ -449,6 +451,7 @@ export default function ChatFirstBuild({
               <button type="button" onClick={onSubmitClick} className="btn-pill">
                 Submit
               </button>
+              {leaveControl}
             </div>
           </div>
         </header>
@@ -549,6 +552,7 @@ export default function ChatFirstBuild({
       {submitModal}
       {creditsModal}
       {creditsKickoff}
+      {cancelModal}
     </>
   );
 }

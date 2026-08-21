@@ -3,12 +3,13 @@ import { Link } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth } from "@/firebase/firebase";
 import { fetchMySubmissions, linkCurrentAnonymousId } from "@/api/account";
-import { deleteOwnSubmission } from "@/api/submissions";
+import { deleteOwnSubmission, renameOwnSubmission } from "@/api/submissions";
 import { useAuth } from "@/lib/useAuth";
 import ShortsHeader from "@/components/ShortsHeader";
 import ShortsFooter from "@/components/ShortsFooter";
 import AccountModal from "@/components/AccountModal";
 import DeleteBuildModal from "@/components/DeleteBuildModal";
+import RenameBuildModal from "@/components/RenameBuildModal";
 import SubmissionCard from "@/components/gallery/SubmissionCard";
 
 export default function MySubmissions() {
@@ -20,6 +21,9 @@ export default function MySubmissions() {
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState(null);
+  const [pendingRename, setPendingRename] = useState(null);
+  const [renaming, setRenaming] = useState(false);
+  const [renameError, setRenameError] = useState(null);
 
   useEffect(() => {
     if (!signedIn) {
@@ -88,6 +92,32 @@ export default function MySubmissions() {
       setDeleteError(err instanceof Error ? err.message : "Delete failed");
     } finally {
       setDeleting(false);
+    }
+  }
+
+  async function confirmRename(nextName) {
+    if (!pendingRename || renaming) return;
+    setRenaming(true);
+    setRenameError(null);
+    try {
+      const result = await renameOwnSubmission(pendingRename.id, nextName);
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              submissions: prev.submissions.map((s) =>
+                s.id === pendingRename.id
+                  ? { ...s, displayName: result.displayName }
+                  : s,
+              ),
+            }
+          : prev,
+      );
+      setPendingRename(null);
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : "Rename failed");
+    } finally {
+      setRenaming(false);
     }
   }
 
@@ -195,10 +225,15 @@ export default function MySubmissions() {
                 <SubmissionCard
                   key={item.id}
                   item={item}
+                  onRename={(build) => {
+                    setRenameError(null);
+                    setPendingRename(build);
+                  }}
                   onDelete={(build) => {
                     setDeleteError(null);
                     setPendingDelete(build);
                   }}
+                  renaming={renaming && pendingRename?.id === item.id}
                   deleting={deleting && pendingDelete?.id === item.id}
                 />
               ))}
@@ -222,6 +257,19 @@ export default function MySubmissions() {
             if (deleting) return;
             setPendingDelete(null);
             setDeleteError(null);
+          }}
+        />
+      )}
+      {pendingRename && (
+        <RenameBuildModal
+          displayName={pendingRename.displayName}
+          renaming={renaming}
+          error={renameError}
+          onConfirm={(next) => void confirmRename(next)}
+          onClose={() => {
+            if (renaming) return;
+            setPendingRename(null);
+            setRenameError(null);
           }}
         />
       )}

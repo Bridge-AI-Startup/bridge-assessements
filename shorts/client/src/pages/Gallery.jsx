@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { listSubmissions, deleteOwnSubmission } from "@/api/submissions";
+import { listSubmissions, deleteOwnSubmission, renameOwnSubmission } from "@/api/submissions";
 import { listPastChallenges } from "@/api/challenges";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
 import {
@@ -11,6 +11,7 @@ import ShortsHeader from "@/components/ShortsHeader";
 import ShortsFooter from "@/components/ShortsFooter";
 import SubmissionCard from "@/components/gallery/SubmissionCard";
 import DeleteBuildModal from "@/components/DeleteBuildModal";
+import RenameBuildModal from "@/components/RenameBuildModal";
 
 export default function Gallery() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -29,6 +30,9 @@ export default function Gallery() {
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState(null);
+  const [pendingRename, setPendingRename] = useState(null);
+  const [renaming, setRenaming] = useState(false);
+  const [renameError, setRenameError] = useState(null);
   const anonymousId = useMemo(() => getOrCreateAnonymousId(), []);
 
   useEffect(() => {
@@ -132,6 +136,28 @@ export default function Gallery() {
       setDeleteError(err instanceof Error ? err.message : "Delete failed");
     } finally {
       setDeleting(false);
+    }
+  }
+
+  function applyRename(id, displayName) {
+    const patch = (list) =>
+      list.map((s) => (s.id === id ? { ...s, displayName } : s));
+    setItems(patch);
+    setMine(patch);
+  }
+
+  async function confirmRename(nextName) {
+    if (!pendingRename || renaming) return;
+    setRenaming(true);
+    setRenameError(null);
+    try {
+      const result = await renameOwnSubmission(pendingRename.id, nextName);
+      applyRename(pendingRename.id, result.displayName);
+      setPendingRename(null);
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : "Rename failed");
+    } finally {
+      setRenaming(false);
     }
   }
 
@@ -294,10 +320,15 @@ export default function Gallery() {
                 <SubmissionCard
                   key={item.id}
                   item={item}
+                  onRename={(build) => {
+                    setRenameError(null);
+                    setPendingRename(build);
+                  }}
                   onDelete={(build) => {
                     setDeleteError(null);
                     setPendingDelete(build);
                   }}
+                  renaming={renaming && pendingRename?.id === item.id}
                   deleting={deleting && pendingDelete?.id === item.id}
                 />
               ))}
@@ -332,6 +363,19 @@ export default function Gallery() {
             if (deleting) return;
             setPendingDelete(null);
             setDeleteError(null);
+          }}
+        />
+      )}
+      {pendingRename && (
+        <RenameBuildModal
+          displayName={pendingRename.displayName}
+          renaming={renaming}
+          error={renameError}
+          onConfirm={(next) => void confirmRename(next)}
+          onClose={() => {
+            if (renaming) return;
+            setPendingRename(null);
+            setRenameError(null);
           }}
         />
       )}

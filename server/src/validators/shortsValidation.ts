@@ -264,6 +264,20 @@ export const deleteOwnSubmissionValidation = [
     .withMessage("anonymousId must be 8–128 characters"),
 ];
 
+export const renameOwnSubmissionValidation = [
+  ...submissionIdParamValidation,
+  body("anonymousId")
+    .optional()
+    .trim()
+    .isLength({ min: 8, max: 128 })
+    .withMessage("anonymousId must be 8–128 characters"),
+  body("displayName")
+    .trim()
+    .notEmpty()
+    .isLength({ min: 1, max: 40 })
+    .withMessage("displayName must be 1–40 characters"),
+];
+
 export const previewSubmissionFileValidation = [
   param("id")
     .trim()

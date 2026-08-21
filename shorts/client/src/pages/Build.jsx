@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { ensureSession, getSession, getWorkspaceRevision, clearStoredSessionId, pauseSession, pauseSessionBeacon, resumeSession } from "@/api/session";
+import { ensureSession, getSession, getWorkspaceRevision, clearStoredSessionId, pauseSession, pauseSessionBeacon, resumeSession, cancelSession } from "@/api/session";
 import { fetchSessionUsage, sendClaudeMessage, waitForClaudeTurn } from "@/api/claude";
 import { submitSession } from "@/api/submit";
 import { useAuth } from "@/lib/useAuth";
@@ -26,6 +26,7 @@ import ChatFirstBuild from "@/components/workspace/ChatFirstBuild";
 import BuildWaitCard from "@/components/workspace/BuildWaitCard";
 import OutOfCreditsModal from "@/components/workspace/OutOfCreditsModal";
 import CreditsKickoffModal from "@/components/workspace/CreditsKickoffModal";
+import CancelBuildModal from "@/components/workspace/CancelBuildModal";
 import {
   compactTokens,
   useTokenDelta,
@@ -449,6 +450,9 @@ export default function Build() {
   const [chatError, setChatError] = useState(null);
   const [spinningDraft, setSpinningDraft] = useState(false);
   const [modelEffort, setModelEffort] = useState(null);
+  const [showCancel, setShowCancel] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState(null);
   const chatEndRef = useRef(null);
   const splitRef = useRef(null);
   const leftColRef = useRef(null);
@@ -1214,6 +1218,19 @@ export default function Build() {
     void sendPrompt(prompt).finally(() => setSpinningDraft(false));
   }
 
+  async function confirmCancelBuild() {
+    if (state.kind !== "ready" || cancelling) return;
+    setCancelling(true);
+    setCancelError(null);
+    const result = await cancelSession(state.session.sessionId);
+    if (result.status !== "ok") {
+      setCancelError(result.message || "Could not leave this build");
+      setCancelling(false);
+      return;
+    }
+    window.location.href = "https://www.bridge-jobs.com";
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     if (state.kind !== "ready" || submitting) return;
@@ -1690,6 +1707,34 @@ export default function Build() {
       />
     ) : null;
 
+  const cancelModalNode =
+    showCancel && state.kind === "ready" ? (
+      <CancelBuildModal
+        cancelling={cancelling}
+        error={cancelError}
+        onConfirm={() => void confirmCancelBuild()}
+        onClose={() => {
+          if (cancelling) return;
+          setShowCancel(false);
+          setCancelError(null);
+        }}
+      />
+    ) : null;
+
+  const leaveBuildButton = (
+    <button
+      type="button"
+      onClick={() => {
+        setCancelError(null);
+        setShowCancel(true);
+      }}
+      disabled={cancelling}
+      className="btn-pill-secondary"
+    >
+      Leave
+    </button>
+  );
+
   const layoutToggle = (
     <LayoutModeToggle mode={layoutMode} onChange={setBuildLayout} />
   );
@@ -1719,10 +1764,12 @@ export default function Build() {
     setModelEffort,
     serverless,
     onSubmitClick: openSubmitModal,
+    leaveControl: leaveBuildButton,
     chatEndRef,
     submitModal,
     creditsModal: creditsModalNode,
     creditsKickoff: creditsKickoffNode,
+    cancelModal: cancelModalNode,
     onShowCreditsHelp: () => openCreditsModal(),
   };
 
@@ -1771,9 +1818,7 @@ export default function Build() {
           >
             Submit
           </button>
-          <Link to="/" className="btn-pill-secondary">
-            Home
-          </Link>
+          {leaveBuildButton}
         </div>
       </header>
 
@@ -1983,6 +2028,7 @@ export default function Build() {
       {submitModal}
       {creditsModalNode}
       {creditsKickoffNode}
+      {cancelModalNode}
     </div>
   );
 }

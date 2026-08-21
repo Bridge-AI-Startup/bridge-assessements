@@ -104,3 +104,27 @@ export async function deleteOwnSubmission(
   }
   return body as DeleteOwnSubmissionResult;
 }
+
+export type RenameOwnSubmissionResult = {
+  renamed: true;
+  id: string;
+  displayName: string;
+  challengeDate: string;
+};
+
+/** Rename one of the caller's builds. Same ownership rules as delete. */
+export async function renameOwnSubmission(
+  id: string,
+  displayName: string,
+): Promise<RenameOwnSubmissionResult> {
+  const anonymousId = getOrCreateAnonymousId();
+  const res = await authPatch(`/submissions/${id}`, {
+    anonymousId,
+    displayName: displayName.trim(),
+  });
+  const body = await readJsonBody(res);
+  if (!res.ok) {
+    throw new Error(getResponseErrorMessage(body, res.status));
+  }
+  return body as RenameOwnSubmissionResult;
+}
