@@ -130,6 +130,13 @@ const BuildSessionSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    /** How many times the builder reset this session to the starter (max 1). */
+    restartsUsed: {
+      type: Number,
+      required: true,
+      default: 0,
+      min: 0,
+    },
     /**
      * Durable in-flight turn. Replaces the in-process Set so a second
      * instance cannot start a colliding build, and so a refresh can poll

@@ -20,12 +20,12 @@ export default function CancelBuildModal({
     <BuildStopModal
       labelledById="cancel-build-title"
       title="Leave this build?"
-      description="This ends the session and takes you to Bridge — you can’t come back to it."
+      description="This ends the session and takes you back to Shorts home — you can’t come back to it."
       note={error}
       actions={[
         { label: "Keep building", onClick: onClose, disabled: cancelling },
         {
-          label: cancelling ? "Leaving…" : "Leave for Bridge",
+          label: cancelling ? "Leaving…" : "Leave for Shorts",
           onClick: onConfirm,
           variant: "primary",
           disabled: cancelling,

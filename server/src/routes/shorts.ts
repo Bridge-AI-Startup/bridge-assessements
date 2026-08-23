@@ -91,6 +91,11 @@ router.post(
   PlayController.cancelSession,
 );
 router.post(
+  "/session/:id/restart",
+  pauseResumeSessionValidation,
+  PlayController.restartSession,
+);
+router.post(
   "/session/:id/resume",
   pauseResumeSessionValidation,
   PlayController.resumeSession,

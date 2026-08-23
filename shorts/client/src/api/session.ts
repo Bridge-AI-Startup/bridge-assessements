@@ -49,6 +49,8 @@ export type PlaySession = {
     output?: string;
     workspaceChanged?: boolean | null;
   } | null;
+  restartsUsed?: number;
+  restartsRemaining?: number;
 };
 
 export type SessionQueueInfo = {
@@ -218,8 +220,8 @@ export async function pauseSession(
 }
 
 /**
- * Abandon the build: kill sandbox / free the seat. Client should leave Shorts
- * after success (Bridge website).
+ * Abandon the build: kill sandbox / free the seat. Client should return to
+ * Shorts home after success.
  */
 export async function cancelSession(
   sessionId: string,
@@ -243,6 +245,23 @@ export async function cancelSession(
       status: "error",
       message: getRequestErrorMessage(error),
     };
+  }
+}
+
+/**
+ * Reset the build to the starter once per session (clears chat + workspace).
+ */
+export async function restartSession(
+  sessionId: string,
+): Promise<SessionResult> {
+  const anonymousId = getOrCreateAnonymousId();
+  try {
+    const res = await post(`/session/${encodeURIComponent(sessionId)}/restart`, {
+      anonymousId,
+    });
+    return parseSessionResponse(res);
+  } catch (error) {
+    return requestFailure(error);
   }
 }
 

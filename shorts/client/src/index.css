@@ -219,6 +219,38 @@ body {
   animation: roulette-land 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
+@keyframes credits-kickoff-arrow-draw {
+  from {
+    stroke-dashoffset: var(--dash, 160);
+    opacity: 0.35;
+  }
+  to {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+@keyframes credits-kickoff-card-pop {
+  from {
+    opacity: 0;
+    transform: rotate(-2deg) translateY(10px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(-2deg) translateY(0) scale(1);
+  }
+}
+
+.credits-kickoff-arrow {
+  stroke-dasharray: var(--dash, 160);
+  animation: credits-kickoff-arrow-draw 700ms cubic-bezier(0.2, 0.8, 0.2, 1)
+    120ms both;
+}
+
+.credits-kickoff-card {
+  animation: credits-kickoff-card-pop 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .vote-backdrop-enter,
   .vote-pane-enter {
@@ -232,6 +264,11 @@ body {
 
   .roulette-whir,
   .roulette-land {
+    animation: none;
+  }
+
+  .credits-kickoff-arrow,
+  .credits-kickoff-card {
     animation: none;
   }
 }

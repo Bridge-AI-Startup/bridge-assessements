@@ -555,3 +555,19 @@ export function assertNotStarterOnly(
     throw new StarterOnlyError();
   }
 }
+
+/** Workspace snapshot used when a build is restarted to the starter. */
+export function starterWorkspaceSnapshot(
+  makeMode: "e2b" | "serverless" = "e2b",
+): Array<{ path: string; content: string }> {
+  if (makeMode === "serverless") {
+    return ["index.html", "style.css", "main.js"].map((path) => ({
+      path,
+      content: STARTER_FILES[path],
+    }));
+  }
+  return Object.entries(STARTER_FILES).map(([path, content]) => ({
+    path,
+    content,
+  }));
+}

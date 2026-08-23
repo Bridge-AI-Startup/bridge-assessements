@@ -412,7 +412,8 @@ server/src/
 - `PATCH /admin/challenges/:slug` -- Update challenge (admin)
 - `POST /session` -- Create or resume E2B build session (`{ anonymousId }`); returns `previewUrl`, `chatMessages`, `expiresAt` (wall-clock build limit); reconnects sandbox or restores `workspaceSnapshot` if box died; provisions Codex `ANTHROPIC_*` + `llmProxyToken`. When running seats are full: **503** `{ code: "session_queue", activeCount, maxConcurrent, estimatedWaitSeconds }` (client waitlist polls)
 - `POST /session/:id/pause` -- Pause E2B sandbox while user leaves Build (`{ anonymousId }`); session stays active until end of UTC day
-- `POST /session/:id/cancel` -- Abandon build (`{ anonymousId }`): kill sandbox, mark session expired so concurrent seats free; client leaves for bridge-jobs.com
+- `POST /session/:id/cancel` -- Abandon build (`{ anonymousId }`): kill sandbox, mark session expired so concurrent seats free; client returns to Shorts home (`/`)
+- `POST /session/:id/restart` -- Reset active build to starter once per session (`restartsUsed` max 1; **409** `restart_limit`); clears chat + workspace, reprovisions E2B / refreshes serverless preview; credits unchanged
 - `POST /session/:id/resume` -- Resume paused sandbox / keep-alive running box; refresh `previewUrl`
 - `GET /session/:id/usage` -- Token meter (`?anonymousId=`) → `{ tokensUsed, tokenBudget, remaining, exhausted }`
 - `GET /session/:id/files` -- List workspace files for Monaco (`?anonymousId=`)

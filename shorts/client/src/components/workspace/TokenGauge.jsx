@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import TokenBreakdown from "@/components/workspace/TokenBreakdown";
+import { CREDITS_METER_ID } from "@/lib/creditsIntro";
 
 const RADIUS = 8;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
@@ -107,6 +108,7 @@ export default function TokenGauge({
       onClick={() => setOpen((v) => !v)}
       aria-expanded={open}
       className={`relative inline-flex items-center gap-1.5 rounded-full border py-0.5 pl-0.5 pr-2 text-left ${palette.shell} ${className}`}
+      id={CREDITS_METER_ID}
       title={`${used.toLocaleString()} of ${budget.toLocaleString()} tokens used (${Math.round(pct)}%) — ${remaining.toLocaleString()} left`}
     >
       <svg

@@ -182,7 +182,7 @@ function useVisualViewportHeight(enabled) {
 
 /**
  * Chat-first Build surface (mobile stream, or desktop chat + live preview).
- * @param {{ variant?: "mobile" | "desktop", headerActions?: import("react").ReactNode, leaveControl?: import("react").ReactNode, cancelModal?: import("react").ReactNode }} props
+ * @param {{ variant?: "mobile" | "desktop", headerActions?: import("react").ReactNode, leaveControl?: import("react").ReactNode, restartControl?: import("react").ReactNode, cancelModal?: import("react").ReactNode, restartModal?: import("react").ReactNode }} props
  */
 export default function ChatFirstBuild({
   variant = "mobile",
@@ -212,11 +212,13 @@ export default function ChatFirstBuild({
   serverless = false,
   onSubmitClick,
   leaveControl = null,
+  restartControl = null,
   chatEndRef,
   submitModal,
   creditsModal,
   creditsKickoff,
   cancelModal = null,
+  restartModal = null,
   onShowCreditsHelp,
 }) {
   const isDesktop = variant === "desktop";
@@ -451,6 +453,7 @@ export default function ChatFirstBuild({
               <button type="button" onClick={onSubmitClick} className="btn-pill">
                 Submit
               </button>
+              {restartControl}
               {leaveControl}
             </div>
           </div>
@@ -496,7 +499,7 @@ export default function ChatFirstBuild({
                 />
                 {showDraftHero ? (
                   <div className="absolute inset-0 z-10 overflow-auto bg-cream px-6 py-10">
-                    <div className="mx-auto flex min-h-full max-w-md items-center">
+                    <div className="mx-auto flex min-h-full max-w-xl items-center">
                       <DraftRoulette
                         variant="hero"
                         chatHint="left"
@@ -553,6 +556,7 @@ export default function ChatFirstBuild({
       {creditsModal}
       {creditsKickoff}
       {cancelModal}
+      {restartModal}
     </>
   );
 }

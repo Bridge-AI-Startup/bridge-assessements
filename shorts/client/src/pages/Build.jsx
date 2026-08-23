@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { ensureSession, getSession, getWorkspaceRevision, clearStoredSessionId, pauseSession, pauseSessionBeacon, resumeSession, cancelSession } from "@/api/session";
+import { ensureSession, getSession, getWorkspaceRevision, clearStoredSessionId, pauseSession, pauseSessionBeacon, resumeSession, cancelSession, restartSession } from "@/api/session";
 import { fetchSessionUsage, sendClaudeMessage, waitForClaudeTurn } from "@/api/claude";
 import { submitSession } from "@/api/submit";
 import { useAuth } from "@/lib/useAuth";
@@ -28,6 +28,7 @@ import BuildWaitCard from "@/components/workspace/BuildWaitCard";
 import OutOfCreditsModal from "@/components/workspace/OutOfCreditsModal";
 import CreditsKickoffModal from "@/components/workspace/CreditsKickoffModal";
 import CancelBuildModal from "@/components/workspace/CancelBuildModal";
+import RestartBuildModal from "@/components/workspace/RestartBuildModal";
 import {
   compactTokens,
   useTokenDelta,
@@ -35,6 +36,12 @@ import {
 import TokenBreakdown from "@/components/workspace/TokenBreakdown";
 import SessionWaitlist from "@/components/SessionWaitlist";
 import DraftRoulette from "@/components/workspace/DraftRoulette";
+import { getOrCreateAnonymousId } from "@/lib/anonymousId";
+import {
+  CREDITS_METER_ID,
+  hasSeenCreditsIntro,
+  markCreditsIntroSeen,
+} from "@/lib/creditsIntro";
 
 const DEFAULT_LEFT_STACK = ["editor", "chat"];
 const DEFAULT_LEFT_SIZES = { editor: 55, chat: 45 };
@@ -216,6 +223,7 @@ function TokenMeter({
   const [open, setOpen] = useState(false);
   return (
     <div
+      id={CREDITS_METER_ID}
       className="relative"
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
@@ -426,7 +434,7 @@ export default function Build() {
   const [displayName, setDisplayName] = useState(() => getDisplayName());
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
-  const { user, signedIn } = useAuth();
+  const { user, signedIn, loading: authLoading } = useAuth();
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [splitPct, setSplitPct] = useState(58);
   const [leftPaneSizes, setLeftPaneSizes] = useState(DEFAULT_LEFT_SIZES);
@@ -454,6 +462,9 @@ export default function Build() {
   const [showCancel, setShowCancel] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState(null);
+  const [showRestart, setShowRestart] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const [restartError, setRestartError] = useState(null);
   const chatEndRef = useRef(null);
   const splitRef = useRef(null);
   const leftColRef = useRef(null);
@@ -598,18 +609,13 @@ export default function Build() {
       outputTokens: session.outputTokensUsed ?? 0,
       llmCalls: 0,
     });
-    const introKey = `shortsCreditsIntro.v1.${session.sessionId}`;
     const isFreshBuild =
       (session.tokensUsed ?? 0) === 0 &&
       restoredMessages.length === 0 &&
       session.currentTurn?.status !== "running";
-    let introSeen = false;
-    try {
-      introSeen = Boolean(sessionStorage.getItem(introKey));
-    } catch {
-      introSeen = false;
+    if (!isFreshBuild) {
+      setShowCreditsIntro(false);
     }
-    setShowCreditsIntro(isFreshBuild && !introSeen);
     if (session.currentTurn?.status === "running") {
       const prompt = session.currentTurn.prompt;
       setChatMessages((prev) => {
@@ -1166,18 +1172,35 @@ export default function Build() {
   }
 
   function dismissCreditsIntro() {
-    if (state.kind === "ready") {
-      try {
-        sessionStorage.setItem(
-          `shortsCreditsIntro.v1.${state.session.sessionId}`,
-          "1",
-        );
-      } catch {
-        /* private mode */
-      }
-    }
+    markCreditsIntroSeen({
+      signedIn,
+      uid: user?.uid,
+      anonymousId: getOrCreateAnonymousId(),
+    });
     setShowCreditsIntro(false);
   }
+
+  useEffect(() => {
+    if (authLoading || state.kind !== "ready") return;
+    const session = state.session;
+    const hasChat =
+      Array.isArray(session.chatMessages) && session.chatMessages.length > 0;
+    const isFreshBuild =
+      (session.tokensUsed ?? 0) === 0 &&
+      !hasChat &&
+      session.currentTurn?.status !== "running";
+    if (!isFreshBuild) {
+      setShowCreditsIntro(false);
+      return;
+    }
+    setShowCreditsIntro(
+      !hasSeenCreditsIntro({
+        signedIn,
+        uid: user?.uid,
+        anonymousId: getOrCreateAnonymousId(),
+      }),
+    );
+  }, [authLoading, signedIn, user?.uid, state]);
 
   /**
    * "Try again" from the out-of-credits pop-up: re-read the meter from the
@@ -1229,7 +1252,41 @@ export default function Build() {
       setCancelling(false);
       return;
     }
-    window.location.href = "https://www.bridge-jobs.com";
+    window.location.href = "/";
+  }
+
+  async function confirmRestartBuild() {
+    if (state.kind !== "ready" || restarting || chatBusy) return;
+    setRestarting(true);
+    setRestartError(null);
+    const result = await restartSession(state.session.sessionId);
+    if (result.status !== "ok") {
+      setRestartError(
+        result.message ||
+          (result.httpStatus === 409
+            ? "You already used your one restart for this build."
+            : "Could not restart this build"),
+      );
+      setRestarting(false);
+      return;
+    }
+    const session = result.session;
+    setState({ kind: "ready", session });
+    setChatMessages(
+      Array.isArray(session.chatMessages)
+        ? session.chatMessages.map((m) => ({
+            role: m.role,
+            text: m.text,
+          }))
+        : [],
+    );
+    setChatInput("");
+    setChatError(null);
+    setSpinningDraft(false);
+    setPreviewTick((tick) => tick + 1);
+    setEditorRefreshKey((key) => key + 1);
+    setRestarting(false);
+    setShowRestart(false);
   }
 
   async function handleSubmit(e) {
@@ -1729,6 +1786,53 @@ export default function Build() {
       />
     ) : null;
 
+  const restartModalNode =
+    showRestart && state.kind === "ready" ? (
+      <RestartBuildModal
+        restarting={restarting}
+        error={restartError}
+        onConfirm={() => void confirmRestartBuild()}
+        onClose={() => {
+          if (restarting) return;
+          setShowRestart(false);
+          setRestartError(null);
+        }}
+      />
+    ) : null;
+
+  const restartsRemaining =
+    state.kind === "ready"
+      ? Math.max(
+          0,
+          state.session.restartsRemaining ??
+            1 - (state.session.restartsUsed ?? 0),
+        )
+      : 0;
+  const canRestart =
+    state.kind === "ready" && restartsRemaining > 0 && !chatBusy && !restarting;
+
+  const restartBuildButton = (
+    <button
+      type="button"
+      onClick={() => {
+        if (!canRestart) return;
+        setRestartError(null);
+        setShowRestart(true);
+      }}
+      disabled={!canRestart || cancelling}
+      title={
+        restartsRemaining <= 0
+          ? "You already used your one restart for this build"
+          : chatBusy
+            ? "Wait for the current turn to finish"
+            : undefined
+      }
+      className="btn-pill-secondary"
+    >
+      Restart
+    </button>
+  );
+
   const leaveBuildButton = (
     <button
       type="button"
@@ -1773,11 +1877,13 @@ export default function Build() {
     serverless,
     onSubmitClick: openSubmitModal,
     leaveControl: leaveBuildButton,
+    restartControl: restartBuildButton,
     chatEndRef,
     submitModal,
     creditsModal: creditsModalNode,
     creditsKickoff: creditsKickoffNode,
     cancelModal: cancelModalNode,
+    restartModal: restartModalNode,
     onShowCreditsHelp: () => openCreditsModal(),
   };
 
@@ -1826,6 +1932,7 @@ export default function Build() {
           >
             Submit
           </button>
+          {restartBuildButton}
           {leaveBuildButton}
         </div>
       </header>
@@ -2011,10 +2118,10 @@ export default function Build() {
                 />
                 {showDraftHero ? (
                   <div className="absolute inset-0 z-10 overflow-auto bg-cream px-6 py-10">
-                    <div className="mx-auto flex min-h-full max-w-md items-center">
+                    <div className="mx-auto flex min-h-full max-w-xl items-center">
                       <DraftRoulette
                         variant="hero"
-                        chatHint="chat"
+                        chatHint="left"
                         busy={chatBusy}
                         disabled={exhausted || chatBusy}
                         onSpin={handleSpinDraft}
@@ -2037,6 +2144,7 @@ export default function Build() {
       {creditsModalNode}
       {creditsKickoffNode}
       {cancelModalNode}
+      {restartModalNode}
     </div>
   );
 }

@@ -195,48 +195,53 @@ export default function DraftRoulette({
     !disabled && !busy && (phase === "idle" || phase === "revealed");
   const inMotion = phase === "spinning" || phase === "building";
   const showResult = phase === "revealed" || phase === "building";
+  const promptHeadline =
+    phase === "idle" ? "Enter first prompt" : "Enter prompt";
 
-  return (
-    <section
-      className={
-        compact
-          ? "punch-card-sm px-4 py-3"
-          : "punch-card -rotate-1 px-5 py-5 sm:px-7 sm:py-6"
-      }
-      aria-label="Start this build"
-    >
-      {!compact && phase === "idle" ? (
-        <>
-          <p className="label-mono">First prompt</p>
-          <h2 className="mt-2 text-[22px] font-medium leading-tight tracking-tight text-ink sm:text-[26px]">
-            Enter your first prompt
-          </h2>
-          <p className="mt-2 text-sm leading-relaxed text-fog">
-            {hintCopy(chatHint)} Or spin a random first draft.
-          </p>
-        </>
+  const promptRail = compact ? (
+    <p className="text-sm font-medium text-ink">{promptHeadline}</p>
+  ) : (
+    <div className="border-l-4 border-accent-amber pl-4 sm:max-w-[11rem] sm:pl-5">
+      <p className="label-mono text-accent-amber">Start here</p>
+      <h2 className="mt-1.5 text-[24px] font-semibold leading-[1.08] tracking-tight text-ink sm:text-[30px]">
+        {promptHeadline}
+      </h2>
+      <p className="mt-2 text-sm leading-relaxed text-fog">
+        {hintCopy(chatHint)}
+      </p>
+      {phase === "idle" ? (
+        <p className="mt-2 text-xs leading-relaxed text-fog-light">
+          <span className="sm:hidden">Or spin a random draft below.</span>
+          <span className="hidden sm:inline">Or spin a random draft on the right.</span>
+        </p>
       ) : null}
+    </div>
+  );
 
+  const rouletteColumn = (
+    <>
       {phase === "spinning" ? (
-        <p className="label-mono text-center" aria-live="polite">
+        <p className="label-mono text-center sm:text-left" aria-live="polite">
           Spinning…
         </p>
       ) : phase === "revealed" ? (
-        <p className="label-mono text-center" aria-live="polite">
+        <p className="label-mono text-center sm:text-left" aria-live="polite">
           You got
         </p>
       ) : phase === "building" ? (
-        <p className="label-mono text-center" aria-live="polite">
+        <p className="label-mono text-center sm:text-left" aria-live="polite">
           Building it…
         </p>
       ) : compact ? (
         <p className="label-mono">Or spin a random draft</p>
-      ) : null}
+      ) : (
+        <p className="label-mono text-center text-fog-light sm:text-left">
+          Optional random draft
+        </p>
+      )}
 
       <div
-        className={`grid grid-cols-3 gap-2 ${
-          compact || phase !== "idle" ? "mt-3" : "mt-5"
-        }`}
+        className={`grid grid-cols-3 gap-2 ${compact ? "mt-3" : "mt-3 sm:mt-4"}`}
         aria-live="polite"
       >
         <Reel
@@ -259,13 +264,15 @@ export default function DraftRoulette({
         />
       </div>
 
-      <div className={`flex flex-col items-center ${compact ? "mt-3" : "mt-5"}`}>
+      <div
+        className={`flex flex-col items-center sm:items-stretch ${compact ? "mt-3" : "mt-4 sm:mt-5"}`}
+      >
         {phase === "revealed" ? (
           <>
-            <p className="mb-3 text-center text-sm font-medium text-ink">
+            <p className="mb-3 text-center text-sm font-medium text-ink sm:text-left">
               {values[0]} · {values[1]} · {values[2]}
             </p>
-            <div className="flex flex-wrap items-center justify-center gap-2">
+            <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-start">
               <button
                 type="button"
                 onClick={spin}
@@ -283,7 +290,7 @@ export default function DraftRoulette({
                 Build that
               </button>
             </div>
-            <p className="mt-2 text-center text-xs text-fog-light">
+            <p className="mt-2 text-center text-xs text-fog-light sm:text-left">
               Building uses credits.
             </p>
           </>
@@ -293,7 +300,7 @@ export default function DraftRoulette({
               type="button"
               onClick={spin}
               disabled={!canSpin}
-              className={`btn-pill ${compact ? "px-5 py-2.5" : "px-8 py-3 text-[12px] shadow-[4px_4px_0_#F59E0B]"}`}
+              className={`btn-pill ${compact ? "px-5 py-2.5" : "px-8 py-3 text-[12px] shadow-[4px_4px_0_#F59E0B] sm:self-start"}`}
             >
               {phase === "spinning"
                 ? "Spinning…"
@@ -302,17 +309,40 @@ export default function DraftRoulette({
                   : "Spin a random draft"}
             </button>
             {!inMotion ? (
-              <p className="mt-2 text-center text-xs text-fog-light">
+              <p className="mt-2 text-center text-xs text-fog-light sm:text-left">
                 Optional — uses credits when you build.
               </p>
             ) : showResult ? (
-              <p className="mt-2 text-center text-xs text-fog-light">
+              <p className="mt-2 text-center text-xs text-fog-light sm:text-left">
                 {values[0]} · {values[1]} · {values[2]}
               </p>
             ) : null}
           </>
         )}
       </div>
+    </>
+  );
+
+  return (
+    <section
+      className={
+        compact
+          ? "punch-card-sm px-4 py-3"
+          : "punch-card -rotate-1 px-5 py-5 sm:px-7 sm:py-6"
+      }
+      aria-label="Start this build"
+    >
+      {compact ? (
+        <>
+          {promptRail}
+          {rouletteColumn}
+        </>
+      ) : (
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:gap-6">
+          <div className="flex-shrink-0">{promptRail}</div>
+          <div className="min-w-0 flex-1">{rouletteColumn}</div>
+        </div>
+      )}
     </section>
   );
 }

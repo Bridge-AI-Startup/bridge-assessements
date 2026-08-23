@@ -40,6 +40,26 @@ import {
   serializeCurrentTurn,
   type SessionTurn,
 } from "./turns.js";
+import { starterWorkspaceSnapshot } from "./starterDetection.js";
+
+export const MAX_RESTARTS_PER_BUILD = 1;
+export const RESTART_LIMIT_CODE = "restart_limit" as const;
+export const RESTART_LIMIT_MESSAGE =
+  "You already used your one restart for this build.";
+
+export class RestartLimitError extends Error {
+  readonly statusCode = 409;
+  readonly code = RESTART_LIMIT_CODE;
+
+  constructor() {
+    super(RESTART_LIMIT_MESSAGE);
+    this.name = "RestartLimitError";
+  }
+}
+
+export function isRestartLimitError(err: unknown): err is RestartLimitError {
+  return err instanceof RestartLimitError;
+}
 
 /**
  * Serverless previews are served by this backend, so their URL is only valid
@@ -87,6 +107,8 @@ export type SessionResponse = {
   sandboxPaused?: boolean;
   error?: string;
   currentTurn?: SessionTurn | null;
+  restartsUsed?: number;
+  restartsRemaining?: number;
 };
 
 function getMaxConcurrentSessions(): number {
@@ -175,6 +197,7 @@ function toSessionResponse(
       model?: string;
       effort?: string | null;
     } | null;
+    restartsUsed?: number;
   },
   challenge: PublicChallenge | SessionChallengeSummary,
 ): SessionResponse {
@@ -195,6 +218,11 @@ function toSessionResponse(
     outputTokensUsed: doc.outputTokensUsed ?? 0,
     chatMessages: serializeChatMessages(doc.chatMessages),
     sandboxPaused: Boolean(doc.sandboxPaused),
+    restartsUsed: doc.restartsUsed ?? 0,
+    restartsRemaining: Math.max(
+      0,
+      MAX_RESTARTS_PER_BUILD - (doc.restartsUsed ?? 0),
+    ),
   };
   if (doc.previewUrl) result.previewUrl = doc.previewUrl;
   if (doc.expiresAt) result.expiresAt = doc.expiresAt.toISOString();
@@ -744,6 +772,76 @@ export async function cancelPlayBuildSession(
   // Unlike pause, cancel always tears down — even mid-turn — so the seat frees.
   await expireSession(doc, "Cancelled by user");
   return { cancelled: true };
+}
+
+/**
+ * Reset an active build to the starter once per session: clear chat, wipe the
+ * workspace, and reprovision the sandbox (E2B) or refresh the serverless preview.
+ */
+export async function restartPlayBuildSession(
+  sessionId: string,
+  anonymousId: string,
+): Promise<SessionResponse> {
+  const BuildSession = getPlayBuildSessionModel();
+  const doc = await BuildSession.findById(sessionId);
+  if (!doc) throw createHttpError(404, "session_not_found");
+  if (doc.anonymousId !== anonymousId.trim()) {
+    throw createHttpError(403, "session_forbidden");
+  }
+  if (doc.status === "submitted") {
+    throw createHttpError(400, "session_already_submitted");
+  }
+  if (doc.status !== "active") {
+    throw createHttpError(400, "session_not_active");
+  }
+  if (doc.expiresAt && doc.expiresAt.getTime() <= Date.now()) {
+    await expireSession(doc, "Challenge round ended");
+    throw createHttpError(400, "session_expired");
+  }
+
+  await reapStaleTurn(sessionId);
+  const live = (await BuildSession.findById(sessionId)) || doc;
+  if (live.currentTurn?.status === "running") {
+    throw createHttpError(409, "turn_running");
+  }
+
+  const restartsUsed = live.restartsUsed ?? 0;
+  if (restartsUsed >= MAX_RESTARTS_PER_BUILD) {
+    throw new RestartLimitError();
+  }
+
+  const makeMode = live.makeMode === "serverless" ? "serverless" : "e2b";
+  const starterFiles = starterWorkspaceSnapshot(makeMode);
+  live.workspaceSnapshot = starterFiles;
+  live.workspaceSnapshotAt = new Date();
+  live.chatMessages = [];
+  live.set("currentTurn", undefined);
+  live.restartsUsed = restartsUsed + 1;
+  live.error = undefined;
+  await live.save();
+
+  const bySlug = await getChallengeBySlug(live.challengeSlug);
+  const challenge = bySlug
+    ? toChallengeSummary(bySlug)
+    : fallbackChallengeSummary(live);
+
+  if (makeMode === "serverless") {
+    await syncServerlessPreviewUrl(live, anonymousId);
+    return toSessionResponse(live, challenge);
+  }
+
+  const challengeForSandbox: PublicChallenge =
+    bySlug ??
+    ({
+      slug: live.challengeSlug,
+      title: live.challengeSlug,
+      challengeDate: live.challengeDate,
+      tokenBudget: live.tokenBudget,
+      prompt: "",
+      category: "other",
+    } satisfies PublicChallenge);
+  await reprovisionSandboxOnSession(live, challengeForSandbox, anonymousId);
+  return toSessionResponse(live, challenge);
 }
 
 /**

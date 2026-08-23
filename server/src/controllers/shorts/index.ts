@@ -21,8 +21,11 @@ import {
   createOrResumeSession,
   getSession as getPlaySession,
   getSessionWorkspaceRevision,
+  isRestartLimitError,
   isSessionQueueError,
   pausePlayBuildSession,
+  restartPlayBuildSession,
+  RESTART_LIMIT_CODE,
   resumePlayBuildSession,
 } from "../../services/shorts/sessions.js";
 import {
@@ -245,6 +248,27 @@ export const cancelSession: RequestHandler = async (req, res, next) => {
     );
     res.status(200).json(result);
   } catch (error) {
+    next(error);
+  }
+};
+
+export const restartSession: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const session = await restartPlayBuildSession(
+      String(req.params.id),
+      String(req.body.anonymousId),
+    );
+    res.status(200).json(session);
+  } catch (error) {
+    if (isRestartLimitError(error)) {
+      res.status(409).json({
+        code: RESTART_LIMIT_CODE,
+        error: error.message,
+      });
+      return;
+    }
     next(error);
   }
 };
