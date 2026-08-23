@@ -22,6 +22,7 @@ import {
 import WorkspaceEditor from "@/components/workspace/WorkspaceEditor";
 import ModelEffortPicker from "@/components/workspace/ModelEffortPicker";
 import ShareBuild from "@/components/ShareBuild";
+import DownloadBuild from "@/components/DownloadBuild";
 import ChatFirstBuild from "@/components/workspace/ChatFirstBuild";
 import BuildWaitCard from "@/components/workspace/BuildWaitCard";
 import OutOfCreditsModal from "@/components/workspace/OutOfCreditsModal";
@@ -1358,11 +1359,18 @@ export default function Build() {
           </Link>
           {/* Resumed already-submitted sessions don't carry the id — no share. */}
           {state.submissionId ? (
-            <ShareBuild
-              submissionId={state.submissionId}
-              displayName={state.displayName}
-              isMine
-            />
+            <>
+              <ShareBuild
+                submissionId={state.submissionId}
+                displayName={state.displayName}
+                isMine
+              />
+              <DownloadBuild
+                submissionId={state.submissionId}
+                displayName={state.displayName}
+                fileCount={state.fileCount}
+              />
+            </>
           ) : null}
           <Link to="/Gallery" className="btn-pill-secondary">
             Browse rankings

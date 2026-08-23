@@ -264,6 +264,25 @@ export const deleteOwnSubmissionValidation = [
     .withMessage("anonymousId must be 8–128 characters"),
 ];
 
+export const starSubmissionValidation = [
+  ...submissionIdParamValidation,
+  body("anonymousId")
+    .trim()
+    .isLength({ min: 8, max: 128 })
+    .withMessage("anonymousId must be 8–128 characters"),
+];
+
+export const listStarsValidation = [
+  query("anonymousId")
+    .trim()
+    .isLength({ min: 8, max: 128 })
+    .withMessage("anonymousId must be 8–128 characters"),
+  query("idsOnly")
+    .optional()
+    .isBoolean()
+    .withMessage("idsOnly must be a boolean"),
+];
+
 export const renameOwnSubmissionValidation = [
   ...submissionIdParamValidation,
   body("anonymousId")

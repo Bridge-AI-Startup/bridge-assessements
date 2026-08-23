@@ -51,6 +51,12 @@ vi.mock("../../src/models/shorts/vote.js", () => ({
   getPlayVoteModel: () => VoteModel,
   getPlayVoteRoundModel: () => VoteRoundModel,
 }));
+const StarModel = {
+  deleteMany: vi.fn(async () => ({ deletedCount: 0 })),
+};
+vi.mock("../../src/models/shorts/star.js", () => ({
+  getPlayStarModel: () => StarModel,
+}));
 vi.mock("../../src/services/shorts/account.js", () => ({
   linkAnonymousId: vi.fn(async () => ({ linked: true, linkedIds: 1 })),
   getLinkedAnonymousIds,

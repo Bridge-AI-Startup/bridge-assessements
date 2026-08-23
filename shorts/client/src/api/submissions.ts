@@ -1,6 +1,7 @@
 import {
   authDelete,
   authGet,
+  authPatch,
   get,
   getResponseErrorMessage,
   readJsonBody,
@@ -103,6 +104,37 @@ export async function deleteOwnSubmission(
     throw new Error(getResponseErrorMessage(body, res.status));
   }
   return body as DeleteOwnSubmissionResult;
+}
+
+function parseAttachmentFilename(disposition: string | null): string | null {
+  if (!disposition) return null;
+  const match = /filename\*?=(?:UTF-8''|")?([^";]+)"?/i.exec(disposition);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1].trim());
+  } catch {
+    return match[1].trim();
+  }
+}
+
+/**
+ * Fetch a build's files as a downloadable blob. The server picks the shape —
+ * a lone self-contained file downloads as itself, multi-file builds come as a
+ * zip — and names it in Content-Disposition; `filename` is null only when the
+ * browser hides that header, in which case the caller falls back to a
+ * client-side guess.
+ */
+export async function downloadSubmissionArchive(
+  id: string,
+): Promise<{ blob: Blob; filename: string | null }> {
+  const res = await get(`/submissions/${id}/download`);
+  if (!res.ok) {
+    throw new Error(res.status === 404 ? "not_found" : `HTTP ${res.status}`);
+  }
+  const filename = parseAttachmentFilename(
+    res.headers.get("content-disposition"),
+  );
+  return { blob: await res.blob(), filename };
 }
 
 export type RenameOwnSubmissionResult = {

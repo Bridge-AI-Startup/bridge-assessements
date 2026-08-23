@@ -22,6 +22,8 @@ import {
   readSessionFileValidation,
   sessionPreviewFileValidation,
   slugParamValidation,
+  starSubmissionValidation,
+  listStarsValidation,
   submissionIdParamValidation,
   submitSessionValidation,
   updateChallengeValidation,
@@ -168,6 +170,31 @@ router.get(
   "/submissions",
   publicListSubmissionsValidation,
   PlayController.listPublicSubmissions,
+);
+// Private bookmarks ("save this build"): star/unstar + the caller's saved list.
+router.post(
+  "/submissions/:id/star",
+  optionalAuthToken,
+  starSubmissionValidation,
+  PlayController.starSubmissionHandler,
+);
+router.delete(
+  "/submissions/:id/star",
+  optionalAuthToken,
+  starSubmissionValidation,
+  PlayController.unstarSubmissionHandler,
+);
+router.get(
+  "/stars",
+  optionalAuthToken,
+  listStarsValidation,
+  PlayController.listStarsHandler,
+);
+// Grab a build's files: single self-contained file as-is, multi-file as a zip.
+router.get(
+  "/submissions/:id/download",
+  submissionIdParamValidation,
+  PlayController.downloadSubmission,
 );
 router.get(
   "/submissions/:id",

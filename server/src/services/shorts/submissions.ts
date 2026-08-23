@@ -2,6 +2,7 @@ import createHttpError from "http-errors";
 import { Types } from "mongoose";
 import { getPlayBuildSessionModel } from "../../models/shorts/buildSession.js";
 import { getPlaySubmissionModel } from "../../models/shorts/submission.js";
+import { getPlayStarModel } from "../../models/shorts/star.js";
 import {
   getPlayVoteModel,
   getPlayVoteRoundModel,
@@ -457,6 +458,10 @@ export async function deleteSubmission(
       $unset: { [`rankSnapshot.${id}`]: "" },
     },
   );
+
+  // Saved-list bookmarks pointing at this build go with it.
+  const Star = getPlayStarModel();
+  await Star.deleteMany({ submissionId: doc._id });
 
   await doc.deleteOne();
 

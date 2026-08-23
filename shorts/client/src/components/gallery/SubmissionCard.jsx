@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import CardPreview from "@/components/gallery/CardPreview";
+import StarButton from "@/components/StarButton";
 
 /** Podium tint for the top three — everything below is plain. */
 const TOP_RANK = {
@@ -14,6 +15,9 @@ export default function SubmissionCard({
   onRename,
   deleting = false,
   renaming = false,
+  /** Pass both to show the save-star overlay on the preview. */
+  starred = false,
+  onToggleStar = null,
 }) {
   const rank = item.rank ?? null;
   const busy = deleting || renaming;
@@ -34,6 +38,14 @@ export default function SubmissionCard({
             >
               #{rank}
             </span>
+          ) : null}
+          {onToggleStar ? (
+            <StarButton
+              submissionId={item.id}
+              starred={starred}
+              onChange={onToggleStar}
+              className="absolute right-4 top-4"
+            />
           ) : null}
         </div>
         <div className="px-4 pb-4 pt-2">

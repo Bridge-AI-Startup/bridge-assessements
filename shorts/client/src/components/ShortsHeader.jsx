@@ -9,6 +9,7 @@ import bridgeLogo from "@/assets/bridge-logo.svg";
 const NAV = [
   { id: "browse", label: "Browse", to: "/Gallery" },
   { id: "vote", label: "Vote", to: "/Vote" },
+  { id: "saved", label: "Saved", to: "/Saved" },
   { id: "about", label: "About", to: "/About" },
 ];
 

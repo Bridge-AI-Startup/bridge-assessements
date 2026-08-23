@@ -3,6 +3,7 @@ import Build from "./pages/Build";
 import Vote from "./pages/Vote";
 import Gallery from "./pages/Gallery";
 import Submission from "./pages/Submission";
+import Saved from "./pages/Saved";
 import MySubmissions from "./pages/MySubmissions";
 import Admin from "./pages/Admin";
 import QueuePreview from "./pages/QueuePreview";
@@ -14,6 +15,7 @@ export const PAGES = {
   Vote,
   Gallery,
   Submission,
+  Saved,
   MySubmissions,
   About,
   Admin,

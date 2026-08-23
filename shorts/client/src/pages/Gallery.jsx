@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { listSubmissions, deleteOwnSubmission, renameOwnSubmission } from "@/api/submissions";
 import { listPastChallenges } from "@/api/challenges";
+import { fetchStarredIds } from "@/api/stars";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
+import { useAuth } from "@/lib/useAuth";
 import {
   fetchChallengePeriod,
   periodPossessive,
@@ -34,6 +36,31 @@ export default function Gallery() {
   const [renaming, setRenaming] = useState(false);
   const [renameError, setRenameError] = useState(null);
   const anonymousId = useMemo(() => getOrCreateAnonymousId(), []);
+  const { user } = useAuth();
+  const [starredIds, setStarredIds] = useState(() => new Set());
+
+  // Which builds this person has saved — refetched on sign-in so the set
+  // grows to include stars made on linked devices.
+  useEffect(() => {
+    let cancelled = false;
+    fetchStarredIds()
+      .then((ids) => {
+        if (!cancelled) setStarredIds(ids);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.uid]);
+
+  function onToggleStar(submissionId, starred) {
+    setStarredIds((prev) => {
+      const next = new Set(prev);
+      if (starred) next.add(submissionId);
+      else next.delete(submissionId);
+      return next;
+    });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -320,6 +347,8 @@ export default function Gallery() {
                 <SubmissionCard
                   key={item.id}
                   item={item}
+                  starred={starredIds.has(item.id)}
+                  onToggleStar={onToggleStar}
                   onRename={(build) => {
                     setRenameError(null);
                     setPendingRename(build);
@@ -345,7 +374,12 @@ export default function Gallery() {
         {viewMode === "builds" && (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {items.map((item) => (
-              <SubmissionCard key={item.id} item={item} />
+              <SubmissionCard
+                key={item.id}
+                item={item}
+                starred={starredIds.has(item.id)}
+                onToggleStar={onToggleStar}
+              />
             ))}
           </div>
         )}

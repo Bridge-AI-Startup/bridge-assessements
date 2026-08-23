@@ -64,6 +64,13 @@ import {
   writeSessionProjectFile,
 } from "../../services/shorts/workspaceFiles.js";
 import { listPlayModelsPublic } from "../../services/shorts/models.js";
+import archiver from "archiver";
+import {
+  getPlaySubmissionDownloadBundle,
+  renderPlayDownloadAbout,
+  resolvePlayDownloadFileName,
+} from "../../services/shorts/download.js";
+import { listStarred, setStarred } from "../../services/shorts/stars.js";
 
 export const health: RequestHandler = (_req, res) => {
   res.status(200).json({ ok: true, product: "shorts" });
@@ -568,6 +575,113 @@ export const getPublicSubmission: RequestHandler = async (req, res, next) => {
       { includeFiles, firebaseUid },
     );
     res.status(200).json(submission);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/** Shared shape for the star toggle handlers. */
+function starRequestInput(req: Parameters<RequestHandler>[0]) {
+  return {
+    submissionId: String(req.params.id),
+    anonymousId:
+      req.body && typeof req.body.anonymousId === "string"
+        ? req.body.anonymousId
+        : "",
+    firebaseUid: (req as { user?: { uid?: string } }).user?.uid || null,
+  };
+}
+
+export const starSubmissionHandler: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const result = await setStarred({ ...starRequestInput(req), starred: true });
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const unstarSubmissionHandler: RequestHandler = async (
+  req,
+  res,
+  next,
+) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const result = await setStarred({
+      ...starRequestInput(req),
+      starred: false,
+    });
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const listStarsHandler: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const result = await listStarred({
+      anonymousId: String(req.query.anonymousId || ""),
+      firebaseUid: (req as { user?: { uid?: string } }).user?.uid || null,
+      idsOnly: req.query.idsOnly === "true" || req.query.idsOnly === "1",
+    });
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Download a build's files. A single stored file (the common serverless
+ * self-contained index.html) downloads as itself so it opens straight in a
+ * browser; multi-file builds stream as a zip with an ABOUT.txt pointing back
+ * at the submission page. Public, same as the gallery preview.
+ */
+export const downloadSubmission: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const bundle = await getPlaySubmissionDownloadBundle(String(req.params.id));
+    const { kind, fileName } = resolvePlayDownloadFileName(
+      bundle.baseName,
+      bundle.files,
+    );
+
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    // Let the browser fetch()-side read the chosen filename cross-origin.
+    res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
+    res.attachment(fileName);
+
+    if (kind === "file") {
+      res.type(fileName);
+      const contentType = String(res.getHeader("Content-Type") || "");
+      if (!contentType || contentType.includes("application/octet-stream")) {
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      }
+      res.status(200).send(bundle.files[0].content);
+      return;
+    }
+
+    const archive = archiver("zip", { zlib: { level: 9 } });
+    archive.on("error", (err) => {
+      // Headers are likely already flushed — kill the stream so the client
+      // sees a failed download rather than a truncated "valid" zip.
+      res.destroy(err);
+    });
+    archive.pipe(res);
+    archive.append(renderPlayDownloadAbout(bundle), {
+      name: `${bundle.baseName}/ABOUT.txt`,
+    });
+    for (const file of bundle.files) {
+      archive.append(file.content, { name: `${bundle.baseName}/${file.path}` });
+    }
+    await archive.finalize();
   } catch (error) {
     next(error);
   }

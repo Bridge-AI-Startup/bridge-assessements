@@ -12,6 +12,9 @@ import { useAuth } from "@/lib/useAuth";
 import ShortsHeader from "@/components/ShortsHeader";
 import ShortsFooter from "@/components/ShortsFooter";
 import ShareBuild from "@/components/ShareBuild";
+import DownloadBuild from "@/components/DownloadBuild";
+import StarButton from "@/components/StarButton";
+import { fetchStarredIds } from "@/api/stars";
 import DeleteBuildModal from "@/components/DeleteBuildModal";
 import RenameBuildModal from "@/components/RenameBuildModal";
 
@@ -30,6 +33,20 @@ export default function Submission() {
   const [renaming, setRenaming] = useState(false);
   const [renameError, setRenameError] = useState(null);
   const anonymousId = useMemo(() => getOrCreateAnonymousId(), []);
+  const [isStarred, setIsStarred] = useState(false);
+
+  useEffect(() => {
+    if (!id) return undefined;
+    let cancelled = false;
+    fetchStarredIds()
+      .then((ids) => {
+        if (!cancelled) setIsStarred(ids.has(id));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [id, signedIn]);
 
   useEffect(() => {
     if (!id) {
@@ -148,10 +165,21 @@ export default function Submission() {
                 </p>
               </div>
               <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <StarButton
+                  submissionId={detail.id}
+                  starred={isStarred}
+                  onChange={(_, next) => setIsStarred(next)}
+                  variant="pill"
+                />
                 <ShareBuild
                   submissionId={detail.id}
                   displayName={detail.displayName}
                   isMine={detail.isMine}
+                />
+                <DownloadBuild
+                  submissionId={detail.id}
+                  displayName={detail.displayName}
+                  fileCount={detail.fileCount}
                 />
                 {detail.isMine ? (
                   <>

@@ -649,6 +649,51 @@ export async function listOwnerSubmissions(
   }));
 }
 
+/**
+ * Public summaries for an explicit id list (the saved/starred list). Preserves
+ * the caller's id order, silently drops ids whose submission no longer exists,
+ * and ranks each entry within its own round.
+ */
+export async function listSubmissionSummariesByIds(
+  ids: string[],
+  viewer: { anonymousId?: string; firebaseUid?: string | null } = {},
+): Promise<PublicSubmissionSummary[]> {
+  const validIds = [
+    ...new Set(ids.filter((id) => Types.ObjectId.isValid(id))),
+  ];
+  if (validIds.length === 0) return [];
+
+  const Submission = getPlaySubmissionModel();
+  const docs = (await Submission.find({ _id: { $in: validIds } })
+    .select(
+      "anonymousId firebaseUid displayName challengeSlug challengeDate fileCount totalBytes submittedAt ratingMean ratingDeviation rankingScore wins losses matches",
+    )
+    .lean()) as LeanSubmission[];
+  if (docs.length === 0) return [];
+
+  const dates = [...new Set(docs.map((d) => d.challengeDate))];
+  const rankById = new Map<string, number>();
+  for (const date of dates) {
+    const ranked = await loadRankedForDate(date);
+    ranked.forEach((doc, i) => rankById.set(String(doc._id), i + 1));
+  }
+
+  const byId = new Map(docs.map((d) => [String(d._id), d]));
+  const out: PublicSubmissionSummary[] = [];
+  for (const id of validIds) {
+    const doc = byId.get(id);
+    if (!doc) continue;
+    out.push(
+      toPublicSummary(doc, {
+        rank: rankById.get(id),
+        anonymousId: viewer.anonymousId,
+        firebaseUid: viewer.firebaseUid || undefined,
+      }),
+    );
+  }
+  return out;
+}
+
 export async function getPublicSubmissionById(
   id: string,
   anonymousId?: string,
