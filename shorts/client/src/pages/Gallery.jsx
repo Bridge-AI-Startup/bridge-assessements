@@ -114,9 +114,15 @@ export default function Gallery() {
     };
   }, [challengeDate, anonymousId]);
 
-  // Lazy-load the archive the first time the tab is opened.
+  // Lazy-load the archive the first time Past rounds opens, or when viewing
+  // a non-current date so the heading can show that round's title.
   useEffect(() => {
-    if (viewMode !== "rounds" || rounds !== null) return undefined;
+    const needsArchive =
+      viewMode === "rounds" ||
+      (Boolean(challengeDate) &&
+        Boolean(currentRound?.challengeDate) &&
+        challengeDate !== currentRound.challengeDate);
+    if (!needsArchive || rounds !== null) return undefined;
     let cancelled = false;
     (async () => {
       setRoundsError(null);
@@ -134,7 +140,7 @@ export default function Gallery() {
     return () => {
       cancelled = true;
     };
-  }, [viewMode, rounds]);
+  }, [viewMode, rounds, challengeDate, currentRound?.challengeDate]);
 
   function onDateChange(value) {
     setChallengeDate(value);
@@ -148,6 +154,26 @@ export default function Gallery() {
     setViewMode("builds");
     onDateChange(round.challengeDate);
   }
+
+  function backToCurrentRound() {
+    setViewMode("builds");
+    const key = currentRound?.challengeDate || "";
+    if (key) onDateChange(key);
+  }
+
+  const viewingPast =
+    Boolean(challengeDate) &&
+    Boolean(currentRound?.challengeDate) &&
+    challengeDate !== currentRound.challengeDate;
+  const selectedRound = (rounds || []).find(
+    (r) => r.challengeDate === challengeDate,
+  );
+  const buildsTabLabel = viewingPast ? "Past round" : "This round";
+  const voteTo = challengeDate
+    ? viewingPast
+      ? `/Vote?challengeDate=${challengeDate}`
+      : "/Vote"
+    : "/Vote";
 
   async function confirmDelete() {
     if (!pendingDelete || deleting) return;
@@ -188,24 +214,43 @@ export default function Gallery() {
     }
   }
 
-  const possessive = "this round's";
-
   return (
     <div className="flex min-h-screen flex-col bg-paper">
       <ShortsHeader
         active="browse"
-        cta={{ label: "Start voting", to: "/Vote" }}
+        cta={{ label: "Start voting", to: voteTo }}
       />
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
         <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-[28px] font-medium tracking-tight text-ink">
-              Browse builds
+              {viewMode === "rounds"
+                ? "Past rounds"
+                : viewingPast
+                  ? selectedRound?.title || "Past round"
+                  : "This round"}
             </h1>
             <p className="mt-1 text-sm text-fog-light">
               {viewMode === "rounds" ? (
-                <>Every past challenge — open one to see its ranked builds</>
+                <>Every published challenge — open one to see its ranked builds</>
+              ) : viewingPast ? (
+                <>
+                  Looking at a past round
+                  {selectedRound?.title ? (
+                    <>
+                      {" "}
+                      · <span className="text-ink">{selectedRound.title}</span>
+                    </>
+                  ) : null}{" "}
+                  · <span className="font-mono">{challengeDate || "…"}</span>
+                  {total > 0 ? (
+                    <>
+                      {" "}
+                      · {total} build{total === 1 ? "" : "s"}
+                    </>
+                  ) : null}
+                </>
               ) : (
                 <>
                   {total} build{total === 1 ? "" : "s"} for{" "}
@@ -214,11 +259,20 @@ export default function Gallery() {
                 </>
               )}
             </p>
+            {viewMode === "builds" && viewingPast && currentRound?.challengeDate ? (
+              <button
+                type="button"
+                onClick={backToCurrentRound}
+                className="label-mono mt-3 hover:text-ink"
+              >
+                Back to this round →
+              </button>
+            ) : null}
           </div>
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex rounded-xl border border-line p-1">
               {[
-                { id: "builds", label: "This round" },
+                { id: "builds", label: buildsTabLabel },
                 { id: "rounds", label: "Past rounds" },
               ].map((tab) => (
                 <button
@@ -323,11 +377,17 @@ export default function Gallery() {
               No submissions yet
             </p>
             <p className="mt-2 text-sm text-fog-light">
-              Be the first to{" "}
-              <Link to="/Build" className="text-ink underline">
-                build {possessive} challenge
-              </Link>
-              .
+              {viewingPast ? (
+                <>This past round has no builds in the gallery.</>
+              ) : (
+                <>
+                  Be the first to{" "}
+                  <Link to="/Build" className="text-ink underline">
+                    build this round&apos;s challenge
+                  </Link>
+                  .
+                </>
+              )}
             </p>
           </div>
         )}
