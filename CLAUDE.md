@@ -225,6 +225,9 @@ See `server/config.env.example` for the full list. Key variables:
 - `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_PRICE_ID` / `APP_URL` -- Stripe billing
 
 **In-session voice companion (ElevenLabs):**
+- `COMPANION_DIRECTOR_ENABLED` -- Opt-in (`true`) for **director mode**: a server-side loop (`services/companion/director.ts`) watches each live session with a smart Claude model and prepares the interviewer's questions; the voice agent just delivers them. Off = legacy self-directed companion, byte-identical prompt and pulse behavior
+- `COMPANION_DIRECTOR_INTERVAL_MS` -- Director sweep interval (default `30000`)
+- `COMPANION_DIRECTOR_MODEL` -- Claude model for director decisions (default `claude-sonnet-5`; uses `ANTHROPIC_API_KEY` directly)
 - `AGENT_SECRET` -- Authenticates ElevenLabs agent tool requests (sent as `X-Agent-Secret`; stored on ElevenLabs as the workspace secret `bridge_agent_secret` so the tool config never holds it in plaintext). **Required — the agent routes fail closed**: when unset, `/api/agent-tools/*` and `/api/workflow-capture/agent-context` return 503 instead of allowing unauthenticated access (comparison is timing-safe; helpers in `server/src/utils/agentSecret.ts`)
 - `ELEVENLABS_API_KEY` -- Management API key used **only** by `src/scripts/registerElevenLabsContextTool.ts` to create/attach the agent's context tool. Not needed at runtime
 - `ELEVENLABS_AGENT_ID` -- Production agent for that script (falls back to a hardcoded companion agent id)
@@ -329,7 +332,6 @@ server/src/
 │   ├── competition.ts     # Public competitions: get by slug, join (creates pending submission), leaderboard
 │   ├── ops.ts             # Ops workload aggregation (employer attribution for heavy jobs)
 │   ├── billing.ts         # Stripe checkout, status, cancel, reactivate, webhook handler
-│   ├── webhook.ts         # ElevenLabs post-call transcript processing + summary generation
 │   ├── agentTools.ts      # Code context retrieval for ElevenLabs agent (Pinecone search)
 │   └── proctoring.ts      # Proctoring: session CRUD, frame upload, consent, sidecar, transcript generation
 ├── services/
@@ -343,7 +345,10 @@ server/src/
 │   ├── agentContext/
 │   │   └── contextCenter.ts   # Unified budgeted context bundle for the ElevenLabs voice agent (assessment/conversation/timeline/code)
 │   ├── companion/
-│   │   └── firstMessage.ts    # Spoken opener after Start: title + unzip/command walkthrough; resume is a short welcome-back
+│   │   ├── firstMessage.ts    # Spoken opener after Start: title + unzip/command walkthrough; resume is a short welcome-back
+│   │   ├── transcript.ts      # Single reader for the {sessionId}/companion/*.jsonl voice transcript blobs
+│   │   ├── director.ts        # Director loop: per-session cost-gated sweep → briefing publish/supersede/withdraw (COMPANION_DIRECTOR_ENABLED)
+│   │   └── directorModel.ts   # Director system prompt + direct Anthropic call → { shouldSpeak, question, anchorSummary, reason }
 │   ├── behavioralGrading/
 │   │   ├── index.ts           # E2B behavioral grading orchestrator + in-process concurrency queue + in-flight dedupe + boot sweep
 │   │   ├── log.ts             # [behavioral] stdout logger; run context stamps submissionId on every line
@@ -465,6 +470,7 @@ server/src/
     ├── generateShortsOgCard.ts # Regenerate the static Shorts share card PNG (SVG → sharp, 1200×630); needs FONTCONFIG_PATH pointing at Inter + Geist Mono to render in-brand
     ├── shorts-sandbox-smoke.ts # Create Shorts E2B template sandbox; print preview URL + Claude check
     ├── transcriptEngineAB.ts # A/B compare transcript engines (gemini vs frames) on one session, no DB writes; list mode + --plan-only cost preview
+    ├── companionDirectorTick.ts # One-shot companion-director run for prompt iteration: --submission <id> --dry-run (calls the model, persists nothing; works on finished sessions) [--show-context]
     ├── registerElevenLabsContextTool.ts # Register/update the `get_candidate_context` webhook tool and attach it (`--dry-run`, `--local` = dev agent + ngrok-pointed dev tool only (refuses the prod agent), `--prod` = production agent + Render tool (default), `--url=`, `--sync-settings` = also PATCH the code-managed agent LLM `claude-haiku-4-5`, 25s turn timeout, `turn_v3` turn detection, and 7200s conversation cap); idempotent
     ├── createElevenLabsDevAgent.ts # One-time: create the `Interview (dev)` twin agent for --local testing (copies prod config + override switches, strips + deletes the webhook tools ElevenLabs clones on create)
     ├── behavioral-grading-smoke.ts
@@ -634,7 +640,9 @@ Hooks-first capture of the candidate's AI-agent conversation + code changes, as 
 *Companion (in-session voice transcript; candidate token or employer auth for GET):*
 - `POST /sessions/:sessionId/companion/prompt` -- Get system prompt + spoken opener for the ElevenLabs companion (body: token). The prompt is assessment-aware (title only) and explicitly forbids solutions, hints, and code. `firstMessage` is a post-start briefing: check-in, title-only project intro, then unzip / starter repo / Node command (screen share already happened on the previous screen). A remount after the companion has already spoken (`companion.status` active/completed) gets a short welcome-back instead of repeating the briefing.
 - `POST /sessions/:sessionId/companion/messages` -- Record companion transcript messages (body: token, conversationId?, messages[]); one JSONL blob per flush under `{sessionId}/companion/`
-- `POST /sessions/:sessionId/companion/complete` -- Mark the companion conversation finished (body: token)
+- `POST /sessions/:sessionId/companion/complete` -- Mark the companion conversation finished (body: token); also clears any pending director briefing
+- `GET /sessions/:sessionId/companion/briefing` -- **Director mode only.** Notch poll for the director's pending prepared question (`?token=`); `{ briefing: null }` or `{ briefing: { id, directive, createdAt, expiresAt } }`. The `directive` (delivery contract + question) is composed server-side; the client only prepends `"[pulse] "`
+- `POST /sessions/:sessionId/companion/briefing/ack` -- Notch reports a briefing outcome (body: token, briefingId, outcome `delivered`/`dropped`). Filtered on briefingId so an ack for a superseded briefing is a harmless `{ acked: false }`
 - `GET /sessions/:sessionId/companion/transcript` -- Get persisted companion transcript (query token or auth; `?format=jsonl` for raw)
 
 **In-session voice companion.** While the candidate works, an ElevenLabs agent listens and
@@ -767,13 +775,59 @@ the simplified prompt under-delivers on `claude-haiku-4-5`, the intended lever i
 `AGENT_LLM` in `registerElevenLabsContextTool.ts` (then `--sync-settings`), not re-adding
 rules. The full before/after with the marked-up old prompt lives in the "Companion Prompt
 Atlas" artifact (2026-08-19).
+**2026-08-25: split thinking from talking (companion director, `COMPANION_DIRECTOR_ENABLED`).**
+The structural fix for everything above: the voice model was being asked to notice a pulse,
+call the tool, interpret a raw timeline, judge whether a moment deserved a question, and
+phrase it — live, on `claude-haiku-4-5`, inside a voice turn. Director mode moves the
+judgment server-side. A background loop (`services/companion/director.ts`, reaper pattern,
+default 30s tick) watches every `companion.status: "active"` session; a **cost gate** skips
+the LLM entirely when nothing changed since the last decision (no new workflow events, no new
+candidate speech — an idle session costs zero calls). When something did change it feeds
+`claude-sonnet-5` (`services/companion/directorModel.ts`; `effort: "medium"`, `max_tokens`
+4000 — thinking bills against it, 700 emitted zero JSON, the assessmentChat lesson again) the
+context bundle + voice transcript + briefing history and gets `{ shouldSpeak, question,
+anchorSummary, reason }`. A speak decision publishes at most **one** pending briefing on the
+session (`companion.director.currentBriefing`; history `$push` is always `$slice: -40`d —
+never an unbounded array), TTL 4 min; a stay-quiet decision **withdraws** a pending briefing
+(the moment passed). **Deliberately no hard pacing floor** — the model sees
+`minutesSinceLastDelivered` and pacing is its judgment; a floor comes back only if testing
+shows nagging. Delivery reuses the pulse: the notch polls `GET /companion/briefing` on the
+15s ticker and, when the conversation is quiet ≥8s (bare turn-taking mechanics, not an
+interview rule), sends `"[pulse] " + directive` (granting the turn WITH
+the prepared content) and acks — the empty 120s cadence pulse does not run in director mode,
+and the share-lost contextual update is followed by its own turn-forcing pulse since there is
+no cadence to carry it. The voice prompt in this mode is `COMPANION_PROMPT_DIRECTOR_BASE`
+(separate constant; legacy `COMPANION_PROMPT_BASE` stays byte-identical for flag-off): it
+a short purpose-first mouthpiece (never-help, pulse contract, reactive conversation,
+screen-share, don't-repeat-opener), with the tool shrunk to answering "what can you see".
+**Both prompts are deliberately minimal (Saaz, 2026-08-25): purpose over rules** — the old
+companion died by rule accretion, so the director prompt states who it is (a pair-programming
+interviewer capturing how the candidate thinks) and what it receives, and trusts the model on
+pacing, moment selection, and phrasing; specific rules return only when a live run shows a
+specific hole (the regression catalog above is the test list). `DIRECTOR_SYSTEM_PROMPT` is
+where prompt iteration happens:
+`npx tsx src/scripts/companionDirectorTick.ts --submission <id> --dry-run` replays the
+director against any real session (finished ones included, deliberately) and prints the
+decision. First dry-run against the 2026-08-25 Studio Bookings session produced "Claude just
+said all four requirements are implemented and verified end-to-end with its own curl tests —
+how do you know that's actually true?" — anchored, judgment-of-AI-output, exactly the altitude
+the old agent never reached. Ack and supersede both filter on `briefingId` so the slot can't
+be clobbered by the race between them. Unit tests: `server/test/unit/companionDirector.test.ts`.
+
 It carries the same honesty carve-out as the interviewer: never volunteer that the session is
 captured, but never deny it when asked directly (this is about the recording, not the tool —
 the never-mention-your-tooling rule above does not license denying that they are recorded). The overlay is
 [`ProctoringCompanionNotch.jsx`](client/src/components/proctoring/ProctoringCompanionNotch.jsx):
 it auto-starts when mounted with a proctoring `sessionId` + candidate `token`, buffers
 transcript lines in memory, and POSTs them every 10s (a failed flush pushes the lines back
-onto the buffer rather than dropping them). The server `firstMessage` is passed into
+onto the buffer rather than dropping them). **This live flush is the only transcript path —
+there is no ElevenLabs post-call webhook.** `controllers/webhook.ts` (post-call transcript +
+summary) was deleted in `eb48cb05`, and the dashboard webhook that still pointed at the old
+suspended Render service (`bridge-assessements.onrender.com`, 503 on every path) was removed
+in Aug 2026 after ElevenLabs auto-disabled it. Don't re-add one to recover transcripts — the
+notch already has them; a post-call webhook would only be worth building for ElevenLabs' own
+post-call analysis, and would need a new route on `bridge-assessements-1`. The server
+`firstMessage` is passed into
 ElevenLabs as `startSession({ overrides: { agent: { firstMessage } } })` — without that field
 the dashboard default greeting plays. `CandidateAssessment` passes `reshareRequestId`
 so every in-progress stream loss (and resume-after-refresh) calls `sendContextualUpdate`,

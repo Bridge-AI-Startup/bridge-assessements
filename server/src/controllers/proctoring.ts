@@ -24,6 +24,7 @@ import {
   companionSetupPromptNotes,
   type CompanionSetupFacts,
 } from "../services/companion/firstMessage.js";
+import { isCompanionDirectorEnabled } from "../services/companion/director.js";
 
 // POST /api/proctoring/sessions
 export const createSession: RequestHandler = async (req, res, next) => {
@@ -978,6 +979,42 @@ This assessment records their screen, but you cannot see it — your only knowle
 Your spoken opener (who you are, the assignment title, the setup steps) already played. Never repeat it. Recap setup steps only if they ask, once: unzip or open the starter, run the Node command on the page, type agree, open their AI assistant in that folder — and never read out the assignment description, tokens, or URLs.`;
 
 /**
+ * Director-mode companion prompt (COMPANION_DIRECTOR_ENABLED). The
+ * interviewing intelligence lives in the server-side director
+ * (services/companion/directorModel.ts); this voice layer is the mouthpiece.
+ * Deliberately minimal and purpose-first at Saaz's direction (2026-08-25) —
+ * behavior rules get added back only when testing shows a specific hole.
+ * Kept as a SEPARATE constant from COMPANION_PROMPT_BASE so legacy mode
+ * stays byte-identical.
+ */
+const COMPANION_PROMPT_DIRECTOR_BASE = `You are the voice of a pair-programming interviewer sitting alongside a candidate during a coding assessment. Your job is to understand how they think and get them talking about it — warm, brief, genuinely curious, like a colleague watching them work. You never help with the task: no hints, no solutions, no opinions on their approach, even if they ask — you're there to understand, not influence.
+
+A user message starting with \`[pulse]\` is not the candidate — it's your own off-stage thinking arriving, and the candidate never sees or hears it. It usually carries a question worth asking right now: say it naturally, in your own words, then listen. If it clearly isn't the moment (they're mid-sentence, or it was just covered), \`skip_turn\` — it will come back if it still matters. A pulse may instead carry an urgent instruction (for example about screen sharing): follow it immediately. Never mention pulses or anything about how you work behind the scenes.
+
+When the candidate talks to you, respond like a person would: acknowledge, follow up when something is interesting, then let them get back to work. When you have nothing worth saying, say nothing (\`skip_turn\`).
+
+The session is recorded with their consent. If they ask what you can see, or what they or their AI assistant have been doing, call \`get_candidate_context\` with topics ["timeline"] and answer plainly — never deny that you can see their work, and never mention the tool itself. Timeline entries are labeled by actor: "candidate" is what they typed or said; "ai_assistant" is their AI working on its own — don't attribute the assistant's actions to them.
+
+Screen share: you cannot see their screen — your only knowledge of share state is system updates, most recent wins. On a share-lost update, tell them once that they must reshare their entire screen (the full display, not a window or tab); they can't continue without it. Never argue with them about share state.
+
+Your spoken opener already played — never repeat it. Recap setup steps only if they ask, and never read out the assignment description, tokens, or URLs.`;
+
+/**
+ * Wrap a director briefing's question in the delivery contract the voice agent
+ * follows. Composed server-side so the voice-facing wording lives in one
+ * place; the client only prepends "[pulse] ".
+ */
+function composeBriefingDirective(
+  question: string,
+  anchorSummary?: string | null
+): string {
+  // The voice prompt already carries the delivery contract — the directive
+  // just hands over the question and what prompted it.
+  const anchor = anchorSummary?.trim() ? ` (${anchorSummary.trim()})` : "";
+  return `Worth asking now${anchor}: "${question}"`;
+}
+
+/**
  * Dev-only tripwire: the ElevenLabs agent calls its `get_candidate_context`
  * webhook from ElevenLabs' servers, which cannot reach localhost — local voice
  * testing only works while an ngrok tunnel to this server is up. That tunnel
@@ -1053,7 +1090,10 @@ export const getCompanionPrompt: RequestHandler = async (req, res, next) => {
         session.companion?.status === "completed",
     };
 
-    let prompt = COMPANION_PROMPT_BASE;
+    const directorEnabled = isCompanionDirectorEnabled();
+    let prompt = directorEnabled
+      ? COMPANION_PROMPT_DIRECTOR_BASE
+      : COMPANION_PROMPT_BASE;
     const setupNotes = companionSetupPromptNotes(setupFacts);
     if (setupNotes) {
       prompt = `${prompt}\n\n${setupNotes}`;
@@ -1066,7 +1106,116 @@ export const getCompanionPrompt: RequestHandler = async (req, res, next) => {
     res.json({
       prompt,
       firstMessage: buildCompanionFirstMessage(setupFacts),
+      directorEnabled,
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /api/proctoring/sessions/:sessionId/companion/briefing?token=...
+// Candidate-notch poll for the director's pending prepared question.
+export const getCompanionBriefing: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+
+    const { sessionId } = req.params;
+    const token = String(req.query.token ?? "");
+
+    const session = await ProctoringSessionModel.findById(sessionId)
+      .select("token companion.director.currentBriefing")
+      .lean();
+    if (!session) throw ProctoringError.SESSION_NOT_FOUND;
+    if (session.token !== token) {
+      return res.status(403).json({ error: "Invalid token" });
+    }
+
+    const briefing = (session.companion as any)?.director?.currentBriefing;
+    if (
+      !briefing ||
+      briefing.deliveredAt ||
+      new Date(briefing.expiresAt).getTime() <= Date.now()
+    ) {
+      return res.json({ briefing: null });
+    }
+
+    res.json({
+      briefing: {
+        id: briefing.briefingId,
+        directive: composeBriefingDirective(
+          briefing.question,
+          briefing.anchorSummary
+        ),
+        createdAt: briefing.createdAt,
+        expiresAt: briefing.expiresAt,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /api/proctoring/sessions/:sessionId/companion/briefing/ack
+// Notch reports what happened to a briefing it polled. Ack for a briefing that
+// is no longer current is a harmless no-op ({ acked: false }).
+export const ackCompanionBriefing: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+
+    const { sessionId } = req.params;
+    const { token, briefingId, outcome } = req.body as {
+      token: string;
+      briefingId: string;
+      outcome: "delivered" | "dropped";
+    };
+
+    const session = await ProctoringSessionModel.findById(sessionId)
+      .select("token companion.director.currentBriefing")
+      .lean();
+    if (!session) throw ProctoringError.SESSION_NOT_FOUND;
+    if (session.token !== token) {
+      return res.status(403).json({ error: "Invalid token" });
+    }
+
+    const briefing = (session.companion as any)?.director?.currentBriefing;
+    if (!briefing || briefing.briefingId !== briefingId) {
+      return res.json({ acked: false });
+    }
+
+    const now = new Date();
+    const update: Record<string, unknown> = {
+      $set: { "companion.director.currentBriefing": null },
+      $push: {
+        "companion.director.briefingHistory": {
+          $each: [
+            {
+              ...briefing,
+              deliveredAt: outcome === "delivered" ? now : briefing.deliveredAt,
+              outcome,
+            },
+          ],
+          $slice: -40,
+        },
+      },
+    };
+    if (outcome === "delivered") {
+      (update.$set as Record<string, unknown>)[
+        "companion.director.lastDeliveredAt"
+      ] = now;
+    }
+    // Filter on the briefingId so this can't clobber a briefing the director
+    // superseded between our read and this write.
+    const result = await ProctoringSessionModel.updateOne(
+      {
+        _id: sessionId,
+        "companion.director.currentBriefing.briefingId": briefingId,
+      },
+      update
+    );
+
+    res.json({ acked: result.modifiedCount > 0 });
   } catch (error) {
     next(error);
   }
@@ -1142,7 +1291,13 @@ export const completeCompanion: RequestHandler = async (req, res, next) => {
     }
 
     await ProctoringSessionModel.findByIdAndUpdate(sessionId, {
-      $set: { "companion.status": "completed", "companion.endedAt": new Date() },
+      $set: {
+        "companion.status": "completed",
+        "companion.endedAt": new Date(),
+        // The conversation is over — a pending director briefing has no
+        // deliverer any more.
+        "companion.director.currentBriefing": null,
+      },
     });
 
     res.json({ completed: true });

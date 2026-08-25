@@ -620,11 +620,15 @@ export interface CompanionMessage {
 
 /**
  * Get the system prompt + spoken opener for the in-session ElevenLabs companion.
+ * `directorEnabled` tells the notch whether briefing-carrying pulses (director
+ * mode) or the legacy empty cadence pulse should run.
  */
 export async function getCompanionPrompt(
   sessionId: string,
   token: string
-): Promise<APIResult<{ prompt: string; firstMessage?: string }>> {
+): Promise<
+  APIResult<{ prompt: string; firstMessage?: string; directorEnabled?: boolean }>
+> {
   try {
     const response = await post(
       `/proctoring/sessions/${sessionId}/companion/prompt`,
@@ -650,6 +654,54 @@ export async function recordCompanionMessages(
     const response = await post(
       `/proctoring/sessions/${sessionId}/companion/messages`,
       { token, conversationId, messages }
+    );
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+export interface CompanionBriefing {
+  id: string;
+  directive: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+/**
+ * Poll the director's pending prepared question (director mode only).
+ * `briefing` is null when there is nothing to deliver.
+ */
+export async function getCompanionBriefing(
+  sessionId: string,
+  token: string
+): Promise<APIResult<{ briefing: CompanionBriefing | null }>> {
+  try {
+    const response = await get(
+      `/proctoring/sessions/${sessionId}/companion/briefing?token=${encodeURIComponent(token)}`
+    );
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return handleAPIError(error);
+  }
+}
+
+/**
+ * Report what happened to a polled briefing. An ack for a briefing that is no
+ * longer current is a harmless no-op on the server.
+ */
+export async function ackCompanionBriefing(
+  sessionId: string,
+  token: string,
+  briefingId: string,
+  outcome: "delivered" | "dropped"
+): Promise<APIResult<{ acked: boolean }>> {
+  try {
+    const response = await post(
+      `/proctoring/sessions/${sessionId}/companion/briefing/ack`,
+      { token, briefingId, outcome }
     );
     const data = await response.json();
     return { success: true, data };

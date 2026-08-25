@@ -112,6 +112,17 @@ router.post(
   ProctoringValidator.companionCompleteValidation,
   ProctoringController.completeCompanion
 );
+// Director-mode briefing poll + ack (COMPANION_DIRECTOR_ENABLED)
+router.get(
+  "/sessions/:sessionId/companion/briefing",
+  ProctoringValidator.getCompanionBriefingValidation,
+  ProctoringController.getCompanionBriefing
+);
+router.post(
+  "/sessions/:sessionId/companion/briefing/ack",
+  ProctoringValidator.ackCompanionBriefingValidation,
+  ProctoringController.ackCompanionBriefing
+);
 router.get(
   "/sessions/:sessionId/companion/transcript",
   optionalAuthToken,

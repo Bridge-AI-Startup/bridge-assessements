@@ -158,6 +158,49 @@ const ProctoringSessionSchema = new mongoose.Schema(
       startedAt: { type: Date, default: null },
       endedAt: { type: Date, default: null },
       error: { type: String, default: null },
+      /**
+       * Companion director state (COMPANION_DIRECTOR_ENABLED): a server-side
+       * loop watches the session and prepares at most ONE pending question
+       * ("briefing") for the voice agent to deliver. `currentBriefing` is a
+       * single overwritten slot; `briefingHistory` is capped via $slice on
+       * every $push — never an unbounded array.
+       */
+      director: {
+        lastTickAt: { type: Date, default: null },
+        /** WorkflowCaptureSession.lastEventAt at the last LLM decision (cost gate). */
+        lastEventAt: { type: Date, default: null },
+        /** Newest candidate voice timestampMs seen at the last LLM decision. */
+        lastVoiceAt: { type: Number, default: 0 },
+        /** Last time a briefing was ack'd delivered — server-side pacing floor. */
+        lastDeliveredAt: { type: Date, default: null },
+        currentBriefing: {
+          type: {
+            briefingId: { type: String, required: true },
+            question: { type: String, required: true },
+            anchorSummary: { type: String, default: "" },
+            reason: { type: String, default: "" },
+            createdAt: { type: Date, required: true },
+            expiresAt: { type: Date, required: true },
+            deliveredAt: { type: Date, default: null },
+          },
+          default: null,
+        },
+        briefingHistory: [
+          {
+            briefingId: String,
+            question: String,
+            anchorSummary: String,
+            reason: String,
+            createdAt: Date,
+            expiresAt: Date,
+            deliveredAt: Date,
+            outcome: {
+              type: String,
+              enum: ["delivered", "superseded", "expired", "withdrawn", "dropped"],
+            },
+          },
+        ],
+      },
     },
   },
   { timestamps: true }

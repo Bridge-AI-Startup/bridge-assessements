@@ -184,6 +184,41 @@ export const getCompanionTranscriptValidation = [
     .withMessage("sessionId must be a valid MongoDB ObjectId"),
 ];
 
+/** Director briefing poll: candidate token rides in the query string (GET). */
+export const getCompanionBriefingValidation = [
+  param("sessionId")
+    .isMongoId()
+    .withMessage("sessionId must be a valid MongoDB ObjectId"),
+  query("token")
+    .exists()
+    .withMessage("token is required")
+    .bail()
+    .isString()
+    .withMessage("token must be a string")
+    .bail()
+    .notEmpty()
+    .withMessage("token cannot be empty"),
+];
+
+export const ackCompanionBriefingValidation = [
+  ...companionTokenValidation,
+  body("briefingId")
+    .exists()
+    .withMessage("briefingId is required")
+    .bail()
+    .isString()
+    .withMessage("briefingId must be a string")
+    .bail()
+    .notEmpty()
+    .withMessage("briefingId cannot be empty"),
+  body("outcome")
+    .exists()
+    .withMessage("outcome is required")
+    .bail()
+    .isIn(["delivered", "dropped"])
+    .withMessage("outcome must be delivered or dropped"),
+];
+
 export const getPlaybackVideoValidation = [
   param("sessionId")
     .isMongoId()

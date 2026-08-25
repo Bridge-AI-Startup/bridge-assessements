@@ -15,6 +15,8 @@ import {
   recordCompanionMessages,
   completeCompanion,
   beaconCompanionShutdown,
+  getCompanionBriefing,
+  ackCompanionBriefing,
 } from "@/api/proctoring";
 import { cn } from "@/lib/utils";
 
@@ -70,6 +72,25 @@ const PULSE_TEXT =
   "[pulse] Automated cadence signal — the candidate did not say anything.";
 const PULSE_INTERVAL_MS = 120000;
 const PULSE_CHECK_MS = 15000;
+/**
+ * Director mode (server returns `directorEnabled: true` from /companion/prompt):
+ * the empty cadence pulse above is replaced by briefing delivery. A server-side
+ * director watches the session and prepares at most one question; the notch
+ * polls it on the same ticker and, when the conversation is quiet, sends it as
+ * a pulse so the agent gets a turn WITH the prepared content. The [pulse]
+ * prefix keeps delivery out of the stored transcript exactly like the legacy
+ * cadence pulse.
+ */
+// Bare turn-taking mechanics only (don't deliver into an active exchange) —
+// interview pacing is the server-side director's judgment, not a client rule.
+const BRIEFING_QUIET_MS = 8000;
+/**
+ * Director mode only: a contextual update never forces a turn, so with cadence
+ * pulses gone the share-lost nag could sit unspoken on a silent session. This
+ * pulse rides right behind the update to grant the turn.
+ */
+const SHARE_LOST_PULSE_TEXT =
+  "[pulse] The candidate's screen share dropped — deliver the reshare demand from the system update now.";
 
 /**
  * Normalize an ElevenLabs socket event to { role, text, timestampMs }.
@@ -179,6 +200,12 @@ const CompanionPanel = forwardRef(function CompanionPanel(
   const lastVoiceActivityRef = useRef(Date.now());
   /** True while a reconnect is in flight, so onConnect can send the resume update. */
   const reconnectingRef = useRef(false);
+  /** Director mode (from /companion/prompt) — read inside []-keyed tickers via ref. */
+  const directorEnabledRef = useRef(false);
+  /** Last briefing id sent to the agent, so a re-poll never delivers twice. */
+  const lastDeliveredBriefingIdRef = useRef(null);
+  /** One briefing poll in flight at a time. */
+  const briefingPollInFlightRef = useRef(false);
 
   const agentId = import.meta.env?.VITE_ELEVENLABS_AGENT_ID;
 
@@ -195,6 +222,10 @@ const CompanionPanel = forwardRef(function CompanionPanel(
     };
   };
   const overrides = useMemo(() => buildOverrides(config), [config]);
+
+  useEffect(() => {
+    directorEnabledRef.current = Boolean(config?.directorEnabled);
+  }, [config]);
 
   /** Mirrors `screenShareLive` so the queued nag can re-check it on connect. */
   const screenShareLiveRef = useRef(screenShareLive);
@@ -217,6 +248,12 @@ const CompanionPanel = forwardRef(function CompanionPanel(
     try {
       conv.sendContextualUpdate?.(SCREEN_SHARE_LOST_UPDATE);
       lostUpdateDeliveredRef.current = true;
+      // Director mode has no cadence pulses to carry this update onto a turn —
+      // grant one explicitly so the demand is spoken now, not minutes later.
+      if (directorEnabledRef.current) {
+        conv.sendUserMessage?.(SHARE_LOST_PULSE_TEXT);
+        lastVoiceActivityRef.current = Date.now();
+      }
     } catch (err) {
       console.warn("[ProctoringCompanion] reshare contextual update failed:", err);
     }
@@ -449,11 +486,53 @@ const CompanionPanel = forwardRef(function CompanionPanel(
     return () => clearInterval(id);
   }, [sessionId, token, flushBuffer]);
 
-  // Proactive pulse: grant the agent a turn during long candidate silence
-  // (see PULSE_TEXT above — skip_turn otherwise mutes it indefinitely).
+  /**
+   * Director mode: poll the server's prepared question and, when the
+   * conversation is quiet, deliver it as a briefing-carrying pulse. The ack
+   * only lands after a successful send; if anything throws, the server's TTL
+   * expires the briefing and the director re-decides.
+   */
+  const pollAndDeliverBriefing = useCallback(async () => {
+    if (briefingPollInFlightRef.current || !sessionId || !token) return;
+    briefingPollInFlightRef.current = true;
+    try {
+      const result = await getCompanionBriefing(sessionId, token);
+      if (!result.success || endedRef.current) return;
+      const briefing = result.data?.briefing;
+      if (!briefing || briefing.id === lastDeliveredBriefingIdRef.current)
+        return;
+      const conv = conversationRef.current;
+      if (!conv || conv.status !== "connected" || conv.isSpeaking) return;
+      // Don't talk over the candidate: deliver only into a quiet moment. The
+      // briefing stays pending server-side, so the next tick retries until
+      // its TTL expires.
+      if (Date.now() - lastVoiceActivityRef.current < BRIEFING_QUIET_MS) return;
+      conv.sendUserMessage?.(`${PULSE_PREFIX} ${briefing.directive}`);
+      lastDeliveredBriefingIdRef.current = briefing.id;
+      lastVoiceActivityRef.current = Date.now();
+      void ackCompanionBriefing(sessionId, token, briefing.id, "delivered");
+    } catch (e) {
+      console.warn("[ProctoringCompanion] briefing delivery failed:", e);
+    } finally {
+      briefingPollInFlightRef.current = false;
+    }
+  }, [sessionId, token]);
+  const pollAndDeliverBriefingRef = useRef(pollAndDeliverBriefing);
+  useEffect(() => {
+    pollAndDeliverBriefingRef.current = pollAndDeliverBriefing;
+  }, [pollAndDeliverBriefing]);
+
+  // Proactive pulse ticker. Legacy mode: grant the agent a turn during long
+  // candidate silence (see PULSE_TEXT above — skip_turn otherwise mutes it
+  // indefinitely). Director mode: no empty pulses — timing is decided by the
+  // server-side director, and the pulse carries its prepared question instead.
   useEffect(() => {
     const id = setInterval(() => {
       if (endedRef.current) return;
+      if (directorEnabledRef.current) {
+        void pollAndDeliverBriefingRef.current?.();
+        return;
+      }
       const conv = conversationRef.current;
       if (!conv || conv.status !== "connected" || conv.isSpeaking) return;
       if (Date.now() - lastVoiceActivityRef.current < PULSE_INTERVAL_MS) return;

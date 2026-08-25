@@ -29,6 +29,7 @@ import {
 import { errorHandler } from "./errors/handler.js";
 import { isDevLoopbackOrigin } from "./utils/corsOrigins.js";
 import { startAttemptReaper } from "./services/submission/finalizeExpired.js";
+import { startCompanionDirector } from "./services/companion/director.js";
 import { resumeInterruptedMerges } from "./services/capture/sessionVideoMerge.js";
 import { resumeInterruptedEvaluations } from "./controllers/submission.js";
 import { startRuntimeSetupReaper } from "./services/runtimeSetup/index.js";
@@ -546,6 +547,7 @@ const startServer = async () => {
       console.log(`${"=".repeat(60)}\n`);
       startAttemptReaper();
       startRuntimeSetupReaper();
+      startCompanionDirector();
       void resumeInterruptedMerges().catch((err) =>
         console.error("[sessionVideoMerge] resumeInterruptedMerges failed:", err),
       );
