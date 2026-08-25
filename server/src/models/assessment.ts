@@ -52,6 +52,22 @@ const AssessmentSchema = new mongoose.Schema(
     },
 
     /**
+     * AI credits (tokens) Bridge provides each candidate on this assessment.
+     *
+     * When > 0, the capture kit points the candidate's Claude Code at the
+     * candidate LLM proxy (`/api/workflow-capture/llm`) with a per-submission
+     * token; calls run on Bridge's Anthropic key metered against this budget
+     * (input + output tokens). 0 / null = off — candidates use their own
+     * account, exactly as before. Read live at proxy time, so raising it
+     * mid-attempt tops up a candidate immediately.
+     */
+    candidateLlmCredits: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+
+    /**
      * Evidence mode for this assessment — how we observe the candidate working.
      * Offered in the editor: "both" (default) or "none".
      *   "both"     — record the screen for playback, analyse the hook stream

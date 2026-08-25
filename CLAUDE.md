@@ -256,6 +256,9 @@ server endpoint still accepts both topics for other consumers. Agent-creation go
 ElevenLabs clones the source agent's webhook tools on create even when `tool_ids` is stripped
 — `createElevenLabsDevAgent.ts` deletes the clones after creating.
 
+**Candidate LLM proxy (Bridge-provided AI credits):**
+- `CANDIDATE_LLM_PROXY_ENABLED` -- Kill switch for `/api/workflow-capture/llm/*` (default: enabled). The real gate is per-assessment: `candidateLlmCredits` > 0 must be set in the editor before any candidate gets a credential. Proxied calls spend the org `ANTHROPIC_API_KEY`
+
 **Email:**
 - `RESEND_API_KEY` -- Resend email service key
 
@@ -312,6 +315,7 @@ server/src/
 │   ├── submission.ts      # Submission schema (token, candidate info, GitHub repo, scores, LLM workflow)
 │   ├── runtimeSetupSession.ts # Ephemeral E2B box for candidate runtime setup / recruiter replay
 │   ├── repoIndex.ts       # Repository indexing metadata for Pinecone
+│   ├── llmProxyCall.ts    # Per-call receipts from the candidate LLM proxy (tamper-proof record)
 │   └── proctoringSession.ts  # Proctoring session (frames, events, transcript, video chunks)
 ├── routes/
 │   ├── user.ts            # /api/users/* -- create, whoami, delete
@@ -335,6 +339,7 @@ server/src/
 │   └── proctoring.ts      # Proctoring: session CRUD, frame upload, consent, sidecar, transcript generation
 ├── services/
 │   ├── langchainAI.ts     # LangChain abstraction: createChatCompletion(), structured output, provider/model selection
+│   ├── candidateLlmProxy.ts # Bridge-provided AI credits: Anthropic Messages passthrough per submission (metering + receipts)
 │   ├── assessmentGeneration.ts  # 3-step AI assessment generation (extract reqs → generate → quality review)
 │   ├── assessmentChat.ts  # Bridge Assistant: chat → validated assessment updates (see below)
 │   ├── email.ts           # Resend email service for candidate invitations
@@ -468,6 +473,7 @@ server/src/
     ├── transcriptEngineAB.ts # A/B compare transcript engines (gemini vs frames) on one session, no DB writes; list mode + --plan-only cost preview
     ├── registerElevenLabsContextTool.ts # Register/update the `get_candidate_context` webhook tool and attach it (`--dry-run`, `--local` = dev agent + ngrok-pointed dev tool only (refuses the prod agent), `--prod` = production agent + Render tool (default), `--url=`, `--sync-settings` = also PATCH the code-managed agent LLM `claude-haiku-4-5`, 25s turn timeout, `turn_v3` turn detection, and 7200s conversation cap); idempotent
     ├── createElevenLabsDevAgent.ts # One-time: create the `Interview (dev)` twin agent for --local testing (copies prod config + override switches, strips + deletes the webhook tools ElevenLabs clones on create)
+    ├── candidate-llm-proxy-smoke.ts # E2E smoke for Bridge-provided AI credits (needs running dev server; self-cleaning)
     ├── behavioral-grading-smoke.ts
     ├── e2b-smoke.ts
     └── test-assessment-generation.ts
@@ -553,6 +559,13 @@ Hooks-first capture of the candidate's AI-agent conversation + code changes, as 
 - `POST /snapshot` -- changed-file snapshot (Bearer `captureToken`); git when available, else a bounded project walk (unzipped starters often have no repo). Catches hand edits the agent never made
 - `POST /complete` -- close the session (Bearer `captureToken`)
 - `GET /me` -- the candidate's own captured record (Bearer `captureToken`). Transparency feature, not a debug route: the setup disclosure promises they can see exactly what was collected, and this is how that is kept. Backs `capture-kit/view.js`
+
+**Candidate LLM proxy — Bridge-provided AI credits** ([`services/candidateLlmProxy.ts`](server/src/services/candidateLlmProxy.ts)). When an assessment sets `candidateLlmCredits` > 0 (editor → Time & Deadlines → "AI credits"; default off/null), `POST /sessions` also issues a per-submission proxy credential: the response carries `llmProxy: { path: "/api/workflow-capture/llm", token, creditBudget }` **exactly once** — only the SHA-256 of the token is stored (`Submission.llmProxy.tokenHash`, sparse-indexed). `setup.js` writes the token into `.claude/settings.json` as `env.ANTHROPIC_BASE_URL` + `env.ANTHROPIC_AUTH_TOKEN` (the same mechanism Shorts' `claudeProvision.ts` uses in E2B, verified live against a logged-out Claude Code — no Anthropic account needed) and gitignores both `.bridge/` and `.claude/settings.json`, since the settings file now holds a live credential a GitHub submit would otherwise publish. Routes (all Bearer proxy token):
+- `POST /llm/v1/messages` -- Anthropic Messages passthrough (streaming + non-streaming) on the org `ANTHROPIC_API_KEY`; model passed through as requested. Meters `input_tokens + output_tokens` into `Submission.llmProxy` counters and refuses with **429** `credit_budget_exceeded` once usage reaches the budget. The budget is read **live** from `Assessment.candidateLlmCredits` on every call, so raising it in the editor tops up an in-progress candidate immediately (and slashing it cuts them off). Closed attempts (`submitted`/`expired`/`opted-out`) get **403** `attempt_closed`; credentials survive token rotation but usage counters are never reset (re-running setup must not refill spent credits)
+- `POST /llm/v1/messages/count_tokens` -- unmetered passthrough (Claude Code uses it for context management; it still works on an exhausted budget so the tool doesn't degrade while the candidate decides what to do)
+- `GET /llm/usage` -- the candidate's credit meter: `{ creditBudget, tokensUsed, inputTokens, outputTokens, calls, remaining, exhausted }`
+
+Every proxied call writes an **`LlmProxyCall` receipt** (`server/src/models/llmProxyCall.ts`): model, stream flag, upstream status, usage split, request/response SHA-256 + byte sizes, the newest *typed* user text (Claude Code's injected `<system-reminder>`/`<command-` user-role blocks are skipped, kept only as fallback), bounded response text, stop reason. This is the tamper-proof half of the record — written server-side where the candidate cannot intervene without losing model access — while **the hook stream remains the semantic/gradable record**: grading, episodes, metrics, and the interviewer context center are unchanged and read hooks exactly as before. Cross-checking receipts against hook `user_prompt` events is the integrity story; receipts are deliberately not parsed into timeline events (wire-format parsing is the fragile part). Kill switch: `CANDIDATE_LLM_PROXY_ENABLED=false` (default on — per-assessment credits defaulting to off is the real gate). Ops notes: the workflow-capture limiter covers this traffic (8000/15min), and the JSON body limit is raised to 25mb for `/api/workflow-capture/llm/*` only, because Claude Code re-sends the full conversation history on every call. Smoke: `npx tsx --env-file=config.env src/scripts/candidate-llm-proxy-smoke.ts` against a running dev server (two ~16-token haiku calls, self-cleaning).
 - `GET /agent-context` -- **live** context for the ElevenLabs interviewer agent (`X-Agent-Secret`, shared with `/api/agent-tools`): recent conversation in chronological order + current code state, by `submissionToken` or `sessionId`
 - `GET /sessions/:id` -- full timeline for employer review (Firebase auth; ownership-checked via the linked submission; never returns `captureToken`). Each event is stamped with `videoOffsetSeconds` when the submission also has a screen recording, so a reviewer can click a prompt and seek the player to it; response carries a `video` block (merged-recording status/duration). Events outside the recording window get `null`, not a bogus offset
 - `POST /video/start`, `POST /video/chunk` (multipart, field `chunk`), `POST /video/stop` -- leftover kit recorder (Bearer `captureToken`), kept for the local tester. **Refused on `both`** (`409 screen_recorded_by_proctoring`) — that mode already records via proctoring. Sync origin for Review is proctoring `stats.captureStartedAt`, not kit `video.startedAt`. Chunks go to disk via multer diskStorage, never the heap.
@@ -724,7 +737,7 @@ gives the LLM a turn only when the candidate speaks or the silence turn-timeout 
 again", cancelling that timeout. Since the model ends nearly every turn with `skip_turn`, the
 agent was permanently reactive (observed: 105s of silence, a timeline full of Claude Code
 activity, zero agent turns, zero tool calls). The fix is a client-side **pulse**: the notch
-sends a sentinel user message (`[pulse] …`, `PULSE_INTERVAL_MS` = 120s of no voice activity)
+sends a sentinel user message (`[pulse] …`, `PULSE_INTERVAL_MS` = 90s of no voice activity — was 120s, which a single "okay" reset, so the agent missed the first-prompt window)
 that grants the turn; the prompt's `## Pulses` section tells the agent a `[pulse]` message is
 not the candidate — poll the timeline, then one anchored question or `skip_turn`. Pulse
 sentinels are filtered out of the stored transcript in `onMessage`, so grading and the
@@ -767,6 +780,16 @@ the simplified prompt under-delivers on `claude-haiku-4-5`, the intended lever i
 `AGENT_LLM` in `registerElevenLabsContextTool.ts` (then `--sync-settings`), not re-adding
 rules. The full before/after with the marked-up old prompt lives in the "Companion Prompt
 Atlas" artifact (2026-08-19).
+**v3 (2026-08-20), after the first v2 run:** the v2 cut went one sentence too far — it dropped
+v1's timeline-blindness paragraph, and the agent used absence-of-evidence in a record that
+structurally cannot contain browser activity to cross-examine a candidate who said they had
+tested in Chrome (eight escalating completion questions, "I don't see any record of you
+actually interacting with it in the browser"). The prompt is now ~3.8k chars and two facts in
+it are **load-bearing — never cut in a future simplification**: (1) the timeline shows ONLY
+AI-assistant activity — no browser, no manual testing, no reading; absence is never evidence,
+their word is the record; (2) **at most one follow-up per topic** — a vague or wrong answer
+may be noted once, neutrally, then the agent moves on; it is an elicitor, not a gatekeeper,
+and the reviewer's post-hoc claim-check (communication assessment) does the verifying.
 It carries the same honesty carve-out as the interviewer: never volunteer that the session is
 captured, but never deny it when asked directly (this is about the recording, not the tool —
 the never-mention-your-tooling rule above does not license denying that they are recorded). The overlay is
@@ -822,11 +845,12 @@ conversation id comes from `getId()`, and `onMessage` receives **raw socket even
 - Agent tools (`/api/agent-tools/*`): 2000 requests / 15 minutes per IP (separate limiter; calls come from ElevenLabs' servers, so concurrent voice sessions share egress IPs — on the general bucket a busy day 429'd the context tool, which fail-soft turns into a silently mute companion. X-Agent-Secret gated)
 - Shorts API (`/api/shorts/*`, `/api/play/*` except preview): 8000 requests / 15 minutes per IP (separate limiter). Build polls usage + workspace-revision + session; E2B sandboxes hit the LLM proxy from shared egress IPs. On the general 100/15min bucket a real builder 429'd with "Too many requests from this IP" within a couple of minutes
 - Shorts preview (`/api/shorts/preview/*`): 3000 requests / 15 minutes per IP (separate limiter; gallery iframe assets)
+- Workflow capture (`/api/workflow-capture/*`): 8000 requests / 15 minutes per IP (separate limiter; hook posts plus, on credit-funded assessments, every Claude Code model call through the candidate LLM proxy)
 - Auth endpoints (`/api/users/whoami`): 5 requests / 15 minutes per IP
 - Competition join (`POST /api/competitions/:slug/join`): 30 requests / 60 minutes per IP
 
 ### Raw Body Parsing
-`/api/billing/webhook` uses `express.raw()` before `express.json()` to preserve the raw body for Stripe signature verification. This is configured in `server.ts`.
+`/api/billing/webhook` uses `express.raw()` before `express.json()` to preserve the raw body for Stripe signature verification. This is configured in `server.ts`. The JSON body limit is 5mb everywhere except `/api/workflow-capture/llm/*`, which gets 25mb — Claude Code re-sends its entire conversation history on every Messages call.
 
 ### AI Prompts (`server/src/prompts/index.ts`)
 - `PROMPT_EXTRACT_ASSESSMENT_REQUIREMENTS` -- Extract requirements, infer stack/level from job description
@@ -1062,7 +1086,7 @@ Legacy subscription (nested): `subscription.tier` (free/paid), `subscription.str
 Current subscription (top-level): `stripeCustomerId` (sparse indexed), `stripeSubscriptionId` (sparse indexed), `subscriptionStatus` (active/canceled/past_due/trialing/incomplete/incomplete_expired/unpaid/null), `currentPeriodEnd`, `cancelAtPeriodEnd`, `cancellationReason`, `cancellationDate`
 
 ### Assessment
-Fields: `userId` (ref User, indexed), `title` (max 200), `description`, `timeLimit` (minutes, min 1), `starterFilesGitHubLink`, `starterCodeFiles[]` { path, content }, `evidenceMode` (`both` default for new assessments / `none` / leftover `workflow` / leftover `screen` — see below), `behavioralChecks[]` (plain-language observable product behaviors; stack-agnostic), `behavioralCheckSpecs[]` (optional Zod-validated acceptance specs with stable ids; never read raw — resolve via `resolveBehavioralCheckSpecs`), `evaluationCriteria[]` (proctoring/transcript rubric), `evaluationCriteriaGroundings` (optional), `evaluationCriteriaValidations` (optional; persisted per-criterion evaluability verdicts keyed by criterion text + profile — see below)
+Fields: `userId` (ref User, indexed), `title` (max 200), `description`, `timeLimit` (minutes, min 1), `starterFilesGitHubLink`, `starterCodeFiles[]` { path, content }, `candidateLlmCredits` (tokens of Bridge-provided AI credits per candidate; null/0 = off, read live per proxied call — see the candidate LLM proxy section), `evidenceMode` (`both` default for new assessments / `none` / leftover `workflow` / leftover `screen` — see below), `behavioralChecks[]` (plain-language observable product behaviors; stack-agnostic), `behavioralCheckSpecs[]` (optional Zod-validated acceptance specs with stable ids; never read raw — resolve via `resolveBehavioralCheckSpecs`), `evaluationCriteria[]` (proctoring/transcript rubric), `evaluationCriteriaGroundings` (optional), `evaluationCriteriaValidations` (optional; persisted per-criterion evaluability verdicts keyed by criterion text + profile — see below)
 
 **`evidenceMode` — how a candidate's work is observed.** Employer choice in AssessmentEditor's timing panel is **Observe session** (`both`, default) or **None**. `both`: record the screen for human playback and low-res surface classification, and analyse the hook stream — the video is **not** transcribed (no OCR stills, no `TRANSCRIPT_ENGINE=gemini` on that movie). `none`: no screen recording and no capture-kit. `workflow` (hooks only, no screen) and `screen` (video + AI transcript) are leftover values: still honoured for existing assessments, not offered as new choices. Documents with no field still resolve to `screen`. Resolution lives in [`server/src/utils/evidenceMode.ts`](server/src/utils/evidenceMode.ts): the assessment field is returned as-is (`none` / `workflow` / `both` / leftover `screen`). There is no `WORKFLOW_CAPTURE_ENABLED` rewrite — that flag is unused, and `/api/workflow-capture` is always mounted. Never read the raw field client-side; `GET /api/submissions/token/:token` returns the *resolved* `evidenceMode`. The candidate sees the `capture-kit` setup command on the in-progress screen when observation is on (`both` or leftover `workflow`). `ensureProctoringTranscriptAndEvaluate` grades the hook stream for `workflow`/`both`, runs the video transcript for legacy `screen`, and skips observational evaluation for `none`. PNG frames are captured only for leftover `screen` (OCR); `both` still records sidecar events (tab/blur/clipboard/idle/stream_lost — the kit does not).
 
@@ -1102,7 +1126,9 @@ Secret env values are write-only — never returned on GET. Because a blanked se
 
 **`npm ci` without a lockfile.** `resolveInstallCommand` in [`run.ts`](server/src/services/runtimeSetup/run.ts) rewrites a leading `npm ci` / `npm clean-install` to `npm install` when neither `package-lock.json` nor `npm-shrinkwrap.json` exists in the run directory, and logs the substitution. Candidates type `npm ci` from muscle memory against starters that ship `package.json` only (the Standup Board starter does), and npm's `EUSAGE` wall then kills install before anything is fetched — in both candidate setup and recruiter replay, which share this path. Only leading flags may sit between `npm` and `ci`, so a candidate's own `npm run ci` script is never rewritten; a probe that fails leaves the command untouched.
 
-Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`
+Candidate LLM proxy: `llmProxy` { tokenHash (SHA-256 of the bearer credential — raw token never stored), issuedAt, tokensUsed, inputTokensUsed, outputTokensUsed, calls, lastCallAt }. Budget lives on the assessment (`candidateLlmCredits`), not here; counters are cumulative per attempt and survive token rotation. Per-call receipts live in the `LlmProxyCall` collection (`models/llmProxyCall.ts`): model, stream, status, usage split, request/response sha256 + sizes, bounded prompt/response text.
+
+Indexes: `{ assessmentId: 1, status: 1 }`, `{ assessmentId: 1, candidateEmail: 1 }`, `{ candidateEmail: 1 }`, sparse `{ "llmProxy.tokenHash": 1 }`
 
 ### RuntimeSetupSession
 Ephemeral E2B box for candidate setup (`kind: setup`) or recruiter replay (`kind: replay`). Durable record is `Submission.runtimeConfig` + the stored code snapshot.

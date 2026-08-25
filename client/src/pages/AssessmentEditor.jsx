@@ -203,6 +203,9 @@ export default function AssessmentEditor() {
   const [timeLimit, setTimeLimit] = useState({ hours: 4, minutes: 0 });
   // "both" (default) | "none" | leftover "workflow"
   const [evidenceMode, setEvidenceMode] = useState("both");
+  // AI credits (tokens) Bridge provides each candidate; 0 = off.
+  const [candidateLlmCredits, setCandidateLlmCredits] = useState(0);
+  const llmCreditsSaveTimer = useRef(null);
   const [startDeadline, setStartDeadline] = useState(7);
   const [timeLimitSaveTimeout, setTimeLimitSaveTimeout] = useState(null);
   const [starterFilesGitHubLink, setStarterFilesGitHubLink] = useState("");
@@ -369,6 +372,7 @@ export default function AssessmentEditor() {
           ? assessmentData.evidenceMode
           : "both"
       );
+      setCandidateLlmCredits(Number(assessmentData.candidateLlmCredits) || 0);
       if (assessmentData.behavioralChecks?.length) {
         const checks = assessmentData.behavioralChecks.filter(
           (c) => typeof c === "string"
@@ -497,6 +501,14 @@ export default function AssessmentEditor() {
         if (result.data.evidenceMode !== undefined) {
           setEvidenceMode(result.data.evidenceMode);
         }
+        // Skip while a debounced credits save is pending — this response
+        // carries the pre-edit value and would clobber what's being typed.
+        if (
+          result.data.candidateLlmCredits !== undefined &&
+          !llmCreditsSaveTimer.current
+        ) {
+          setCandidateLlmCredits(Number(result.data.candidateLlmCredits) || 0);
+        }
         return result;
       } else {
         const errorMsg =
@@ -547,6 +559,21 @@ export default function AssessmentEditor() {
     if (totalMinutes > 0 && totalMinutes !== assessmentData?.timeLimit) {
       await saveAssessment({ timeLimit: totalMinutes });
     }
+  };
+
+  /**
+   * Set + debounce-save the AI credit budget (tokens). Debounced because the
+   * input fires per keystroke; the server reads the value live per model call,
+   * so the save landing is all that matters.
+   */
+  const setAndSaveLlmCredits = (tokens) => {
+    const clamped = Math.max(0, Math.min(200_000_000, Math.round(tokens) || 0));
+    setCandidateLlmCredits(clamped);
+    if (llmCreditsSaveTimer.current) clearTimeout(llmCreditsSaveTimer.current);
+    llmCreditsSaveTimer.current = setTimeout(() => {
+      llmCreditsSaveTimer.current = null;
+      saveAssessment({ candidateLlmCredits: clamped });
+    }, 800);
   };
 
   /**
@@ -1098,7 +1125,11 @@ export default function AssessmentEditor() {
               onCollapsedChange={(next) =>
                 setSectionCollapsed("timeLimit", next)
               }
-              summary={`${durationLabel} · ${observeLabel}`}
+              summary={`${durationLabel} · ${observeLabel}${
+                candidateLlmCredits > 0
+                  ? ` · ${Math.round((candidateLlmCredits / 1_000_000) * 10) / 10}M AI credits`
+                  : ""
+              }`}
               isActive={false}
               isHighlighted={highlightedSection === "timeLimit"}
               onSelect={() => {}}
@@ -1216,6 +1247,63 @@ export default function AssessmentEditor() {
                       </label>
                     ))}
                   </div>
+                </div>
+
+                {/* Bridge-provided AI credits */}
+                <div className="pt-4 border-t border-gray-100">
+                  <label className="text-sm font-medium text-gray-700 mb-2 block">
+                    AI credits
+                  </label>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Provide Claude for the candidate: their Claude Code runs on
+                    Bridge&apos;s API, metered against this budget, so they
+                    don&apos;t need their own AI subscription. Model calls are
+                    routed through Bridge and logged, which also makes the
+                    captured workflow record independently verifiable. Off
+                    means candidates use their own account, as before.
+                  </p>
+                  <label className="flex items-center gap-3 mb-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={candidateLlmCredits > 0}
+                      onChange={(e) =>
+                        setAndSaveLlmCredits(e.target.checked ? 5_000_000 : 0)
+                      }
+                    />
+                    <span className="text-sm text-gray-700">
+                      Provide AI credits to candidates
+                    </span>
+                  </label>
+                  {candidateLlmCredits > 0 && (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min="0.5"
+                        max="200"
+                        step="0.5"
+                        value={
+                          Math.round((candidateLlmCredits / 1_000_000) * 10) /
+                          10
+                        }
+                        onChange={(e) =>
+                          setAndSaveLlmCredits(
+                            (parseFloat(e.target.value) || 0) * 1_000_000
+                          )
+                        }
+                        className="w-20 text-center border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#21201C]/20 focus:border-[#21201C]"
+                      />
+                      <span className="text-sm text-gray-500">
+                        million tokens per candidate
+                      </span>
+                    </div>
+                  )}
+                  {candidateLlmCredits > 0 && (
+                    <p className="text-xs text-gray-400 mt-2">
+                      Counted as input + output tokens. A focused 60–90 minute
+                      Claude Code session typically uses 2–6M. Raising this
+                      tops up in-progress candidates immediately.
+                    </p>
+                  )}
                 </div>
 
                 {/* Deadline to start */}

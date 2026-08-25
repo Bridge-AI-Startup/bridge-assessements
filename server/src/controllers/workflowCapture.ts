@@ -44,6 +44,12 @@ import {
   agentSecretConfigured,
   agentSecretMatches,
 } from "../utils/agentSecret.js";
+import {
+  candidateLlmProxyEnabled,
+  issueCandidateLlmToken,
+  CANDIDATE_LLM_PROXY_PATH,
+} from "../services/candidateLlmProxy.js";
+import AssessmentModel from "../models/assessment.js";
 
 /** Per-event text cap. Long tool results get truncated, never dropped. */
 const MAX_TEXT_CHARS = 20_000;
@@ -68,7 +74,9 @@ const KIT_EVENT_TYPES = new Set<WorkflowEventType>([
   "notification",
 ]);
 
-const DISCLOSURE_VERSION = "2026-08-12";
+// 2026-08-19: added the AI-credits routing disclosure (model calls proxied
+// through Bridge when the assessment provides credits).
+const DISCLOSURE_VERSION = "2026-08-19";
 
 function truncate(
   value: string | null | undefined,
@@ -113,15 +121,17 @@ export async function createCaptureSession(
 
     let submissionId: mongoose.Types.ObjectId | undefined;
     let nameFromSubmission: string | undefined;
+    let assessmentIdForCredits: mongoose.Types.ObjectId | undefined;
     if (submissionToken) {
       const submission = await SubmissionModel.findOne({ token: submissionToken })
-        .select("_id candidateName status")
+        .select("_id candidateName status assessmentId")
         .lean();
       if (!submission) {
         res.status(404).json({ error: "submission_not_found" });
         return;
       }
       submissionId = (submission as any)._id;
+      assessmentIdForCredits = (submission as any).assessmentId;
       const fromSub =
         typeof (submission as any).candidateName === "string"
           ? String((submission as any).candidateName).trim()
@@ -162,10 +172,45 @@ export async function createCaptureSession(
       environment: environment || undefined,
     });
 
+    // Bridge-provided AI credits: when the assessment funds a token budget,
+    // issue the per-submission proxy credential alongside the capture token.
+    // The raw token appears in this response exactly once — only its hash is
+    // stored (Submission.llmProxy.tokenHash). Setup writes it into
+    // .claude/settings.json as ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN.
+    let llmProxy:
+      | { path: string; token: string; creditBudget: number }
+      | undefined;
+    if (submissionId && assessmentIdForCredits && candidateLlmProxyEnabled()) {
+      try {
+        const assessment: any = await AssessmentModel.findById(
+          assessmentIdForCredits
+        )
+          .select("candidateLlmCredits")
+          .lean();
+        const budget = Number(assessment?.candidateLlmCredits) || 0;
+        if (budget > 0) {
+          const token = await issueCandidateLlmToken(submissionId.toString());
+          llmProxy = {
+            path: CANDIDATE_LLM_PROXY_PATH,
+            token,
+            creditBudget: budget,
+          };
+        }
+      } catch (err) {
+        // Credits are a perk, not a precondition — capture setup must succeed
+        // even if issuing the credential fails.
+        console.error(
+          "[workflow-capture] failed to issue LLM proxy credential:",
+          err instanceof Error ? err.message : err
+        );
+      }
+    }
+
     res.status(201).json({
       sessionId: session._id.toString(),
       captureToken,
       disclosureVersion: DISCLOSURE_VERSION,
+      ...(llmProxy ? { llmProxy } : {}),
     });
   } catch (error) {
     next(error);

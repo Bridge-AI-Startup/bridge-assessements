@@ -265,6 +265,26 @@ const SubmissionSchema = new mongoose.Schema(
       declaredEgressDomains: { type: [String], default: [] },
     },
 
+    /**
+     * Candidate LLM proxy state (Bridge-provided AI credits).
+     *
+     * `tokenHash` is the SHA-256 of the bearer token the capture kit holds —
+     * the raw token is returned exactly once (capture-session creation) and
+     * never stored. Usage counters are cumulative for the attempt and survive
+     * token rotation (re-running setup must not refill spent credits). The
+     * budget itself lives on the assessment (`candidateLlmCredits`), read live
+     * so employers can top up mid-attempt. Per-call receipts: LlmProxyCall.
+     */
+    llmProxy: {
+      tokenHash: { type: String, default: null },
+      issuedAt: { type: Date, default: null },
+      tokensUsed: { type: Number, default: 0 },
+      inputTokensUsed: { type: Number, default: 0 },
+      outputTokensUsed: { type: Number, default: 0 },
+      calls: { type: Number, default: 0 },
+      lastCallAt: { type: Date, default: null },
+    },
+
     runtimeSetup: {
       status: {
         type: String,
@@ -309,6 +329,9 @@ const SubmissionSchema = new mongoose.Schema(
 
 // Index for efficient queries
 SubmissionSchema.index({ assessmentId: 1, status: 1 });
+// Candidate LLM proxy auth: every proxied model call resolves its bearer token
+// through this lookup. Sparse — most submissions never get a proxy token.
+SubmissionSchema.index({ "llmProxy.tokenHash": 1 }, { sparse: true });
 SubmissionSchema.index({ assessmentId: 1, candidateEmail: 1 });
 SubmissionSchema.index({ candidateEmail: 1 });
 

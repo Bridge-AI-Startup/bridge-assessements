@@ -204,11 +204,13 @@ const playPreviewLimiter = rateLimit({
 });
 
 // Workflow capture: one request per AI prompt / tool call from every active
-// candidate. Same shape as proctoring traffic (many small posts), so it gets
-// its own high ceiling rather than eating the general API bucket.
+// candidate — plus, when the assessment provides AI credits, every Claude Code
+// model call through the candidate LLM proxy (/llm/v1/messages). Same shape as
+// proctoring traffic (many small posts), so it gets its own high ceiling
+// rather than eating the general API bucket.
 const workflowCaptureLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5000,
+  max: 8000,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -287,7 +289,13 @@ app.use((req, res, next) => {
   if (contentType.includes("multipart/form-data")) {
     return next();
   }
-  express.json({ limit: "5mb" })(req, res, next);
+  // The candidate LLM proxy carries Claude Code's Messages requests, which
+  // re-send the entire conversation history every call — routinely past 5mb
+  // on a long session. Everything else keeps the 5mb ceiling.
+  const isCandidateLlmProxy = (req.originalUrl || req.url || "").startsWith(
+    "/api/workflow-capture/llm/",
+  );
+  express.json({ limit: isCandidateLlmProxy ? "25mb" : "5mb" })(req, res, next);
 });
 app.use((req, res, next) => {
   const contentType = req.get("Content-Type") || "";
@@ -494,6 +502,8 @@ console.log("     - POST /api/workflow-capture/sessions");
 console.log("     - POST /api/workflow-capture/events");
 console.log("     - POST /api/workflow-capture/snapshot");
 console.log("     - GET  /api/workflow-capture/agent-context");
+console.log("     - POST /api/workflow-capture/llm/v1/messages (candidate AI credits)");
+console.log("     - GET  /api/workflow-capture/llm/usage");
 
 app.use("/api", apiLimiter);
 app.use("/api", evaluationRoutes);
