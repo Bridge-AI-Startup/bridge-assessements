@@ -4,10 +4,7 @@ import { castVote, fetchVoteNext } from "@/api/vote";
 import { shouldFetchSubmissionFiles } from "@/config/submissionPreview";
 import { useSubmissionPreview } from "@/lib/useSubmissionPreview";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
-import {
-  fetchChallengePeriod,
-  periodNoun,
-} from "@/lib/challengePeriod";
+import { fetchCurrentRound } from "@/lib/currentRound";
 import ShortsHeader from "@/components/ShortsHeader";
 
 function PreviewPane({ card, side, label, onPick, disabled }) {
@@ -201,7 +198,6 @@ export default function Vote() {
   const [searchParams] = useSearchParams();
   const preferId = searchParams.get("preferId") || undefined;
   const urlDate = searchParams.get("challengeDate");
-  const [period, setPeriod] = useState(null);
   const [challengeDate, setChallengeDate] = useState(urlDate || "");
   const anonymousId = useMemo(() => getOrCreateAnonymousId(), []);
 
@@ -213,13 +209,27 @@ export default function Vote() {
     let cancelled = false;
     (async () => {
       try {
-        const p = await fetchChallengePeriod();
+        const p = await fetchCurrentRound();
         if (cancelled) return;
-        setPeriod(p);
-        if (!urlDate) setChallengeDate(p.periodKey);
+        if (!urlDate) {
+          setChallengeDate(p.challengeDate);
+          if (!p.challengeDate) {
+            setState({
+              kind: "empty",
+              data: {
+                reason: "no_active_round",
+                message: "No round is active yet.",
+                round: null,
+                weighted: true,
+              },
+            });
+          }
+        }
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to load period");
+          setError(
+            err instanceof Error ? err.message : "Failed to load current round",
+          );
           setState({ kind: "error" });
         }
       }
@@ -233,8 +243,7 @@ export default function Vote() {
     if (urlDate) setChallengeDate(urlDate);
   }, [urlDate]);
 
-  const cadence = period?.cadence || "weekly";
-  const noun = periodNoun(cadence);
+  const noun = "round";
 
   const loadNext = useCallback(async () => {
     if (!challengeDate) return;
@@ -348,7 +357,7 @@ export default function Vote() {
           </div>
         )}
 
-        {(state.kind === "loading" || !challengeDate) && (
+        {state.kind === "loading" && (
           <p className="text-center text-sm text-fog-light">
             Finding a matchup…
           </p>

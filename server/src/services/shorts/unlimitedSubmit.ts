@@ -9,7 +9,7 @@ import { firebaseAdminAuth } from "../../utils/firebase.js";
 export const UNLIMITED_SUBMIT_EMAILS = ["smahadkar@ucsd.edu"] as const;
 
 export const SUBMISSION_LIMIT_MESSAGE =
-  "You ran out of builds for the week." as const;
+  "You ran out of builds for this round." as const;
 
 export function isUnlimitedSubmitEmail(
   email?: string | null,

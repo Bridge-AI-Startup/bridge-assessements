@@ -36,7 +36,9 @@ import {
 const router = express.Router();
 
 // GET /health is mounted always-on in server.ts (deploy smoke tests).
-router.get("/today", PlayController.getToday);
+router.get("/round", PlayController.getCurrentRound);
+// Legacy alias for older deployed clients.
+router.get("/today", PlayController.getCurrentRound);
 router.get("/period", PlayController.getPeriod);
 router.get("/models", PlayController.listModels);
 router.get(
@@ -248,6 +250,11 @@ adminRouter.patch(
   "/challenges/:slug",
   updateChallengeValidation,
   PlayController.adminUpdateChallenge,
+);
+adminRouter.post(
+  "/challenges/:slug/activate",
+  slugParamValidation,
+  PlayController.adminActivateChallenge,
 );
 adminRouter.get(
   "/submissions",

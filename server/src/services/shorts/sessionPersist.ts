@@ -5,7 +5,6 @@ import type { Sandbox } from "e2b";
 import { Types } from "mongoose";
 import { getShortsSubmitGraceSeconds } from "../../utils/shortsEnv.js";
 import { getPlayBuildSessionModel } from "../../models/shorts/buildSession.js";
-import { endOfChallengePeriod } from "./challengePeriod.js";
 import {
   snapshotProjectFiles,
   writeChallengeMarkdown,
@@ -25,38 +24,11 @@ export type ChatMessage = {
 
 export type { SnapshotFile };
 
-/** End of the challenge period for a stored period key (day or week). */
-export function endOfUtcChallengeDay(challengeDate: string): Date {
-  return endOfChallengePeriod(challengeDate);
-}
-
-/**
- * When a build session stops accepting work: the end of its challenge round.
- *
- * There is deliberately **no per-build clock**. Builds used to expire a fixed
- * number of minutes after `startedAt`, which meant a finished build could be
- * lost while its author was typing a name or signing in. The only boundary now
- * is the round itself, because a submission has to belong to the round it was
- * built for.
- */
-export function computeBuildSessionExpiresAt(input: {
-  challengeDate: string;
-  /** Window-override rounds end here instead of the cadence-derived period end. */
-  periodEndsAt?: Date | null;
-}): Date {
-  return input.periodEndsAt ?? endOfUtcChallengeDay(input.challengeDate);
-}
-
 const DEFAULT_SUBMIT_GRACE_SECONDS = 120;
 
 /**
- * Grace window after `expiresAt` in which a build can still be **submitted**.
- *
- * `expiresAt` is now the round boundary rather than a personal clock, so this
- * exists only to keep that boundary from being a cliff: someone who hits Submit
- * as the round rolls over still gets their build saved. Building itself is over
- * at `expiresAt` — chat turns are refused. `SHORTS_SUBMIT_GRACE_SECONDS=0`
- * disables it.
+ * Compatibility grace for legacy sessions that still have `expiresAt`.
+ * Manually managed rounds create sessions without calendar expiry.
  */
 export function getSubmitGraceSeconds(): number {
   const raw = getShortsSubmitGraceSeconds();

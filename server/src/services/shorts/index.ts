@@ -1,5 +1,4 @@
 export * from "./challenges.js";
-export * from "./challengePeriod.js";
 export * from "./sandbox.js";
 export * from "./sessions.js";
 export * from "./submissions.js";

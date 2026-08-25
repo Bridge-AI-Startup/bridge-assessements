@@ -50,7 +50,7 @@ const DEFAULT_OG_IMAGE_COMMITTED = true;
 const OG_IMAGE_WIDTH = 1200;
 const OG_IMAGE_HEIGHT = 630;
 const OG_IMAGE_ALT =
-  "Bridge Shorts — one challenge, one week, everyone gets the same model.";
+  "Bridge Shorts — one challenge, one round, everyone gets the same model.";
 
 /**
  * Absolute URL of the share card, or `null` when we cannot vouch for one.
@@ -149,7 +149,7 @@ export async function renderSubmissionSharePage(
     renderOgDocument({
       title: "Bridge Shorts",
       description:
-        "A weekly build challenge — make something small and fun with AI, then the community votes.",
+        "A build challenge — make something small and fun with AI, then the community votes.",
       canonicalUrl: `${base}/Gallery`,
     });
 
@@ -166,7 +166,7 @@ export async function renderSubmissionSharePage(
     () => null,
   );
   const challengeTitle =
-    (challenge as { title?: string } | null)?.title || "this week's challenge";
+    (challenge as { title?: string } | null)?.title || "this round's challenge";
 
   return renderOgDocument({
     title: `“${doc.displayName}” — ${challengeTitle} · Bridge Shorts`,

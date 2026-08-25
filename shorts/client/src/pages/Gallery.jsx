@@ -5,10 +5,7 @@ import { listPastChallenges } from "@/api/challenges";
 import { fetchStarredIds } from "@/api/stars";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
 import { useAuth } from "@/lib/useAuth";
-import {
-  fetchChallengePeriod,
-  periodPossessive,
-} from "@/lib/challengePeriod";
+import { fetchCurrentRound } from "@/lib/currentRound";
 import ShortsHeader from "@/components/ShortsHeader";
 import ShortsFooter from "@/components/ShortsFooter";
 import SubmissionCard from "@/components/gallery/SubmissionCard";
@@ -18,7 +15,7 @@ import RenameBuildModal from "@/components/RenameBuildModal";
 export default function Gallery() {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlDate = searchParams.get("challengeDate");
-  const [period, setPeriod] = useState(null);
+  const [currentRound, setCurrentRound] = useState(null);
   const [challengeDate, setChallengeDate] = useState(urlDate || "");
   const [items, setItems] = useState([]);
   const [mine, setMine] = useState([]);
@@ -66,10 +63,13 @@ export default function Gallery() {
     let cancelled = false;
     (async () => {
       try {
-        const p = await fetchChallengePeriod();
+        const p = await fetchCurrentRound();
         if (cancelled) return;
-        setPeriod(p);
-        if (!urlDate) setChallengeDate(p.periodKey);
+        setCurrentRound(p);
+        if (!urlDate) {
+          setChallengeDate(p.challengeDate);
+          if (!p.challengeDate) setLoading(false);
+        }
       } catch {
         if (!cancelled && !urlDate) setLoading(false);
       }
@@ -138,7 +138,7 @@ export default function Gallery() {
 
   function onDateChange(value) {
     setChallengeDate(value);
-    const currentKey = period?.periodKey;
+    const currentKey = currentRound?.challengeDate;
     setSearchParams(
       currentKey && value === currentKey ? {} : { challengeDate: value },
     );
@@ -188,7 +188,7 @@ export default function Gallery() {
     }
   }
 
-  const possessive = periodPossessive(period?.cadence || "weekly");
+  const possessive = "this round's";
 
   return (
     <div className="flex min-h-screen flex-col bg-paper">

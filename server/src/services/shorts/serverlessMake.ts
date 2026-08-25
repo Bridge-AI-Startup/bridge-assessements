@@ -334,7 +334,6 @@ export async function provisionServerlessSession(input: {
   anonymousId: string;
   challenge: PublicChallenge;
   startedAt: Date;
-  expiresAt: Date;
 }) {
   const BuildSession = getPlayBuildSessionModel();
   const doc = await BuildSession.create({
@@ -347,7 +346,6 @@ export async function provisionServerlessSession(input: {
     tokensUsed: 0,
     llmCalls: 0,
     startedAt: input.startedAt,
-    expiresAt: input.expiresAt,
     chatMessages: [],
     workspaceSnapshot: serverlessStarterFiles(),
     workspaceSnapshotAt: new Date(),

@@ -6,10 +6,6 @@ import { submitSession } from "@/api/submit";
 import { useAuth } from "@/lib/useAuth";
 import AccountModal from "@/components/AccountModal";
 import {
-  fetchChallengePeriod,
-  periodPossessive,
-} from "@/lib/challengePeriod";
-import {
   DISPLAY_NAME_MAX,
   getDisplayName,
   setDisplayName as persistDisplayName,
@@ -426,7 +422,6 @@ export default function Build() {
   const isMobile = useIsMobile();
   const [layoutMode, setLayoutMode] = useState(() => loadBuildLayoutMode());
   const [state, setState] = useState({ kind: "provisioning" });
-  const [periodCadence, setPeriodCadence] = useState("weekly");
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   /** null, or { lastPrompt, note, checking } while the credits pop-up is up. */
   const [creditsModal, setCreditsModal] = useState(null);
@@ -632,12 +627,6 @@ export default function Build() {
   useEffect(() => {
     setState({ kind: "provisioning" });
     void loadSession();
-  }, []);
-
-  useEffect(() => {
-    fetchChallengePeriod()
-      .then((p) => setPeriodCadence(p.cadence))
-      .catch(() => {});
   }, []);
 
   // Poll while waiting for a Build seat.
@@ -1396,7 +1385,7 @@ export default function Build() {
   }
 
   if (state.kind === "submitted") {
-    const possessive = periodPossessive(periodCadence);
+    const possessive = "this round's";
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-paper p-6">
         <p className="text-[22px] font-medium tracking-tight text-ink">
@@ -1710,7 +1699,7 @@ export default function Build() {
               </>
             ) : submitError.code === "submission_limit" ? (
               <p className="font-medium">
-                You ran out of builds for the week.
+                You ran out of builds for this round.
               </p>
             ) : (
               <p>{submitError.message}</p>
@@ -1853,7 +1842,6 @@ export default function Build() {
 
   const chatFirstProps = {
     session,
-    cadence: periodCadence,
     chatMessages,
     chatInput,
     setChatInput,
@@ -1905,7 +1893,7 @@ export default function Build() {
     <div className="flex h-screen flex-col overflow-hidden bg-cream">
       <header className="flex flex-shrink-0 flex-wrap items-center gap-3 border-b border-line bg-paper px-4 py-2.5">
         <div className="min-w-0 flex-1">
-          <p className="label-mono">Today&apos;s challenge</p>
+          <p className="label-mono">This round&apos;s challenge</p>
           <p className="truncate text-sm font-medium tracking-tight text-ink">
             {session.challenge.title}
           </p>

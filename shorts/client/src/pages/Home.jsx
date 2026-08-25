@@ -1,16 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchTodayChallenge } from "@/api/challenge";
+import { fetchCurrentChallenge } from "@/api/challenge";
 import { listSubmissions } from "@/api/submissions";
 import ShortsHeader from "@/components/ShortsHeader";
 import ShortsFooter from "@/components/ShortsFooter";
 import Markdown from "@/components/Markdown";
 import SubmissionCard from "@/components/gallery/SubmissionCard";
 import { getOrCreateAnonymousId } from "@/lib/anonymousId";
-import {
-  fetchChallengePeriod,
-  periodPossessive,
-} from "@/lib/challengePeriod";
 
 const HOME_BROWSE_LIMIT = 3;
 
@@ -31,35 +27,6 @@ const TILE_TILTS = [-3, 2, -2, 3, -1, 2];
 
 /** Collapse long briefs behind a teaser so the page reads as a game, not homework. */
 const BRIEF_COLLAPSE_THRESHOLD = 280;
-
-/**
- * Live countdown to the end of the round — the Wordle clock. Over a day out
- * it reads "2d 14h 03m"; inside a day it becomes a ticking "H:MM:SS".
- */
-function useCountdown(endsAtIso) {
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    if (!endsAtIso) return undefined;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [endsAtIso]);
-
-  if (!endsAtIso) return null;
-  const ms = new Date(endsAtIso).getTime() - now;
-  if (!Number.isFinite(ms)) return null;
-  if (ms <= 0) return "closing now";
-
-  const totalSec = Math.floor(ms / 1000);
-  const days = Math.floor(totalSec / 86400);
-  const hours = Math.floor((totalSec % 86400) / 3600);
-  const mins = Math.floor((totalSec % 3600) / 60);
-  const secs = totalSec % 60;
-  const pad = (n) => String(n).padStart(2, "0");
-
-  if (days > 0) return `${days}d ${hours}h ${pad(mins)}m`;
-  return `${hours}:${pad(mins)}:${pad(secs)}`;
-}
 
 function TileRow({ word }) {
   return (
@@ -84,7 +51,6 @@ function TileRow({ word }) {
 
 export default function Home() {
   const [state, setState] = useState({ kind: "loading" });
-  const [period, setPeriod] = useState(null);
   const [briefOpen, setBriefOpen] = useState(false);
   const [browse, setBrowse] = useState({
     kind: "loading",
@@ -94,20 +60,10 @@ export default function Home() {
   const anonymousId = useMemo(() => getOrCreateAnonymousId(), []);
 
   useEffect(() => {
-    fetchChallengePeriod().then(setPeriod).catch(() => setPeriod(null));
-    fetchTodayChallenge().then((result) => {
+    fetchCurrentChallenge().then((result) => {
       if (result.status === "ok") {
         setState({ kind: "challenge", challenge: result.challenge });
-        if (result.challenge.cadence || result.challenge.periodEndsAt) {
-          setPeriod({
-            cadence: result.challenge.cadence || "weekly",
-            periodKey: result.challenge.challengeDate,
-            periodEndsAt: result.challenge.periodEndsAt || "",
-            label:
-              result.challenge.cadence === "daily" ? "Today" : "This week",
-          });
-        }
-      } else if (result.status === "no_challenge_today") {
+      } else if (result.status === "no_active_round") {
         setState({ kind: "empty" });
       } else {
         setState({ kind: "error", message: result.message });
@@ -115,18 +71,8 @@ export default function Home() {
     });
   }, []);
 
-  const cadence = period?.cadence || "weekly";
-  const possessive = periodPossessive(cadence);
   const browseDate =
-    state.kind === "challenge"
-      ? state.challenge.challengeDate
-      : period?.periodKey;
-
-  const endsAt =
-    (state.kind === "challenge" && state.challenge.periodEndsAt) ||
-    period?.periodEndsAt ||
-    null;
-  const countdown = useCountdown(endsAt);
+    state.kind === "challenge" ? state.challenge.challengeDate : null;
 
   useEffect(() => {
     if (state.kind === "loading" || !browseDate) return undefined;
@@ -175,7 +121,7 @@ export default function Home() {
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-10 lg:py-14">
         {state.kind === "loading" && (
           <p className="text-center text-sm text-fog-light">
-            Loading {possessive} challenge…
+            Loading this round&apos;s challenge…
           </p>
         )}
 
@@ -190,9 +136,7 @@ export default function Home() {
           <div className="mx-auto max-w-xl text-center">
             <TileRow word="SHORTS" />
             <h1 className="mt-6 text-[36px] font-medium leading-[1.1] tracking-tight text-ink lg:text-[44px]">
-              {cadence === "weekly"
-                ? "No challenge this week"
-                : "No challenge today"}
+              No challenge this round
             </h1>
             <p className="mt-3 text-sm text-fog-light">
               The next round is coming. Meanwhile, the archive is open.
@@ -212,11 +156,7 @@ export default function Home() {
           <div className="mx-auto max-w-2xl text-center">
             <TileRow word="SHORTS" />
 
-            <p className="label-mono mt-6">
-              {cadence === "weekly"
-                ? "This week's challenge"
-                : "Today's challenge"}
-            </p>
+            <p className="label-mono mt-6">This round&apos;s challenge</p>
 
             <h1 className="mt-3 text-[34px] font-medium leading-[1.1] tracking-tight text-ink sm:text-[42px] lg:text-[48px]">
               {state.challenge.title}
@@ -256,24 +196,14 @@ export default function Home() {
             </div>
 
             <div className="mt-6 inline-flex items-center gap-2 rounded-full bg-mist px-4 py-2 font-mono text-[12px] tabular-nums text-fog">
-              {countdown ? (
-                <>
-                  <span aria-hidden="true">⏳</span>
-                  <span>
-                    ends in{" "}
-                    <span className="font-semibold text-ink">{countdown}</span>
-                  </span>
-                </>
-              ) : null}
-              {countdown && browse.kind === "ready" ? (
-                <span className="text-line">·</span>
-              ) : null}
+              <span>open until the next round</span>
+              {browse.kind === "ready" ? <span className="text-line">·</span> : null}
               {browse.kind === "ready" ? (
                 <span>
                   {browse.total} build{browse.total === 1 ? "" : "s"} in
                 </span>
               ) : null}
-              {!countdown && browse.kind !== "ready" ? <span>&nbsp;</span> : null}
+              {browse.kind !== "ready" ? <span>&nbsp;</span> : null}
             </div>
 
             <p className="mt-4 text-sm text-fog-light">

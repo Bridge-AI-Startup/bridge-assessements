@@ -5,8 +5,9 @@
  *   npx tsx src/scripts/seedShortsChallenge.ts [path-to-json]
  *
  * Defaults to ../play/challenges/counter-widget.json relative to server/.
- * If challengeDate is omitted, uses the current period key from
- * PLAY_CHALLENGE_CADENCE (weekly default → Monday UTC; daily → today UTC).
+ * If challengeDate is omitted, uses today's UTC date as the round's grouping
+ * key. Seeding/publishing never activates a round; use activateShortsRound.ts
+ * or the Admin "Make current round" action.
  */
 
 import "../config/loadEnv.js";

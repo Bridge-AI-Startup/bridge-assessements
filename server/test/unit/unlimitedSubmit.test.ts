@@ -62,7 +62,7 @@ describe("unlimitedSubmit", () => {
 
   it("keeps the fourth-build copy as a weekly stop", () => {
     expect(SUBMISSION_LIMIT_MESSAGE).toBe(
-      "You ran out of builds for the week.",
+      "You ran out of builds for this round.",
     );
   });
 });

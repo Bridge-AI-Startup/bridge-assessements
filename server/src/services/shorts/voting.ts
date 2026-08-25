@@ -62,6 +62,8 @@ export type PublicSubmissionDetail = PublicSubmissionSummary & {
 export type RoundProgress = {
   votesInRound: number;
   roundSize: number;
+  votesThisRound: number;
+  /** @deprecated Kept for older deployed clients. */
   votesToday: number;
   maxVotes: number;
   roundIndex: number;
@@ -354,6 +356,7 @@ function buildRoundProgress(
   return {
     votesInRound,
     roundSize: VOTE_ROUND_SIZE,
+    votesThisRound: votesToday,
     votesToday,
     maxVotes: votesToday + pairsRemaining,
     roundIndex: Math.floor(votesToday / VOTE_ROUND_SIZE),

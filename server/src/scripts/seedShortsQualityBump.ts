@@ -214,7 +214,7 @@ async function insertBuilds(cfg: SeedConfig) {
 async function runAgentVotes(cfg: SeedConfig) {
   const Submission = getPlaySubmissionModel();
   const challengePrompt =
-    "**This week: make time visible.** Build a page that shows the current time — but not with a boring clock face. It must reflect the real current time, live. Vote for the one you'd leave open on a second monitor.";
+    "**This round: make time visible.** Build a page that shows the current time — but not with a boring clock face. It must reflect the real current time, live. Vote for the one you'd leave open on a second monitor.";
 
   const voters = cfg.builds.map((b) => b.anonymousId);
   // Ensure each voter has a submission (required to vote)

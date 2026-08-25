@@ -81,7 +81,6 @@ curl http://localhost:5050/api/shorts/today
 | `SHORTS_ADMIN_EMAIL` | `PLAY_ADMIN_EMAIL` | `saaz.m@icloud.com` | Firebase user email allowed to manage challenges |
 | `SHORTS_E2B_TEMPLATE_ID` | `PLAY_E2B_TEMPLATE_ID` | `bridge-play-dev` | E2B custom template name (build via `shorts/e2b-template`) |
 | `SHORTS_MAX_CONCURRENT_SESSIONS` | `PLAY_MAX_CONCURRENT_SESSIONS` | `5` | Soft cap on globally **running** (non-paused) sessions |
-| `SHORTS_CHALLENGE_CADENCE` | `PLAY_CHALLENGE_CADENCE` | `weekly` | `weekly` = one challenge per Mon–Sun UTC week (`challengeDate` = Monday); `daily` = one per UTC day |
 
 ### Shorts client (`shorts/client/.env.local`)
 
@@ -99,12 +98,13 @@ Primary namespace is `/api/shorts`; every route is also served under the legacy 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/api/shorts/health` | — | Always on; `{ ok: true, product: "shorts" }` |
-| GET | `/api/shorts/today` | — | Published challenge for the **current period** (week or day); 404 `no_challenge_today` if none |
-| GET | `/api/shorts/period` | — | `{ cadence, periodKey, periodEndsAt, label }` — switch via `SHORTS_CHALLENGE_CADENCE` |
+| GET | `/api/shorts/round` | — | Manually selected current round (`isActive: true`); 404 `no_active_round` if none. `/today` is a legacy alias |
+| GET | `/api/shorts/period` | — | Compatibility response whose `periodKey` is the active round's `challengeDate`; never calendar-derived |
 | GET | `/api/shorts/admin/challenges` | Firebase + admin | List challenges (newest first) |
 | GET | `/api/shorts/admin/challenges/:slug` | Firebase + admin | Single challenge |
 | POST | `/api/shorts/admin/challenges` | Firebase + admin | Create challenge |
 | PATCH | `/api/shorts/admin/challenges/:slug` | Firebase + admin | Update challenge |
+| POST | `/api/shorts/admin/challenges/:slug/activate` | Firebase + admin | Make a published challenge the current round. Publishing alone never switches rounds |
 | POST | `/api/shorts/session` | — | Create or resume E2B build session (`{ anonymousId }`). Full: **503** `session_queue` waitlist payload |
 | GET | `/api/shorts/session/:id` | — | Get session (`?anonymousId=`) |
 | GET | `/api/shorts/session/:id/usage` | — | Token meter (`?anonymousId=`) → `{ tokensUsed, tokenBudget, remaining, exhausted }` |
@@ -115,7 +115,7 @@ Primary namespace is `/api/shorts`; every route is also served under the legacy 
 | POST | `/api/shorts/session/:id/claude/message` | — | Phase 2 chat relay: run `claude -p` in sandbox (`{ anonymousId, prompt }`) |
 | POST | `/api/shorts/session/:id/terminal*` | — | PTY APIs still on server; **not used** by current Build UI |
 | GET | `/api/shorts/session/:id/workspace-revision` | — | Workspace fingerprint for preview refresh |
-| POST | `/api/shorts/submit` | optional Firebase | Snapshot project files + kill sandbox (`{ sessionId, anonymousId, displayName }`). Rejects starter-only / near-empty snapshots with **400** `{ code: "starter_only" }`. Max **3 live builds per person per round**; a fourth is **409** `{ code: "submission_limit" }` ("You ran out of builds for the week."). Signed-in `smahadkar@ucsd.edu` is exempt. |
+| POST | `/api/shorts/submit` | optional Firebase | Snapshot project files + kill sandbox (`{ sessionId, anonymousId, displayName }`). Rejects starter-only / near-empty snapshots with **400** `{ code: "starter_only" }`. Max **3 live builds per person per round**; a fourth is **409** `{ code: "submission_limit" }` ("You ran out of builds for this round."). Signed-in `smahadkar@ucsd.edu` is exempt. |
 | GET | `/api/shorts/submissions` | — | Public gallery list (`challengeDate`, `limit`, `anonymousId`); omit `files`; includes `previewRevision` |
 | GET | `/api/shorts/submissions/:id` | optional Firebase | Public submission detail (`previewRevision`; `includeFiles` default true). Signed-in `isMine` also matches `firebaseUid` |
 | DELETE | `/api/shorts/submissions/:id` | browser id and/or Firebase | Owner-delete (`{ anonymousId? }`). Same vote/recap cleanup as admin delete |
@@ -220,8 +220,7 @@ Assessments Vercel project (`client/`) is unchanged.
 
 ## Future implementation
 
-- Automatic challenge rotation / calendar seed (still manual Admin or seed script)
-- Flip `SHORTS_CHALLENGE_CADENCE=daily` when ready to go Wordle-daily again
+- Optional scheduled activation could be added later; current rounds are deliberately manual
 - Optional end-of-day Top 8 finals bracket
 - Share cards / streaks
 - **Head-to-head:** live 1v1 build duel (same challenge, timed, spectators / rematch) — backlog, not scheduled

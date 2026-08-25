@@ -1,6 +1,6 @@
 import { get, getRequestErrorMessage } from "@/api/requests";
 
-export type TodayChallenge = {
+export type CurrentChallenge = {
   challengeDate: string;
   slug: string;
   title: string;
@@ -8,25 +8,24 @@ export type TodayChallenge = {
   tokenBudget: number;
   category: string;
   makeMode?: "e2b" | "serverless";
-  cadence?: "daily" | "weekly";
-  periodEndsAt?: string;
+  isActive?: boolean;
 };
 
-export type FetchTodayResult =
-  | { status: "ok"; challenge: TodayChallenge }
-  | { status: "no_challenge_today" }
+export type FetchCurrentRoundResult =
+  | { status: "ok"; challenge: CurrentChallenge }
+  | { status: "no_active_round" }
   | { status: "error"; message: string };
 
-export async function fetchTodayChallenge(): Promise<FetchTodayResult> {
+export async function fetchCurrentChallenge(): Promise<FetchCurrentRoundResult> {
   try {
-    const res = await get("/today");
+    const res = await get("/round");
     if (res.status === 404) {
-      return { status: "no_challenge_today" };
+      return { status: "no_active_round" };
     }
     if (!res.ok) {
       return { status: "error", message: `HTTP ${res.status}` };
     }
-    const challenge = (await res.json()) as TodayChallenge;
+    const challenge = (await res.json()) as CurrentChallenge;
     return { status: "ok", challenge };
   } catch (error) {
     return {

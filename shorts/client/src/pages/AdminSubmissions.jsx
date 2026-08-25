@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { authDelete, authGet, readJsonBody } from "@/api/requests";
 import { useSubmissionPreview } from "@/lib/useSubmissionPreview";
-import { fetchChallengePeriod } from "@/lib/challengePeriod";
+import { fetchCurrentRound } from "@/lib/currentRound";
 
 function formatBytes(n) {
   if (n < 1024) return `${n} B`;
@@ -11,7 +11,7 @@ function formatBytes(n) {
 
 export default function AdminSubmissions() {
   const [challengeDate, setChallengeDate] = useState("");
-  const [periodReady, setPeriodReady] = useState(false);
+  const [roundReady, setRoundReady] = useState(false);
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -28,17 +28,17 @@ export default function AdminSubmissions() {
     let cancelled = false;
     (async () => {
       try {
-        const p = await fetchChallengePeriod();
+        const p = await fetchCurrentRound();
         if (cancelled) return;
-        setChallengeDate(p.periodKey);
+        setChallengeDate(p.challengeDate);
       } catch (err) {
         if (!cancelled) {
           setError(
-            err instanceof Error ? err.message : "Failed to load period",
+            err instanceof Error ? err.message : "Failed to load current round",
           );
         }
       } finally {
-        if (!cancelled) setPeriodReady(true);
+        if (!cancelled) setRoundReady(true);
       }
     })();
     return () => {
@@ -157,7 +157,7 @@ export default function AdminSubmissions() {
               setSelectedId(null);
               setChallengeDate(e.target.value);
             }}
-            disabled={!periodReady}
+            disabled={!roundReady}
             className="mt-1 block rounded border border-line px-3 py-1.5 text-sm disabled:opacity-50"
           />
         </label>

@@ -141,7 +141,7 @@ export const PLAY_PROJECT_CLAUDE_MD = [
 ].join("\n");
 
 /**
- * Write today's challenge prompt into the workspace (session layer + smoke).
+ * Write the current round's challenge into the workspace (session + smoke).
  * Always includes preview constraints so Claude targets `index.html`.
  */
 export async function writeChallengeMarkdown(

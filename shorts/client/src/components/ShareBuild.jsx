@@ -64,7 +64,7 @@ export default function ShareBuild({
     submissionId,
   )}`;
   const text = isMine
-    ? `My build “${displayName}” for this week's Bridge Shorts challenge`
+    ? `My build “${displayName}” for this round's Bridge Shorts challenge`
     : `“${displayName}” on Bridge Shorts`;
 
   useEffect(() => () => clearTimeout(copyTimerRef.current), []);

@@ -2,9 +2,10 @@ import type { RequestHandler } from "express";
 import { validationResult } from "express-validator";
 import validationErrorParser from "../../utils/validationErrorParser.js";
 import {
+  activateChallenge,
   createChallenge,
   getChallengeBySlug,
-  getTodayChallenge,
+  getCurrentChallenge,
   listChallenges,
   listPastChallenges,
   updateChallenge,
@@ -14,7 +15,6 @@ import {
   getAccountSubmissions,
   linkAnonymousId,
 } from "../../services/shorts/account.js";
-import { getChallengePeriodInfo } from "../../services/shorts/challengePeriod.js";
 import { renderSubmissionSharePage } from "../../services/shorts/sharePage.js";
 import {
   cancelPlayBuildSession,
@@ -79,18 +79,49 @@ export const health: RequestHandler = (_req, res) => {
   res.status(200).json({ ok: true, product: "shorts" });
 };
 
-export const getPeriod: RequestHandler = (_req, res) => {
-  res.status(200).json(getChallengePeriodInfo());
+/** Compatibility endpoint: periodKey now means the explicit current round. */
+export const getPeriod: RequestHandler = async (_req, res, next) => {
+  try {
+    const live = await getCurrentChallenge();
+    if (live) {
+      res.status(200).json({
+        cadence: "manual",
+        periodKey: live.challengeDate,
+        periodEndsAt: "",
+        label: "This round",
+      });
+      return;
+    }
+    res.status(200).json({
+      cadence: "manual",
+      periodKey: "",
+      periodEndsAt: "",
+      label: "No active round",
+    });
+  } catch (error) {
+    next(error);
+  }
 };
 
-export const getToday: RequestHandler = async (_req, res, next) => {
+export const getCurrentRound: RequestHandler = async (_req, res, next) => {
   try {
-    const challenge = await getTodayChallenge();
+    const challenge = await getCurrentChallenge();
     if (!challenge) {
-      res.status(404).json({ error: "no_challenge_today" });
+      res.status(404).json({ error: "no_active_round" });
       return;
     }
     res.status(200).json(challenge);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const adminActivateChallenge: RequestHandler = async (req, res, next) => {
+  const errors = validationResult(req);
+  try {
+    validationErrorParser(errors);
+    const challenge = await activateChallenge(req.params.slug);
+    res.status(200).json({ challenge });
   } catch (error) {
     next(error);
   }

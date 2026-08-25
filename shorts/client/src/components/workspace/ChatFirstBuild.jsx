@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchTodayChallenge } from "@/api/challenge";
+import { fetchCurrentChallenge } from "@/api/challenge";
 import Markdown from "@/components/Markdown";
 import BuildWaitCard from "@/components/workspace/BuildWaitCard";
 import ModelEffortPicker from "@/components/workspace/ModelEffortPicker";
@@ -188,7 +188,6 @@ export default function ChatFirstBuild({
   variant = "mobile",
   headerActions = null,
   session,
-  cadence,
   chatMessages,
   chatInput,
   setChatInput,
@@ -226,12 +225,11 @@ export default function ChatFirstBuild({
   const [previewOpen, setPreviewOpen] = useState(false);
   const textareaRef = useRef(null);
   const mobileViewportHeight = useVisualViewportHeight(!isDesktop);
-  const challengeLabel =
-    cadence === "daily" ? "Today's challenge" : "This week's challenge";
+  const challengeLabel = "This round's challenge";
 
   useEffect(() => {
     let cancelled = false;
-    fetchTodayChallenge().then((result) => {
+    fetchCurrentChallenge().then((result) => {
       if (!cancelled && result.status === "ok") {
         setChallengePrompt(result.challenge.prompt || "");
       }

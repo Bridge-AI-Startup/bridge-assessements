@@ -63,7 +63,7 @@ vi.mock("../../src/services/shorts/account.js", () => ({
 }));
 vi.mock("../../src/services/shorts/unlimitedSubmit.js", () => ({
   isUnlimitedSubmitter,
-  SUBMISSION_LIMIT_MESSAGE: "You ran out of builds for the week.",
+  SUBMISSION_LIMIT_MESSAGE: "You ran out of builds for this round.",
 }));
 
 const {
@@ -239,7 +239,7 @@ describe("submission limit", () => {
       code: SUBMISSION_LIMIT_CODE,
       count: MAX_SUBMISSIONS_PER_ROUND,
       max: MAX_SUBMISSIONS_PER_ROUND,
-      message: "You ran out of builds for the week.",
+      message: "You ran out of builds for this round.",
     });
   });
 

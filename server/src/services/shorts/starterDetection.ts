@@ -123,7 +123,7 @@ const LEGACY_STARTER_FILES: Record<string, string[]> = {
       <ol>
         <li>
           <strong>Read the challenge.</strong>
-          It's at the top of the chat — that's what you're making today.
+          It's at the top of the chat — that's what you're making this round.
         </li>
         <li>
           <strong>Describe what you want in the chat, in plain English.</strong>

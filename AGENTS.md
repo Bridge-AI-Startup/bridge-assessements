@@ -187,7 +187,6 @@ See `server/config.env.example` for the full list. Key variables:
 - `PLAY_E2B_TEMPLATE_ID` -- Custom E2B template for Play sandboxes (default `bridge-play-dev`; build from `play/e2b-template/`)
 - `PLAY_MAX_CONCURRENT_SESSIONS` -- Soft cap on **running** (non-paused) Play sessions (default: `5`)
 - `PLAY_BUILD_TIME_LIMIT_MINUTES` -- Wall-clock build window from start (default: `10`); overridden by challenge `timeLimitMinutes`; always capped by challenge period end
-- `PLAY_CHALLENGE_CADENCE` -- `weekly` (default) or `daily`. Weekly: one published challenge per Mon–Sun UTC week; `challengeDate` = Monday. Daily: one per UTC calendar day. Swap with this env var only.
 - `PLAY_LLM_PROXY_PUBLIC_URL` -- Public base URL for the Play LLM proxy that E2B sandboxes can reach (e.g. Render or a tunnel). Required for Codex; sandboxes cannot call `localhost`
 - `PLAY_ANTHROPIC_MODEL` -- Optional default model for Codex in Play sandboxes
 - `ANTHROPIC_API_KEY` -- Org Anthropic key used by the Play Messages proxy (never written into the sandbox)
@@ -404,7 +403,7 @@ server/src/
 
 **Play routes** (`/api/play`, consumer product — requires `PLAY_ENABLED=true` except health):
 - `GET /health` -- Always on; smoke check `{ ok: true, product: "play" }`
-- `GET /today` -- Published challenge for the current period (`PLAY_CHALLENGE_CADENCE`); includes `cadence` + `periodEndsAt`; 404 `{ error: "no_challenge_today" }` if none
+- `GET /round` -- Manually selected current round (`isActive: true`); 404 `{ error: "no_active_round" }` if none. `/today` remains a legacy alias. Publishing/dates do not change rounds; use the admin activate endpoint.
 - `GET /period` -- `{ cadence, periodKey, periodEndsAt, label }` for clients
 - `GET /admin/challenges` -- List challenges (Firebase + `PLAY_ADMIN_EMAIL`; query: `limit`, `from`, `to`, `status`)
 - `GET /admin/challenges/:slug` -- Single challenge (admin)

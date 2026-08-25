@@ -233,14 +233,14 @@ async function main() {
     );
   }
 
-  // Prefer today's published challenge slug if present.
+  // Prefer the manually selected current round if present.
   let challengeSlug = "todo-list";
   try {
-    const { getTodayChallenge } = await import(
+    const { getCurrentChallenge } = await import(
       "../services/shorts/challenges.js"
     );
-    const today = await getTodayChallenge();
-    if (today?.slug) challengeSlug = today.slug;
+    const current = await getCurrentChallenge();
+    if (current?.slug) challengeSlug = current.slug;
   } catch {
     /* keep default */
   }

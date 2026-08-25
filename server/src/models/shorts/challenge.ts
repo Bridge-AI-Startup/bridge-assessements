@@ -47,30 +47,35 @@ const ChallengeSchema = new Schema(
       enum: CHALLENGE_STATUSES,
       default: "draft",
     },
+    /**
+     * The one challenge currently served by Shorts. Round changes are manual:
+     * publishing or changing challengeDate never activates a challenge.
+     */
+    isActive: {
+      type: Boolean,
+      required: true,
+      default: false,
+    },
+    activatedAt: {
+      type: Date,
+    },
+    deactivatedAt: {
+      type: Date,
+    },
     // Which build path this challenge uses. Unset → fall back to SHORTS_MAKE_MODE.
     makeMode: {
       type: String,
       enum: CHALLENGE_MAKE_MODES,
-    },
-    /**
-     * Explicit round window override. When both are set, this challenge is
-     * live exactly while now ∈ [windowStartsAt, windowEndsAt] — regardless of
-     * the weekly/daily cadence grid — and the round countdown uses
-     * windowEndsAt. `challengeDate` stays the period key that submissions,
-     * votes and sessions attach to; the window never rekeys existing data.
-     * Unset → the cadence-derived period applies (the normal case).
-     */
-    windowStartsAt: {
-      type: Date,
-    },
-    windowEndsAt: {
-      type: Date,
     },
   },
   { timestamps: true },
 );
 
 ChallengeSchema.index({ status: 1, challengeDate: -1 });
+ChallengeSchema.index(
+  { isActive: 1 },
+  { unique: true, partialFilterExpression: { isActive: true } },
+);
 
 export { CHALLENGE_CATEGORIES, CHALLENGE_STATUSES, CHALLENGE_MAKE_MODES };
 

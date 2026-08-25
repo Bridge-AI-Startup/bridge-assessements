@@ -107,10 +107,8 @@ export async function submitSession(input: {
   if (session.status === "submitted") {
     throw createHttpError(409, "session_already_submitted");
   }
-  // Builds have no personal clock — `expiresAt` is the end of the round. A
-  // session caught by that rollover is `expired` rather than `active`, so both
-  // statuses are allowed while the short grace window holds, which keeps the
-  // round boundary from swallowing a build mid-submit.
+  // New manual-round sessions have no expiry. The grace path remains only for
+  // legacy documents that still carry a calendar-derived `expiresAt`.
   const inGrace = isWithinSubmitGrace(session.expiresAt);
   if (session.status !== "active" && !(session.status === "expired" && inGrace)) {
     throw createHttpError(400, `session_not_active:${session.status}`);

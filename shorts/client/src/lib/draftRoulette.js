@@ -3,7 +3,7 @@
  *
  * Three independent banks — vibe, material, twist — so a spin is a
  * combinatorial gag, not a canned prompt. The resulting chat line is a
- * BUILD instruction: make a real working draft of this week's challenge,
+ * BUILD instruction: make a real working draft of this round's challenge,
  * just through that lens.
  *
  * Humor is general-audience (same rule as waitingRoom.js): no jokes that
@@ -80,7 +80,7 @@ export function pickSpin(avoid = []) {
 export function buildSpinPrompt({ vibe, material, twist }) {
   return (
     `Spin a first draft: ${vibe} · ${material} · ${twist}. ` +
-    `Build this week's challenge that way — actually working, just weird. ` +
+    `Build this round's challenge that way — actually working, just weird. ` +
     `Don't ask me what I want; just go.`
   );
 }

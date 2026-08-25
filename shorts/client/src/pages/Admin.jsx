@@ -8,9 +8,9 @@ import {
 import { auth } from "@/firebase/firebase";
 import { authGet, authPatch, authPost } from "@/api/requests";
 import {
-  fetchChallengePeriod,
-  periodPossessive,
-} from "@/lib/challengePeriod";
+  fetchCurrentRound,
+  invalidateCurrentRound,
+} from "@/lib/currentRound";
 import AdminSubmissions from "@/pages/AdminSubmissions";
 import Markdown from "@/components/Markdown";
 
@@ -19,12 +19,6 @@ const MAKE_MODES = [
   { value: "e2b", label: "E2B sandbox (Claude Code)" },
   { value: "serverless", label: "Serverless (single-file HTML)" },
 ];
-
-function addUtcDays(yyyyMmDd, days) {
-  const [y, m, d] = yyyyMmDd.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d + days));
-  return dt.toISOString().slice(0, 10);
-}
 
 function emptyForm(challengeDate, lockedDate = false) {
   return {
@@ -51,6 +45,7 @@ function formFromChallenge(challenge, lockedDate = false) {
     category: challenge.category,
     status: challenge.status,
     makeMode: challenge.makeMode ?? "e2b",
+    isActive: Boolean(challenge.isActive),
     lockedDate,
     isNew: false,
   };
@@ -58,10 +53,9 @@ function formFromChallenge(challenge, lockedDate = false) {
 
 const FILTERS = [
   { id: "all", label: "All" },
+  { id: "active", label: "Current round" },
   { id: "published", label: "Published" },
   { id: "draft", label: "Draft" },
-  { id: "past", label: "Past" },
-  { id: "upcoming", label: "Upcoming" },
 ];
 
 export default function Admin() {
@@ -76,11 +70,9 @@ export default function Admin() {
   const [forbidden, setForbidden] = useState(false);
   const [listError, setListError] = useState(null);
 
-  const [period, setPeriod] = useState(null);
-  const periodKey = period?.periodKey || "";
-  const cadence = period?.cadence || "weekly";
+  const [currentRoundKey, setCurrentRoundKey] = useState("");
 
-  const [viewMode, setViewMode] = useState("today");
+  const [viewMode, setViewMode] = useState("current");
   const [selectedSlug, setSelectedSlug] = useState(null);
   const [form, setForm] = useState(() => emptyForm("", true));
   const [saving, setSaving] = useState(false);
@@ -94,9 +86,9 @@ export default function Admin() {
   }, []);
 
   useEffect(() => {
-    fetchChallengePeriod()
-      .then(setPeriod)
-      .catch(() => setPeriod(null));
+    fetchCurrentRound()
+      .then((round) => setCurrentRoundKey(round.challengeDate))
+      .catch(() => setCurrentRoundKey(""));
   }, []);
 
   const loadChallenges = useCallback(async () => {
@@ -130,36 +122,31 @@ export default function Admin() {
   }, [authUser, loadChallenges]);
 
   const currentChallenge = useMemo(
-    () =>
-      periodKey
-        ? challenges.find((c) => c.challengeDate === periodKey) || null
-        : null,
-    [challenges, periodKey],
+    () => challenges.find((c) => c.isActive) || null,
+    [challenges],
   );
 
   useEffect(() => {
-    if (!authUser || listLoading || !periodKey) return;
-    if (viewMode === "today") {
+    if (!authUser || listLoading) return;
+    if (viewMode === "current") {
       if (currentChallenge) {
         setForm(formFromChallenge(currentChallenge, true));
         setSelectedSlug(currentChallenge.slug);
       } else {
-        setForm(emptyForm(periodKey, true));
+        setForm(emptyForm(new Date().toISOString().slice(0, 10), false));
         setSelectedSlug(null);
       }
     }
-  }, [authUser, listLoading, viewMode, currentChallenge, periodKey]);
+  }, [authUser, listLoading, viewMode, currentChallenge]);
 
   const filteredChallenges = useMemo(() => {
     return challenges.filter((c) => {
       if (filter === "published") return c.status === "published";
       if (filter === "draft") return c.status === "draft";
-      if (!periodKey) return true;
-      if (filter === "past") return c.challengeDate < periodKey;
-      if (filter === "upcoming") return c.challengeDate > periodKey;
+      if (filter === "active") return c.isActive;
       return true;
     });
-  }, [challenges, filter, periodKey]);
+  }, [challenges, filter]);
 
   async function handleSignIn(e) {
     e.preventDefault();
@@ -182,31 +169,28 @@ export default function Admin() {
     setForm(
       formFromChallenge(
         challenge,
-        Boolean(periodKey && challenge.challengeDate === periodKey),
+        Boolean(challenge.isActive),
       ),
     );
     setMessage(null);
   }
 
   function backToCurrent() {
-    setViewMode("today");
+    setViewMode("current");
     setMessage(null);
     if (currentChallenge) {
       setForm(formFromChallenge(currentChallenge, true));
       setSelectedSlug(currentChallenge.slug);
-    } else if (periodKey) {
-      setForm(emptyForm(periodKey, true));
+    } else {
+      setForm(emptyForm(new Date().toISOString().slice(0, 10), false));
       setSelectedSlug(null);
     }
   }
 
-  function startNewScheduled() {
+  function startNewRound() {
     setViewMode("history");
     setSelectedSlug(null);
-    const nextDate = periodKey
-      ? addUtcDays(periodKey, cadence === "weekly" ? 7 : 1)
-      : "";
-    setForm(emptyForm(nextDate, false));
+    setForm(emptyForm(new Date().toISOString().slice(0, 10), false));
     setMessage(null);
   }
 
@@ -250,11 +234,9 @@ export default function Admin() {
       const saved = await res.json();
       await loadChallenges();
 
-      const savedIsCurrent = Boolean(
-        periodKey && saved.challengeDate === periodKey,
-      );
+      const savedIsCurrent = Boolean(saved.isActive);
       if (savedIsCurrent) {
-        setViewMode("today");
+        setViewMode("current");
         setSelectedSlug(saved.slug);
         setForm(formFromChallenge(saved, true));
       } else {
@@ -304,6 +286,40 @@ export default function Admin() {
       setMessage({
         type: "error",
         text: err instanceof Error ? err.message : "Status update failed",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function activateRound() {
+    if (form.isNew || form.status !== "published" || form.isActive) return;
+    setSaving(true);
+    setMessage(null);
+    try {
+      const res = await authPost(
+        `/admin/challenges/${selectedSlug}/activate`,
+        {},
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(body.error || body.message || `HTTP ${res.status}`);
+      }
+      const active = body.challenge;
+      await loadChallenges();
+      invalidateCurrentRound();
+      setCurrentRoundKey(active.challengeDate);
+      setViewMode("current");
+      setSelectedSlug(active.slug);
+      setForm(formFromChallenge(active, true));
+      setMessage({
+        type: "success",
+        text: "Current round changed. It will stay active until you activate another.",
+      });
+    } catch (err) {
+      setMessage({
+        type: "error",
+        text: err instanceof Error ? err.message : "Activation failed",
       });
     } finally {
       setSaving(false);
@@ -383,24 +399,16 @@ export default function Admin() {
     );
   }
 
-  const editingCurrent = viewMode === "today";
+  const editingCurrent = viewMode === "current";
   const showBackToCurrent =
     viewMode === "history" &&
-    Boolean(periodKey) &&
-    form.challengeDate !== periodKey;
-  const possessive = periodPossessive(cadence);
-  const currentLabel =
-    cadence === "weekly" ? "Current week" : "Today";
-  const currentChallengeTitle =
-    cadence === "weekly" ? "This week's challenge" : "Today's challenge";
-  const noCurrentTitle =
-    cadence === "weekly"
-      ? "No challenge scheduled for this week"
-      : "No challenge scheduled for today";
-  const backLabel =
-    cadence === "weekly" ? "← Back to current week" : "← Back to today";
-  const currentBadge =
-    cadence === "weekly" ? "This week" : "Today";
+    Boolean(currentRoundKey) &&
+    form.challengeDate !== currentRoundKey;
+  const currentLabel = "Current round";
+  const currentChallengeTitle = "This round's challenge";
+  const noCurrentTitle = "No challenge scheduled for this round";
+  const backLabel = "← Back to current round";
+  const currentBadge = "This round";
 
   return (
     <div className="min-h-screen bg-paper">
@@ -462,10 +470,10 @@ export default function Admin() {
           )}
           <button
             type="button"
-            onClick={startNewScheduled}
+            onClick={startNewRound}
             className="ml-auto rounded border border-line bg-paper px-3 py-1.5 text-sm text-fog hover:bg-paper"
           >
-            New challenge
+            New round
           </button>
         </div>
 
@@ -477,18 +485,14 @@ export default function Admin() {
                 ? currentChallengeTitle
                 : `Edit: ${form.challengeDate}`}
           </h2>
-          {editingCurrent && periodKey && (
+          {editingCurrent && currentChallenge && (
             <p className="mt-1 text-xs text-fog-light">
-              {currentLabel} · period key: {periodKey}
-              {cadence === "weekly" ? " (Monday UTC)" : " (UTC)"}
+              {currentLabel} · round key: {currentChallenge.challengeDate}
+              {" · stays active until replaced"}
             </p>
           )}
 
-          {!periodKey ? (
-            <p className="mt-4 text-sm text-fog-light">
-              Loading {possessive} period…
-            </p>
-          ) : listLoading ? (
+          {listLoading ? (
             <p className="mt-4 text-sm text-fog-light">Loading…</p>
           ) : (
             <form onSubmit={handleSave} className="mt-4 space-y-4">
@@ -508,9 +512,7 @@ export default function Admin() {
                 </label>
                 <label className="block text-sm">
                   <span className="font-medium text-fog">
-                    {cadence === "weekly"
-                      ? "Week start (Monday UTC)"
-                      : "Date (UTC)"}
+                    Round key date (UTC)
                   </span>
                   <input
                     type="date"
@@ -520,9 +522,10 @@ export default function Admin() {
                     className="mt-1 w-full rounded border border-line px-3 py-2 text-sm disabled:bg-mist"
                     required
                   />
-                  {cadence === "weekly" && !form.lockedDate && (
+                  {!form.lockedDate && (
                     <p className="mt-1 text-xs text-fog-light">
-                      Use the Monday UTC that starts the challenge week.
+                      Used to group this round&apos;s builds and votes. It does
+                      not schedule or activate the round.
                     </p>
                   )}
                 </label>
@@ -653,6 +656,19 @@ export default function Admin() {
                 >
                   {form.status === "published" ? "Unpublish" : "Publish"}
                 </button>
+                <button
+                  type="button"
+                  disabled={
+                    saving ||
+                    form.isNew ||
+                    form.status !== "published" ||
+                    form.isActive
+                  }
+                  onClick={activateRound}
+                  className="rounded-2xl border border-line bg-paper px-4 py-2 text-sm font-medium text-fog hover:bg-paper disabled:opacity-50"
+                >
+                  {form.isActive ? "Current round" : "Make current round"}
+                </button>
               </div>
             </form>
           )}
@@ -664,7 +680,7 @@ export default function Admin() {
             onClick={() => setHistoryOpen((o) => !o)}
             className="flex w-full items-center justify-between rounded-2xl border border-line bg-paper px-4 py-3 text-left text-sm font-medium text-ink shadow-card"
           >
-            Challenge history
+            All rounds
             <span className="text-fog-light">{historyOpen ? "▾" : "▸"}</span>
           </button>
 
@@ -705,10 +721,7 @@ export default function Admin() {
                       </tr>
                     )}
                     {filteredChallenges.map((c) => {
-                      const isPast = periodKey && c.challengeDate < periodKey;
-                      const isCurrent =
-                        Boolean(periodKey) && c.challengeDate === periodKey;
-                      const isFuture = periodKey && c.challengeDate > periodKey;
+                      const isCurrent = Boolean(c.isActive);
                       const selected = c.slug === selectedSlug;
                       return (
                         <tr
@@ -716,18 +729,13 @@ export default function Admin() {
                           onClick={() => selectHistoryRow(c)}
                           className={`cursor-pointer border-t border-line hover:bg-paper ${
                             selected ? "bg-accent-blue/5" : ""
-                          } ${isPast ? "text-fog-light" : "text-ink"}`}
+                          } ${isCurrent ? "text-ink" : "text-fog-light"}`}
                         >
                           <td className="px-3 py-2 whitespace-nowrap">
                             {c.challengeDate}
                             {isCurrent && (
                               <span className="ml-1 text-xs font-medium text-accent-blue">
                                 {currentBadge}
-                              </span>
-                            )}
-                            {isFuture && (
-                              <span className="ml-1 text-xs text-accent-violet">
-                                Scheduled
                               </span>
                             )}
                           </td>

@@ -11,7 +11,7 @@ import {
 } from "./serverlessMake.js";
 import {
   getChallengeBySlug,
-  getTodayChallenge,
+  getCurrentChallenge,
   type PublicChallenge,
 } from "./challenges.js";
 import {
@@ -27,9 +27,7 @@ import {
 import { provisionClaudeForSession } from "./claudeProvision.js";
 import { generateLlmProxyToken } from "./llmProxy.js";
 import {
-  computeBuildSessionExpiresAt,
   e2bTimeoutMsForChallengeDay,
-  getSubmitGraceMs,
   restoreSessionSnapshotAndPrompt,
   serializeChatMessages,
   type SnapshotFile,
@@ -157,10 +155,9 @@ export function isSessionQueueError(err: unknown): err is SessionQueueError {
 /**
  * Rough wait for a Build seat.
  *
- * There is no per-build clock to count down any more, so `expiresAt` (the round
- * end) says nothing about when a seat frees — seats free when someone submits
- * or walks away and their sandbox pauses. That is unknowable, so this is a
- * deliberately flat, honest-ish guess rather than a fake precise number.
+ * There is no per-build or calendar clock. Seats free when someone submits,
+ * leaves and pauses, or an admin activates another round. That is unknowable,
+ * so this remains a flat estimate rather than fake precision.
  */
 const ESTIMATED_QUEUE_WAIT_SECONDS = 90;
 
@@ -300,25 +297,6 @@ async function expireSession(
   await doc.save();
 }
 
-/**
- * Expire sessions whose challenge round has ended so they stop holding
- * concurrent seats. Best-effort; safe to call on every session create.
- */
-async function reapExpiredActiveSessions(): Promise<void> {
-  const BuildSession = getPlayBuildSessionModel();
-  // Leave the submit grace window alone: reaping kills the sandbox, and an E2B
-  // build caught by the round rollover still needs its files snapshotted.
-  const cutoff = new Date(Date.now() - getSubmitGraceMs());
-  const stale = await BuildSession.find({
-    status: "active",
-    expiresAt: { $lte: cutoff },
-  }).limit(50);
-
-  for (const doc of stale) {
-    await expireSession(doc, "Challenge round ended");
-  }
-}
-
 /** Kill old box if any, create a fresh sandbox on the same session document. */
 async function reprovisionSandboxOnSession(
   doc: {
@@ -351,8 +329,6 @@ async function reprovisionSandboxOnSession(
   }
 
   const timeoutMs = e2bTimeoutMsForChallengeDay(challenge.challengeDate);
-  // expiresAt is the round end and is unchanged by reprovisioning the box.
-
   const sandbox = await createPlaySandbox({
     timeoutMs,
     metadata: {
@@ -396,8 +372,8 @@ async function reprovisionSandboxOnSession(
 const withAnonymousSessionLock = createKeyedAsyncLock();
 
 /**
- * Create a new E2B build session for today's challenge, or resume an active one
- * for the same anonymousId + challengeDate.
+ * Create a build session for the explicit current round, or resume one for the
+ * same anonymousId + challengeDate.
  */
 export async function createOrResumeSession(input: {
   anonymousId: string;
@@ -415,23 +391,20 @@ export async function createOrResumeSession(input: {
 async function createOrResumeSessionUnlocked(
   anonymousId: string,
 ): Promise<SessionResponse> {
-  const challenge = await getTodayChallenge();
+  const challenge = await getCurrentChallenge();
   if (!challenge) {
-    throw createHttpError(404, "no_challenge_today");
+    throw createHttpError(404, "no_active_round");
   }
 
   const BuildSession = getPlayBuildSessionModel();
   const now = new Date();
 
-  await reapExpiredActiveSessions();
-
-  // Wait briefly if another request is mid-provision for this user/day.
+  // Wait briefly if another request is mid-provision for this user/round.
   for (let i = 0; i < 60; i++) {
     const provisioning = await BuildSession.findOne({
       anonymousId,
       challengeDate: challenge.challengeDate,
       status: "provisioning",
-      expiresAt: { $gt: now },
     });
     if (!provisioning) break;
     await new Promise((r) => setTimeout(r, 500));
@@ -441,36 +414,14 @@ async function createOrResumeSessionUnlocked(
     anonymousId,
     challengeDate: challenge.challengeDate,
     status: "active",
-    expiresAt: { $gt: now },
   });
 
   if (existing) {
-    // Sessions run to the end of the round. Sessions created under the old
-    // per-build clock carry a short expiresAt, so resume *extends* them to the
-    // round end rather than clamping — otherwise a build in flight during the
-    // rollout would still die on the old timer.
-    const legacyCreated = (existing as { createdAt?: Date }).createdAt;
-    const startedAt =
-      existing.startedAt instanceof Date
-        ? existing.startedAt
-        : legacyCreated instanceof Date
-          ? legacyCreated
-          : now;
-    const roundEnd = computeBuildSessionExpiresAt({
-      challengeDate: challenge.challengeDate,
-      periodEndsAt: challenge.periodEndsAt ? new Date(challenge.periodEndsAt) : null,
-    });
-    if (
-      !existing.expiresAt ||
-      existing.expiresAt.getTime() !== roundEnd.getTime()
-    ) {
-      existing.expiresAt = roundEnd;
-      if (!existing.startedAt) existing.startedAt = startedAt;
+    // Legacy sessions may carry a calendar-derived expiry. The active round is
+    // now manual, so clear it rather than letting a date close the build.
+    if (existing.expiresAt) {
+      existing.expiresAt = undefined;
       await existing.save();
-    }
-    if (existing.expiresAt.getTime() <= Date.now()) {
-      await expireSession(existing, "Challenge round ended");
-      existing = null;
     }
   }
 
@@ -529,7 +480,6 @@ async function createOrResumeSessionUnlocked(
       anonymousId,
       challengeDate: challenge.challengeDate,
       status: "active",
-      expiresAt: { $gt: now },
     },
     {
       $set: {
@@ -544,15 +494,10 @@ async function createOrResumeSessionUnlocked(
   // Per-challenge override (set by admins) wins; else the server env default.
   const resolvedMakeMode = challenge.makeMode ?? getShortsMakeMode();
   if (resolvedMakeMode === "serverless") {
-    const expiresAt = computeBuildSessionExpiresAt({
-      challengeDate: challenge.challengeDate,
-      periodEndsAt: challenge.periodEndsAt ? new Date(challenge.periodEndsAt) : null,
-    });
     const doc = await provisionServerlessSession({
       anonymousId,
       challenge,
       startedAt: now,
-      expiresAt,
     });
     return toSessionResponse(doc, challenge);
   }
@@ -560,7 +505,6 @@ async function createOrResumeSessionUnlocked(
   // Paused builders park their sandbox but should not block newcomers.
   const activeCount = await BuildSession.countDocuments({
     status: "active",
-    expiresAt: { $gt: now },
     sandboxPaused: { $ne: true },
   });
   const maxConcurrent = getMaxConcurrentSessions();
@@ -572,10 +516,6 @@ async function createOrResumeSessionUnlocked(
     });
   }
 
-  const expiresAt = computeBuildSessionExpiresAt({
-    challengeDate: challenge.challengeDate,
-    periodEndsAt: challenge.periodEndsAt ? new Date(challenge.periodEndsAt) : null,
-  });
   const timeoutMs = e2bTimeoutMsForChallengeDay(challenge.challengeDate, now);
 
   const doc = await BuildSession.create({
@@ -588,7 +528,6 @@ async function createOrResumeSessionUnlocked(
     llmProxyToken: generateLlmProxyToken(),
     llmCalls: 0,
     startedAt: now,
-    expiresAt,
     chatMessages: [],
     workspaceSnapshot: [],
   });

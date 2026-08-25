@@ -9,7 +9,7 @@ export type PastChallengeSummary = {
   isCurrent: boolean;
 };
 
-/** Published challenges up to the current period, newest first. */
+/** All published rounds, newest first; the active one has isCurrent=true. */
 export async function listPastChallenges(options: { limit?: number } = {}): Promise<{
   challenges: PastChallengeSummary[];
   total: number;

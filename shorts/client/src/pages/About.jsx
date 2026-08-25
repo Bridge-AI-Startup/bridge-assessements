@@ -162,7 +162,7 @@ export default function About() {
                 </p>
                 <p>
                   Shorts is that thesis with the stakes removed. Same question,
-                  asked for fun, in public, on a weekly clock.
+                  asked for fun, in public, one round at a time.
                 </p>
                 <div className="flex flex-wrap gap-3 pt-1">
                   <a href={BRIDGE_SITE_URL} className="btn-pill px-6 py-3">

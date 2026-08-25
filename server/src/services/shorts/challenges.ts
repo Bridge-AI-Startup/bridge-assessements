@@ -1,16 +1,12 @@
 import createHttpError from "http-errors";
+import { Sandbox } from "e2b";
 import {
   CHALLENGE_CATEGORIES,
   CHALLENGE_STATUSES,
   getPlayChallengeModel,
 } from "../../models/shorts/challenge.js";
+import { getPlayBuildSessionModel } from "../../models/shorts/buildSession.js";
 import { getPlaySubmissionModel } from "../../models/shorts/submission.js";
-
-import {
-  endOfChallengePeriod,
-  getCurrentPeriodKey,
-  getPlayChallengeCadence,
-} from "./challengePeriod.js";
 
 export type ChallengeCategory = (typeof CHALLENGE_CATEGORIES)[number];
 export type ChallengeStatus = (typeof CHALLENGE_STATUSES)[number];
@@ -25,16 +21,13 @@ export type PublicChallenge = {
   category: ChallengeCategory;
   /** Build path override; unset → server SHORTS_MAKE_MODE default. */
   makeMode?: ChallengeMakeMode;
-  /** Present on GET /today — mirrors PLAY_CHALLENGE_CADENCE */
-  cadence?: "daily" | "weekly";
-  periodEndsAt?: string;
-  /** Present when the round's live window is an explicit override, not the cadence grid. */
-  windowStartsAt?: string;
+  /** True only for the manually selected current round. */
+  isActive?: boolean;
 };
 
-/** @deprecated Prefer getCurrentPeriodKey — kept for call sites / seeds */
+/** UTC date helper for seed scripts. It does not select the active round. */
 export function getUtcChallengeDate(date: Date = new Date()): string {
-  return getCurrentPeriodKey(date);
+  return date.toISOString().slice(0, 10);
 }
 
 export type ChallengeInput = {
@@ -65,6 +58,7 @@ function toPublicChallenge(doc: {
   tokenBudget: number;
   category: ChallengeCategory;
   makeMode?: ChallengeMakeMode;
+  isActive?: boolean;
 }): PublicChallenge {
   const result: PublicChallenge = {
     challengeDate: doc.challengeDate,
@@ -77,61 +71,25 @@ function toPublicChallenge(doc: {
   if (doc.makeMode === "e2b" || doc.makeMode === "serverless") {
     result.makeMode = doc.makeMode;
   }
+  if (doc.isActive) result.isActive = true;
   return result;
 }
 
-export async function getTodayChallenge(): Promise<PublicChallenge | null> {
+/** The current round is explicit state; dates and cadence never select it. */
+export async function getCurrentChallenge(): Promise<PublicChallenge | null> {
   const Challenge = getPlayChallengeModel();
-  const now = new Date();
-
-  // An explicit window override wins over the cadence grid: the challenge is
-  // live exactly while now sits inside [windowStartsAt, windowEndsAt].
-  const windowed = (await Challenge.findOne({
-    status: "published",
-    windowStartsAt: { $lte: now },
-    windowEndsAt: { $gte: now },
-  })
-    .sort({ windowStartsAt: -1 })
-    .lean()) as
-    | (PublicChallenge & { windowStartsAt?: Date; windowEndsAt?: Date })
-    | null;
-
-  if (windowed) {
-    const challenge = toPublicChallenge(windowed);
-    challenge.cadence = getPlayChallengeCadence();
-    challenge.periodEndsAt = new Date(windowed.windowEndsAt!).toISOString();
-    challenge.windowStartsAt = new Date(windowed.windowStartsAt!).toISOString();
-    return challenge;
-  }
-
-  const periodKey = getCurrentPeriodKey();
   const doc = (await Challenge.findOne({
-    challengeDate: periodKey,
     status: "published",
-    // A challenge whose explicit window excludes "now" is not live even if
-    // its period key matches (e.g. a round that starts mid-week).
-    $or: [{ windowStartsAt: null }, { windowStartsAt: { $exists: false } }],
+    isActive: true,
   }).lean()) as PublicChallenge | null;
-
-  if (!doc) {
-    return null;
-  }
-
-  const challenge = toPublicChallenge(doc);
-  challenge.cadence = getPlayChallengeCadence();
-  challenge.periodEndsAt = endOfChallengePeriod(periodKey).toISOString();
-  return challenge;
+  return doc ? toPublicChallenge(doc) : null;
 }
 
-/**
- * Period key of the currently live challenge — window-aware. Falls back to
- * the cadence-derived key when no challenge is live. Use this (not
- * getCurrentPeriodKey) wherever "the current round" defaults a challengeDate,
- * so a window-extended round keeps its gallery, votes and leaderboard.
- */
+/** Date key of the manually selected current round. */
 export async function getActiveChallengeDate(): Promise<string> {
-  const live = await getTodayChallenge();
-  return live?.challengeDate ?? getCurrentPeriodKey();
+  const live = await getCurrentChallenge();
+  if (!live) throw createHttpError(404, "no_active_round");
+  return live.challengeDate;
 }
 
 export type PastChallengeSummary = {
@@ -140,26 +98,23 @@ export type PastChallengeSummary = {
   challengeDate: string;
   category: ChallengeCategory;
   submissionCount: number;
-  /** True for the current period's challenge. */
+  /** True for the manually selected current round. */
   isCurrent: boolean;
 };
 
 /**
- * Published challenges up to and including the current period, newest first,
- * with per-round submission counts. Public — powers the archive view.
+ * All published rounds, newest first, with per-round submission counts.
  */
 export async function listPastChallenges(
   options: { limit?: number } = {},
 ): Promise<{ challenges: PastChallengeSummary[]; total: number }> {
   const Challenge = getPlayChallengeModel();
   const limit = Math.min(Math.max(options.limit ?? 52, 1), 200);
-  // Window-aware: an extended round stays "current" (and out of the past-rounds
-  // framing) for as long as its window runs.
-  const currentKey = await getActiveChallengeDate();
+  const current = await getCurrentChallenge();
+  const currentKey = current?.challengeDate ?? null;
 
   const filter = {
     status: "published",
-    challengeDate: { $lte: currentKey },
   };
 
   const [docs, total] = await Promise.all([
@@ -222,6 +177,77 @@ export async function getChallengeBySlug(slug: string) {
   return Challenge.findOne({ slug: slug.toLowerCase() }).lean();
 }
 
+/**
+ * Make one published challenge the current round. This is the only operation
+ * that changes the round; dates, windows, publishing, and wall-clock time do not.
+ *
+ * The updates deliberately fail closed: if the process stops between clearing
+ * the old marker and setting the new one, Shorts has no active round rather
+ * than silently serving the wrong challenge.
+ */
+export async function activateChallenge(slug: string) {
+  const Challenge = getPlayChallengeModel();
+  const BuildSession = getPlayBuildSessionModel();
+  const normalizedSlug = slug.toLowerCase();
+  const target = await Challenge.findOne({ slug: normalizedSlug });
+  if (!target) throw createHttpError(404, "Challenge not found");
+  if (target.status !== "published") {
+    throw createHttpError(409, "Publish the challenge before activating it");
+  }
+
+  const now = new Date();
+  const oldSessions = await BuildSession.find({
+    challengeSlug: { $ne: normalizedSlug },
+    status: { $in: ["active", "provisioning"] },
+    e2bSandboxId: { $exists: true, $ne: null },
+  })
+    .select("e2bSandboxId")
+    .lean();
+
+  await Challenge.updateMany(
+    { isActive: true, slug: { $ne: normalizedSlug } },
+    { $set: { isActive: false, deactivatedAt: now } },
+  );
+  target.isActive = true;
+  target.activatedAt = now;
+  target.deactivatedAt = undefined;
+  await target.save();
+
+  // A round switch closes unfinished builds from prior rounds. Current-round
+  // sessions lose legacy calendar expiry so they remain usable until the next
+  // explicit activation.
+  await Promise.all([
+    BuildSession.updateMany(
+      {
+        challengeSlug: { $ne: normalizedSlug },
+        status: { $in: ["active", "provisioning"] },
+      },
+      {
+        $set: { status: "expired", error: "Round replaced" },
+        $unset: { expiresAt: 1 },
+      },
+    ),
+    BuildSession.updateMany(
+      {
+        challengeSlug: normalizedSlug,
+        status: { $in: ["active", "provisioning"] },
+      },
+      { $unset: { expiresAt: 1, error: 1 } },
+    ),
+  ]);
+
+  // Mongo state changes first so old sessions stop accepting work immediately;
+  // sandbox cleanup is best-effort and cannot roll the round switch back.
+  await Promise.allSettled(
+    oldSessions
+      .map((session) => session.e2bSandboxId)
+      .filter((id): id is string => Boolean(id))
+      .map((id) => Sandbox.kill(id)),
+  );
+
+  return target.toObject();
+}
+
 async function assertUniqueSlugAndDate(
   slug: string,
   challengeDate: string,
@@ -274,6 +300,16 @@ export async function updateChallenge(slug: string, patch: ChallengePatch) {
   const nextSlug = patch.slug?.toLowerCase() ?? normalizedSlug;
   const nextDate = patch.challengeDate ?? existing.challengeDate;
 
+  if (
+    existing.isActive &&
+    (nextSlug !== normalizedSlug || nextDate !== existing.challengeDate)
+  ) {
+    throw createHttpError(
+      409,
+      "Activate another round before changing the current round key",
+    );
+  }
+
   if (nextSlug !== normalizedSlug || nextDate !== existing.challengeDate) {
     await assertUniqueSlugAndDate(nextSlug, nextDate, normalizedSlug);
   }
@@ -297,6 +333,12 @@ export async function updateChallenge(slug: string, patch: ChallengePatch) {
     existing.category = patch.category;
   }
   if (patch.status !== undefined) {
+    if (existing.isActive && patch.status !== "published") {
+      throw createHttpError(
+        409,
+        "Activate another round before unpublishing the current one",
+      );
+    }
     existing.status = patch.status;
   }
   if (patch.makeMode !== undefined) {

@@ -9,7 +9,9 @@ import { shouldFetchSubmissionFiles } from "@/config/submissionPreview";
 export type RoundProgress = {
   votesInRound: number;
   roundSize: number;
-  votesToday: number;
+  votesThisRound: number;
+  /** @deprecated Compatibility with older servers during rollout. */
+  votesToday?: number;
   maxVotes: number;
   roundIndex: number;
   remainingWeightedVotes: number;

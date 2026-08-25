@@ -71,10 +71,6 @@ export function getShortsSubmitGraceSeconds(): string {
   );
 }
 
-export function getShortsChallengeCadence(): string {
-  return shortsEnv("SHORTS_CHALLENGE_CADENCE", "PLAY_CHALLENGE_CADENCE", "weekly");
-}
-
 export function getShortsAnthropicModel(): string {
   return shortsEnv("SHORTS_ANTHROPIC_MODEL", "PLAY_ANTHROPIC_MODEL");
 }

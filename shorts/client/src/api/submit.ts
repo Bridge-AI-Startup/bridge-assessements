@@ -64,7 +64,7 @@ export async function submitSession(input: {
           message:
             typeof body.error === "string"
               ? body.error
-              : "You ran out of builds for the week.",
+              : "You ran out of builds for this round.",
           httpStatus: res.status,
           code: "submission_limit",
         };
