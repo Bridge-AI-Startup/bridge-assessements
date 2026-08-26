@@ -70,6 +70,13 @@
       "port": 5173
     },
     {
+      "name": "standup-board-demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.js"],
+      "cwd": "demos/standup-board-demo",
+      "port": 3000
+    },
+    {
       "name": "starter-preview",
       "runtimeExecutable": "python3",
       "runtimeArgs": [

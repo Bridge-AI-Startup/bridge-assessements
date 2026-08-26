@@ -180,7 +180,7 @@ describe("combined leaderboard score", () => {
       },
       evaluationReport: rubric,
     });
-    expect(parts).toEqual(["Process 7.0/10", "Behavioral 67% (3/4 checks decided)"]);
+    expect(parts).toEqual(["Process 7.0/10", "Code 67% (3/4 checks decided)"]);
   });
 
   it("omits the coverage note when every check was decided", () => {
@@ -191,7 +191,7 @@ describe("combined leaderboard score", () => {
         score: computeBehavioralScore(cases("pass", "fail")),
       },
     });
-    expect(parts).toEqual(["Behavioral 50%"]);
+    expect(parts).toEqual(["Code 50%"]);
   });
 
   it("still refuses to score a legacy setup-failure report", () => {

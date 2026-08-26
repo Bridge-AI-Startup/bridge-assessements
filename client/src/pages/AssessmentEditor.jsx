@@ -1160,7 +1160,7 @@ export default function AssessmentEditor() {
                     the candidate&apos;s AI prompts, replies, and code changes
                     for scoring — they run a short setup command and work in
                     their own environment. None turns that off. Evaluation
-                    criteria are judged against this record; behavioral checks
+                    criteria are judged against this record; product checks
                     still run on the submitted code either way.
                   </p>
                   <div className="space-y-2">
@@ -1378,7 +1378,7 @@ export default function AssessmentEditor() {
                   <PlayCircle className="w-4 h-4 text-gray-600 mt-0.5 shrink-0" />
                   <span>
                     <span className="text-sm font-medium text-gray-800 block">
-                      Behavioral checks — what they built
+                      Product checks — what they built
                     </span>
                     <span className="text-xs text-gray-500">
                       We run their submitted code and check the product actually
@@ -1403,7 +1403,7 @@ export default function AssessmentEditor() {
 
             {/* Behavioral checks (shared product bar for all candidates) */}
             <DocumentBlock
-              title="Behavioral checks"
+              title="Product checks"
               subtitle="What the finished product must do"
               icon={PlayCircle}
               sectionId="behavioralChecks"
@@ -1434,7 +1434,7 @@ export default function AssessmentEditor() {
                 </p>
                 {behavioralChecks.length === 0 ? (
                   <p className="text-sm text-gray-500 italic border border-dashed border-gray-200 rounded-lg px-3 py-4 bg-gray-50/80">
-                    No behavioral checks yet. They are generated when you create
+                    No product checks yet. They are generated when you create
                     an assessment with AI, or you can add your own.
                   </p>
                 ) : (
@@ -1559,7 +1559,7 @@ export default function AssessmentEditor() {
                     className="text-sm bg-[#21201C] hover:bg-[#35332D]"
                   >
                     {behavioralChecksDirty
-                      ? "Save behavioral checks"
+                      ? "Save product checks"
                       : "Saved"}
                   </Button>
                 </div>
@@ -1593,7 +1593,7 @@ export default function AssessmentEditor() {
               <div className="space-y-4">
                 <p className="text-xs text-gray-500">
                   Criteria used to judge {observedEvidenceLabel} — the process,
-                  not whether the finished product works (that&apos;s behavioral
+                  not whether the finished product works (that&apos;s product
                   checks above). Add, edit, or suggest from the project
                   description.
                 </p>
@@ -1604,7 +1604,7 @@ export default function AssessmentEditor() {
                     <span className="font-medium">
                       Time &amp; Deadlines → How we observe the session
                     </span>{" "}
-                    to use them. Behavioral checks still run either way.
+                    to use them. Product checks still run either way.
                   </p>
                 )}
                 <div className="space-y-2">

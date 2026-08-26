@@ -24,7 +24,7 @@ export type CompetitionLeaderboardResponse = {
     displayName: string;
     score: number | null;
     submittedAt: string | null;
-    /** Same segments as employer “Combined score” subtitle (Process / Behavioral). */
+    /** Same segments as employer “Combined score” subtitle (Process / Code). */
     breakdown: string[];
   }>;
 };

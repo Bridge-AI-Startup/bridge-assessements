@@ -109,7 +109,7 @@ async function setBehavioralGradingFailed(
         setup: {
           status: "failed",
           phase: failureCategory === "timeout" ? "health_wait" : "runbook",
-          summary: `Behavioral grading failed: ${summary}`,
+          summary: `Code grading failed: ${summary}`,
           failedSteps: [],
         },
         cases: [],
@@ -1717,7 +1717,7 @@ export const gradeBehavioralHandler: RequestHandler = async (
       await beginStressDemoBehavioralSimulation(submissionId);
       triggerStressDemoBehavioralSimulationInBackground(submissionId);
       return res.status(202).json({
-        message: "Behavioral grading queued.",
+        message: "Code grading queued.",
         submissionId,
       });
     }
@@ -1725,20 +1725,20 @@ export const gradeBehavioralHandler: RequestHandler = async (
     if (!isBehavioralGradingEnabled()) {
       return res.status(503).json({
         error:
-          "Behavioral grading (E2B) is currently disabled. Set BEHAVIORAL_GRADING_ENABLED=true on the server to enable.",
+          "Code grading (E2B) is currently disabled. Set BEHAVIORAL_GRADING_ENABLED=true on the server to enable.",
       });
     }
 
     if (isBehavioralGradingInFlight(submissionId)) {
       return res.status(409).json({
-        error: "Behavioral grading is already running for this submission.",
+        error: "Code grading is already running for this submission.",
       });
     }
 
     triggerBehavioralGradingInBackground(submissionId, "manual");
 
     return res.status(202).json({
-      message: "Behavioral grading queued.",
+      message: "Code grading queued.",
       submissionId,
     });
   } catch (error) {

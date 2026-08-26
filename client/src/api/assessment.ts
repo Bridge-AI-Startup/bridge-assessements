@@ -30,6 +30,8 @@ export type Assessment = {
   behavioralChecks?: string[];
   behavioralCheckSpecs?: BehavioralCheckSpec[];
   evaluationCriteria?: string[];
+  pinned?: boolean;
+  pinnedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -55,6 +57,7 @@ export type AssessmentUpdate = {
   behavioralChecks?: string[];
   behavioralCheckSpecs?: BehavioralCheckSpec[];
   evaluationCriteria?: string[];
+  pinned?: boolean;
 };
 
 /**
@@ -252,6 +255,7 @@ export async function updateAssessment(
       behavioralChecks?: string[];
       behavioralCheckSpecs?: BehavioralCheckSpec[];
       evaluationCriteria?: string[];
+      pinned?: boolean;
     } = {};
 
     if (data.title !== undefined) {
@@ -282,6 +286,9 @@ export async function updateAssessment(
     }
     if (data.evaluationCriteria !== undefined) {
       updateBody.evaluationCriteria = data.evaluationCriteria;
+    }
+    if (data.pinned !== undefined) {
+      updateBody.pinned = data.pinned;
     }
 
     const response = await patch(`/assessments/${id}`, updateBody, {
@@ -541,7 +548,7 @@ export async function generateBehavioralChecksForAssessment(
       }
       return {
         success: false,
-        error: `Failed to generate behavioral checks (${response.status})`,
+        error: `Failed to generate product checks (${response.status})`,
       };
     }
 
@@ -554,7 +561,7 @@ export async function generateBehavioralChecksForAssessment(
         success: false,
         error:
           result?.error ||
-          `Failed to generate behavioral checks (${response.status})`,
+          `Failed to generate product checks (${response.status})`,
       };
     }
 
@@ -572,7 +579,7 @@ export async function generateBehavioralChecksForAssessment(
 
     return {
       success: false,
-      error: "Invalid response from generate behavioral checks",
+      error: "Invalid response from generate product checks",
     };
   } catch (error) {
     return handleAPIError(error);

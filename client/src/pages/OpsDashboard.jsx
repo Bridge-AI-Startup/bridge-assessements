@@ -326,7 +326,7 @@ export default function OpsDashboard() {
               </div>
               <p className="mt-1 text-sm text-stone-600 max-w-2xl">
                 Who is driving heavy backend work (video merge, transcripts,
-                behavioral grading). Risk signals only — not crash causes.
+                code grading). Risk signals only — not crash causes.
                 Correlate times with Render logs.
               </p>
             </div>
@@ -385,7 +385,7 @@ export default function OpsDashboard() {
                 value={data.summary.generatingTranscripts}
               />
               <SummaryCard
-                label="Behavioral"
+                label="Code grading"
                 value={data.summary.pendingBehavioral}
               />
               <SummaryCard
@@ -411,7 +411,7 @@ export default function OpsDashboard() {
               </div>
               <div className="rounded-card border border-stone-200 bg-white px-4 py-3 text-sm">
                 <div className="text-xs uppercase tracking-[0.03em] text-stone-500 font-mono mb-1">
-                  Behavioral grading queue (this instance)
+                  Code grading queue (this instance)
                 </div>
                 <div className="tabular-nums text-ink">
                   {data.queues.behavioralGrading.active} active ·{" "}

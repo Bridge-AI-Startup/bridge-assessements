@@ -118,6 +118,19 @@ const AssessmentSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: undefined,
     },
+
+    /** Home dashboard: pinned assessments sort above the rest. */
+    pinned: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    /** When the assessment was last pinned; null when unpinned. */
+    pinnedAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true, // Adds createdAt and updatedAt automatically

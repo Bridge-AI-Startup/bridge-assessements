@@ -1054,7 +1054,7 @@ function replayLockKey(submissionId: string): string {
  * Reconnecting a warm replay box does not create anything, so it is allowed.
  */
 export const REPLAY_BLOCKED_BY_GRADING_MESSAGE =
-  "Behavioral grading is still running. Wait until it finishes before starting a live preview.";
+  "Code grading is still running. Wait until it finishes before starting a live preview.";
 
 export function replayWouldPreemptGrading(): boolean {
   return hasAnyBehavioralGradingInFlight();

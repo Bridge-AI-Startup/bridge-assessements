@@ -466,7 +466,7 @@ export async function runBehavioralGrading(
     if (!response.ok) {
       return {
         success: false,
-        error: result.error || "Failed to queue behavioral grading",
+        error: result.error || "Failed to queue code grading",
       };
     }
     return { success: true, data: result };
@@ -504,7 +504,7 @@ export async function getBehavioralArtifactBlob(
       const text = await response.text();
       return {
         success: false,
-        error: text || "Failed to load behavioral artifact",
+        error: text || "Failed to load grading screenshot",
       };
     }
     const blob = await response.blob();

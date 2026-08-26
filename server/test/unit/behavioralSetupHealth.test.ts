@@ -34,8 +34,12 @@ describe("orderChecksForIsolation", () => {
 describe("inferFailureCategory", () => {
   it("marks grading that is switched off as disabled", () => {
     expect(inferFailureCategory("Behavioral grading is disabled")).toBe("disabled");
+    expect(inferFailureCategory("Code grading is disabled")).toBe("disabled");
     expect(
       inferFailureCategory("Behavioral grading (E2B) is disabled. Set BEHAVIORAL_GRADING_ENABLED=true to enable.")
+    ).toBe("disabled");
+    expect(
+      inferFailureCategory("Code grading (E2B) is disabled. Set BEHAVIORAL_GRADING_ENABLED=true to enable.")
     ).toBe("disabled");
   });
 
@@ -84,6 +88,9 @@ describe("inferFailureCategory", () => {
 
   it("keeps a missing README, runbook, or empty check list as candidate setup", () => {
     expect(inferFailureCategory("Assessment has no behavioral checks configured.")).toBe(
+      "setup"
+    );
+    expect(inferFailureCategory("Assessment has no product checks configured.")).toBe(
       "setup"
     );
     expect(inferFailureCategory("Could not plan a runbook from the README")).toBe(

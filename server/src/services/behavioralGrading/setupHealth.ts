@@ -403,7 +403,8 @@ export function inferFailureCategory(message: string): GradingFailureCategory {
   if (
     m.includes("runbook") ||
     m.includes("readme") ||
-    m.includes("no behavioral checks")
+    m.includes("no behavioral checks") ||
+    m.includes("no product checks")
   ) {
     return "setup";
   }

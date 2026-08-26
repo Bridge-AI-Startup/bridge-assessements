@@ -34,6 +34,8 @@ import {
   MoreHorizontal,
   RefreshCw,
   AlertTriangle,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -142,6 +144,38 @@ function getRecordingRubricAvg10(sub) {
 function getRecordingRubric0to100(sub) {
   const avg = getRecordingRubricAvg10(sub);
   return avg == null ? null : avg * 10;
+}
+
+/**
+ * Rubric score (0–10) → Summary card tone.
+ *
+ * Green / amber / red match the rest of the review surface (pass badges,
+ * setup panels). Grey is reserved for "not evaluable" so a 2/10 cannot be
+ * mistaken for "we could not score this".
+ */
+function rubricScoreTone(score, evaluable) {
+  if (!evaluable) {
+    return {
+      card: "border-gray-200 border-l-gray-300 bg-gray-50",
+      text: "text-gray-500",
+    };
+  }
+  if (score >= 7) {
+    return {
+      card: "border-green-200 border-l-green-500 bg-green-50",
+      text: "text-green-800",
+    };
+  }
+  if (score >= 4) {
+    return {
+      card: "border-amber-200 border-l-amber-500 bg-amber-50",
+      text: "text-amber-900",
+    };
+  }
+  return {
+    card: "border-red-200 border-l-red-500 bg-red-50",
+    text: "text-red-800",
+  };
 }
 
 /**
@@ -336,7 +370,7 @@ function getBehavioralPass0to100(sub) {
 
 /**
  * Combined employer-facing score (0–100): mean of available signals —
- * process rubric (how they worked) and behavioral pass rate (did the thing work).
+ * process rubric (how they worked) and code-grading pass rate (did the thing work).
  */
 function getCombinedScore0to100(sub) {
   const parts = [
@@ -360,7 +394,7 @@ function getCombinedScoreBreakdownParts(sub) {
       score.decided > 0 && score.decided < score.total
         ? ` (${score.decided}/${score.total} checks decided)`
         : "";
-    segs.push(`Behavioral ${Math.round(beh)}%${coverage}`);
+    segs.push(`Code ${Math.round(beh)}%${coverage}`);
   }
   return segs;
 }
@@ -707,7 +741,7 @@ function BehavioralCaseEvidenceBody({
                   {behavioralArtifactUrls[artifactKey] ? (
                     <img
                       src={behavioralArtifactUrls[artifactKey]}
-                      alt="Behavioral evidence screenshot"
+                      alt="Check evidence screenshot"
                       className="w-full h-40 object-cover"
                     />
                   ) : (
@@ -847,7 +881,7 @@ function formatBehavioralGradingDebugExport(submission, assessment) {
   const report = submission?.behavioralGradingReport;
   const runbook = report?.runbook;
 
-  push("=== BridgeAI Behavioral Grading Export ===");
+  push("=== BridgeAI Code Grading Export ===");
   push(`Exported: ${new Date().toISOString()}`);
   push("");
 
@@ -858,7 +892,7 @@ function formatBehavioralGradingDebugExport(submission, assessment) {
   push(`Status: ${submission?.status ?? "?"}`);
   push(`Code source: ${submission?.codeSource ?? "?"}`);
   if (submission?.githubLink) push(`GitHub: ${submission.githubLink}`);
-  push(`Behavioral grading: ${submission?.behavioralGradingStatus ?? "not run"}`);
+  push(`Code grading: ${submission?.behavioralGradingStatus ?? "not run"}`);
   if (submission?.behavioralGradingError) {
     push(`Grading error: ${submission.behavioralGradingError}`);
   }
@@ -1002,7 +1036,7 @@ function formatBehavioralGradingDebugExport(submission, assessment) {
 
   const cases = report?.cases;
   if (Array.isArray(cases) && cases.length > 0) {
-    push("--- Behavioral checks ---");
+    push("--- Product checks ---");
     cases.forEach((caseResult, idx) => {
       push("");
       push(`### Check ${idx + 1}: ${(caseResult.verdict || "?").toUpperCase()}`);
@@ -1056,7 +1090,7 @@ function formatBehavioralGradingDebugExport(submission, assessment) {
       }
     });
   } else if (!submission?.behavioralGradingError) {
-    push("--- Behavioral checks ---");
+    push("--- Product checks ---");
     push("(no case results)");
   }
 
@@ -1100,7 +1134,7 @@ function CopyBehavioralReportButton({
       setCopied(true);
       toast({
         title: "Copied",
-        description: "Behavioral grading report copied to clipboard.",
+        description: "Code grading report copied to clipboard.",
       });
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -1202,6 +1236,7 @@ export default function SubmissionsDashboard() {
   const [selectedEvaluationSubmission, setSelectedEvaluationSubmission] =
     useState(null);
   const [showEvaluationModal, setShowEvaluationModal] = useState(false);
+  const [reviewFullscreen, setReviewFullscreen] = useState(false);
   const [showRunProjectModal, setShowRunProjectModal] = useState(false);
   const [runProjectPreviewUrl, setRunProjectPreviewUrl] = useState("");
   const [evaluationTab, setEvaluationTab] = useState("summary");
@@ -1252,6 +1287,10 @@ export default function SubmissionsDashboard() {
   const recordsScreen =
     evidenceModeForReview !== "workflow" && evidenceModeForReview !== "none";
   const activityTimelineOnRecording = evidenceModeForReview === "both";
+  // Tab panes need more room when the review dialog is fullscreen.
+  const reviewTabScrollClass = reviewFullscreen
+    ? "max-h-[calc(100dvh-12.5rem)] overflow-y-auto pr-1"
+    : "max-h-[58vh] overflow-y-auto pr-1";
 
   const handleOpenRunProjectModal = (githubUrl) => {
     const previewUrl = buildStackBlitzUrl(githubUrl);
@@ -1316,7 +1355,7 @@ export default function SubmissionsDashboard() {
       toast({
         title: "Evidence exported",
         description:
-          "ZIP includes submission metadata, evaluation and behavioral reports, and grading artifacts.",
+          "ZIP includes submission metadata, evaluation and code grading reports, and grading artifacts.",
       });
     } catch (e) {
       toast({
@@ -2287,6 +2326,7 @@ export default function SubmissionsDashboard() {
   const openReview = (submission, tab) => {
     if (!submission) return;
     setRecordingSeekSec(null);
+    setReviewFullscreen(false);
     if (tab) {
       reviewTabOverrideRef.current = true;
       const mode =
@@ -2381,7 +2421,7 @@ export default function SubmissionsDashboard() {
     if (!currentUser) {
       toast({
         title: "Not signed in",
-        description: "Please sign in to run behavioral grading.",
+        description: "Please sign in to run code grading.",
         variant: "destructive",
       });
       return;
@@ -2401,7 +2441,7 @@ export default function SubmissionsDashboard() {
       const result = await runBehavioralGrading(submission._id, token);
       if (!result.success) {
       toast({
-          title: "Could not start behavioral grading",
+          title: "Could not start code grading",
           description: result.error || "Please try again.",
           variant: "destructive",
         });
@@ -2411,14 +2451,14 @@ export default function SubmissionsDashboard() {
       }
 
       toast({
-        title: "Behavioral grading queued",
+        title: "Code grading queued",
         description:
           "The trace below will update as the sandbox clones, installs, and runs each check.",
       });
       await loadSubmissions();
     } catch (error) {
       toast({
-        title: "Could not start behavioral grading",
+        title: "Could not start code grading",
         description: error?.message || "Please try again.",
         variant: "destructive",
       });
@@ -2988,11 +3028,11 @@ export default function SubmissionsDashboard() {
                               }`}
                             >
                               {behavioralFailedIsPlatform(submission)
-                                ? `Behavioral: ${failureCategoryLabel(
+                                ? `Code: ${failureCategoryLabel(
                                     submission.behavioralGradingReport
                                       ?.failureCategory
                                   )}`
-                                : `Behavioral: ${submission.behavioralGradingStatus}`}
+                                : `Code: ${submission.behavioralGradingStatus}`}
                               {submission.behavioralGradingStatus === "completed" &&
                               submission.behavioralGradingReport?.setup?.status &&
                               submission.behavioralGradingReport.setup.status !==
@@ -3138,7 +3178,7 @@ export default function SubmissionsDashboard() {
                                 ) : (
                                   <Play className="mr-2 h-4 w-4" />
                                 )}
-                                Run behavioral grading
+                                Run code grading
                               </DropdownMenuItem>
                             )}
                             <DropdownMenuSeparator />
@@ -3636,11 +3676,19 @@ export default function SubmissionsDashboard() {
               setShowEvaluationModal(false);
               setSelectedEvaluationSubmission(null);
               setRecordingSeekSec(null);
+              setReviewFullscreen(false);
             }
           }}
         >
-          <DialogContent className="max-w-5xl max-h-[92vh] overflow-hidden">
-            <DialogHeader className="pr-8">
+          <DialogContent
+            className={cn(
+              "overflow-hidden",
+              reviewFullscreen
+                ? "left-0 top-0 h-[100dvh] max-h-[100dvh] w-screen max-w-none translate-x-0 translate-y-0 rounded-none sm:rounded-none"
+                : "max-w-5xl max-h-[92vh]"
+            )}
+          >
+            <DialogHeader className="pr-12">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <DialogTitle className="truncate">
@@ -3652,93 +3700,117 @@ export default function SubmissionsDashboard() {
                       "No email on file"}
                   </DialogDescription>
                 </div>
-                {selectedEvaluationSubmission ? (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="outline" size="sm" className="shrink-0">
-                        Actions
-                        <ChevronDown className="ml-2 h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-56">
-                      {selectedEvaluationSubmission.githubLink ? (
-                        <DropdownMenuItem asChild>
-                          <a
-                            href={selectedEvaluationSubmission.githubLink}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {selectedEvaluationSubmission ? (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          Actions
+                          <ChevronDown className="ml-2 h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-56">
+                        {selectedEvaluationSubmission.githubLink ? (
+                          <DropdownMenuItem asChild>
+                            <a
+                              href={selectedEvaluationSubmission.githubLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <Eye className="mr-2 h-4 w-4" />
+                              Open GitHub repo
+                            </a>
+                          </DropdownMenuItem>
+                        ) : null}
+                        {selectedEvaluationSubmission.codeSource === "upload" ? (
+                          <DropdownMenuItem
+                            onClick={() =>
+                              handleDownloadCodeArchive(
+                                selectedEvaluationSubmission
+                              )
+                            }
                           >
-                            <Eye className="mr-2 h-4 w-4" />
-                            Open GitHub repo
-                          </a>
-                        </DropdownMenuItem>
-                      ) : null}
-                      {selectedEvaluationSubmission.codeSource === "upload" ? (
+                            <Download className="mr-2 h-4 w-4" />
+                            Download archive
+                          </DropdownMenuItem>
+                        ) : null}
+                        {selectedEvaluationSubmission.status === "submitted" ? (
+                          <DropdownMenuItem
+                            onClick={() =>
+                              handleRunBehavioralGrading(
+                                selectedEvaluationSubmission
+                              )
+                            }
+                            disabled={
+                              behavioralGradingSubmissionId ===
+                              selectedEvaluationSubmission._id
+                            }
+                          >
+                            <Play className="mr-2 h-4 w-4" />
+                            Re-run code grading
+                          </DropdownMenuItem>
+                        ) : null}
+                        {selectedEvaluationSubmission.status === "submitted" ? (
+                          <DropdownMenuItem
+                            onClick={() =>
+                              handleRunEvaluation(selectedEvaluationSubmission)
+                            }
+                            disabled={
+                              evaluatingSubmissionId ===
+                              selectedEvaluationSubmission._id
+                            }
+                          >
+                            <RefreshCw className="mr-2 h-4 w-4" />
+                            Re-run scoring
+                          </DropdownMenuItem>
+                        ) : null}
                         <DropdownMenuItem
                           onClick={() =>
-                            handleDownloadCodeArchive(
-                              selectedEvaluationSubmission
-                            )
+                            openShareModal(selectedEvaluationSubmission)
                           }
                         >
-                          <Download className="mr-2 h-4 w-4" />
-                          Download archive
+                          <Send className="mr-2 h-4 w-4" />
+                          Share link or email
                         </DropdownMenuItem>
-                      ) : null}
-                      {selectedEvaluationSubmission.status === "submitted" ? (
+                        <DropdownMenuSeparator />
                         <DropdownMenuItem
-                          onClick={() =>
-                            handleRunBehavioralGrading(
-                              selectedEvaluationSubmission
-                            )
-                          }
-                          disabled={
-                            behavioralGradingSubmissionId ===
-                            selectedEvaluationSubmission._id
-                          }
+                          className="text-red-600 focus:text-red-600 focus:bg-red-50"
+                          onClick={() => {
+                            const target = selectedEvaluationSubmission;
+                            setShowEvaluationModal(false);
+                            setSelectedEvaluationSubmission(null);
+                            setReviewFullscreen(false);
+                            handleDeleteClick(target);
+                          }}
                         >
-                          <Play className="mr-2 h-4 w-4" />
-                          Re-run behavioral grading
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Delete submission
                         </DropdownMenuItem>
-                      ) : null}
-                      {selectedEvaluationSubmission.status === "submitted" ? (
-                        <DropdownMenuItem
-                          onClick={() =>
-                            handleRunEvaluation(selectedEvaluationSubmission)
-                          }
-                          disabled={
-                            evaluatingSubmissionId ===
-                            selectedEvaluationSubmission._id
-                          }
-                        >
-                          <RefreshCw className="mr-2 h-4 w-4" />
-                          Re-run scoring
-                        </DropdownMenuItem>
-                      ) : null}
-                      <DropdownMenuItem
-                        onClick={() =>
-                          openShareModal(selectedEvaluationSubmission)
-                        }
-                      >
-                        <Send className="mr-2 h-4 w-4" />
-                        Share link or email
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        className="text-red-600 focus:text-red-600 focus:bg-red-50"
-                        onClick={() => {
-                          const target = selectedEvaluationSubmission;
-                          setShowEvaluationModal(false);
-                          setSelectedEvaluationSubmission(null);
-                          handleDeleteClick(target);
-                        }}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete submission
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                ) : null}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => setReviewFullscreen((v) => !v)}
+                    aria-label={
+                      reviewFullscreen
+                        ? "Exit fullscreen review"
+                        : "Fullscreen review"
+                    }
+                    title={
+                      reviewFullscreen ? "Exit fullscreen" : "Fullscreen"
+                    }
+                  >
+                    {reviewFullscreen ? (
+                      <Minimize2 className="h-4 w-4" />
+                    ) : (
+                      <Maximize2 className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
               </div>
             </DialogHeader>
 
@@ -3809,7 +3881,7 @@ export default function SubmissionsDashboard() {
                         </div>
                         <div>
                           <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
-                            Behavioral
+                            Code
                           </p>
                           {behPct != null ? (
                             <p className="text-lg font-semibold text-gray-900 tabular-nums leading-tight">
@@ -3852,7 +3924,7 @@ export default function SubmissionsDashboard() {
                                     : "bg-amber-100 text-amber-800"
                               }
                             >
-                              Behavioral:{" "}
+                              Code:{" "}
                               {
                                 selectedEvaluationSubmission.behavioralGradingStatus
                               }
@@ -3886,7 +3958,7 @@ export default function SubmissionsDashboard() {
                     Recording
                   </TabsTrigger>
                 ) : null}
-                <TabsTrigger value="execution" title="Behavioral grading and the submitted code">
+                <TabsTrigger value="execution" title="Code grading and the submitted code">
                   Code
                 </TabsTrigger>
                 <TabsTrigger
@@ -3898,7 +3970,7 @@ export default function SubmissionsDashboard() {
               </TabsList>
 
               <TabsContent value="summary" className="mt-4">
-                <div className="max-h-[58vh] overflow-y-auto pr-1 space-y-4">
+                <div className={cn(reviewTabScrollClass, "space-y-4")}>
                   <EvidenceIntegrityBanner
                     report={
                       selectedEvaluationSubmission?.evaluationReport
@@ -3942,31 +4014,28 @@ export default function SubmissionsDashboard() {
                           <div className="space-y-3">
                             {selectedEvaluationSubmission.evaluationReport.criteria_results.map(
                               (r, i) => {
-                                const scoreColor =
+                                const tone = rubricScoreTone(
+                                  r.score,
                                   r.evaluable
-                                    ? r.score >= 7
-                                      ? "border-l-emerald-500 bg-emerald-50/50"
-                                      : r.score >= 4
-                                        ? "border-l-amber-500 bg-amber-50/50"
-                                        : "border-l-gray-400 bg-gray-50"
-                                    : "border-l-gray-300 bg-gray-50";
-                                const scoreTextColor = r.evaluable
-                                  ? r.score >= 7
-                                    ? "text-emerald-700"
-                                    : r.score >= 4
-                                      ? "text-amber-700"
-                                      : "text-gray-700"
-                                  : "text-gray-500";
+                                );
                                 return (
-                                <div
-                                  key={i}
-                                  className={`rounded-lg border border-gray-200 border-l-4 p-4 shadow-sm ${scoreColor}`}
-                                >
+                                  <div
+                                    key={i}
+                                    className={cn(
+                                      "rounded-lg border border-l-4 p-4 shadow-sm",
+                                      tone.card
+                                    )}
+                                  >
                                   <div className="flex items-start justify-between gap-3">
                                     <p className="font-semibold text-gray-900">
                                       {r.criterion}
                                     </p>
-                                    <span className={`text-xl font-medium tracking-[-0.012em] tabular-nums shrink-0 ${scoreTextColor}`}>
+                                    <span
+                                      className={cn(
+                                        "text-xl font-medium tracking-[-0.012em] tabular-nums shrink-0",
+                                        tone.text
+                                      )}
+                                    >
                                       {r.evaluable ? `${r.score}` : "—"}/10
                                     </span>
                                   </div>
@@ -4286,7 +4355,7 @@ export default function SubmissionsDashboard() {
               </TabsContent>
 
               <TabsContent value="execution" className="mt-4">
-                <div className="max-h-[58vh] overflow-y-auto pr-1 space-y-4">
+                <div className={cn(reviewTabScrollClass, "space-y-4")}>
                   {/* Submitted code + sandbox behavioral checks */}
                   {selectedEvaluationSubmission?.githubLink ||
                   selectedEvaluationSubmission?.codeSource === "upload" ? (
@@ -4337,7 +4406,7 @@ export default function SubmissionsDashboard() {
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <p className="text-[10px] font-medium text-gray-500 uppercase font-mono tracking-[0.03em]">
-                              Behavioral grading
+                              Code grading
                             </p>
                             <div className="mt-1 flex items-center gap-2">
                               <Badge
@@ -4582,13 +4651,13 @@ export default function SubmissionsDashboard() {
                               ),
                             },
                             {
-                              label: "Behavioral grading queued",
+                              label: "Code grading queued",
                               done: Boolean(
                                 selectedEvaluationSubmission?.behavioralGradingStatus
                               ),
                             },
                             {
-                              label: "Behavioral grading completed",
+                              label: "Code grading completed",
                               done:
                                 selectedEvaluationSubmission?.behavioralGradingStatus ===
                                 "completed",
@@ -4632,8 +4701,8 @@ export default function SubmissionsDashboard() {
                                 ?.runbook?.evidence || [];
                             if (!entries.length) {
                               return behavioralGradingInProgress
-                                ? "Behavioral grading is still running…"
-                                : "No behavioral execution logs available yet.";
+                                ? "Code grading is still running…"
+                                : "No code grading logs available yet.";
                             }
 
                             return entries
@@ -4688,7 +4757,7 @@ export default function SubmissionsDashboard() {
               </TabsContent>
 
               <TabsContent value="recording" className="mt-4">
-                <div className="max-h-[58vh] overflow-y-auto pr-1 space-y-4">
+                <div className={cn(reviewTabScrollClass, "space-y-4")}>
                   {/* Screen recording — available once session completes / merged */}
                   {selectedEvaluationSubmission &&
                   (recordingVideoObjectUrl ||
@@ -4926,7 +4995,7 @@ export default function SubmissionsDashboard() {
               </TabsContent>
 
               <TabsContent value="agent" className="mt-4">
-                <div className="max-h-[58vh] overflow-y-auto pr-1 space-y-6">
+                <div className={cn(reviewTabScrollClass, "space-y-6")}>
                   {(() => {
                     const hasCompanion =
                       Array.isArray(companionMessages) &&

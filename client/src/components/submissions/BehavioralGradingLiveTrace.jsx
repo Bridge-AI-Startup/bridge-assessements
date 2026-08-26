@@ -53,7 +53,7 @@ export default function BehavioralGradingLiveTrace({ progress, behavioralChecks 
     progress?.checkText ??
     (currentIndex != null ? behavioralChecks[currentIndex] : null);
   const agentSteps = progress?.agentSteps ?? [];
-  const phaseLabel = progress?.phaseLabel ?? "Starting behavioral grading…";
+  const phaseLabel = progress?.phaseLabel ?? "Starting code grading…";
   const doneCount = completed.length;
   const pct = checksTotal > 0 ? Math.round((doneCount / checksTotal) * 100) : 0;
 

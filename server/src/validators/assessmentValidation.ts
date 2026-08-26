@@ -152,6 +152,13 @@ export const createAssessmentValidation = [
   makeOptionalStarterCodeFilesValidator(),
 ];
 
+const makeOptionalPinnedValidator = () =>
+  body("pinned")
+    .optional()
+    .isBoolean()
+    .withMessage("pinned must be a boolean")
+    .toBoolean();
+
 export const updateAssessmentValidation = [
   makeOptionalTitleValidator(),
   makeOptionalDescriptionValidator(),
@@ -161,6 +168,7 @@ export const updateAssessmentValidation = [
   makeOptionalEvaluationCriteriaValidator(),
   makeOptionalStarterCodeFilesValidator(),
   makeOptionalEvidenceModeValidator(),
+  makeOptionalPinnedValidator(),
 ];
 
 const makeOptionalStackValidator = () =>

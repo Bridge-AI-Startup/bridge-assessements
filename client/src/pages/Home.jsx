@@ -13,13 +13,14 @@ import {
   Trophy,
   Loader2,
   Activity,
+  Pin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { CHALLENGE_BRAND_NAME } from "@/config/competition";
-import { getAssessments, deleteAssessment } from "@/api/assessment";
+import { getAssessments, deleteAssessment, updateAssessment } from "@/api/assessment";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -196,6 +197,60 @@ export default function Home() {
     } catch (err) {
       console.error("Error deleting assessment:", err);
       alert("Failed to delete assessment");
+    }
+  };
+
+  const sortAssessments = (list) =>
+    [...list].sort((a, b) => {
+      const aPinned = Boolean(a.pinned);
+      const bPinned = Boolean(b.pinned);
+      if (aPinned !== bPinned) return aPinned ? -1 : 1;
+      if (aPinned && bPinned) {
+        const aAt = a.pinnedAt ? new Date(a.pinnedAt).getTime() : 0;
+        const bAt = b.pinnedAt ? new Date(b.pinnedAt).getTime() : 0;
+        if (aAt !== bAt) return bAt - aAt;
+      }
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
+  const handleTogglePin = async (assessment, event) => {
+    event.stopPropagation();
+    const nextPinned = !assessment.pinned;
+    const previous = assessments;
+    setAssessments(
+      sortAssessments(
+        assessments.map((a) =>
+          a._id === assessment._id
+            ? {
+                ...a,
+                pinned: nextPinned,
+                pinnedAt: nextPinned ? new Date().toISOString() : null,
+              }
+            : a
+        )
+      )
+    );
+
+    try {
+      const result = await updateAssessment(assessment._id, {
+        pinned: nextPinned,
+      });
+      if (result.success && result.data) {
+        setAssessments((current) =>
+          sortAssessments(
+            current.map((a) => (a._id === result.data._id ? result.data : a))
+          )
+        );
+      } else {
+        setAssessments(previous);
+        const errorMsg =
+          "error" in result ? result.error : "Failed to update pin";
+        alert(errorMsg);
+      }
+    } catch (err) {
+      console.error("Error toggling pin:", err);
+      setAssessments(previous);
+      alert("Failed to update pin");
     }
   };
 
@@ -494,22 +549,36 @@ export default function Home() {
                 }}
               >
                 <div className="flex items-start justify-between mb-3">
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0 pr-2">
                     <h3 className="font-semibold text-gray-900 mb-1 line-clamp-1">
                       {assessment.title}
                     </h3>
                     <Badge className="bg-blue-100 text-blue-700">Active</Badge>
                   </div>
-                  <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDelete(assessment._id);
-                        }}
-                    className="p-1.5 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity text-red-600 hover:text-red-700"
-                    title="Delete assessment"
-                      >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <button
+                      onClick={(e) => handleTogglePin(assessment, e)}
+                      className={`p-1.5 rounded-lg hover:bg-[#21201C]/5 ${
+                        assessment.pinned
+                          ? "text-[#21201C]"
+                          : "opacity-0 group-hover:opacity-100 text-gray-400 hover:text-[#21201C]"
+                      }`}
+                      title={assessment.pinned ? "Unpin" : "Pin to top"}
+                      aria-label={assessment.pinned ? "Unpin" : "Pin to top"}
+                    >
+                      <Pin className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(assessment._id);
+                      }}
+                      className="p-1.5 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity text-red-600 hover:text-red-700"
+                      title="Delete assessment"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
 
                 <p className="text-sm text-gray-500 mb-4 line-clamp-2">

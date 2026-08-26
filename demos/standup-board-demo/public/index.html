@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Standup Board</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; color: #21201c; }
+      main { display: flex; gap: 1.5rem; align-items: flex-start; }
+      section { flex: 1; background: #faf9f2; border-radius: 8px; padding: 1rem; }
+      h2 { margin-top: 0; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.04em; }
+      ul { list-style: none; padding: 0; }
+      li { background: #fff; border-radius: 6px; padding: 0.5rem; margin-bottom: 0.5rem;
+           display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+      li button { flex-shrink: 0; }
+      form { margin-bottom: 0.75rem; display: flex; gap: 0.5rem; }
+      #message { min-height: 1.5rem; color: #a33; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <h1>Standup Board</h1>
+    <form id="add-form">
+      <input type="text" placeholder="Task title" />
+      <input type="text" placeholder="Owner" />
+      <button type="submit">Add task</button>
+    </form>
+    <div id="message"></div>
+    <main>
+      <section><h2>Todo</h2><ul id="todo"></ul></section>
+      <section><h2>Doing</h2><ul id="doing"></ul></section>
+      <section><h2>Done</h2><ul id="done"></ul></section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

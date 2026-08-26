@@ -2,9 +2,9 @@
  * Public leaderboard score — must stay in sync with client `SubmissionsDashboard.jsx`:
  * `getCombinedScore0to100` + `getCombinedScoreBreakdownParts`.
  *
- * Mean of available signals (0–100 each): process rubric and behavioral pass rate.
+ * Mean of available signals (0–100 each): process rubric and code-grading pass rate.
  *
- * The behavioral half is not derived here — it comes from the score stored on the
+ * The code-grading half is not derived here — it comes from the score stored on the
  * report by `behavioralGrading/scoring.ts`, so the leaderboard, the dashboard and
  * the report itself cannot disagree about what a candidate scored.
  */
@@ -48,7 +48,7 @@ function getBehavioralPass0to100(sub: SubmissionLike): number | null {
 }
 
 /**
- * Combined 0–100 score: average of whichever of (process rubric, behavioral) exist.
+ * Combined 0–100 score: average of whichever of (process rubric, code grading) exist.
  * Returns null if none of the signals are available.
  */
 export function getCombinedLeaderboardScore(sub: SubmissionLike): number | null {
@@ -74,7 +74,7 @@ export function getCombinedScoreBreakdownParts(sub: SubmissionLike): string[] {
       score.decided > 0 && score.decided < score.total
         ? ` (${score.decided}/${score.total} checks decided)`
         : "";
-    segs.push(`Behavioral ${Math.round(beh)}%${coverage}`);
+    segs.push(`Code ${Math.round(beh)}%${coverage}`);
   }
   return segs;
 }

@@ -64,6 +64,7 @@ export type UpdateRequest = {
   behavioralChecks?: string[];
   behavioralCheckSpecs?: unknown;
   evaluationCriteria?: string[];
+  pinned?: boolean;
   uid: string; // Added by verifyAuthToken middleware
 };
 
@@ -227,9 +228,12 @@ export const getAssessments: RequestHandler = async (req, res, next) => {
     // Get MongoDB user ID from Firebase UID
     const userId = await getUserIdFromFirebaseUid(uid);
 
+    // Pinned first (most recently pinned on top), then newest created.
     const assessments = await AssessmentModel.find({ userId }).sort({
+      pinned: -1,
+      pinnedAt: -1,
       createdAt: -1,
-    }); // Most recent first
+    });
 
     // Convert to objects for JSON response
     const assessmentsResponse = assessments.map((assessment) => {
@@ -293,6 +297,7 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
       behavioralChecks,
       behavioralCheckSpecs,
       evaluationCriteria,
+      pinned,
       uid,
     } = req.body as UpdateRequest;
     const { id } = req.params;
@@ -385,6 +390,10 @@ export const updateAssessment: RequestHandler = async (req, res, next) => {
       } else {
         (assessment as any).evaluationCriteriaGroundings = undefined;
       }
+    }
+    if (pinned !== undefined) {
+      (assessment as any).pinned = Boolean(pinned);
+      (assessment as any).pinnedAt = pinned ? new Date() : null;
     }
 
     await assessment.save();

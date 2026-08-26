@@ -218,7 +218,7 @@ export async function sweepInterruptedBehavioralGrading(): Promise<number> {
         $set: {
           behavioralGradingStatus: "failed",
           behavioralGradingError:
-            "Behavioral grading was interrupted by a server restart before it finished. Re-run it to get verdicts; nothing here reflects the candidate's work.",
+            "Code grading was interrupted by a server restart before it finished. Re-run it to get verdicts; nothing here reflects the candidate's work.",
           behavioralGradingReport: {
             failureCategory: "interrupted" satisfies GradingFailureCategory,
             setup: {
@@ -440,7 +440,7 @@ export async function gradeSubmissionBehavioral(
     const t0 = Date.now();
     if (!isBehavioralGradingEnabled()) {
       throw new Error(
-        "Behavioral grading (E2B) is disabled. Set BEHAVIORAL_GRADING_ENABLED=true to enable."
+        "Code grading (E2B) is disabled. Set BEHAVIORAL_GRADING_ENABLED=true to enable."
       );
     }
     const submission = await SubmissionModel.findById(submissionId).populate("assessmentId");
@@ -449,7 +449,7 @@ export async function gradeSubmissionBehavioral(
     }
     if (submission.codeSource === "upload" && !isUploadBehavioralEnabled()) {
       throw new Error(
-        "Behavioral grading for uploaded archives is currently disabled."
+        "Code grading for uploaded archives is currently disabled."
       );
     }
 
@@ -461,7 +461,7 @@ export async function gradeSubmissionBehavioral(
     const specsByIndex: BehavioralCheckSpec[] = resolvedSpecs.specs;
     const behavioralChecks: string[] = specsByIndex.map((s) => s.text);
     if (behavioralChecks.length === 0) {
-      throw new Error("Assessment has no behavioral checks configured.");
+      throw new Error("Assessment has no product checks configured.");
     }
     if (resolvedSpecs.rejected.length > 0 || resolvedSpecs.orphanedSpecIds.length > 0) {
       behavioralInfo("check_specs_ignored", {
