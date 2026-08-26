@@ -27,7 +27,6 @@ import { getFrameStorage } from "../services/capture/storage.js";
 import {
   buildPlaybackVideo,
   videoChunkKey,
-  offsetIntoVideo,
   nextVideoOffsetStart,
 } from "../services/workflowCapture/video.js";
 import { computeMetrics } from "../services/workflowCapture/metrics.js";
@@ -910,115 +909,6 @@ export async function runScreenClassification(
     }
     const result = await classifyScreenGaps(req.params.id);
     res.status(200).json(result);
-  } catch (error) {
-    next(error);
-  }
-}
-
-/**
- * GET /api/workflow-capture/dev/data   (development only)
- * Backs the live tester page: recent sessions plus the full record of one of
- * them, with no auth. Gated to non-production in the route layer AND here —
- * this returns captured prompts, so a mis-mounted route must fail closed.
- */
-export async function getDevTesterData(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    if (process.env.NODE_ENV === "production") {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-
-    const sessions = await WorkflowCaptureSessionModel.find({})
-      .sort({ createdAt: -1 })
-      .limit(20)
-      .select("candidateName status stats createdAt")
-      .lean();
-
-    const requested = (req.query.sessionId as string) || null;
-    const currentId = requested || (sessions[0] as any)?._id?.toString() || null;
-
-    let current: Record<string, unknown> | null = null;
-    if (currentId) {
-      const session: any = await WorkflowCaptureSessionModel.findById(currentId).lean();
-      if (session) {
-        const events = await WorkflowEventModel.find({ sessionId: session._id })
-          .sort({ seq: 1 })
-          .limit(500)
-          .lean();
-        const files = await WorkflowFileStateModel.find({ sessionId: session._id })
-          .sort({ path: 1 })
-          .select("path sizeBytes origin revision updatedAt")
-          .lean();
-        const vid = session.video || {};
-        // Continuous screen-state band: what was visible at every moment of the
-        // recording, including observations excluded from grading evidence.
-        const screenBand = events
-          .filter((e: any) => e.type === "screen_context" && e.payload?.videoStart != null)
-          .map((e: any) => ({
-            start: e.payload.videoStart,
-            end: e.payload.videoEnd,
-            label: e.payload.label,
-            detail: e.payload.detail,
-            redundant: !!e.payload.redundant,
-            concurrentWithAgent: !!e.payload.concurrentWithAgent,
-          }))
-          .sort((a: any, b: any) => a.start - b.start);
-        current = {
-          sessionId: session._id.toString(),
-          status: session.status,
-          startedAt: session.startedAt || session.createdAt,
-          // Dev-only: the tester page needs this to upload video chunks as the
-          // session. Never returned by any non-dev route.
-          captureToken: session.captureToken,
-          stats: session.stats,
-          events: events.map((e: any) => ({
-            at: e.at,
-            type: e.type,
-            tool: e.toolName,
-            text: e.text,
-            // Position in the merged recording, or null when the event fell
-            // outside every recorded segment (before start, after stop, or in
-            // a gap where the share was interrupted).
-            videoOffsetSeconds: offsetIntoVideo(e.at, vid.segments),
-          })),
-          files,
-          screenBand,
-          // Persisted, so the tester shows the same segmentation the grading
-          // pipeline uses rather than a fresh (and differently-worded) one.
-          episodes: session.episodes || [],
-          episodesComputedAt: session.episodesComputedAt || null,
-          video: {
-            status: vid.status || "not_started",
-            startedAt: vid.startedAt || null,
-            endedAt: vid.endedAt || null,
-            chunkCount: (vid.chunks || []).length,
-            hasPlayback: (vid.chunks || []).length > 0,
-            segments: (vid.segments || []).map((s: any) => ({
-              wallStartedAt: s.wallStartedAt,
-              wallEndedAt: s.wallEndedAt,
-              videoOffsetStart: s.videoOffsetStart,
-              endReason: s.endReason,
-            })),
-            totalRecordedSeconds: nextVideoOffsetStart(vid.segments || []),
-          },
-        };
-      }
-    }
-
-    res.status(200).json({
-      sessions: sessions.map((s: any) => ({
-        id: s._id.toString(),
-        candidateName: s.candidateName,
-        status: s.status,
-        eventCount: s.stats?.totalEvents ?? 0,
-        createdAt: s.createdAt,
-      })),
-      current,
-    });
   } catch (error) {
     next(error);
   }

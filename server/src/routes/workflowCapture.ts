@@ -12,6 +12,7 @@ import multer from "multer";
 import os from "os";
 
 import * as WorkflowCaptureController from "../controllers/workflowCapture.js";
+import * as WorkflowCaptureDevController from "../controllers/workflowCaptureDev.js";
 import { verifyAuthToken } from "../validators/auth.js";
 import { renderTesterPage } from "../services/workflowCapture/testerPage.js";
 
@@ -72,12 +73,17 @@ router.get(
   WorkflowCaptureController.getCaptureSessionBySubmission
 );
 
-// --- Dev-only live tester (never mounted in production) ---
+// --- Dev-only live lab (never mounted in production) ---
+// The lab shows raw capture data AND runs every AI stage on demand, so it is
+// gated here and re-checked inside each handler.
 if (process.env.NODE_ENV !== "production") {
   router.get("/tester", (_req, res) => {
     res.type("html").send(renderTesterPage());
   });
-  router.get("/dev/data", WorkflowCaptureController.getDevTesterData);
+  router.get("/dev/data", WorkflowCaptureDevController.getLabData);
+  router.get("/dev/file", WorkflowCaptureDevController.getLabFile);
+  router.get("/dev/stage/:stage", WorkflowCaptureDevController.getLabStage);
+  router.post("/dev/run/:stage", express.json({ limit: "1mb" }), WorkflowCaptureDevController.runLabStage);
 }
 
 // --- Live interviewer agent (X-Agent-Secret) ---

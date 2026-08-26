@@ -20,7 +20,7 @@ The tradeoff is that hooks are removable — a candidate *can* delete
 hiring context, a stripped or truncated record is itself visible to the
 reviewer. We optimise for a cooperative candidate, not an adversarial one.
 
-## Live tester (fastest way to see it work)
+## Capture lab (fastest way to see it work)
 
 First restart the dev server if it was already running, then open:
 
@@ -28,9 +28,21 @@ First restart the dev server if it was already running, then open:
 http://localhost:5050/api/workflow-capture/tester
 ```
 
-Polls every 2s and shows the timeline, stats, code state, **and a screen
-recording synced to the timeline**. Click any event and the player jumps to that
-moment. Dev-only — not mounted when `NODE_ENV=production`.
+Dev-only — not mounted when `NODE_ENV=production`. It shows **everything the
+platform records about a session and everything it infers from it**, live:
+
+- **Session** — the setup command, the session document, consent, environment,
+  capture integrity, and whatever submission/proctoring session it is linked to.
+- **Raw stream** — every event exactly as stored, full payload included.
+- **Timeline** — the built `TranscriptEvent[]` the grading engine reads, with
+  voice merged in.
+- **Code** — file state, with contents.
+- **AI pipeline** — deterministic metrics, plus each model-backed stage with a
+  Run button: screen classification, episodes, rubric grading (validate →
+  ground → evaluate → citation validation → communication → capture integrity),
+  the voice agent's context bundle, and the companion director's next question.
+  **Run full pipeline** does them in production order.
+- **Recording** — segments, chunks, and the merged file.
 
 Order of operations: click **Start screen recording** first (the recording's
 start instant is the sync origin), then run setup and work in Claude Code, then
@@ -41,9 +53,10 @@ them.
 ### How the sync works
 
 `video.startedAt` is recorded server-side when recording begins; an event's
-position is simply `event.at − video.startedAt`. Nothing about the video is
-analysed — no frames, no OCR, no vision model. The video is there so a human can
-*watch* the moment; all the analysis comes from the hook stream.
+position is simply `event.at − video.startedAt`. The hook stream is what gets
+graded — the video exists so a human can *watch* the moment, and so screen
+classification can identify which surface was visible (Gemini at 1fps / LOW,
+surface identification, not OCR).
 
 Chunks are merged and **remuxed through ffmpeg** on first playback, then cached.
 The remux is not optional: raw concatenated MediaRecorder output plays but is not
