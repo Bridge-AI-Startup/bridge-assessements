@@ -1,0 +1,50 @@
+{
+  "note": "Seeded cold-start data. These anonymousIds are synthetic, not real users.",
+  "challengeDate": "2026-09-11",
+  "challengeSlug": "fidget-toy-2026-09-11",
+  "submissions": [
+    {
+      "_id": "6aa444faafbf8da9be1a6aa0",
+      "anonymousId": "c9d0e1f2-a3b4-4c5d-9e6f-7a8b9c0d1e02",
+      "displayName": "spinny",
+      "dir": "spinny"
+    },
+    {
+      "_id": "6aa444faafbf8da9be1a6a9e",
+      "anonymousId": "c9d0e1f2-a3b4-4c5d-9e6f-7a8b9c0d1e01",
+      "displayName": "pop sheet",
+      "dir": "pop-sheet"
+    },
+    {
+      "_id": "6aa444faafbf8da9be1a6aa2",
+      "anonymousId": "c9d0e1f2-a3b4-4c5d-9e6f-7a8b9c0d1e03",
+      "displayName": "goo",
+      "dir": "goo"
+    },
+    {
+      "_id": "6aa444faafbf8da9be1a6aa8",
+      "anonymousId": "c9d0e1f2-a3b4-4c5d-9e6f-7a8b9c0d1e06",
+      "displayName": "filings",
+      "dir": "filings"
+    },
+    {
+      "_id": "6aa444faafbf8da9be1a6aa4",
+      "anonymousId": "c9d0e1f2-a3b4-4c5d-9e6f-7a8b9c0d1e04",
+      "displayName": "bead loop",
+      "dir": "bead-loop"
+    },
+    {
+      "_id": "6aa444faafbf8da9be1a6aa6",
+      "anonymousId": "c9d0e1f2-a3b4-4c5d-9e6f-7a8b9c0d1e05",
+      "displayName": "switchboard",
+      "dir": "switchboard"
+    },
+    {
+      "_id": "6aa444faafbf8da9be1a6aaa",
+      "anonymousId": "c9d0e1f2-a3b4-4c5d-9e6f-7a8b9c0d1e07",
+      "displayName": "big button",
+      "dir": "big-button"
+    }
+  ],
+  "voteCount": 35
+}

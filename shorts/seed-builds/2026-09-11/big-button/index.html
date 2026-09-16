@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>big button</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:hsl(var(--h,20),60%,92%);transition:background .4s}
+  #wrap{position:absolute;inset:0;display:grid;place-items:center}
+  #btn{width:min(60vmin,340px);height:min(60vmin,340px);border-radius:50%;border:0;cursor:pointer;position:relative;
+    background:radial-gradient(circle at 40% 32%,hsl(var(--h,20),85%,68%),hsl(var(--h,20),75%,48%) 70%);
+    box-shadow:0 18px 0 hsl(var(--h,20),60%,32%),0 26px 30px rgba(0,0,0,.25);
+    transition:transform .07s ease,box-shadow .07s ease,background .3s;color:#fff;font:700 clamp(22px,7vmin,48px) ui-monospace,monospace;letter-spacing:.06em}
+  #btn.down{transform:translateY(14px) scale(.97);box-shadow:0 4px 0 hsl(var(--h,20),60%,32%),0 8px 12px rgba(0,0,0,.25)}
+  .ring{position:absolute;left:50%;top:50%;width:min(60vmin,340px);height:min(60vmin,340px);margin:calc(min(60vmin,340px)/-2) 0 0 calc(min(60vmin,340px)/-2);
+    border-radius:50%;border:4px solid hsl(var(--h,20),70%,50%);pointer-events:none;animation:ring .7s ease-out forwards}
+  @keyframes ring{to{transform:scale(2.2);opacity:0}}
+  #n{position:absolute;bottom:26px;left:0;right:0;text-align:center;font-size:12px;letter-spacing:.14em;color:rgba(0,0,0,.45)}
+</style>
+</head>
+<body>
+<div id="wrap"><button id="btn">PRESS</button></div>
+<div id="n"></div>
+<script>
+"use strict";
+const btn = document.getElementById("btn"), n = document.getElementById("n"), root = document.documentElement;
+let count = 0, hue = 20;
+btn.addEventListener("pointerdown", e => {
+  btn.setPointerCapture(e.pointerId);
+  btn.classList.add("down");
+  count++;
+  hue = (hue + 37) % 360;
+  root.style.setProperty("--h", hue);
+  btn.textContent = count;
+  n.textContent = count === 1 ? "again" : count < 20 ? `${count} presses` : count < 100 ? "keep going" : "you're still here";
+  const r = document.createElement("div"); r.className = "ring";
+  document.getElementById("wrap").appendChild(r);
+  setTimeout(() => r.remove(), 720);
+});
+const up = () => btn.classList.remove("down");
+btn.addEventListener("pointerup", up); btn.addEventListener("pointercancel", up);
+</script>
+</body>
+</html>

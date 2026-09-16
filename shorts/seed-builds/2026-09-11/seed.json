@@ -1,0 +1,58 @@
+{
+  "challengeSlug": "fidget-toy-2026-09-11",
+  "challengeJson": "shorts/challenges/fidget-toy-2026-09-11.json",
+  "note": "Fidget Toy launch round (seeded 2026-09-11). strength is a hidden win-propensity for the simulated vote graph only; stored ratings are genuine TrueSkill output. Ordered by expected finish: pop sheet (bubble wrap, swipe-to-pop, instantly satisfying) > spinny (flickable spinner with momentum) > goo (draggable jelly blob with eyes) > bead loop (verlet bead chain) > switchboard (panel of snappy toggles/knobs) > filings (iron filings following the pointer) > big button (one squishy button \u2014 barely a toy).",
+  "votesPerVoter": 5,
+  "randomSeed": 20260913,
+  "builds": [
+    {
+      "dir": "pop-sheet",
+      "name": "pop sheet",
+      "anonymousId": "c9d0e1f2-a3b4-4c5d-9e6f-7a8b9c0d1e01",
+      "minutes": 501,
+      "strength": 0.92
+    },
+    {
+      "dir": "spinny",
+      "name": "spinny",
+      "anonymousId": "c9d0e1f2-a3b4-4c5d-9e6f-7a8b9c0d1e02",
+      "minutes": 591,
+      "strength": 0.8
+    },
+    {
+      "dir": "goo",
+      "name": "goo",
+      "anonymousId": "c9d0e1f2-a3b4-4c5d-9e6f-7a8b9c0d1e03",
+      "minutes": 681,
+      "strength": 0.71
+    },
+    {
+      "dir": "bead-loop",
+      "name": "bead loop",
+      "anonymousId": "c9d0e1f2-a3b4-4c5d-9e6f-7a8b9c0d1e04",
+      "minutes": 771,
+      "strength": 0.6
+    },
+    {
+      "dir": "switchboard",
+      "name": "switchboard",
+      "anonymousId": "c9d0e1f2-a3b4-4c5d-9e6f-7a8b9c0d1e05",
+      "minutes": 861,
+      "strength": 0.49
+    },
+    {
+      "dir": "filings",
+      "name": "filings",
+      "anonymousId": "c9d0e1f2-a3b4-4c5d-9e6f-7a8b9c0d1e06",
+      "minutes": 951,
+      "strength": 0.37
+    },
+    {
+      "dir": "big-button",
+      "name": "big button",
+      "anonymousId": "c9d0e1f2-a3b4-4c5d-9e6f-7a8b9c0d1e07",
+      "minutes": 1041,
+      "strength": 0.26
+    }
+  ]
+}

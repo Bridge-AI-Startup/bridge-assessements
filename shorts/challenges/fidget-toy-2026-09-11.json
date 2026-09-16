@@ -1,0 +1,10 @@
+{
+  "slug": "fidget-toy-2026-09-11",
+  "challengeDate": "2026-09-11",
+  "title": "Build a Fidget Toy",
+  "prompt": "Build a fidget toy — something to poke, drag, spin, flick, or squish.\n\nOne `index.html` file. No score, no goal, no instructions: someone who lands on it should be playing with it within a second and not want to stop.\n\nMouse and touch both. Keep it silent — builds get played side by side. Make the feel of it your whole focus: the weight, the bounce, the snap-back.\n\nPeople vote on these and pick the one they'd rather keep open. The obvious version loses — make it yours.\n\nYou're done when you catch yourself still fiddling with it after you meant to stop.",
+  "tokenBudget": 40000,
+  "category": "widget",
+  "status": "published",
+  "makeMode": "serverless"
+}

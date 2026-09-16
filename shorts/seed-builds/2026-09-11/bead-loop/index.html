@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>bead loop</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#1b1a22;touch-action:none;
+    user-select:none;-webkit-user-select:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+let vw, vh, L;
+const N = 28, beads = [];
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  vw = innerWidth; vh = innerHeight;
+  cv.width = vw * dpr; cv.height = vh * dpr;
+  cv.style.width = vw + "px"; cv.style.height = vh + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  L = Math.max(14, Math.min(26, Math.min(vw, vh) * 0.032));
+}
+resize();
+addEventListener("resize", resize);
+const pin = () => ({ x: vw / 2, y: 36 });
+function seed(){
+  beads.length = 0;
+  for (let i = 0; i < N; i++){
+    const x = vw / 2 + i * L * 0.3, y = 36 + i * L * 0.9;
+    beads.push({ x, y, px: x, py: y, r: 7 + (i / N) * 6 });
+  }
+}
+
+let held = null, hint = 1, t = 0;
+cv.addEventListener("pointerdown", e => {
+  let best = null, bd = Infinity;
+  for (const b of beads){ const d = Math.hypot(b.x - e.clientX, b.y - e.clientY); if (d < bd){ bd = d; best = b; } }
+  if (bd < 48){ held = best; cv.setPointerCapture(e.pointerId); hint = 0; }
+});
+cv.addEventListener("pointermove", e => {
+  if (!held) return;
+  held.px = held.x; held.py = held.y;
+  held.x = e.clientX; held.y = e.clientY;
+});
+const drop = () => { held = null; };
+cv.addEventListener("pointerup", drop);
+cv.addEventListener("pointercancel", drop);
+
+function physics(dt){
+  const G = 2200 * dt * dt;
+  for (const b of beads){
+    if (b === held) continue;
+    const vx = (b.x - b.px) * 0.995, vy = (b.y - b.py) * 0.995;
+    b.px = b.x; b.py = b.y;
+    b.x += vx; b.y += vy + G;
+  }
+  const p = pin();
+  for (let k = 0; k < 10; k++){
+    beads[0].x = p.x; beads[0].y = p.y;
+    for (let i = 0; i < N - 1; i++){
+      const a = beads[i], c = beads[i + 1];
+      const dx = c.x - a.x, dy = c.y - a.y, d = Math.hypot(dx, dy) || 1;
+      const diff = (d - L) / d;
+      const wa = a === held || i === 0 ? 0 : 0.5, wc = c === held ? 0 : (a === held || i === 0 ? 1 : 0.5);
+      a.x += dx * diff * wa; a.y += dy * diff * wa;
+      c.x -= dx * diff * wc; c.y -= dy * diff * wc;
+    }
+    for (const b of beads){
+      if (b === held) continue;
+      if (b.y > vh - b.r){ b.y = vh - b.r; b.py = b.y + (b.y - b.py) * 0.4; }
+      if (b.x < b.r) b.x = b.r; if (b.x > vw - b.r) b.x = vw - b.r;
+    }
+  }
+}
+
+let last = performance.now();
+function frame(now){
+  const dt = Math.min(0.03, (now - last) / 1000); last = now; t += dt;
+  physics(dt / 2); physics(dt / 2);
+
+  ctx.fillStyle = "#1b1a22"; ctx.fillRect(0, 0, vw, vh);
+  // hook
+  const p = pin();
+  ctx.fillStyle = "#3a3846"; ctx.fillRect(p.x - 26, 0, 52, 14);
+  ctx.fillStyle = "#8e8ba0"; ctx.beginPath(); ctx.arc(p.x, 20, 6, 0, 7); ctx.fill();
+  // string
+  ctx.strokeStyle = "rgba(255,255,255,.35)"; ctx.lineWidth = 2; ctx.lineJoin = "round";
+  ctx.beginPath(); ctx.moveTo(p.x, 20);
+  for (const b of beads) ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  // beads
+  beads.forEach((b, i) => {
+    const hue = (300 + i * 9) % 360;
+    const g = ctx.createRadialGradient(b.x - b.r * 0.35, b.y - b.r * 0.4, b.r * 0.15, b.x, b.y, b.r * 1.1);
+    g.addColorStop(0, `hsl(${hue},85%,80%)`); g.addColorStop(0.5, `hsl(${hue},75%,58%)`); g.addColorStop(1, `hsl(${hue},70%,32%)`);
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r + (b === held ? 3 : 0), 0, 7); ctx.fill();
+  });
+  if (hint){
+    ctx.textAlign = "center";
+    ctx.fillStyle = `rgba(255,255,255,${0.45 + 0.3 * Math.sin(t * 4)})`;
+    ctx.font = "500 15px ui-monospace,monospace";
+    ctx.fillText("grab a bead and fling it", vw / 2, vh - 30);
+  }
+  requestAnimationFrame(frame);
+}
+function boot(){
+  resize();
+  if (vw > 0 && vh > 0){ seed(); last = performance.now(); requestAnimationFrame(frame); }
+  else requestAnimationFrame(boot);
+}
+boot();
+</script>
+</body>
+</html>

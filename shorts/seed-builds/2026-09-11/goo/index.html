@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>goo</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#f6f1e6;touch-action:none;
+    user-select:none;-webkit-user-select:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+let vw, vh, cx, cy, R;
+const N = 30, pts = [];
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  vw = innerWidth; vh = innerHeight;
+  cv.width = vw * dpr; cv.height = vh * dpr;
+  cv.style.width = vw + "px"; cv.style.height = vh + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cx = vw / 2; cy = vh / 2; R = Math.min(vw, vh) * 0.24;
+}
+resize();
+addEventListener("resize", resize);
+function seed(){
+  pts.length = 0;
+  for (let i = 0; i < N; i++){
+    const a = i / N * Math.PI * 2;
+    pts.push({ a, x: cx + Math.cos(a) * R, y: cy + Math.sin(a) * R, vx: 0, vy: 0 });
+  }
+}
+
+let held = null, pointer = { x: cx, y: cy - 200 }, downAt = 0, downPos = null, hint = 1, t = 0;
+let blink = 0, nextBlink = 2;
+
+cv.addEventListener("pointerdown", e => {
+  cv.setPointerCapture(e.pointerId);
+  pointer = { x: e.clientX, y: e.clientY };
+  downAt = performance.now(); downPos = { x: e.clientX, y: e.clientY };
+  let best = null, bd = Infinity;
+  for (const p of pts){ const d = Math.hypot(p.x - e.clientX, p.y - e.clientY); if (d < bd){ bd = d; best = p; } }
+  if (bd < R * 0.55){ held = best; held.vx = held.vy = 0; hint = 0; }
+});
+cv.addEventListener("pointermove", e => {
+  pointer = { x: e.clientX, y: e.clientY };
+  if (held){
+    const nx = e.clientX, ny = e.clientY;
+    held.vx = (nx - held.x) * 30; held.vy = (ny - held.y) * 30;
+    held.x = nx; held.y = ny;
+  }
+});
+function up(e){
+  if (downPos && performance.now() - downAt < 160 &&
+      Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) < 8){
+    // a quick tap = poke: shove nearby points away from the tap
+    for (const p of pts){
+      const dx = p.x - e.clientX, dy = p.y - e.clientY, d = Math.hypot(dx, dy) || 1;
+      const f = Math.max(0, 1 - d / (R * 1.3)) * 900;
+      p.vx += dx / d * f; p.vy += dy / d * f;
+    }
+    hint = 0;
+  }
+  held = null; downPos = null;
+}
+cv.addEventListener("pointerup", up);
+cv.addEventListener("pointercancel", up);
+
+function step(dt){
+  const breathe = R * (1 + 0.025 * Math.sin(t * 1.6));
+  for (let i = 0; i < N; i++){
+    const p = pts[i];
+    if (p === held) continue;
+    const rx = cx + Math.cos(p.a) * breathe, ry = cy + Math.sin(p.a) * breathe;
+    // spring to rest shape
+    p.vx += (rx - p.x) * 38 * dt; p.vy += (ry - p.y) * 38 * dt;
+    // neighbour springs keep the skin continuous
+    for (const q of [pts[(i + 1) % N], pts[(i + N - 1) % N]]){
+      const dx = q.x - p.x, dy = q.y - p.y, d = Math.hypot(dx, dy) || 1;
+      const rest = 2 * Math.PI * breathe / N;
+      const f = (d - rest) * 140 * dt;
+      p.vx += dx / d * f; p.vy += dy / d * f;
+    }
+    p.vx *= Math.pow(0.08, dt); p.vy *= Math.pow(0.08, dt);
+    const sp = Math.hypot(p.vx, p.vy), cap = R * 14;
+    if (sp > cap){ p.vx *= cap / sp; p.vy *= cap / sp; }
+    p.x += p.vx * dt; p.y += p.vy * dt;
+  }
+}
+
+function blobPath(){
+  ctx.beginPath();
+  for (let i = 0; i < N; i++){
+    const p = pts[i], q = pts[(i + 1) % N];
+    const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
+    if (i === 0) ctx.moveTo(mx, my); else ctx.quadraticCurveTo(p.x, p.y, mx, my);
+  }
+  const p = pts[0], q = pts[1];
+  ctx.quadraticCurveTo(p.x, p.y, (p.x + q.x) / 2, (p.y + q.y) / 2);
+  ctx.closePath();
+}
+
+let last = performance.now();
+function frame(now){
+  const dt = Math.min(0.033, (now - last) / 1000); last = now; t += dt;
+  step(dt / 2); step(dt / 2);
+  // blink timer
+  if (t > nextBlink){ blink = 0.18; nextBlink = t + 2.5 + Math.random() * 3; }
+  if (blink > 0) blink -= dt;
+
+  ctx.fillStyle = "#f6f1e6"; ctx.fillRect(0, 0, vw, vh);
+  // centroid + squish for shadow
+  let mx = 0, my = 0; for (const p of pts){ mx += p.x; my += p.y; } mx /= N; my /= N;
+  ctx.fillStyle = "rgba(60,80,30,.12)";
+  ctx.beginPath(); ctx.ellipse(mx, cy + R * 1.05, R * 0.9, R * 0.14, 0, 0, 7); ctx.fill();
+
+  blobPath();
+  const g = ctx.createRadialGradient(mx - R * 0.3, my - R * 0.35, R * 0.1, mx, my, R * 1.3);
+  g.addColorStop(0, "#c8f08a"); g.addColorStop(0.55, "#8fd44f"); g.addColorStop(1, "#5aa832");
+  ctx.fillStyle = g; ctx.fill();
+  ctx.lineWidth = 4; ctx.strokeStyle = "rgba(50,110,30,.35)"; ctx.stroke();
+  // highlight
+  ctx.fillStyle = "rgba(255,255,255,.55)";
+  ctx.beginPath(); ctx.ellipse(mx - R * 0.35, my - R * 0.45, R * 0.18, R * 0.09, -0.6, 0, 7); ctx.fill();
+
+  // eyes look at the pointer
+  const ex = [mx - R * 0.28, mx + R * 0.28], ey = my - R * 0.1;
+  for (const x of ex){
+    const dx = pointer.x - x, dy = pointer.y - ey, d = Math.hypot(dx, dy) || 1;
+    const look = Math.min(R * 0.07, d * 0.05);
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.ellipse(x, ey, R * 0.15, blink > 0 ? R * 0.02 : R * 0.17, 0, 0, 7); ctx.fill();
+    if (blink <= 0){
+      ctx.fillStyle = "#22301a";
+      ctx.beginPath(); ctx.arc(x + dx / d * look, ey + dy / d * look, R * 0.075, 0, 7); ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.beginPath(); ctx.arc(x + dx / d * look - R * 0.025, ey + dy / d * look - R * 0.03, R * 0.025, 0, 7); ctx.fill();
+    }
+  }
+  // mouth: wider when stretched
+  let stretch = 0; for (const p of pts) stretch = Math.max(stretch, Math.hypot(p.x - mx, p.y - my) / R - 1);
+  ctx.strokeStyle = "#22301a"; ctx.lineWidth = 3; ctx.lineCap = "round";
+  ctx.beginPath();
+  if (stretch > 0.35) ctx.arc(mx, my + R * 0.25, R * 0.1 + stretch * R * 0.1, 0, 7);
+  else ctx.arc(mx, my + R * 0.12, R * 0.22, 0.35, Math.PI - 0.35);
+  ctx.stroke();
+
+  if (hint){
+    ctx.textAlign = "center";
+    ctx.fillStyle = `rgba(40,60,20,${0.45 + 0.3 * Math.sin(t * 4)})`;
+    ctx.font = "500 15px ui-monospace,monospace";
+    ctx.fillText("drag the edge · tap to poke", cx, vh - 30);
+  }
+  requestAnimationFrame(frame);
+}
+function boot(){
+  resize();
+  if (vw > 0 && vh > 0){ seed(); last = performance.now(); requestAnimationFrame(frame); }
+  else requestAnimationFrame(boot);
+}
+boot();
+</script>
+</body>
+</html>

@@ -4,9 +4,11 @@
  * Usage (from server/):
  *   npx tsx src/scripts/seedShortsChallenge.ts [path-to-json]
  *
- * Defaults to ../play/challenges/counter-widget.json relative to server/.
+ * Defaults to ../shorts/challenges/counter-widget.json relative to server/.
  * If challengeDate is omitted, uses today's UTC date as the round's grouping
- * key. Seeding/publishing never activates a round; use activateShortsRound.ts
+ * key. `makeMode` (`e2b` | `serverless`) is passed through when present;
+ * omitting it leaves the round on the SHORTS_MAKE_MODE default.
+ * Seeding/publishing never activates a round; use activateShortsRound.ts
  * or the Admin "Make current round" action.
  */
 
@@ -32,12 +34,13 @@ type SeedPayload = {
   tokenBudget: number;
   category: "widget" | "game" | "tool" | "other";
   status?: "draft" | "published";
+  makeMode?: "e2b" | "serverless";
 };
 
 async function main() {
   const defaultPath = path.resolve(
     __dirname,
-    "../../../play/challenges/counter-widget.json",
+    "../../../shorts/challenges/counter-widget.json",
   );
   const jsonPath = path.resolve(process.argv[2] || defaultPath);
 
@@ -72,6 +75,7 @@ async function main() {
       tokenBudget: payload.tokenBudget,
       category: payload.category,
       status: payload.status ?? "draft",
+      makeMode: payload.makeMode,
     });
     console.log("Challenge updated:");
   } else {
@@ -83,6 +87,7 @@ async function main() {
       tokenBudget: payload.tokenBudget,
       category: payload.category,
       status: payload.status ?? "draft",
+      makeMode: payload.makeMode,
     });
     console.log("Challenge created:");
   }
@@ -90,6 +95,7 @@ async function main() {
   console.log("  slug:", doc.slug);
   console.log("  challengeDate:", doc.challengeDate);
   console.log("  status:", doc.status);
+  console.log("  makeMode:", doc.makeMode ?? "(env default)");
   process.exit(0);
 }
 

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>switchboard</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#0f1013;touch-action:none;
+    user-select:none;-webkit-user-select:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#9a9da8}
+  #panel{position:absolute;inset:12px;border-radius:18px;background:linear-gradient(135deg,#2a2d35,#1c1e24 40%,#24272e);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 20px 40px rgba(0,0,0,.6);
+    display:grid;grid-template-rows:auto 1fr auto;gap:10px;padding:18px;box-sizing:border-box}
+  .screw{position:absolute;width:10px;height:10px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#777,#2a2a2a);
+    box-shadow:inset 0 0 0 1px #111}
+  .screw::after{content:"";position:absolute;left:1px;right:1px;top:4px;height:2px;background:#111;transform:rotate(35deg)}
+  .row{display:flex;justify-content:center;align-items:center;gap:6vmin;flex-wrap:wrap}
+  .lbl{font-size:10px;letter-spacing:.14em;text-transform:uppercase;text-align:center;margin-top:6px}
+  /* meter */
+  #meter{height:9vmin;min-height:44px;border-radius:8px;background:#0a0b0d;box-shadow:inset 0 2px 8px #000;position:relative;overflow:hidden}
+  #bar{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg,#3ad07a,#d8d33a 70%,#e2503a);
+    transition:width .35s cubic-bezier(.2,.9,.3,1.25)}
+  #ticks{position:absolute;inset:0;background:repeating-linear-gradient(90deg,transparent 0 9%,#0a0b0d 9% 10%)}
+  /* toggles */
+  .tg{width:34px;height:64px;border-radius:8px;background:#0b0c0e;box-shadow:inset 0 2px 6px #000,0 1px 0 rgba(255,255,255,.06);position:relative;cursor:pointer}
+  .tg .k{position:absolute;left:4px;right:4px;top:4px;height:26px;border-radius:6px;background:linear-gradient(#f2f0ea,#b9b6ad);
+    box-shadow:0 3px 0 #6c6a63,0 5px 6px rgba(0,0,0,.5);transition:transform .16s cubic-bezier(.3,1.6,.5,1)}
+  .tg.on .k{transform:translateY(30px)}
+  .led{width:8px;height:8px;border-radius:50%;background:#3a1a1a;margin:0 auto 6px;box-shadow:inset 0 0 2px #000;transition:all .15s}
+  .on ~ .led,.lit{background:#ff5a4a;box-shadow:0 0 8px #ff5a4a,0 0 2px #fff}
+  .tgw{display:flex;flex-direction:column-reverse;align-items:center}
+  /* knobs */
+  .knob{width:64px;height:64px;border-radius:50%;background:radial-gradient(circle at 40% 35%,#4a4d57,#1b1d22 70%);
+    box-shadow:0 4px 0 #0a0b0d,0 8px 14px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.15);position:relative;cursor:grab;touch-action:none}
+  .knob::after{content:"";position:absolute;left:50%;top:6px;width:4px;height:16px;margin-left:-2px;border-radius:2px;background:#f0efe8}
+  .kw{position:relative;width:96px;height:96px;display:grid;place-items:center}
+  .dot{position:absolute;width:5px;height:5px;border-radius:50%;background:#33363e;transition:background .1s}
+  .dot.lit{background:#ffb347;box-shadow:0 0 6px #ffb347}
+  /* fader */
+  .fader{width:22px;height:150px;border-radius:6px;background:#0b0c0e;box-shadow:inset 0 2px 6px #000;position:relative;cursor:grab;touch-action:none}
+  .fader::before{content:"";position:absolute;left:9px;top:8px;bottom:8px;width:4px;background:#000;border-radius:2px}
+  .fader .cap{position:absolute;left:-12px;width:46px;height:22px;border-radius:5px;background:linear-gradient(#e8e6df,#a9a69c);
+    box-shadow:0 3px 0 #5c5a52,0 6px 6px rgba(0,0,0,.6)}
+  .fader .cap::after{content:"";position:absolute;left:8px;right:8px;top:10px;height:2px;background:#2a2a2a}
+  /* buttons */
+  .pb{width:52px;height:52px;border-radius:50%;background:radial-gradient(circle at 45% 35%,#e3564a,#8c1f18);
+    box-shadow:0 7px 0 #4a0f0b,0 10px 10px rgba(0,0,0,.6);cursor:pointer;transition:transform .06s,box-shadow .06s}
+  .pb.down{transform:translateY(6px);box-shadow:0 1px 0 #4a0f0b,0 2px 3px rgba(0,0,0,.6)}
+  .pb.green{background:radial-gradient(circle at 45% 35%,#7de07d,#1f7a2e);box-shadow:0 7px 0 #0d3a16,0 10px 10px rgba(0,0,0,.6)}
+  .pb.green.down{box-shadow:0 1px 0 #0d3a16,0 2px 3px rgba(0,0,0,.6)}
+  .pb.blue{background:radial-gradient(circle at 45% 35%,#6ea8ff,#1f4ea3);box-shadow:0 7px 0 #0c2450,0 10px 10px rgba(0,0,0,.6)}
+  .pb.blue.down{box-shadow:0 1px 0 #0c2450,0 2px 3px rgba(0,0,0,.6)}
+  .pb.hold{filter:brightness(1.35) saturate(1.2)}
+</style>
+</head>
+<body>
+<div id="panel">
+  <div class="screw" style="left:10px;top:10px"></div><div class="screw" style="right:10px;top:10px"></div>
+  <div class="screw" style="left:10px;bottom:10px"></div><div class="screw" style="right:10px;bottom:10px"></div>
+  <div><div id="meter"><div id="bar"></div><div id="ticks"></div></div><div class="lbl">load</div></div>
+  <div class="row" id="mid"></div>
+  <div class="row" id="bot"></div>
+</div>
+<script>
+"use strict";
+const mid = document.getElementById("mid"), bot = document.getElementById("bot"), bar = document.getElementById("bar");
+const state = { toggles: [0,0,0,0,0], knobs: [0.3, 0.6], fader: 0.4, latched: 0 };
+function meter(){
+  const t = state.toggles.reduce((a, b) => a + b, 0) / 5;
+  const k = (state.knobs[0] + state.knobs[1]) / 2;
+  const v = (t * 0.45 + k * 0.3 + state.fader * 0.2 + state.latched * 0.05);
+  bar.style.width = (v * 100) + "%";
+}
+// toggles
+const tgRow = document.createElement("div"); tgRow.className = "row"; tgRow.style.gap = "14px";
+state.toggles.forEach((_, i) => {
+  const w = document.createElement("div"); w.className = "tgw";
+  const tg = document.createElement("div"); tg.className = "tg"; tg.innerHTML = '<div class="k"></div>';
+  const led = document.createElement("div"); led.className = "led";
+  tg.addEventListener("pointerdown", () => { tg.classList.toggle("on"); state.toggles[i] = tg.classList.contains("on") ? 1 : 0; meter(); });
+  w.append(tg, led); tgRow.appendChild(w);
+});
+mid.appendChild(tgRow);
+// knobs
+state.knobs.forEach((v, i) => {
+  const kw = document.createElement("div"); kw.className = "kw";
+  const dots = [];
+  for (let d = 0; d < 11; d++){
+    const a = (-135 + d * 27) * Math.PI / 180;
+    const dot = document.createElement("div"); dot.className = "dot";
+    dot.style.left = (48 + Math.sin(a) * 42 - 2.5) + "px"; dot.style.top = (48 - Math.cos(a) * 42 - 2.5) + "px";
+    kw.appendChild(dot); dots.push(dot);
+  }
+  const knob = document.createElement("div"); knob.className = "knob"; kw.appendChild(knob);
+  const render = () => {
+    const step = Math.round(state.knobs[i] * 10);
+    knob.style.transform = `rotate(${-135 + step * 27}deg)`;
+    dots.forEach((d, n) => d.classList.toggle("lit", n <= step));
+  };
+  let drag = null;
+  knob.addEventListener("pointerdown", e => {
+    knob.setPointerCapture(e.pointerId);
+    const r = knob.getBoundingClientRect();
+    drag = { cx: r.left + r.width / 2, cy: r.top + r.height / 2, last: null };
+  });
+  knob.addEventListener("pointermove", e => {
+    if (!drag) return;
+    let a = Math.atan2(e.clientX - drag.cx, -(e.clientY - drag.cy)) * 180 / Math.PI;   // 0 = up
+    a = Math.max(-135, Math.min(135, a));
+    const v = (a + 135) / 270, snapped = Math.round(v * 10) / 10;
+    if (snapped !== state.knobs[i]){
+      state.knobs[i] = snapped; render(); meter();
+      knob.style.transition = "transform .09s cubic-bezier(.3,1.5,.5,1)";
+    }
+  });
+  const end = () => drag = null;
+  knob.addEventListener("pointerup", end); knob.addEventListener("pointercancel", end);
+  render();
+  mid.appendChild(kw);
+});
+// fader
+{
+  const f = document.createElement("div"); f.className = "fader";
+  const cap = document.createElement("div"); cap.className = "cap"; f.appendChild(cap);
+  const render = () => { cap.style.top = (8 + (1 - state.fader) * (150 - 16 - 22)) + "px"; };
+  let drag = false;
+  f.addEventListener("pointerdown", e => { drag = true; f.setPointerCapture(e.pointerId); });
+  f.addEventListener("pointermove", e => {
+    if (!drag) return;
+    const r = f.getBoundingClientRect();
+    let v = 1 - (e.clientY - r.top - 19) / (150 - 38);
+    v = Math.max(0, Math.min(1, v));
+    const notch = Math.round(v * 10) / 10;
+    if (Math.abs(v - notch) < 0.035) v = notch;           // gentle detents
+    state.fader = v; render(); meter();
+  });
+  const end = () => { drag = false; state.fader = Math.round(state.fader * 10) / 10; cap.style.transition = "top .12s"; render(); setTimeout(() => cap.style.transition = "", 130); meter(); };
+  f.addEventListener("pointerup", end); f.addEventListener("pointercancel", end);
+  render();
+  mid.appendChild(f);
+}
+// push buttons
+[["", 0], ["green", 0], ["blue", 1]].forEach(([cls, latch]) => {
+  const b = document.createElement("div"); b.className = "pb " + cls;
+  b.addEventListener("pointerdown", e => {
+    b.setPointerCapture(e.pointerId); b.classList.add("down");
+    if (latch){ b.classList.toggle("hold"); state.latched = b.classList.contains("hold") ? 1 : 0; meter(); }
+  });
+  const up = () => b.classList.remove("down");
+  b.addEventListener("pointerup", up); b.addEventListener("pointercancel", up);
+  bot.appendChild(b);
+});
+meter();
+</script>
+</body>
+</html>

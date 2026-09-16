@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>pop sheet</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#e7f0f6;touch-action:none;
+    user-select:none;-webkit-user-select:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  #sheet{position:absolute;inset:0;display:grid;place-content:center;gap:6px;padding:14px;box-sizing:border-box}
+  .b{width:var(--s);height:var(--s);border-radius:50%;position:relative;
+    background:radial-gradient(circle at 35% 32%,#ffffff 0,#e3f2fb 26%,#a9d5ec 68%,#83bcdc 100%);
+    box-shadow:inset -3px -4px 8px rgba(40,90,130,.28),inset 3px 4px 8px rgba(255,255,255,.95),0 2px 3px rgba(40,90,130,.16);
+    transition:transform .08s ease}
+  .b.p{background:radial-gradient(circle at 50% 58%,#d3e3ec 0,#bfd5e1 60%,#b4ccd9 100%);
+    box-shadow:inset 2px 3px 6px rgba(40,90,130,.38),inset -1px -1px 2px rgba(255,255,255,.5);
+    animation:pop .24s cubic-bezier(.2,.9,.3,1.4)}
+  .b.p::after{content:"";position:absolute;inset:24% 30% 34% 26%;border-radius:50%;
+    background:rgba(70,110,140,.16);transform:rotate(-14deg)}
+  @keyframes pop{0%{transform:scale(1.18)}55%{transform:scale(.84)}100%{transform:scale(1)}}
+  #hud{position:absolute;top:12px;left:0;right:0;text-align:center;font-size:12px;color:#5b7d92;
+    letter-spacing:.06em;pointer-events:none}
+  #fresh{position:absolute;left:50%;bottom:22px;transform:translate(-50%,90px);padding:12px 22px;border-radius:999px;
+    border:0;background:#1f3a4d;color:#fff;font:600 14px ui-monospace,monospace;letter-spacing:.08em;
+    box-shadow:0 6px 0 #0f2230;transition:transform .35s cubic-bezier(.2,.9,.3,1.3);cursor:pointer}
+  #fresh.show{transform:translate(-50%,0)}
+  #fresh:active{transform:translate(-50%,4px);box-shadow:0 2px 0 #0f2230}
+  .spark{position:absolute;width:6px;height:6px;border-radius:50%;background:#fff;pointer-events:none;
+    box-shadow:0 0 4px #9fd2ee;animation:fly .45s ease-out forwards}
+  @keyframes fly{to{transform:translate(var(--dx),var(--dy)) scale(0);opacity:0}}
+</style>
+</head>
+<body>
+<div id="sheet"></div>
+<div id="hud"></div>
+<button id="fresh">fresh sheet</button>
+<script>
+"use strict";
+const sheet = document.getElementById("sheet");
+const hud = document.getElementById("hud");
+const fresh = document.getElementById("fresh");
+let total = 0, popped = 0, down = false, sheets = 0;
+
+function build(){
+  sheet.innerHTML = "";
+  popped = 0;
+  const W = innerWidth - 28, H = innerHeight - 28;
+  const s = Math.max(36, Math.min(64, Math.floor(Math.min(W, H) / 7)));
+  const cols = Math.max(3, Math.floor((W + 6) / (s + 6)));
+  const rows = Math.max(3, Math.floor((H + 6) / (s + 6)));
+  sheet.style.setProperty("--s", s + "px");
+  sheet.style.gridTemplateColumns = `repeat(${cols}, ${s}px)`;
+  total = cols * rows;
+  for (let i = 0; i < total; i++){
+    const b = document.createElement("div");
+    b.className = "b";
+    b.style.animationDelay = (i * 4) + "ms";
+    sheet.appendChild(b);
+  }
+  fresh.classList.remove("show");
+  hud.textContent = sheets ? `sheet ${sheets + 1} · 0 / ${total}` : "press or swipe";
+}
+
+function burst(el){
+  const r = el.getBoundingClientRect();
+  for (let i = 0; i < 6; i++){
+    const s = document.createElement("div");
+    s.className = "spark";
+    const a = Math.random() * 6.283, d = 16 + Math.random() * 24;
+    s.style.left = (r.left + r.width / 2 - 3) + "px";
+    s.style.top = (r.top + r.height / 2 - 3) + "px";
+    s.style.setProperty("--dx", Math.cos(a) * d + "px");
+    s.style.setProperty("--dy", Math.sin(a) * d + "px");
+    document.body.appendChild(s);
+    setTimeout(() => s.remove(), 500);
+  }
+}
+
+function pop(el){
+  if (!el || !el.classList.contains("b") || el.classList.contains("p")) return;
+  el.classList.add("p");
+  burst(el);
+  popped++;
+  hud.textContent = `${popped} / ${total}`;
+  if (popped === total){
+    hud.textContent = "all popped";
+    sheets++;
+    setTimeout(() => fresh.classList.add("show"), 260);
+  }
+}
+
+const at = e => document.elementFromPoint(e.clientX, e.clientY);
+addEventListener("pointerdown", e => { if (e.target === fresh) return; down = true; pop(at(e)); });
+addEventListener("pointermove", e => { if (down) pop(at(e)); });
+addEventListener("pointerup", () => down = false);
+addEventListener("pointercancel", () => down = false);
+fresh.addEventListener("click", build);
+addEventListener("resize", build);
+build();
+</script>
+</body>
+</html>

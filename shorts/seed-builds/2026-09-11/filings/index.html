@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>filings</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#efe9dd;touch-action:none;
+    user-select:none;-webkit-user-select:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+let vw, vh;
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  vw = innerWidth; vh = innerHeight;
+  cv.width = vw * dpr; cv.height = vh * dpr;
+  cv.style.width = vw + "px"; cv.style.height = vh + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+resize();
+addEventListener("resize", resize);
+
+const N = 1400, P = [];
+function seed(){
+  P.length = 0;
+  for (let i = 0; i < N; i++) P.push({ x: Math.random() * vw, y: Math.random() * vh, vx: 0, vy: 0, a: Math.random() * 6.283 });
+}
+let mag = null, down = false, hint = 1, t = 0;
+cv.addEventListener("pointerdown", e => { down = true; mag = { x: e.clientX, y: e.clientY }; hint = 0; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener("pointermove", e => { mag = { x: e.clientX, y: e.clientY }; });
+const up = () => { down = false; };
+cv.addEventListener("pointerup", up); cv.addEventListener("pointercancel", up);
+cv.addEventListener("pointerleave", () => { if (!down) mag = null; });
+
+let last = performance.now();
+function frame(now){
+  const dt = Math.min(0.04, (now - last) / 1000); last = now; t += dt;
+  ctx.fillStyle = "#efe9dd"; ctx.fillRect(0, 0, vw, vh);
+  ctx.strokeStyle = "#2b2a30"; ctx.lineWidth = 1.4; ctx.lineCap = "round";
+  ctx.beginPath();
+  for (const p of P){
+    if (mag){
+      const dx = mag.x - p.x, dy = mag.y - p.y, d = Math.hypot(dx, dy) || 1;
+      if (down){
+        // pull in, with a swirl so they orbit rather than pile up
+        const f = Math.min(2600, 90000 / d) * dt;
+        p.vx += (dx / d) * f - (dy / d) * f * 0.6;
+        p.vy += (dy / d) * f + (dx / d) * f * 0.6;
+        if (d < 26){ p.vx -= dx / d * 900 * dt; p.vy -= dy / d * 900 * dt; }
+      }
+      // align to the field: tangent rings near the magnet, radial further out
+      const ring = d < 140;
+      const target = ring ? Math.atan2(dx, -dy) : Math.atan2(dy, dx);
+      let da = target - p.a; da = Math.atan2(Math.sin(da), Math.cos(da));
+      p.a += da * Math.min(1, dt * (down ? 14 : 5));
+    } else {
+      p.a += (Math.random() - 0.5) * 0.02;
+    }
+    p.vx *= Math.pow(0.02, dt); p.vy *= Math.pow(0.02, dt);
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    if (p.x < 0) p.x += vw; if (p.x > vw) p.x -= vw;
+    if (p.y < 0) p.y += vh; if (p.y > vh) p.y -= vh;
+    const L = 4, cx = Math.cos(p.a) * L, cy = Math.sin(p.a) * L;
+    ctx.moveTo(p.x - cx, p.y - cy); ctx.lineTo(p.x + cx, p.y + cy);
+  }
+  ctx.stroke();
+  if (mag && down){
+    ctx.fillStyle = "rgba(200,40,40,.85)";
+    ctx.beginPath(); ctx.arc(mag.x, mag.y, 7, 0, 7); ctx.fill();
+  }
+  if (hint){
+    ctx.textAlign = "center";
+    ctx.fillStyle = `rgba(40,40,50,${0.45 + 0.3 * Math.sin(t * 4)})`;
+    ctx.font = "500 15px ui-monospace,monospace";
+    ctx.fillText("press and hold to bring the magnet", vw / 2, vh - 30);
+  }
+  requestAnimationFrame(frame);
+}
+function boot(){
+  resize();
+  if (vw > 0 && vh > 0){ seed(); last = performance.now(); requestAnimationFrame(frame); }
+  else requestAnimationFrame(boot);
+}
+boot();
+</script>
+</body>
+</html>

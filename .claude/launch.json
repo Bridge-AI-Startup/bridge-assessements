@@ -72,7 +72,9 @@
     {
       "name": "standup-board-demo",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["server.js"],
+      "runtimeArgs": [
+        "server.js"
+      ],
       "cwd": "demos/standup-board-demo",
       "port": 3000
     },
@@ -86,6 +88,17 @@
       ],
       "cwd": "shorts/e2b-template/starter-project",
       "port": 5181
+    },
+    {
+      "name": "seed-preview",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5182"
+      ],
+      "cwd": "shorts/seed-builds",
+      "port": 5182
     }
   ]
 }
