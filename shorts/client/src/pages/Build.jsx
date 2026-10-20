@@ -1327,6 +1327,9 @@ export default function Build() {
       fileCount: result.result.fileCount,
       // Lets the success screen offer a share link straight to the new entry.
       submissionId: result.result.submissionId,
+      // The Instagram story card names the round; the submitted screen no
+      // longer has the session to read it from.
+      challengeTitle: state.session.challenge?.title ?? null,
     });
   }
 
@@ -1409,6 +1412,7 @@ export default function Build() {
               <ShareBuild
                 submissionId={state.submissionId}
                 displayName={state.displayName}
+                challengeTitle={state.challengeTitle}
                 isMine
               />
               <DownloadBuild

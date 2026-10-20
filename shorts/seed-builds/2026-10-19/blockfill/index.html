@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>blockfill</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#101322;user-select:none;-webkit-user-select:none;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  canvas{position:absolute;inset:0;width:100%;height:100%}
+  #hud{position:absolute;left:0;right:0;bottom:7vh;text-align:center;color:#8f95b8;font-size:12px;letter-spacing:.16em;
+    text-transform:uppercase;pointer-events:none}
+  #hud b{display:block;font-size:34px;letter-spacing:-.02em;color:#f1f3ff;margin-bottom:8px;font-weight:600;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"><b id="pct">0%</b><span id="msg">loading level</span></div>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const pct = document.getElementById("pct"), msg = document.getElementById("msg");
+let W, H;
+function size(){ const d = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight; cv.width = W*d; cv.height = H*d; ctx.setTransform(d,0,0,d,0,0); }
+addEventListener("resize", size); size();
+
+const COLS = 20, ROWS = 6, TOTAL = COLS * ROWS;
+const PALETTE = ["#00e5ff","#ffd600","#b388ff","#69f0ae","#ff5252","#ff9100","#448aff"];
+const KEYS = [[0,0],[2,26],[4.5,47],[7,55],[9.5,58],[11.5,84],[13.5,100]];
+const DUR = 13.5, HOLD = 2.8, RESET = 1.1;
+function progressAt(t){
+  for (let i = 1; i < KEYS.length; i++){
+    const [t0,p0] = KEYS[i-1], [t1,p1] = KEYS[i];
+    if (t <= t1){ const u = (t-t0)/(t1-t0); const e = u<.5 ? 2*u*u : 1-Math.pow(-2*u+2,2)/2; return p0+(p1-p0)*e; }
+  }
+  return 100;
+}
+
+let landed = [];           // [{col,row,color,squash}]
+let falling = [];          // [{col,row,y,color,v}]
+let rowFlash = new Array(ROWS).fill(0);
+let start = performance.now()/1000, phase = "load", pi = 0;
+
+function cellTarget(i){ return { row: Math.floor(i / COLS), col: i % COLS }; }
+
+let lastNow = performance.now()/1000;
+function frame(nowMs){
+  const now = nowMs/1000, t = now - start;
+  const dt = Math.min(0.05, Math.max(0.001, now - lastNow)); lastNow = now;
+  let p;
+  if (phase === "load"){ p = progressAt(t); if (t >= DUR){ phase = "hold"; start = now; p = 100; } }
+  else if (phase === "hold"){ p = 100; if (t >= HOLD){ phase = "reset"; start = now; } }
+  else { p = 100 * (1 - t / RESET); if (t >= RESET){ phase = "load"; start = now; landed = []; falling = []; rowFlash.fill(0); p = 0; } }
+
+  const s = Math.max(.6, Math.min(1.4, Math.min(W / 560, H / 420)));
+  const cell = 22 * s, gap = 3 * s;
+  const bw = COLS * (cell + gap) - gap, bh = ROWS * (cell + gap) - gap;
+  const bx = (W - bw) / 2, by = (H - bh) / 2 - 10 * s;
+  const cx = c => bx + c * (cell + gap), cy = r => by + (ROWS - 1 - r) * (cell + gap);
+
+  // spawn blocks until landed+falling covers the needed count
+  const need = Math.min(TOTAL, Math.floor(TOTAL * p / 100));
+  if (phase === "load"){
+    while (landed.length + falling.length < need){
+      const i = landed.length + falling.length, { row, col } = cellTarget(i);
+      falling.push({ col, row, y0: by - cell * 2 - Math.random() * 60 * s, t0: now, color: PALETTE[(col + row * 3) % PALETTE.length] });
+    }
+  }
+  // gravity — position is analytic in elapsed time, so a stalled tab
+  // (background throttling) lands everything on the next frame instead of
+  // leaving a cloud of blocks hovering above the well
+  for (let i = falling.length - 1; i >= 0; i--){
+    const f = falling[i], age = now - f.t0; f.y = f.y0 + 0.5 * 2600 * s * age * age;
+    if (f.y >= cy(f.row)){
+      falling.splice(i, 1);
+      landed.push({ col: f.col, row: f.row, color: f.color, squash: .6 });
+      if (landed.filter(b => b.row === f.row).length === COLS) rowFlash[f.row] = 1;
+    }
+  }
+
+  ctx.clearRect(0, 0, W, H);
+  // well
+  ctx.strokeStyle = "#2a2f4a"; ctx.lineWidth = 3 * s;
+  ctx.strokeRect(bx - 8*s, by - 8*s, bw + 16*s, bh + 16*s);
+  ctx.fillStyle = "#171b2e";
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) ctx.fillRect(cx(c), cy(r), cell, cell);
+
+  const drawBlock = (x, y, color, sq) => {
+    const w = cell * (1 + (1 - sq) * .25), h = cell * sq;
+    ctx.fillStyle = color; ctx.fillRect(x - (w - cell) / 2, y + (cell - h), w, h);
+    ctx.fillStyle = "rgba(255,255,255,.35)"; ctx.fillRect(x - (w - cell) / 2, y + (cell - h), w, Math.max(2, h * .22));
+    ctx.fillStyle = "rgba(0,0,0,.25)"; ctx.fillRect(x - (w - cell) / 2, y + cell - Math.max(2, h * .18), w, Math.max(2, h * .18));
+  };
+  const visibleRows = phase === "reset" ? Math.ceil(ROWS * p / 100) : ROWS;
+  for (const b of landed){
+    if (b.row >= visibleRows) continue;
+    if (b.squash < 1) b.squash = Math.min(1, b.squash + 7.2 * dt);
+    drawBlock(cx(b.col), cy(b.row), b.color, b.squash);
+  }
+  for (const f of falling) drawBlock(cx(f.col), f.y, f.color, 1);
+  // full-row flash
+  for (let r = 0; r < ROWS; r++){
+    if (rowFlash[r] <= 0) continue;
+    ctx.fillStyle = `rgba(255,255,255,${rowFlash[r] * .85})`;
+    ctx.fillRect(bx, cy(r), bw, cell); rowFlash[r] -= 3.6 * dt;
+  }
+  if (phase === "hold"){
+    const k = Math.floor(t * 6) % ROWS;
+    ctx.fillStyle = "rgba(255,255,255,.25)"; ctx.fillRect(bx, cy(k), bw, cell);
+  }
+
+  pct.textContent = Math.round(Math.max(0, p)) + "%";
+  msg.textContent = phase === "hold" ? "level up" : phase === "reset" ? "clearing the well" :
+    p < 30 ? "loading level" : p < 56 ? "placing blocks" : p < 62 ? "waiting for the long piece" : "almost full";
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

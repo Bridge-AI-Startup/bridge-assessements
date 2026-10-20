@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>sprout</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#1d2a44;user-select:none;-webkit-user-select:none;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  svg{position:absolute;inset:0;width:100%;height:100%}
+  #hud{position:absolute;left:0;right:0;bottom:5vh;text-align:center;color:#2f4a2a;font-size:12px;
+    letter-spacing:.14em;text-transform:uppercase;pointer-events:none}
+  #hud b{display:block;font-size:34px;letter-spacing:-.02em;color:#1f3a1b;margin-bottom:6px;font-weight:600;
+    font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<svg id="s" viewBox="0 0 300 420" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop id="sk1" offset="0" stop-color="#1d2a44"/>
+      <stop id="sk2" offset="1" stop-color="#f6d9a7"/>
+    </linearGradient>
+  </defs>
+  <rect x="-3000" width="6300" height="420" fill="url(#sky)"/>
+  <g id="stars" fill="#fff"></g>
+  <circle id="sun" cx="30" cy="190" r="22" fill="#ffd166"/>
+  <rect x="-3000" y="300" width="6300" height="120" fill="#7aa86a"/>
+  <rect x="-3000" y="300" width="6300" height="6" fill="#5f8f50"/>
+  <!-- pot -->
+  <path d="M105 300 L120 360 L180 360 L195 300 Z" fill="#c4683a"/>
+  <rect x="98" y="288" width="104" height="16" rx="3" fill="#d8784a"/>
+  <ellipse cx="150" cy="300" rx="42" ry="7" fill="#4a3324"/>
+  <path id="stem" d="M150 298 C150 262 138 246 150 206 C162 166 140 134 150 96"
+        fill="none" stroke="#3f8d3a" stroke-width="6" stroke-linecap="round"
+        pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/>
+  <g id="leaves"></g>
+  <g id="flower"></g>
+</svg>
+<div id="hud"><b id="pct">0%</b><span id="msg">planting</span></div>
+<script>
+"use strict";
+const NS = "http://www.w3.org/2000/svg";
+const $ = id => document.getElementById(id);
+const stem = $("stem"), leaves = $("leaves"), flower = $("flower"), sun = $("sun");
+const sk1 = $("sk1"), sk2 = $("sk2"), pct = $("pct"), msg = $("msg"), stars = $("stars"), svg = $("s");
+
+// The scene is 420 units tall and bottom-anchored; the viewBox widens or
+// narrows to the viewport so nothing is cropped and the ground always fills.
+function fit(){
+  const vw = Math.max(210, 420 * innerWidth / innerHeight);
+  svg.setAttribute("viewBox", `${150 - vw / 2} 0 ${vw} 420`);
+}
+addEventListener("resize", fit); fit();
+
+for (let i = 0; i < 40; i++){
+  const c = document.createElementNS(NS, "circle");
+  c.setAttribute("cx", Math.random() * 1800 - 750); c.setAttribute("cy", Math.random() * 220);
+  c.setAttribute("r", Math.random() * 1.3 + .3); stars.appendChild(c);
+}
+
+// Leaves hang off real points on the stem path so they track its curve.
+const LEAF = "M0 0 C10 -14 30 -14 36 0 C30 10 10 10 0 0 Z";
+const LEAF_AT = [[0.22, -1], [0.40, 1], [0.58, -1], [0.76, 1]];
+const len = stem.getTotalLength();
+const leafEls = LEAF_AT.map(([k, side]) => {
+  const pt = stem.getPointAtLength(len * k);
+  const g = document.createElementNS(NS, "g");
+  g.dataset.x = pt.x; g.dataset.y = pt.y; g.dataset.side = side; g.dataset.k = k;
+  const p = document.createElementNS(NS, "path");
+  p.setAttribute("d", LEAF); p.setAttribute("fill", side < 0 ? "#4caf50" : "#43a047");
+  g.appendChild(p); leaves.appendChild(g); return g;
+});
+
+// Flower: petals around the stem tip, plus a center.
+const tip = stem.getPointAtLength(len);
+for (let i = 0; i < 8; i++){
+  const e = document.createElementNS(NS, "ellipse");
+  e.setAttribute("cx", 0); e.setAttribute("cy", -16); e.setAttribute("rx", 7); e.setAttribute("ry", 14);
+  e.setAttribute("fill", i % 2 ? "#ff8fab" : "#ffb3c6");
+  e.setAttribute("transform", `rotate(${i * 45})`); flower.appendChild(e);
+}
+const core = document.createElementNS(NS, "circle");
+core.setAttribute("r", 8); core.setAttribute("fill", "#ffd166"); flower.appendChild(core);
+
+const KEYS = [[0,0],[2,22],[4.5,41],[7.5,58],[10,64],[12,80],[14,100]];
+const DUR = 14, HOLD = 3, RESET = 1;
+function progressAt(t){
+  for (let i = 1; i < KEYS.length; i++){
+    const [t0,p0] = KEYS[i-1], [t1,p1] = KEYS[i];
+    if (t <= t1){ const u = (t-t0)/(t1-t0); const e = u<.5 ? 2*u*u : 1-Math.pow(-2*u+2,2)/2; return p0+(p1-p0)*e; }
+  }
+  return 100;
+}
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const back = u => 1 + 2.2 * Math.pow(u - 1, 3) + 1.2 * Math.pow(u - 1, 2); // ease-out-back
+function lerpHex(a, b, u){
+  const A = a.match(/\w\w/g).map(h => parseInt(h, 16)), B = b.match(/\w\w/g).map(h => parseInt(h, 16));
+  return "#" + A.map((v, i) => Math.round(v + (B[i] - v) * u).toString(16).padStart(2, "0")).join("");
+}
+
+let start = performance.now() / 1000, phase = "load";
+function frame(nowMs){
+  const now = nowMs / 1000, t = now - start;
+  let p;
+  if (phase === "load"){ p = progressAt(t); if (t >= DUR){ phase = "hold"; start = now; p = 100; } }
+  else if (phase === "hold"){ p = 100; if (t >= HOLD){ phase = "reset"; start = now; } }
+  else { p = 100 * (1 - Math.min(1, t / RESET)); if (t >= RESET){ phase = "load"; start = now; p = 0; } }
+  const u = p / 100;
+
+  stem.setAttribute("stroke-dashoffset", 100 - p);
+  leafEls.forEach(g => {
+    const k = +g.dataset.k * 100, side = +g.dataset.side;
+    const sc = back(clamp01((p - k) / 9));
+    const sway = phase === "hold" ? Math.sin(now * 2 + k) * 4 : 0;
+    g.setAttribute("transform",
+      `translate(${g.dataset.x} ${g.dataset.y}) rotate(${side < 0 ? -150 + sway : -30 + sway}) scale(${side * sc} ${sc})`);
+  });
+  const fs = back(clamp01((p - 90) / 10)) * (phase === "hold" ? 1 + Math.sin(now * 3) * .03 : 1);
+  flower.setAttribute("transform", `translate(${tip.x} ${tip.y}) rotate(${phase === "hold" ? now * 10 : 0}) scale(${fs})`);
+
+  sun.setAttribute("cx", 30 + 240 * u);
+  sun.setAttribute("cy", 190 - 150 * Math.sin(Math.PI * u));
+  sk1.setAttribute("stop-color", lerpHex("#1d2a44", "#8ecae6", Math.min(1, u * 1.4)));
+  sk2.setAttribute("stop-color", lerpHex("#f6d9a7", "#fff3c4", u));
+  stars.setAttribute("opacity", Math.max(0, 1 - u * 2.5));
+  document.body.style.background = lerpHex("#1d2a44", "#8ecae6", Math.min(1, u * 1.4));
+
+  pct.textContent = Math.round(p) + "%";
+  msg.textContent =
+    phase === "hold" ? "in bloom" : phase === "reset" ? "new season" :
+    p < 12 ? "planting" : p < 40 ? "sprouting" : p < 64 ? "growing" : p < 72 ? "waiting on the weather" : p < 92 ? "reaching for it" : "budding";
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

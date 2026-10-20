@@ -14,7 +14,7 @@ import {
   updateRatings1v1,
   VOTE_ROUND_SIZE,
 } from "./bayesianRating.js";
-import { getActiveChallengeDate } from "./challenges.js";
+import { getActiveChallengeDate, getChallengeBySlug } from "./challenges.js";
 import { getPlayPreviewRevision } from "./preview.js";
 import { filterPlayPublicFiles } from "./sandbox.js";
 
@@ -57,6 +57,8 @@ export type PublicSubmissionSummary = {
 
 export type PublicSubmissionDetail = PublicSubmissionSummary & {
   files?: Array<{ path: string; content: string }>;
+  /** Title of the round this build was made for; omitted if the challenge is gone. */
+  challengeTitle?: string;
 };
 
 export type RoundProgress = {
@@ -718,7 +720,10 @@ export async function getPublicSubmissionById(
     throw createHttpError(404, "submission_not_found");
   }
 
-  const ranked = await loadRankedForDate(doc.challengeDate);
+  const [ranked, challenge] = await Promise.all([
+    loadRankedForDate(doc.challengeDate),
+    getChallengeBySlug(doc.challengeSlug).catch(() => null),
+  ]);
   const rank =
     ranked.findIndex((d) => String(d._id) === String(doc._id)) + 1 || undefined;
 
@@ -728,6 +733,9 @@ export async function getPublicSubmissionById(
       anonymousId,
       firebaseUid: options.firebaseUid,
     }),
+    // The Submission page's share card names the round. Best-effort: a
+    // deleted challenge just leaves the field out.
+    ...(challenge?.title ? { challengeTitle: challenge.title } : {}),
   };
   if (includeFiles) {
     detail.files = filterPlayPublicFiles(doc.files || []).map((f) => ({

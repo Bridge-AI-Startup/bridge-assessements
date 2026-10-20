@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>spinner</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#fafafa;color:#1c1c1e;user-select:none;-webkit-user-select:none;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;display:grid;place-items:center}
+  #wrap{text-align:center}
+  svg{width:min(44vw,160px);height:min(44vw,160px);display:block;margin:0 auto 18px}
+  #track{stroke:#e6e6ea}
+  #arc{stroke:#1c1c1e;stroke-linecap:round;transform-origin:50% 50%;animation:spin 1.4s linear infinite;transition:stroke .3s}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #wrap.done #arc{animation:none;stroke:#2eb872}
+  #check{stroke:#2eb872;stroke-width:5;fill:none;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:60;stroke-dashoffset:60;transition:stroke-dashoffset .5s ease .15s}
+  #wrap.done #check{stroke-dashoffset:0}
+  #pct{font-size:28px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+  #msg{margin-top:6px;font-size:13px;color:#8e8e93}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <svg viewBox="0 0 100 100" aria-hidden="true">
+    <circle id="track" cx="50" cy="50" r="42" fill="none" stroke-width="5"/>
+    <circle id="arc" cx="50" cy="50" r="42" fill="none" stroke-width="5" stroke-dasharray="263.9" stroke-dashoffset="263.9"/>
+    <path id="check" d="M33 52 L45 64 L68 38"/>
+  </svg>
+  <div id="pct">0%</div>
+  <div id="msg">Loading…</div>
+</div>
+<script>
+"use strict";
+const wrap = document.getElementById("wrap"), arc = document.getElementById("arc"), pct = document.getElementById("pct"), msg = document.getElementById("msg");
+const C = 263.9;
+const KEYS = [[0,0],[2.5,35],[5,57],[7.5,63],[9.5,67],[11.5,88],[13.5,100]];
+const DUR = 13.5, HOLD = 2.4, RESET = .5;
+function progressAt(t){
+  for (let i = 1; i < KEYS.length; i++){
+    const [t0,p0] = KEYS[i-1], [t1,p1] = KEYS[i];
+    if (t <= t1){ const u = (t-t0)/(t1-t0); const e = u<.5 ? 2*u*u : 1-Math.pow(-2*u+2,2)/2; return p0+(p1-p0)*e; }
+  }
+  return 100;
+}
+let start = performance.now()/1000, phase = "load";
+function frame(nowMs){
+  const now = nowMs/1000, t = now - start;
+  let p;
+  if (phase === "load"){ p = progressAt(t); if (t >= DUR){ phase = "hold"; start = now; p = 100; wrap.classList.add("done"); } }
+  else if (phase === "hold"){ p = 100; if (t >= HOLD){ phase = "reset"; start = now; wrap.classList.remove("done"); } }
+  else { p = 0; if (t >= RESET){ phase = "load"; start = now; } }
+  arc.setAttribute("stroke-dashoffset", C * (1 - Math.max(0.04, p / 100)));
+  pct.textContent = Math.round(p) + "%";
+  msg.textContent = phase === "hold" ? "Done" : phase === "reset" ? "Starting over" : p >= 60 && p <= 68 ? "Still loading…" : "Loading…";
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

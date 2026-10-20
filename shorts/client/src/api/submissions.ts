@@ -29,6 +29,8 @@ export type PublicSubmissionSummary = {
 
 export type PublicSubmissionDetail = PublicSubmissionSummary & {
   files?: Array<{ path: string; content: string }>;
+  /** Title of the round this build was made for (absent if the challenge is gone). */
+  challengeTitle?: string;
 };
 
 export async function listSubmissions(options: {

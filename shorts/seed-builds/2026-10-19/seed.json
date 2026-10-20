@@ -1,0 +1,16 @@
+{
+  "challengeSlug": "loading-screen-2026-10-19",
+  "challengeJson": "shorts/challenges/loading-screen-2026-10-19.json",
+  "note": "Loading Screen launch round (seeded 2026-10-19). strength is a hidden win-propensity for the simulated vote graph only; stored ratings are genuine TrueSkill output. Ordered by expected finish: kettle (water heats, bubbles, steam, lid rattles at the boil) > sprout (a seed grows into a flower as the sun comes up) > elevator (floor counter, scrolling shaft, doors open at the top) > blockfill (Tetris squares drop into the bar, full rows flash) > orbit (rocket completes one lap and lands) > teletype (terminal typing out status lines) > spinner (a tasteful ring with a percentage — barely more than the thing the brief says loses).",
+  "votesPerVoter": 5,
+  "randomSeed": 20261019,
+  "builds": [
+    { "dir": "kettle",    "name": "kettle",    "anonymousId": "d0e1f2a3-b4c5-4d6e-8f7a-9b0c1d2e3f01", "minutes": 496,  "strength": 0.92 },
+    { "dir": "sprout",    "name": "sprout",    "anonymousId": "d0e1f2a3-b4c5-4d6e-8f7a-9b0c1d2e3f02", "minutes": 583,  "strength": 0.8 },
+    { "dir": "elevator",  "name": "elevator",  "anonymousId": "d0e1f2a3-b4c5-4d6e-8f7a-9b0c1d2e3f03", "minutes": 677,  "strength": 0.71 },
+    { "dir": "blockfill", "name": "blockfill", "anonymousId": "d0e1f2a3-b4c5-4d6e-8f7a-9b0c1d2e3f04", "minutes": 764,  "strength": 0.6 },
+    { "dir": "orbit",     "name": "orbit",     "anonymousId": "d0e1f2a3-b4c5-4d6e-8f7a-9b0c1d2e3f05", "minutes": 858,  "strength": 0.49 },
+    { "dir": "teletype",  "name": "teletype",  "anonymousId": "d0e1f2a3-b4c5-4d6e-8f7a-9b0c1d2e3f06", "minutes": 947,  "strength": 0.37 },
+    { "dir": "spinner",   "name": "spinner",   "anonymousId": "d0e1f2a3-b4c5-4d6e-8f7a-9b0c1d2e3f07", "minutes": 1033, "strength": 0.26 }
+  ]
+}

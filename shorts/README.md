@@ -117,7 +117,7 @@ Primary namespace is `/api/shorts`; every route is also served under the legacy 
 | GET | `/api/shorts/session/:id/workspace-revision` | — | Workspace fingerprint for preview refresh |
 | POST | `/api/shorts/submit` | optional Firebase | Snapshot project files + kill sandbox (`{ sessionId, anonymousId, displayName }`). Rejects starter-only / near-empty snapshots with **400** `{ code: "starter_only" }`. Max **3 live builds per person per round**; a fourth is **409** `{ code: "submission_limit" }` ("You ran out of builds for this round."). Signed-in `smahadkar@ucsd.edu` is exempt. |
 | GET | `/api/shorts/submissions` | — | Public gallery list (`challengeDate`, `limit`, `anonymousId`); omit `files`; includes `previewRevision` |
-| GET | `/api/shorts/submissions/:id` | optional Firebase | Public submission detail (`previewRevision`; `includeFiles` default true). Signed-in `isMine` also matches `firebaseUid` |
+| GET | `/api/shorts/submissions/:id` | optional Firebase | Public submission detail (`previewRevision`; `includeFiles` default true; `challengeTitle` when the round's challenge still exists). Signed-in `isMine` also matches `firebaseUid` |
 | DELETE | `/api/shorts/submissions/:id` | browser id and/or Firebase | Owner-delete (`{ anonymousId? }`). Same vote/recap cleanup as admin delete |
 | GET | `/api/shorts/preview/:id/:revision` | — | Serve stored `index.html` (immutable revision = `submittedAt` ms) |
 | GET | `/api/shorts/preview/:id/:revision/*` | — | Serve stored snapshot asset by exact relative path |

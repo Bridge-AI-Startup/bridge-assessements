@@ -174,6 +174,8 @@ export default function Submission() {
                 <ShareBuild
                   submissionId={detail.id}
                   displayName={detail.displayName}
+                  challengeTitle={detail.challengeTitle}
+                  rank={detail.rank}
                   isMine={detail.isMine}
                 />
                 <DownloadBuild
