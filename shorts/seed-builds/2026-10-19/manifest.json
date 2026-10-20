@@ -1,0 +1,50 @@
+{
+  "note": "Seeded cold-start data. These anonymousIds are synthetic, not real users.",
+  "challengeDate": "2026-10-19",
+  "challengeSlug": "loading-screen-2026-10-19",
+  "submissions": [
+    {
+      "_id": "6ad7c4fdc0a89ebf63865884",
+      "anonymousId": "d0e1f2a3-b4c5-4d6e-8f7a-9b0c1d2e3f01",
+      "displayName": "kettle",
+      "dir": "kettle"
+    },
+    {
+      "_id": "6ad7c4fdc0a89ebf63865888",
+      "anonymousId": "d0e1f2a3-b4c5-4d6e-8f7a-9b0c1d2e3f03",
+      "displayName": "elevator",
+      "dir": "elevator"
+    },
+    {
+      "_id": "6ad7c4fdc0a89ebf63865886",
+      "anonymousId": "d0e1f2a3-b4c5-4d6e-8f7a-9b0c1d2e3f02",
+      "displayName": "sprout",
+      "dir": "sprout"
+    },
+    {
+      "_id": "6ad7c4fdc0a89ebf6386588e",
+      "anonymousId": "d0e1f2a3-b4c5-4d6e-8f7a-9b0c1d2e3f06",
+      "displayName": "teletype",
+      "dir": "teletype"
+    },
+    {
+      "_id": "6ad7c4fdc0a89ebf6386588a",
+      "anonymousId": "d0e1f2a3-b4c5-4d6e-8f7a-9b0c1d2e3f04",
+      "displayName": "blockfill",
+      "dir": "blockfill"
+    },
+    {
+      "_id": "6ad7c4fdc0a89ebf63865890",
+      "anonymousId": "d0e1f2a3-b4c5-4d6e-8f7a-9b0c1d2e3f07",
+      "displayName": "spinner",
+      "dir": "spinner"
+    },
+    {
+      "_id": "6ad7c4fdc0a89ebf6386588c",
+      "anonymousId": "d0e1f2a3-b4c5-4d6e-8f7a-9b0c1d2e3f05",
+      "displayName": "orbit",
+      "dir": "orbit"
+    }
+  ],
+  "voteCount": 35
+}

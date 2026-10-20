@@ -341,3 +341,137 @@ export function storyCardFilename(displayName) {
       .slice(0, 40) || "shorts-build";
   return `${slug}-story.png`;
 }
+
+export const FEED_WIDTH = 1080;
+export const FEED_HEIGHT = 1350;
+
+/**
+ * Round announcement as a 4:5 feed image (Instagram's tallest feed ratio; a
+ * 9:16 story card gets cropped in the feed). Same punch language as the story
+ * card, but the headline is the round itself, not a build.
+ *
+ * @param {object} p
+ * @param {string} p.challengeTitle  the round's title
+ * @param {string} p.host            where to play, e.g. "shorts.bridge-jobs.com"
+ * @param {string} [p.eyebrow]       small mono line above the title
+ */
+export async function renderRoundCard({ challengeTitle, host, eyebrow = "NEW ROUND · OPEN NOW" }) {
+  await loadFonts();
+  const W = FEED_WIDTH;
+  const H = FEED_HEIGHT;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("canvas_unavailable");
+
+  ctx.fillStyle = CREAM;
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "rgba(33,32,28,0.07)";
+  for (let y = 60; y < H; y += 60) {
+    for (let x = 60; x < W; x += 60) {
+      ctx.beginPath();
+      ctx.arc(x, y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  drawTiles(ctx, "SHORTS", W / 2, 200, 124, 18);
+  ctx.fillStyle = FOG;
+  ctx.font = `500 26px ${MONO}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("B R I D G E   S H O R T S", W / 2, 334);
+
+  const pad = 72;
+  const innerW = CARD_W - pad * 2;
+  const title = fitLines(ctx, challengeTitle || "A new round", innerW, {
+    max: 108,
+    min: 60,
+    maxLines: 4,
+    weight: 600,
+    family: SANS,
+  });
+  const titleLH = Math.round(title.size * 1.06);
+  const pillH = 76;
+  const cardH = pad + 38 + 30 + title.lines.length * titleLH + 48 + pillH + pad;
+  const cardY = 420;
+  const cx = SAFE_X + CARD_W / 2;
+  const cy = cardY + cardH / 2;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate((-1.6 * Math.PI) / 180);
+  const left = -CARD_W / 2;
+  const top = -cardH / 2;
+  ctx.fillStyle = INK;
+  roundRect(ctx, left + 16, top + 16, CARD_W, cardH, 40);
+  ctx.fill();
+  ctx.fillStyle = PAPER;
+  roundRect(ctx, left, top, CARD_W, cardH, 40);
+  ctx.fill();
+  ctx.lineWidth = 7;
+  ctx.strokeStyle = INK;
+  ctx.stroke();
+
+  let y = top + pad + 38;
+  ctx.textAlign = "left";
+  ctx.fillStyle = FOG;
+  ctx.font = `500 28px ${MONO}`;
+  ctx.fillText(eyebrow, left + pad, y - 10);
+  y += 30;
+  ctx.fillStyle = INK;
+  ctx.font = `600 ${title.size}px ${SANS}`;
+  for (const line of title.lines) {
+    y += titleLH;
+    ctx.fillText(line, left + pad - 4, y - Math.round(title.size * 0.22));
+  }
+  y += 48;
+  const pillText = "PLAY THIS ROUND";
+  ctx.font = `500 28px ${MONO}`;
+  const pillW = Math.ceil(ctx.measureText(pillText).width) + 72;
+  const pillX = left + pad;
+  ctx.fillStyle = AMBER;
+  roundRect(ctx, pillX + 7, y + 7, pillW, pillH, pillH / 2);
+  ctx.fill();
+  ctx.fillStyle = INK;
+  roundRect(ctx, pillX, y, pillW, pillH, pillH / 2);
+  ctx.fill();
+  ctx.fillStyle = PAPER;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(pillText, pillX + pillW / 2, y + pillH / 2 + 2);
+  ctx.restore();
+
+  const ctaY = cardY + cardH + 130;
+  ctx.fillStyle = FOG;
+  ctx.font = `500 38px ${SANS}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("Same challenge, same model, everyone.", W / 2, ctaY);
+  drawPill(ctx, String(host || "").toUpperCase(), W / 2, ctaY + 86, {
+    font: `500 34px ${MONO}`,
+    padX: 52,
+    height: 96,
+    shadow: 10,
+  });
+
+  ctx.fillStyle = INK;
+  ctx.fillRect(0, H - 160, W, 160);
+  ctx.fillStyle = CREAM;
+  ctx.font = `500 26px ${MONO}`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("B R I D G E  S H O R T S", SAFE_X, H - 66);
+  ctx.textAlign = "right";
+  ctx.globalAlpha = 0.65;
+  ctx.fillText("M A D E  B Y  B R I D G E", W - SAFE_X, H - 66);
+  ctx.globalAlpha = 1;
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("round_card_blob_failed"));
+    }, "image/png");
+  });
+}
